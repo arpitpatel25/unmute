@@ -639,6 +639,22 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('recording:start', (_e, _mode, _sessionId, kind) =>
       cb(kind === 'remote' ? 'remote' : 'dictation')),
 
+  // ── The live capture changed lanes (fn ⇄ right-Option ⇄ right-Command) ──
+  //
+  // ITS OWN CHANNEL, AND THAT IS THE WHOLE POINT. The obvious way to update
+  // the badge mid-capture is to re-send 'recording:start' with the new kind —
+  // and the renderer's handler for that calls startRecording(), which
+  // re-acquires the microphone and throws away everything spoken so far. A
+  // switch must be visible without being audible, so it gets a channel that
+  // nothing in the audio path listens to.
+  remoteOnCaptureRoute: (cb: (route: 'cursor' | 'task' | 'agent') => void) => {
+    const h = (_e: unknown, route: string) => {
+      if (route === 'cursor' || route === 'task' || route === 'agent') cb(route)
+    }
+    ipcRenderer.on('capture:route', h)
+    return () => ipcRenderer.removeListener('capture:route', h)
+  },
+
   // ── Meeting Notetaker floating widget (bottom-left) ──
   /** User clicked the widget, then confirmed Cancel — tells main to stop the
    *  note-taking session (spec §6: stop is never a single, direct action;

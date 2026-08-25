@@ -859,6 +859,7 @@ export default function WidgetApp() {
     // 4th arg). Tells us whether this capture is Remote so the pill can badge it.
     const remoteApi = api as unknown as {
       remoteOnCaptureKind?: (cb: (kind: 'dictation' | 'remote') => void) => void
+      remoteOnCaptureRoute?: (cb: (route: 'cursor' | 'task' | 'agent') => void) => (() => void) | void
       remoteAgentOptions?: () => Promise<{ current: string; options: Array<{ id: string; label: string; available: boolean }> }>
     }
     // Warm the picker at mount. The capture-start refresh below keeps it honest,
@@ -867,8 +868,8 @@ export default function WidgetApp() {
     void remoteApi.remoteAgentOptions?.()
       .then((o) => { if (o) setAgentPicker(o) })
       .catch(() => {})
-    remoteApi.remoteOnCaptureKind?.((kind) => {
-      const remote = kind === 'remote'
+    /** The badge and the picker, for whichever lane the capture is on now. */
+    const applyCaptureLane = (remote: boolean): void => {
       setIsRemote(remote)
       // Only Remote captures dispatch a task, so only they need the picker.
       // Refresh on every start: whether Codex can take work is live state, and
@@ -877,7 +878,13 @@ export default function WidgetApp() {
       void remoteApi.remoteAgentOptions?.()
         .then((o) => setAgentPicker(o ?? null))
         .catch(() => setAgentPicker(null))
-    })
+    }
+    remoteApi.remoteOnCaptureKind?.((kind) => applyCaptureLane(kind === 'remote'))
+    // MID-CAPTURE LANE CHANGES, through a channel the audio path never sees.
+    // Same badge, same picker, same code — the only difference from a start is
+    // that no recorder is touched, which is exactly why this is not
+    // 'recording:start' with a different argument.
+    remoteApi.remoteOnCaptureRoute?.((route) => applyCaptureLane(route !== 'cursor'))
 
     // Zombie phone detected by the recorder (acquirable device, dead pipe):
     // re-enumerate so the chip stops advertising a corpse and flips back to

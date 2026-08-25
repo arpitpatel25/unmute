@@ -19,6 +19,14 @@ import { isRemoteTriggerEnabled } from './remoteTriggerGate'
 // and post-wire — no cross-tree hazard the way this file's own
 // './paywall/remote/capture/agentGesture' import has.
 import { createNotetakerLogger } from './notetaker/notetakerLog'
+// Where a live capture is headed, and what a lane key press means while one is
+// already running. Same-directory import (both live in engine-overrides/
+// electron/), so it resolves identically pre- and post-wire — unlike this
+// file's own './paywall/remote/capture/agentGesture' import, which only
+// resolves after the copy.
+import { decidePress, routeOfLanes, type CaptureRoute } from './captureRoute'
+
+export type { CaptureRoute } from './captureRoute'
 
 export type SessionMode = 'dictation' | 'instruction'
 export type KeyboardEvent =
@@ -32,6 +40,13 @@ export type KeyboardEvent =
   | { type: 'agent-ignored'; reason: string }
   | { type: 'remote-ignored'; reason: string }
   | { type: 'agent-stop' }
+  // ─── The live capture changed lanes — NOT a lifecycle event ───
+  // Emitted when a lane key is pressed while a DIFFERENT lane is recording.
+  // The recording continues untouched; only its destination moves. There is
+  // deliberately no matching stop/start pair: a switch that ended one capture
+  // and began another would lose the audio already spoken, which is the entire
+  // thing this exists to prevent.
+  | { type: 'capture-route'; route: CaptureRoute }
   | { type: 'session-stop'; mode: SessionMode }
   | { type: 'chain-start'; mode: SessionMode }
   | { type: 'chain-expired' }
@@ -83,7 +98,6 @@ export class KeyboardManager extends EventEmitter {
   /** When the first tap of a pending pair landed. 0 = none. */
   private lastAgentTapAt = 0
   private lastAgentToggleTime = 0
-  private lastAgentToggleTime = 0
   private chainTimer: NodeJS.Timeout | null = null
   private chainWindowMs = 2000
   // Separate debounce per logical key so Fn and Caps Lock can't cross-block each other
@@ -102,6 +116,35 @@ export class KeyboardManager extends EventEmitter {
   // blocked while this is true, and Remote is blocked while dictation/
   // instruction is active.
   private remoteActive = false
+
+  // ─── Is the Unmute Agent usable right now? ───
+  // Pushed in by the paywall layer (init.ts owns the setting), the same
+  // inversion remoteTriggerGate uses for the Orchestrator's entitlement —
+  // this file asks a question, it never reads paywall state.
+  //
+  // IT IS CHECKED BEFORE THE LANE LATCHES, and that is the point. The check
+  // used to live only in init.ts, on the agent-start it received — by which
+  // time this file had already set `agentActive = true`. An unavailable Agent
+  // therefore left the lane locked with no capture behind it and no session
+  // whose ending could clear it, so right-Option stayed refused until some
+  // unrelated dictation happened to run resetState. Asking first makes that
+  // state unreachable rather than merely unlikely.
+  private unmuteAgentAvailable = false
+
+  /**
+   * Which lane OPENED the live capture — not where it is going now.
+   *
+   * The route moves; this does not. It answers one question: does finishing
+   * this capture need the remote-shaped stop (release the held modifier, grab
+   * the selection, then process) or the plain dictation one? That shape
+   * belongs to the key that is physically held, so a capture opened on
+   * right-Option and submitted on fn after a switch still has to take it —
+   * otherwise the deferred selection grab never happens and the
+   * select-text→command flow silently loses its input.
+   *
+   * Null whenever nothing is recording.
+   */
+  private openedLane: CaptureRoute | null = null
 
   // Double-tap-push (dual mode) state
   private dualState: DualModeState = 'idle'
@@ -183,6 +226,10 @@ export class KeyboardManager extends EventEmitter {
     this.emit('keyboard', {
       type: 'key-state',
       trigger,
+      // The derived answer, beside the flags it comes from — a switch is then
+      // one field moving in a line you can read straight through, rather than
+      // three booleans a reader has to recombine.
+      route: this.liveRoute(),
       dictationActive: this.dictationActive,
       instructionActive: this.instructionActive,
       remoteActive: this.remoteActive,
@@ -202,6 +249,7 @@ export class KeyboardManager extends EventEmitter {
     this.remoteActive = false
     this.agentGesture = freshGestureState()
     this.lastAgentTapAt = 0
+    this.openedLane = null
     this.emitKeyState('capture-ended')
   }
 
@@ -231,11 +279,58 @@ export class KeyboardManager extends EventEmitter {
     this.agentActive = false
     this.agentGesture = freshGestureState()
     this.lastAgentTapAt = 0
+    this.openedLane = null
     this.emitKeyState('reset-state')
   }
 
   setChainWindow(ms: number): void {
     this.chainWindowMs = ms
+  }
+
+  /** Pushed by the paywall layer whenever the Agent's availability changes. */
+  setUnmuteAgentAvailable(value: boolean): void {
+    this.unmuteAgentAvailable = value === true
+    console.log('[keyboard] Unmute Agent available:', this.unmuteAgentAvailable)
+  }
+
+  /**
+   * Which lane is recording right now.
+   *
+   * A READ of the four booleans, never a fifth field beside them. Those flags
+   * are entangled with the chain timer, the Caps Lock chain and the dual-mode
+   * state machine; a parallel `activeRoute` would be one more pair of things
+   * that can disagree, and every transition bug in this file has had exactly
+   * that shape.
+   */
+  private liveRoute(): CaptureRoute | null {
+    return routeOfLanes({
+      dictation: this.dictationActive,
+      remote: this.remoteActive,
+      agent: this.agentActive,
+    })
+  }
+
+  /**
+   * Move the live capture to another lane.
+   *
+   * THE ONLY PLACE ALL THREE FLAGS MOVE TOGETHER, so "at most one lane is
+   * live" is enforced by one assignment block rather than asserted at four
+   * call sites. It emits `capture-route` and nothing else: no session-stop, no
+   * session-start, no chain event. Nothing is ending, so nothing may be torn
+   * down — the recorder, the session, the open capture segment and the
+   * scratchpad all carry straight through.
+   */
+  private applyRouteSwitch(to: CaptureRoute): void {
+    const from = this.liveRoute()
+    this.dictationActive = to === 'cursor'
+    this.remoteActive = to === 'task'
+    this.agentActive = to === 'agent'
+    // A pending FIRST tap of an Agent double-tap belongs to the gesture that
+    // has just been resolved. Left set, it could pair with an unrelated later
+    // tap and arm something the user never asked for.
+    this.lastAgentTapAt = 0
+    console.log('[keyboard] Capture route SWITCH:', from, '→', to)
+    this.emit('keyboard', { type: 'capture-route', route: to } as KeyboardEvent)
   }
 
   setDictationKey(key: DictationKey): void {
@@ -327,44 +422,60 @@ export class KeyboardManager extends EventEmitter {
   // active; while a task capture is active, the dictation handlers below bail out.
 
   private handleRemoteKeyDown(): void {
-    // Gate (Pro entitlement + the user's per-session toggle). A capture already
-    // in progress is still allowed to STOP — turning the trigger off mid-capture
-    // must never strand `remoteActive` and block dictation's mutual exclusion.
-    if (!isRemoteTriggerEnabled() && !this.remoteActive) {
-      console.log('[keyboard] Remote key ignored — Unmute Remote trigger is off')
-      return
-    }
     const now = Date.now()
-    // Debounce only the START (a too-fast re-tap right after toggling). The STOP
-    // tap must always go through so the user can submit/cancel without delay.
-    if (!this.remoteActive && now - this.lastRemoteToggleTime < this.DEBOUNCE_MS) {
-      console.log('[keyboard] Remote toggle DEBOUNCED (too fast)')
-      return
-    }
+    const gateOn = isRemoteTriggerEnabled()
+    // ONE DECISION, IN A PURE MODULE. The four inline branches this replaces —
+    // gate, debounce, stop, exclusion — each answered a piece of "what does
+    // this press mean", and the exclusion one answered it wrongly for the case
+    // this feature is about: another lane being live now moves the capture
+    // here instead of refusing it.
+    const action = decidePress({
+      lane: 'task',
+      live: this.liveRoute(),
+      instructionActive: this.instructionActive,
+      activationMode: this.activationMode,
+      // A capture already in progress is still allowed to STOP — decidePress
+      // answers `submit` above every gate, so turning the trigger off
+      // mid-capture can never strand `remoteActive`.
+      laneAvailable: gateOn,
+    })
 
-    if (this.remoteActive) {
-      // Second tap → stop + dispatch.
+    if (action === 'submit') {
       this.lastRemoteToggleTime = now
       this.remoteActive = false
+      this.openedLane = null
       console.log('[keyboard] Remote capture STOP (tap-toggle) → dispatch')
       this.emit('keyboard', { type: 'remote-stop' } as KeyboardEvent)
       return
     }
 
-    // First tap → start. Mutual exclusion against EVERY other lane.
-    //
-    // `agentActive` was missing here while the Agent path already checked
-    // `remoteActive`, and that asymmetry is exactly how two captures came to be
-    // armed one second apart on 18 August: the Agent key armed one, the Remote
-    // key armed another on top of it, and ownership of the utterance was
-    // decided seventy seconds later by whichever flag had survived.
-    if (this.dictationActive || this.instructionActive || this.agentActive) {
+    if (action === 'ignore') {
+      if (!gateOn) {
+        console.log('[keyboard] Remote key ignored — Unmute Remote trigger is off')
+        return
+      }
       console.log('[keyboard] Remote key ignored — another capture is active (mutual exclusion)')
       this.emit('keyboard', { type: 'remote-ignored', reason: 'capture-already-live' } as KeyboardEvent)
       return
     }
+
+    // Debounce only the START (a too-fast re-tap right after toggling), exactly
+    // as before. A SWITCH is deliberately not debounced: it is a press of a
+    // DIFFERENT key from the one that opened the capture, so it can never be a
+    // bounce of this one, and rate-limiting it would break the whole promise
+    // that you may change your mind as often as you like.
+    if (action === 'start' && now - this.lastRemoteToggleTime < this.DEBOUNCE_MS) {
+      console.log('[keyboard] Remote toggle DEBOUNCED (too fast)')
+      return
+    }
+
     this.lastRemoteToggleTime = now
+    if (action === 'switch') {
+      this.applyRouteSwitch('task')
+      return
+    }
     this.remoteActive = true
+    this.openedLane = 'task'
     console.log('[keyboard] Remote capture START (tap-toggle)')
     this.emit('keyboard', { type: 'remote-start' } as KeyboardEvent)
   }
@@ -400,26 +511,40 @@ export class KeyboardManager extends EventEmitter {
 
     const now = Date.now()
 
-    // 1 · gate — the Agent's availability is checked where it is owned, in
-    // init.ts on agent-start. Nothing to gate here.
-
-    // 2 · STOP FIRST — a single clean tap ends a running capture.
+    // 2 · STOP FIRST — a single clean tap ends a running Agent capture.
+    //     Still ahead of everything, still unconditional.
     if (this.agentActive) {
       this.lastAgentToggleTime = now
       this.agentActive = false
       this.lastAgentTapAt = 0
+      this.openedLane = null
       console.log('[keyboard] Agent capture STOP (single tap) → dispatch')
       this.emit('keyboard', { type: 'agent-stop' } as KeyboardEvent)
       return
     }
 
-    // 3 · debounce the START only.
-    if (now - this.lastAgentToggleTime < this.DEBOUNCE_MS) {
+    // 3 · debounce the START only — and a START is only possible when nothing
+    //     is recording. With another lane live this press is a SWITCH, and
+    //     this lane's own toggle history has no bearing on it.
+    //
+    //     THE DEBOUNCE HAD TO MOVE, and the bug it caused is the one this
+    //     whole feature is most at risk of: switch into the Agent, switch
+    //     away, and switch back inside 300ms, and `lastAgentToggleTime` was
+    //     still warm from the first switch — so the check fired above the tap
+    //     pairing and ate BOTH taps. Nothing latched, nothing was logged, and
+    //     the key simply did nothing. Caught by keyboard.lanes.test.ts.
+    const live = this.liveRoute()
+    if (live === null && now - this.lastAgentToggleTime < this.DEBOUNCE_MS) {
       console.log('[keyboard] Agent toggle DEBOUNCED (too fast)')
       return
     }
 
     // 5a · pair the taps. A lone tap is remembered, not acted on.
+    //
+    //      THE PAIRING GUARDS THE SWITCH TOO. Entering a lane always costs
+    //      that lane's own start gesture, so moving a live dictation to the
+    //      Agent takes two taps, exactly as starting one from cold does. Only
+    //      LEAVING is a single tap, because by then this is the live lane.
     const paired = this.lastAgentTapAt > 0 && now - this.lastAgentTapAt <= DOUBLE_TAP_WINDOW_MS
     if (!paired) {
       this.lastAgentTapAt = now
@@ -427,16 +552,33 @@ export class KeyboardManager extends EventEmitter {
     }
     this.lastAgentTapAt = 0
 
-    // 4 · exclusion — only once we know this is a start.
-    if (this.dictationActive || this.instructionActive || this.remoteActive) {
-      console.log('[keyboard] Agent gesture ignored — another capture is active (mutual exclusion)')
-      this.emit('keyboard', { type: 'agent-ignored', reason: 'capture-already-live' } as KeyboardEvent)
+    // 4 · start or switch — decided once, in captureRoute.ts.
+    const action = decidePress({
+      lane: 'agent',
+      live,
+      instructionActive: this.instructionActive,
+      activationMode: this.activationMode,
+      laneAvailable: this.unmuteAgentAvailable,
+    })
+    if (action === 'ignore') {
+      console.log('[keyboard] Agent gesture ignored —',
+        this.unmuteAgentAvailable ? 'another capture is active (mutual exclusion)' : 'the Agent is unavailable')
+      this.emit('keyboard', {
+        type: 'agent-ignored',
+        reason: this.unmuteAgentAvailable ? 'capture-already-live' : 'not-available',
+      } as KeyboardEvent)
+      return
+    }
+    if (action === 'switch') {
+      this.lastAgentToggleTime = now
+      this.applyRouteSwitch('agent')
       return
     }
 
     // 5b · start
     this.lastAgentToggleTime = now
     this.agentActive = true
+    this.openedLane = 'agent'
     console.log('[keyboard] Agent capture START (double tap)')
     this.emit('keyboard', { type: 'agent-start' } as KeyboardEvent)
   }
@@ -546,9 +688,15 @@ export class KeyboardManager extends EventEmitter {
   // ─── Dictation key-down/up dispatchers ───
 
   private handleDictationKeyDown(): void {
-    // Mutual exclusion (PRD §2.4.4): ignore the dictation key while a Remote
-    // capture is in progress.
-    if (this.remoteActive) {
+    // Mutual exclusion (PRD §2.4.4) — for the HELD modes only.
+    //
+    // Tap-toggle now routes through decidePress, which moves a live task or
+    // agent capture to the cursor instead of refusing the key. Push-to-talk
+    // and double-tap-push keep the old refusal untouched: fn is physically
+    // held for the duration there, so "the key that submits" is a release
+    // rather than a press, and the tap-toggle symmetry a switch relies on does
+    // not exist. See captureRoute.ts.
+    if (this.activationMode !== 'tap-toggle' && this.remoteActive) {
       console.log('[keyboard] Dictation key ignored — a Remote capture is active (mutual exclusion)')
       return
     }
@@ -583,17 +731,39 @@ export class KeyboardManager extends EventEmitter {
 
   private handleTapToggleDown(): void {
     const now = Date.now()
-    if (!this.dictationActive && now - this.lastDictationToggleTime < this.DEBOUNCE_MS) {
+    const action = decidePress({
+      lane: 'cursor',
+      live: this.liveRoute(),
+      instructionActive: this.instructionActive,
+      activationMode: this.activationMode,
+      // Dictation has no gate, and deliberately so: it is the user's way out
+      // when another lane is wedged, so nothing may make it unavailable.
+      laneAvailable: true,
+    })
+
+    // Debounce the START only — a submit must always go through, and a SWITCH
+    // is a press of a different key from the one that opened the capture.
+    if (action === 'start' && now - this.lastDictationToggleTime < this.DEBOUNCE_MS) {
       console.log('[keyboard] Dictation toggle DEBOUNCED (too fast)')
       return
     }
     this.lastDictationToggleTime = now
 
-    if (this.dictationActive) {
-      this.stopDictation()
-    } else {
-      this.startDictation()
+    // `ignore` here can only be Instruct owning the mic. Every other lane is
+    // now a switch rather than a refusal.
+    if (action === 'ignore') {
+      console.log('[keyboard] Dictation key ignored — Instruct owns the capture')
+      return
     }
+    if (action === 'switch') {
+      this.applyRouteSwitch('cursor')
+      return
+    }
+    if (action === 'submit') {
+      this.stopDictation()
+      return
+    }
+    this.startDictation()
   }
 
   // ─── Push-to-talk mode ───
@@ -705,6 +875,7 @@ export class KeyboardManager extends EventEmitter {
       this.emit('keyboard', { type: 'session-stop', mode: 'instruction' } as KeyboardEvent)
 
       this.dictationActive = true
+      this.openedLane = 'cursor'
       console.log('[keyboard] Dictation CHAIN-START (direct)')
       this.emit('keyboard', { type: 'chain-start', mode: 'dictation' } as KeyboardEvent)
       return
@@ -715,6 +886,7 @@ export class KeyboardManager extends EventEmitter {
     const chainResult = this.wasChainPending('dictation')
     if (chainResult === 'chain') {
       this.dictationActive = true
+      this.openedLane = 'cursor'
       console.log('[keyboard] Dictation CHAIN-START')
       this.emit('keyboard', { type: 'chain-start', mode: 'dictation' } as KeyboardEvent)
     } else if (chainResult === 'same-mode-restart') {
@@ -722,13 +894,32 @@ export class KeyboardManager extends EventEmitter {
       this.emit('keyboard', { type: 'chain-expired' } as KeyboardEvent)
     } else {
       this.dictationActive = true
+      this.openedLane = 'cursor'
       console.log('[keyboard] Dictation SESSION-START')
       this.emit('keyboard', { type: 'session-start', mode: 'dictation' } as KeyboardEvent)
     }
   }
 
   private stopDictation(): void {
+    const opened = this.openedLane
     this.dictationActive = false
+    this.openedLane = null
+
+    // A CAPTURE OPENED BY A HELD KEY TAKES THE HELD KEY'S STOP, wherever it
+    // ended up being addressed. right-Option and right-Command are physically
+    // down for the whole capture, so their stop has to release the modifier,
+    // settle, and only then synthesise the selection grab — otherwise Cmd+C
+    // lands as Cmd+Opt+C and Chrome opens DevTools instead. Submitting such a
+    // capture on fn, after switching it to the cursor, still needs that shape:
+    // the modifier is a fact about the user's hand, not about where the words
+    // are going. init.ts answers 'remote-stop' with the same finishCapture()
+    // the other two lanes use.
+    if (opened !== null && opened !== 'cursor') {
+      console.log('[keyboard] Dictation STOPPED — switched capture, opened on', opened, '→ held-key stop')
+      this.emit('keyboard', { type: 'remote-stop' } as KeyboardEvent)
+      return
+    }
+
     console.log('[keyboard] Dictation STOPPED')
     this.emit('keyboard', { type: 'session-stop', mode: 'dictation' } as KeyboardEvent)
     console.log('[keyboard] Dictation done — processing immediately (no chain wait)')

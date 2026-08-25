@@ -23,8 +23,9 @@ import { dispatchFromCapture, hideNativePill, recordCapturedDictation } from './
 import {
   attachTranscript, beginOwnClipboardSequence, beginSegment, cancelOpenSegment,
   composeWithInserts, endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed,
-  registerFormat, registerHistoryCopy, registerPaste, removeFromPad,
+  registerFormat, registerHistoryCopy, registerPaste, removeFromPad, setPadOrigin,
 } from './paywall/remote/capture/index'
+import type { CaptureRoute } from './captureRoute'
 import { registerTaskImagePaste } from './paywall/remote/task-attachment-paste'
 import { registerDesktopTaskImagePaste } from './paywall/remote/desktop-task-attachment-paste'
 import { canObserve } from './paywall/remote/capture/captureGate'
@@ -150,9 +151,34 @@ interface SessionState {
    *  this can. It decides the pad's origin, and therefore which destinations
    *  the scratchpad offers when a capture is held. */
   agentAddressed: boolean
-  /** The task visible at Right Option key-down. It is immutable for this
-   * capture: a task update while transcription runs must not retarget speech. */
+  /**
+   * WHERE THIS UTTERANCE IS GOING — the one truth, of which `kind` and
+   * `agentAddressed` above are two views.
+   *
+   * It is no longer stamped once at birth. A lane key pressed while this
+   * capture is recording MOVES it (fn → cursor, right-Option → task,
+   * right-Command → agent), as often as the user likes, without stopping the
+   * recorder or losing a syllable — see setCaptureRoute and captureRoute.ts.
+   *
+   * It still lives on the SESSION rather than in a module-level variable, and
+   * that part is unchanged and load-bearing: the session is nulled on every
+   * teardown path there is, so a cancelled or superseded capture cannot leave
+   * its address behind for the next one to inherit. A global that tried to do
+   * this job is exactly what silently readdressed every Remote press to the
+   * Agent for a whole session on 18 August.
+   */
+  route: CaptureRoute
+  /** The task this capture is addressed at, when the user aimed it explicitly.
+   *  Normally null: the target is resolved from what the user is looking at AT
+   *  SUBMIT, not snapshotted at key-down, so moving the pocket mid-utterance
+   *  changes where it lands. */
   remoteTargetId: string | null
+  /** Which physical key opened this capture. NOT the route — the route moves,
+   *  this does not. It exists for exactly one question: whether the selection
+   *  grab has to be deferred to key-release. right-Option is held while the
+   *  capture runs, so a synthesised Cmd+C landing during it becomes Cmd+Opt+C,
+   *  which Chrome reads as Inspect Element and answers with DevTools. */
+  openedByHeldKey: boolean
   // The capture-buffer segment this recording opened, so the transcript can be
   // attached to the RIGHT segment when it lands 30-45s later. Null when the
   // capture seam never opened one (it is fail-open — a capture failure must
@@ -165,6 +191,23 @@ interface SessionState {
   // empty and delivery is byte-for-byte what it always was.
   captureAttachments: string[]
 }
+
+/**
+ * THE ONE WRITER of a session's destination.
+ *
+ * `kind` and `agentAddressed` are not independent facts — they are two views
+ * of `route`, and every bug this file has had in this area came from a site
+ * setting one of them without the other. Deriving both here means a route can
+ * only ever be changed as a unit.
+ */
+function stampRoute(session: SessionState, route: CaptureRoute): void {
+  session.route = route
+  session.kind = route === 'cursor' ? 'dictation' : 'remote'
+  session.agentAddressed = route === 'agent'
+}
+
+/** The pad speaks the same three words the route does. */
+function padOriginOf(route: CaptureRoute): 'cursor' | 'task' | 'agent' { return route }
 
 function sendToWidget(channel: string, ...args: unknown[]): void {
   const widget = getWidgetWindow()
@@ -301,6 +344,10 @@ class SessionManager {
   // Called when a session is fully terminated (cancel, Escape, processing done)
   // Used to reset keyboard state so it doesn't get stuck
   public onSessionEnded: (() => void) | null = null
+  /** The live capture changed lanes. Wired by the paywall layer so the pill's
+   *  chips and the notch's capture label follow — never by this file, which
+   *  owns neither surface. */
+  public onCaptureRouteChanged: ((route: CaptureRoute) => void) | null = null
 
   // Called when a session-start is rejected (e.g. during processing)
   // Used to reset keyboard toggle state without unregistering Escape
@@ -829,7 +876,7 @@ class SessionManager {
     return this.usePipeline
   }
 
-  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation', remoteTargetId: string | null = null, agentAddressed = false): void {
+  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation', remoteTargetId: string | null = null, agentAddressed = false, openedByHeldKey = false): void {
     console.log('[session] startSession called, mode:', mode, '| kind:', kind, '| isProcessing:', this.isProcessing, '| currentSession:', this.currentSession?.sessionId || 'null')
     if (!this.telemetryReady) {
       this.telemetryReady = true
@@ -885,6 +932,7 @@ class SessionManager {
 
     if (!this.currentSession) {
       const sessionId = uuidv4()
+      const route: CaptureRoute = kind === 'remote' ? (agentAddressed ? 'agent' : 'task') : 'cursor'
       this.currentSession = {
         sessionId,
         dictationAudio: null,
@@ -898,19 +946,35 @@ class SessionManager {
         status: 'recording',
         errorMessage: null,
         createdAt: Date.now(),
-        kind, // stamped at birth; default 'dictation' (default-safe → paste)
-        // Stamped at birth for the same reason `kind` is: a capture that is
-        // later cancelled or superseded must not leave the address behind for
-        // the next one to inherit.
+        // All three set together by stampRoute immediately below — never
+        // by hand, and never one without the others.
+        kind,
         agentAddressed,
+        route,
         remoteTargetId: kind === 'remote' ? remoteTargetId : null,
+        openedByHeldKey,
         captureSegmentId: null,
         captureAttachments: [],
       }
-      console.log('[session] New session created:', sessionId, '| kind:', kind, '| agentAddressed:', agentAddressed)
+      stampRoute(this.currentSession, route)
+      console.log('[session] New session created:', sessionId, '| route:', route, '| heldKey:', openedByHeldKey)
       logTelemetry('session-start', { sessionId, mode, kind, engineMode: (() => { try { return getPaywallEngineMode() } catch { return '?' } })() })
+    } else if (this.currentSession.status === 'recording') {
+      // REUSING A LIVE CAPTURE IS NOW A BUG, AND SAYS SO.
+      //
+      // This branch silently reused whatever session was current WITHOUT
+      // re-stamping its route, which was harmless only because mutual
+      // exclusion made a second start unreachable while one was recording.
+      // Lane switching removes that guarantee: a start reaching here would
+      // leave a session whose route and whose stamp disagree, and the
+      // disagreement would only surface at delivery, minutes later. Switching
+      // goes through setCaptureRoute; starting never lands on a live capture.
+      console.warn('[session] ⛔ startSession while a capture is LIVE — refusing',
+        '(session:', this.currentSession.sessionId, 'route:', this.currentSession.route, ')')
+      this.onSessionRejected?.()
+      return
     } else {
-      console.log('[session] Reusing existing session:', this.currentSession.sessionId, '| kind:', this.currentSession.kind)
+      console.log('[session] Reusing existing session:', this.currentSession.sessionId, '| route:', this.currentSession.route)
     }
 
     // Fresh arbiter per session — captures the (now-established) sessionId
@@ -939,11 +1003,11 @@ class SessionManager {
       // from `kind` alone is what sent an Agent utterance to the cursor: the
       // Agent lane is stamped 'remote', so it read as a task and then, having
       // no task, as the cursor.
-      const origin = this.currentSession.agentAddressed
-        ? 'agent'
-        : this.currentSession.kind === 'remote' ? 'task' : 'cursor'
-      console.log('[session] 📮 capture addressed to:', origin,
-        '(kind:', this.currentSession.kind, 'agentAddressed:', this.currentSession.agentAddressed, ')')
+      // ONE FIELD NOW. This used to reconstruct the origin from `kind` and
+      // `agentAddressed` at every read, and deriving it from `kind` alone is
+      // what once sent an Agent utterance to the cursor.
+      const origin = padOriginOf(this.currentSession.route)
+      console.log('[session] 📮 capture addressed to:', origin)
       this.currentSession.captureSegmentId = beginSegment(
         origin, Date.now(), canObserve(getCaptureSettings()),
       )
@@ -962,14 +1026,19 @@ class SessionManager {
     // finish rendering the window before osascript Cmd+C fires,
     // which can disrupt window ordering.
     //
-    // For Remote captures the selection grab is DEFERRED to key-release
-    // (see stopRemoteCapture). The Remote trigger is the right-option key,
-    // which the user is still physically holding during this on-down window;
-    // a synthesized Cmd+C colliding with the held Option becomes Cmd+Opt+C —
-    // which Chrome interprets as "Inspect Element" and pops DevTools. Grabbing
-    // only after the key lifts keeps the select-text→command flow intact
-    // without ever producing that modifier combination.
-    if (this.currentSession.kind !== 'remote' && !this.currentSession.selectedText) {
+    // TWO QUESTIONS, NOT ONE — they were the same question only while the key
+    // and the route were the same object.
+    //
+    //   WHETHER to grab is about the destination, and the destination can now
+    //   change mid-capture, so it is settled at submit (see finishCapture).
+    //
+    //   WHEN to grab is about the physical key. right-Option is held for the
+    //   duration of its capture, and a synthesized Cmd+C landing while it is
+    //   down becomes Cmd+Opt+C — which Chrome reads as "Inspect Element" and
+    //   answers with DevTools. That deferral belongs to the key that is held,
+    //   not to where the words end up, so it keys off `openedByHeldKey` and
+    //   stays correct however many times the route moves afterwards.
+    if (!this.currentSession.openedByHeldKey && !this.currentSession.selectedText) {
       setTimeout(() => this.captureSelection(mode), 50)
     }
 
@@ -996,22 +1065,102 @@ class SessionManager {
     }
     console.log('[session] 🛰  REMOTE capture START')
     // Reuse the dictation capture machinery wholesale, but stamp the session as
-    // 'remote' at birth so delivery dispatches instead of pasting. The kind lives
-    // on the session, so it can't leak if this capture is later cancelled.
-    this.startSession('dictation', 'remote', targetTaskId, agentAddressed)
+    // 'remote' at birth so delivery dispatches instead of pasting. The route
+    // lives on the session, so it can't leak if this capture is later cancelled
+    // — and it can now MOVE, without any of this machinery noticing.
+    //
+    // openedByHeldKey: right-Option and right-Command are both physically held
+    // through the press that starts them, so both defer the selection grab.
+    this.startSession('dictation', 'remote', targetTaskId, agentAddressed, true)
+  }
+
+  /**
+   * The live capture changed lanes.
+   *
+   * WHAT THIS MUST NOT DO is the whole of its design. It does not stop or
+   * start the recorder, does not open a session, and above all does not call
+   * beginSegment — that would discard the pad, mint a second segment id for
+   * one utterance, and zero the own-clipboard sequence depth mid-sequence,
+   * which leaves the clipboard watcher disarmed for the rest of the recording
+   * and silently drops every copy and screenshot after it. See setPadOrigin's
+   * own header.
+   *
+   * It writes one field, moves the pad's address to match, and tells the two
+   * surfaces. The audio, the open segment, the arbiter, the scratchpad and
+   * everything already spoken carry straight through.
+   */
+  setCaptureRoute(route: CaptureRoute): boolean {
+    const session = this.currentSession
+    if (!session) {
+      console.warn('[session] ⛔ route switch ignored — no capture is live')
+      return false
+    }
+    // ONLY WHILE THE MIC IS HOT. Once a capture is submitted its destination is
+    // settled; re-routing something already in flight is a different feature
+    // and a much worse one.
+    if (this.isProcessing || session.status !== 'recording') {
+      console.warn('[session] ⛔ route switch ignored — capture is', session.status,
+        '(processing:', this.isProcessing, ')')
+      return false
+    }
+    if (session.route === route) return true
+
+    const from = session.route
+    stampRoute(session, route)
+    // The address is resolved at submit from what the user is looking at THEN,
+    // so an explicit target from an earlier lane must not survive the move.
+    if (route !== 'task') session.remoteTargetId = null
+
+    // Fail-open, exactly like every other capture-seam call on this path: a
+    // pad failure must never surface on the dictation path.
+    try { setPadOrigin(padOriginOf(route), Date.now()) } catch (e) {
+      console.warn('[session] pad origin follow failed:', e)
+    }
+
+    // BADGE ONLY — never 'recording:start'. That handler calls startRecording(),
+    // which re-acquires the microphone and would throw away everything spoken
+    // so far. This is the entire reason the route change has its own channel.
+    sendToWidget('capture:route', route, session.sessionId)
+    console.log('[session] 🔀 capture route:', from, '→', route)
+    logTelemetry('capture-route-switch', { sessionId: session.sessionId, from, to: route })
+    try { this.onCaptureRouteChanged?.(route) } catch (e) {
+      console.warn('[session] route observer failed:', e)
+    }
+    return true
+  }
+
+  /** What the LIVE capture is addressed at, or null when nothing is recording. */
+  get captureRoute(): CaptureRoute | null {
+    return this.currentSession?.status === 'recording' ? this.currentSession.route : null
   }
 
   async stopRemoteCapture(): Promise<void> {
     console.log('[session] 🛰  REMOTE capture STOP → awaiting audio, then process')
+    await this.finishCapture()
+  }
+
+  /**
+   * Finish the live capture and process it.
+   *
+   * THE SUBMIT PATH BELONGS TO THE ROUTE, NOT TO THE KEY THAT PRESSED IT.
+   * There used to be two: dictation stopped and let the chain window expire
+   * into processSession, while remote stopped, grabbed the selection, waited
+   * for the audio to land and processed immediately. With the route fixed at
+   * key-down that was the same distinction twice. It is not any more — a
+   * capture opened on fn and submitted on right-Option must take the remote
+   * shape, and one opened on right-Option and submitted on fn must not wait on
+   * a chain window that will never resolve it.
+   */
+  async finishCapture(): Promise<void> {
     await this.stopRecording('dictation')
 
-    // Deferred selection grab — see startSession. The right-option trigger has
-    // now been released, so the synthesized osascript Cmd+C lands cleanly
-    // (no Cmd+Opt+C, no Chrome DevTools). A short settle lets the modifier
-    // fully lift before we synthesize the keystroke; we AWAIT the grab so the
-    // selection is populated before processSession() reads it — preserving the
+    // Deferred selection grab — see startSession. The held trigger has now been
+    // released, so the synthesized osascript Cmd+C lands cleanly (no Cmd+Opt+C,
+    // no Chrome DevTools). A short settle lets the modifier fully lift before
+    // we synthesize the keystroke; we AWAIT the grab so the selection is
+    // populated before processSession() reads it — preserving the
     // select-text→command flow with no loss of ordering.
-    if (this.currentSession && !this.currentSession.selectedText) {
+    if (this.currentSession?.openedByHeldKey && !this.currentSession.selectedText) {
       await new Promise((r) => setTimeout(r, 60))
       await this.captureSelection('dictation')
     }
@@ -1194,7 +1343,15 @@ class SessionManager {
       // Nothing about the dispatch itself changes: same work, same order (see
       // the queue below), only the UI stops blocking on it.
       remoteDispatchQueue = remoteDispatchQueue
-        .then(() => dispatchFromCapture(cmd, session.captureAttachments, session.remoteTargetId))
+        // THE ROUTE TRAVELS WITH THE UTTERANCE. It used to be read from a
+        // module-level variable in init.ts at dispatch time, which is how a
+        // cancelled Agent capture came to speak for every Remote press that
+        // followed it. Passed explicitly, a dispatch can only ever be told the
+        // address of the capture that produced it — and this queue is drained
+        // AFTER currentSession is nulled, so there is nothing left to ask.
+        .then(() => dispatchFromCapture(cmd, session.captureAttachments, session.remoteTargetId, {
+          route: session.route,
+        }))
         .catch((e) => {
           console.error('[session] 🛰  REMOTE dispatch failed:', e instanceof Error ? e.message : e)
         })

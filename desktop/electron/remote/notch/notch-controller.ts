@@ -1594,9 +1594,22 @@ export class NotchController {
 
   // ── external notifications (init forwards these) ───────────────────────────
 
+  /**
+   * The capture surface's "listening → transcribing → routing" line, and what
+   * it says the words are aimed at.
+   *
+   * NO TARGET MEANS NO TARGET. This used to fall back to the focused task when
+   * `taskId` was null, which read as helpful and was a lie in the one case
+   * that matters: an Agent capture is ALWAYS null here — pressing its own key
+   * is a statement about who you are talking to — so with a task in the pocket
+   * the notch announced that task as the destination while the utterance went,
+   * correctly, to the Agent. A dictation had the same problem for the same
+   * reason. The caller knows what this capture is addressed at; when it says
+   * nothing, that is the answer.
+   */
   notifyCapturePhase(phase: string, taskId: string | null): void {
     const t = taskId ? this.deps.getTask(taskId) : undefined
-    const target = t ? (t.name ?? truncate(t.intent)) : (this.focusedId ? this.titleOf(this.focusedId) : undefined)
+    const target = t ? (t.name ?? truncate(t.intent)) : undefined
     this.client.send({ type: 'capturePhase', phase, target })
   }
 

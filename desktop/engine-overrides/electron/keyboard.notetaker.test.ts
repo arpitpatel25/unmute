@@ -1,19 +1,14 @@
-// NOT PART OF THE DEFAULT `npm test` RUN — run it with `npm run
-// test:notetaker-keyboard`.
+// Part of the default `npm test` run.
 //
-// It is excluded from the default glob in package.json
-// ("engine-overrides/electron/**/!(keyboard.notetaker).test.ts") because it
-// CANNOT load standalone in this repo: keyboard.ts imports
-// './paywall/remote/capture/agentGesture', a path that only exists after
-// build/wire-into-engine.sh copies desktop/electron/remote/ onto the OSS
-// engine's electron/paywall/. Outside that wired tree the import fails with
-// ERR_MODULE_NOT_FOUND before a single test runs. That is a pre-existing,
-// already-ruled limitation of loading keyboard.ts here, not a bug in these
-// tests — but leaving a permanently-red file in the default suite trains
-// everyone to ignore the suite's overall pass/fail signal, which is exactly
-// how ten genuinely pre-existing failures in provider-contract.test.ts went
-// unnoticed. So it lives behind its own script instead: the default run's
-// exit code stays meaningful, and this file stays invocable.
+// IT WAS NOT, AND COULD NOT BE, UNTIL NOW. keyboard.ts imports its POST-WIRE
+// path './paywall/remote/capture/agentGesture', which does not exist in this
+// repo — engine-overrides/electron/ and electron/remote/ are sibling trees, and
+// only build/wire-into-engine.sh's copy puts one inside the other. So this file
+// failed to load before a single test ran, was excluded from the default glob,
+// and its dedicated `test:notetaker-keyboard` script had never passed either.
+//
+// wired-tree-setup.mjs maps those post-wire prefixes back for test runs, so
+// keyboard.ts loads and these tests execute. See that file's header.
 
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'

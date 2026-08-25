@@ -12,7 +12,7 @@ import {
   commitDelivery, gateDelivery, registerHistoryCopy, registerSettings, removeFromPad, restageDelivery, runDelivery,
   segmentOpen, setOwnSequenceCeiling, setScratchpadRoot, snapshot, takeForDelivery,
   writePadNow,
-  registerComposerImageSink, stageImagesIntoFocusedComposer,
+  registerComposerImageSink, stageImagesIntoFocusedComposer, setPadOrigin,
 } from './index'
 import { SETTLE_IDLE_MS, deserialize, padDirFor, serialize } from './scratchpadStore'
 import { TEXT_DEDUP_WINDOW_MS } from './clipboardLedger'
@@ -2360,5 +2360,90 @@ describe('images delivered while Unmute\'s own composer is focused', () => {
   test('fall back to the keystroke when nothing registered a sink at all', () => {
     registerComposerImageSink(null)
     assert.equal(stageImagesIntoFocusedComposer(['/tmp/a.png']), false)
+  })
+})
+
+// ── The capture's lane, and the pad that follows it ──────────────────────
+//
+// A capture can now change lanes while it is running (fn → right-Option →
+// right-Command, any number of times), and a held pad can be resumed with a
+// different lane's key. The pad's origin decides which destinations the panel
+// offers, so it has to follow — and it has to follow WITHOUT going anywhere
+// near beginSegment, for the reasons setPadOrigin's own header sets out.
+
+describe('the pad follows the lane the capture is on', () => {
+  test('setPadOrigin moves the address and nothing else', () => {
+    beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'text', text: 'https://example.com', atMs: 1100 }, 1100)
+    const before = snapshot().pad
+    assert.equal(before?.origin, 'cursor')
+    const entriesBefore = before?.entries.length
+
+    setPadOrigin('task', 1200)
+
+    const after = snapshot().pad
+    assert.equal(after?.origin, 'task')
+    // Same pad, same id, same entries — a switch is a field moving, not a
+    // buffer being rebuilt.
+    assert.equal(after?.id, before?.id)
+    assert.equal(after?.entries.length, entriesBefore)
+    assert.ok(segmentOpen(), 'the open segment survives a switch')
+  })
+
+  test('setPadOrigin leaves the open segment id alone', () => {
+    const id = beginSegment('cursor', 1000, true)
+    setPadOrigin('agent', 1100)
+    attachTranscript(id, 'the words that were actually said', 1200)
+    const texts = segs().map((s) => (s as { text: string }).text)
+    assert.deepEqual(texts, ['the words that were actually said'],
+      'the transcript lands in the segment the capture opened, not a new one')
+  })
+
+  test('a switch does not disturb an own-clipboard sequence', () => {
+    // THE HAZARD THIS FUNCTION EXISTS FOR. beginSegment zeroes ownSequenceDepth;
+    // if it were used to restamp the origin mid-sequence, the matching end call
+    // would return early at depth 0 and the watcher would stay stopped for the
+    // rest of the recording — every later copy silently dropped.
+    beginSegment('cursor', 1000, true)
+    const startsBefore = clipCalls.starts
+    beginOwnClipboardSequence()
+    setPadOrigin('task', 1050)
+    endOwnClipboardSequence(1100)
+    assert.ok(clipCalls.starts > startsBefore, 'the clipboard watcher was resumed')
+  })
+
+  test('setPadOrigin is a no-op with no pad, and when nothing changes', () => {
+    assert.doesNotThrow(() => setPadOrigin('task', 1000))
+    assert.equal(snapshot().pad, null)
+    beginSegment('task', 1000, true)
+    const before = snapshot().pad?.updatedAt
+    setPadOrigin('task', 5000)
+    assert.equal(snapshot().pad?.updatedAt, before, 'an unchanged origin touches nothing')
+  })
+
+  test('resuming a held pad in another lane moves its origin', () => {
+    // Pause a dictation with the pad armed, then carry on with right-Option.
+    // Same pad, new address — this is a switch taken across a pause.
+    armScratchpad(true)
+    const first = beginSegment('cursor', 1000, true)
+    attachTranscript(first, 'first half', 1100)
+    endSegment(1200)
+    const padId = snapshot().pad?.id
+    assert.equal(snapshot().pad?.origin, 'cursor')
+
+    beginSegment('task', 2000, true)
+
+    assert.equal(snapshot().pad?.id, padId, 'the held pad is the same pad')
+    assert.equal(snapshot().pad?.origin, 'task', 'and it now answers to the task lane')
+    assert.equal(segs().length, 2, 'the held segment is still there beside the new one')
+  })
+
+  test('an unarmed pad is still replaced wholesale, origin and all', () => {
+    const first = beginSegment('cursor', 1000, true)
+    attachTranscript(first, 'gone', 1100)
+    endSegment(1200)
+    beginSegment('task', 2000, true)
+    assert.equal(snapshot().pad?.origin, 'task')
+    assert.equal(segs().length, 1, 'nothing is held, so nothing carries over')
   })
 })

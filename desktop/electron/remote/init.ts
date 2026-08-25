@@ -91,11 +91,6 @@ import { selectSessions, type IndexedSession } from './agent/sessions/index'
 /** Where the Agent's last conversation got to. Memory is the durable
  *  continuity; this is only the short-term thread. */
 let lastAgentConversation: Conversation | null = null
-import {
-  nextCaptureAddress,
-  type CaptureAddress,
-  type CaptureAddressEvent,
-} from './capture/captureAddress'
 import { CodexCliProvider } from './agent/providers/codex'
 import { probeCli, type AgentProviderId, type ProviderProbe } from './agent/provider'
 import { SafeStorageKeyProvider } from './agent/memory/key-provider'
@@ -168,7 +163,23 @@ import {
   registerTaskDraftAttachmentSink,
 } from './task-attachment-paste'
 import { SETTLE_IDLE_MS } from './capture/scratchpadStore'
-import type { Entry, InsertKind } from './capture/types'
+import type { Destination, Entry, InsertKind } from './capture/types'
+
+/**
+ * The lane a capture is on — cursor (fn), task (right-Option), agent
+ * (right-Command).
+ *
+ * AN ALIAS, NOT A SECOND UNION. The authority is `captureRoute.ts` in the
+ * engine tree, which this file cannot import: engine-overrides/electron/ is a
+ * sibling tree, and a relative path that resolves after wire-into-engine.sh's
+ * copy does not resolve here (see notetakerInit.ts's header, and the TS2307s
+ * that keyboard.ts and db.ts carry for exactly this reason). Aliasing the pad's
+ * own `Destination` instead of retyping the three literals means the two cannot
+ * drift apart silently — they were deliberately given the same vocabulary so
+ * a capture's route and the pad's address are one word, not two that have to
+ * be mapped.
+ */
+type CaptureRoute = Destination
 import { CaptureHistoryStore, clipboardPayload, type CaptureHistoryKind } from './capture/history-store'
 import { screenCaptureVisibility } from './screen-capture-visibility'
 import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
@@ -179,6 +190,14 @@ import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
 interface SessionManagerLike {
   startRemoteCapture(targetTaskId?: string | null, agentAddressed?: boolean): void
   stopRemoteCapture(): Promise<void>
+  /** Move the LIVE capture to another lane. Returns false when there is
+   *  nothing hot to move — the mic is the only window in which this is legal. */
+  setCaptureRoute?(route: CaptureRoute): boolean
+  /** The live capture's lane, or null when nothing is recording. */
+  readonly captureRoute?: CaptureRoute | null
+  /** Announced when the live capture changes lanes, so the surfaces this file
+   *  owns — the pill's chips, the notch's capture label — can follow. */
+  onCaptureRouteChanged?: ((route: CaptureRoute) => void) | null
   /** Fired from every ending the session has — dispatch, cancel, too-short,
    *  junk STT. Declared here so the lane locks can be cleared however a capture
    *  dies, rather than only by its own stop tap. */
@@ -187,8 +206,16 @@ interface SessionManagerLike {
 interface KeyboardManagerLike {
   on(event: 'keyboard', cb: (e: { type: string }) => void): unknown
   /** Clears the Orchestrator and Agent locks. Never dictation's — that lane is
-   *  the user's way out when something else is wedged. */
+   *  the user's way out when something else is wedged.
+   *
+   *  IT NOW HAS CALLERS. It was added to fix exactly the failure its name
+   *  describes and then never subscribed to — see the refusal paths in the
+   *  keyboard handler below, which is where a lane latches with no capture
+   *  behind it and therefore no session whose ending could clear it. */
   onCaptureEnded?(): void
+  /** Whether the Agent can take work, pushed down so the keyboard can refuse a
+   *  press BEFORE it latches the lane rather than after. */
+  setUnmuteAgentAvailable?(available: boolean): void
 }
 export interface RemoteInitDeps {
   sessionManager: SessionManagerLike
@@ -562,6 +589,10 @@ async function getSetupStatus() {
 }
 
 let manager: TaskManager | null = null
+/** The OSS engine's session manager, kept so the few things that need to ask
+ *  the LIVE capture a question (which lane is it on?) can, without threading
+ *  `deps` through every helper. Set once by initRemote; opaque by contract. */
+let sessionManagerRef: SessionManagerLike | null = null
 
 type UnmuteAgentUnavailableReason =
   | 'disabled'
@@ -794,9 +825,23 @@ function broadcastUnmuteAgentActivity(activity: AgentInteractionActivity | Unmut
   notchClient?.send({ type: 'agentActivity', activity: snapshot })
 }
 
-async function submitUnmuteAgent(input: AgentInteractionInput): Promise<AgentInteractionResult> {
+async function submitUnmuteAgent(
+  input: AgentInteractionInput,
+  /**
+   * Did the user address this at the Agent by pressing its own key?
+   *
+   * IF SO, A FOCUSED COMPOSER IS NOT A DESTINATION. The Agent is handed
+   * `activeTaskId` so it can act on the thing you are working in, and it can
+   * stage text into that task's draft with delivery_copy_text(taskId). That is
+   * right for an Agent turn raised from inside a task, and wrong for one you
+   * raised by pressing right-Command: the key IS the statement about who you
+   * are talking to, and a text box having focus is not. Reported as "the Agent
+   * key goes into whatever is open in the pocket".
+   */
+  addressedByKey = false,
+): Promise<AgentInteractionResult> {
   if (!unmuteAgentController) throw new Error('Unmute Agent is unavailable')
-  const focusedTaskId = input.currentContext?.activeTaskId
+  const focusedTaskId = (input.currentContext?.activeTaskId || addressedByKey)
     ? undefined
     : notchController?.focusedComposerTaskId()
   const focusedTask = focusedTaskId ? manager?.get(focusedTaskId) : undefined
@@ -2379,7 +2424,15 @@ async function refreshCodexReasoningForPill(): Promise<void> {
  *
  *  Best-effort by design: a chip that cannot be resolved simply does not
  *  render, and a failure here must never surface on the capture path. */
-async function pushPillChips(taskId: string | null = null): Promise<void> {
+async function pushPillChips(
+  taskId: string | null = null,
+  // ASKED FOR, NOT READ FROM A GLOBAL. The lane is a property of the live
+  // capture, which can now change lanes mid-utterance — so the caller, which
+  // knows what just happened, says which one it is drawing for. Defaulting to
+  // whatever the session manager reports keeps every existing call site (task
+  // pickers, model changes, settings) correct without passing it explicitly.
+  lane: CaptureRoute | null = liveCaptureRoute(),
+): Promise<void> {
   if (!pillController) return
   try {
     const addressed = taskId ? manager?.get(taskId) : undefined
@@ -2582,7 +2635,7 @@ async function pushPillChips(taskId: string | null = null): Promise<void> {
     // provider is a setting, chosen once. Blanked rather than skipped, because
     // `push` MERGES and an absent key would leave the previous lane's chips on
     // screen.
-    if (captureAddress === 'agent') {
+    if (lane === 'agent') {
       chips.agent = 'Unmute Agent'
       chips.agentOptions = []
       chips.model = undefined
@@ -2591,7 +2644,7 @@ async function pushPillChips(taskId: string | null = null): Promise<void> {
       chips.modelEmpty = undefined
     }
     log.event('pill-chips', {
-      lane: captureAddress === 'agent' ? 'agent' : 'orchestrator',
+      lane: lane === 'agent' ? 'agent' : 'orchestrator',
       agent: chips.agent ?? null,
       model: chips.model ?? null,
       axes: (chips.modelAxes ?? []).map((a) => `${a.axis}:${a.values.length}`),
@@ -2895,6 +2948,42 @@ async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask' | 'agen
  *  that task still exists. A task can end or be removed while a pad is held, so
  *  the id alone is not enough; offering a destination that cannot receive is
  *  worse than not offering it at all. */
+/**
+ * The task a right-Option capture would land in IF IT WERE SUBMITTED NOW.
+ *
+ * Deliberately a live read rather than anything stored. `applyVoiceTarget()`
+ * in the notch controller already maintains exactly this rule — a task
+ * expanded wins, otherwise the pocket's current slot when it is open, and
+ * nothing at all when it is closed, which means the router and a new task —
+ * and re-answering it here is how two copies of one question drift apart.
+ */
+function liveVoiceTarget(): string | null {
+  return orchestrateFocusId && manager?.get(orchestrateFocusId) ? orchestrateFocusId : null
+}
+
+/** The lane the live capture is on, or null when nothing is recording. */
+/**
+ * The voice target moved while something may be recording.
+ *
+ * LATE BINDING HAS TO BE VISIBLE OR IT IS JUST UNPREDICTABLE. The target is
+ * now read at submit, so moving the pocket mid-utterance changes where the
+ * words land — and a pill still naming the task you have moved off is worse
+ * than the snapshot this replaced. Only the task lane cares: a dictation goes
+ * to the cursor and an Agent capture goes to the Agent, whatever is on screen.
+ */
+function voiceTargetMoved(): void {
+  if (liveCaptureRoute() !== 'task') return
+  // One call, not two: broadcastCapturePhase re-pushes the chips itself on
+  // 'listening', reading the live lane. Pushing here as well was the same
+  // payload twice — dropped by push()'s own equality check, but the kind of
+  // duplication that later grows a second opinion.
+  broadcastCapturePhase('listening', liveVoiceTarget())
+}
+
+function liveCaptureRoute(): CaptureRoute | null {
+  return sessionManagerRef?.captureRoute ?? null
+}
+
 function scratchpadDestinations(): {
   cursor: true
   newTask: true
@@ -3308,16 +3397,27 @@ export interface CaptureDispatchOptions {
   destination?: Extract<CaptureDestination, 'task' | 'unmute-agent'>
   /** Present only when the user explicitly addressed an earlier Agent run. */
   priorAgentRunId?: string
+  /**
+   * The lane the capture was on WHEN IT WAS SUBMITTED, carried from the
+   * session that produced it.
+   *
+   * THIS REPLACES A MODULE-LEVEL VARIABLE, and the replacement is the point.
+   * The address used to live in a `captureAddress` global here, advanced by
+   * key-down and spent by dispatch — so a capture that never dispatched, being
+   * cancelled or superseded, left it set. Observed 2026-08-18: an Agent
+   * capture was cancelled a second after it began and from then on every
+   * Remote press was silently readdressed to the Agent; the user's task never
+   * ran, and an Agent reply appeared twelve seconds after they released the
+   * Remote key, indistinguishable from one they had asked for. The fold that
+   * replaced it narrowed the window but kept the shape — and kept a hole, in
+   * that the addressed-task branch below returns before ever spending it.
+   *
+   * A field on the session cannot have that class of bug: the session is
+   * nulled on every teardown path there is, and the route rides along with the
+   * utterance it belongs to. Nothing outlives the capture that set it.
+   */
+  route?: CaptureRoute
 }
-
-/** Who the live capture is addressed to. The rule, and the failure it exists
- *  for, live in capture/captureAddress.ts where they are tested. */
-let captureAddress: CaptureAddress = 'task'
-function advanceCaptureAddress(event: CaptureAddressEvent): void {
-  captureAddress = nextCaptureAddress(captureAddress, event)
-}
-export function markCaptureAddressedToAgent(): void { advanceCaptureAddress('agent-start') }
-export function clearAgentAddressedCapture(): void { advanceCaptureAddress('remote-start') }
 
 export async function dispatchFromCapture(
   rawTranscript: string,
@@ -3325,14 +3425,15 @@ export async function dispatchFromCapture(
   targetTaskId?: string | null,
   options: CaptureDispatchOptions = {},
 ): Promise<string | null> {
-  // Read, not consumed, here — the addressed-task shortcut below needs to see it
-  // too. Cleared once the destination has actually been resolved.
-  if (captureAddress === 'agent') options = { ...options, destination: 'unmute-agent' }
+  // The lane this utterance was on when the user submitted it. Handed in by
+  // the session that recorded it (see CaptureDispatchOptions.route), never
+  // read from anything that outlives the capture.
+  if (options.route === 'agent') options = { ...options, destination: 'unmute-agent' }
   // WHY THIS WENT WHERE IT WENT, recorded rather than left to inference. The
   // failure that made this necessary looked exactly like a normal Agent turn
   // in the logs, twelve seconds after a Remote key release.
   log.event('capture-destination', {
-    address: captureAddress,
+    route: options.route ?? null,
     explicit: options.destination ?? null,
     targetTaskId: targetTaskId ?? null,
   })
@@ -3382,7 +3483,7 @@ async function dispatchFromCaptureInner(
   //
   // Pressing the Agent key is a statement about WHO you are talking to. A task
   // being on screen is not.
-  const addressedToAgent = captureAddress === 'agent' || options.destination === 'unmute-agent'
+  const addressedToAgent = options.route === 'agent' || options.destination === 'unmute-agent'
   const addressedTaskId = addressedToAgent ? null : (targetTaskId ?? orchestrateFocusId)
   if (addressedTaskId && manager.list().some((t) => t.id === addressedTaskId)) {
     const fid = addressedTaskId
@@ -3465,7 +3566,6 @@ async function dispatchFromCaptureInner(
     explicitDestination: options.destination,
     transcript: raw,
   })
-  advanceCaptureAddress('dispatched')
   if (destination === 'unmute-agent') {
     const transcript = agentAddress?.transcript ?? raw
     if (!unmuteAgentController || !unmuteAgentAvailability.available) {
@@ -3497,7 +3597,14 @@ async function dispatchFromCaptureInner(
           return decision.resume ? { priorRunId: decision.runId } : {}
         })()),
     }
-    const result = await submitUnmuteAgent(input)
+    // `route === 'agent'` means the user pressed (or switched to) the Agent's
+    // own key. An explicit `destination` covers the scratchpad's Agent button,
+    // which is the same statement made with a different gesture. Either way a
+    // task's focused composer must not capture this turn.
+    const result = await submitUnmuteAgent(
+      input,
+      options.route === 'agent' || options.destination === 'unmute-agent',
+    )
     log.event('agent-capture-complete', {
       interactionId: result.interactionId,
       agentRunId: result.agentRunId,
@@ -3907,8 +4014,17 @@ const CURATOR_PARKED = true
 
 export function initRemote(deps: RemoteInitDeps): TaskManager {
   notetakerAdapters = deps.notetaker ?? null
+  sessionManagerRef = deps.sessionManager
   captureHistory.cleanup()
   if (manager) return manager
+
+  // THE AGENT'S GATE, ANSWERED BEFORE THE LANE LATCHES. Pushed down the same
+  // way paywall-glue pushes the Orchestrator's entitlement into
+  // remoteTriggerGate: this file owns the setting, the keyboard only asks. The
+  // check used to live here, on the agent-start we RECEIVE — by which point
+  // the keyboard had already set its lock, with no capture behind it and no
+  // session whose ending could clear it.
+  deps.keyboardManager.setUnmuteAgentAvailable?.(settings.get('unmuteAgentAvailable') === true)
 
   // DEV-ONLY curator diagnostics gate — set VERY EARLY, before the Curator is
   // constructed. An UNPACKAGED dev/test run auto-enables comprehensive curator
@@ -4305,6 +4421,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         focus: (id) => {
           orchestrateFocusId = id
           log.event('orchestrate-focus-set', { taskId: orchestrateFocusId, via: 'notch' })
+          voiceTargetMoved()
           // Same reason as the IPC setter: the pad's destinations are computed
           // per push, so a focus change has to announce itself or the
           // "Add to <task>" button never appears on an already-open pad.
@@ -4772,6 +4889,19 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // self-guard; that carry-forward enforcement is this map's responsibility.
   const curatorConversations = new Map<string, ProposalConversation>()
 
+  // ── The live capture changed lanes: redraw the pill's chips ──
+  //
+  // A FULL PUSH, NEVER A DELTA. PillController.push MERGES, so an absent key
+  // leaves the previous lane's value on screen — which is exactly why
+  // pushPillChips blanks the model column explicitly in the Agent lane rather
+  // than omitting it. Switching lanes mid-capture is the case that makes that
+  // matter most: without this the pill would still be offering "Codex CLI" to
+  // someone who is now talking to the Agent.
+  deps.sessionManager.onCaptureRouteChanged = (route: CaptureRoute) => {
+    void pushPillChips(route === 'task' ? liveVoiceTarget() : null, route)
+    pillController?.push({ kind: route === 'cursor' ? 'dictation' : 'remote' })
+  }
+
   // ── Wire the Remote trigger key → capture (PRD §2.4.4 / §5) ──
   // keyboard.ts emits 'remote-start'/'remote-stop' for the non-dictation key;
   // route them to the sessionManager's Remote capture (which reuses the STT
@@ -4782,35 +4912,59 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // reconstructing ownership from timestamps; the address is now stated
       // here, at key-down, where it is decided.
       log.event('remote-key', { phase: 'start', lane: 'orchestrator', address: 'task' })
-      // This utterance is addressed at a task, not at the Agent. Say so now:
-      // a previous Agent capture that never dispatched must not speak for it.
-      clearAgentAddressedCapture()
       void router?.warm() // ensure the classifier is ready before the utterance lands (re-warms if it died)
       pauseOverlayEscape() // capture owns Escape (cancel) while recording
-      // Snapshot the visible address now. Transcription completes later, during
-      // which task lifecycle events may legitimately change the live focus.
-      // A capture is an intent addressed at key-down, not at delivery time.
-      const targetTaskId = orchestrateFocusId && manager?.get(orchestrateFocusId)
-        ? orchestrateFocusId
-        : null
-      deps.sessionManager.startRemoteCapture(targetTaskId)
-      broadcastCapturePhase('listening', targetTaskId) // ADDITIVE observer — the capture itself is untouched
+      // NO SNAPSHOT. This used to freeze the visible address at key-down —
+      // "a capture is an intent addressed at key-down, not at delivery time".
+      // That is the position this change reverses, deliberately: which task
+      // you mean is the one you are looking at when you finish speaking, not
+      // the one that happened to be on screen when you started. People move
+      // the pocket mid-sentence precisely BECAUSE they are choosing.
+      //
+      // Passing null lets dispatchFromCaptureInner fall through to the live
+      // `orchestrateFocusId`, which applyVoiceTarget() already keeps exactly
+      // in step with the surface — pocket open aims at the slot under the
+      // index, pocket closed means the router and a new task. No new state,
+      // and no second copy of a rule that already exists.
+      deps.sessionManager.startRemoteCapture(null)
+      broadcastCapturePhase('listening', liveVoiceTarget()) // ADDITIVE observer — the capture itself is untouched
     } else if (e.type === 'agent-start') {
       log.event('agent-key', { phase: 'start', lane: 'agent', address: 'agent' })
       if (settings.get('unmuteAgentAvailable') !== true) {
+        // BELT AS WELL AS BRACES. The keyboard now refuses this press before
+        // it latches the lane (setUnmuteAgentAvailable, pushed below), so this
+        // branch should be unreachable. If availability changed in the gap, the
+        // lane is latched with no capture behind it and therefore no session
+        // whose ending could clear it — which is precisely the failure
+        // onCaptureEnded was written for, and never wired to until now.
         log.event('agent-key', { phase: 'ignored', reason: 'not-available' })
+        deps.keyboardManager.onCaptureEnded?.()
         return
       }
       void router?.warm()
       pauseOverlayEscape()
       // Addressed at the AGENT, not at whatever task happens to be in focus —
-      // that is the whole point of giving it its own key.
-      markCaptureAddressedToAgent()
-      // The session is stamped too, not just the module-level address: the pad
-      // reads its origin from the session at beginSegment, and the address
-      // alone is not visible there.
+      // that is the whole point of giving it its own key. The session carries
+      // that address itself now; there is no module-level copy to set.
       deps.sessionManager.startRemoteCapture(null, true)
       broadcastCapturePhase('listening', null)
+    } else if (e.type === 'capture-route') {
+      // THE LIVE CAPTURE CHANGED LANES. Nothing here starts, stops or touches
+      // the recording — the recorder is not even reachable from this file. The
+      // session moves its own route (and the pad's address with it); this
+      // side only redraws what the two surfaces are saying.
+      const route = (e as { route?: CaptureRoute }).route
+      if (!route) return
+      const moved = deps.sessionManager.setCaptureRoute?.(route) ?? false
+      log.event('capture-route', { route, applied: moved })
+      if (!moved) return
+      if (route !== 'cursor') void router?.warm()
+      // Escape belongs to the capture for every lane; pauseOverlayEscape is a
+      // plain release, not a counter, so saying it again is free and saying it
+      // once too often cannot leak.
+      pauseOverlayEscape()
+      // The task lane aims at whatever is live; the other two aim at nothing.
+      broadcastCapturePhase('listening', route === 'task' ? liveVoiceTarget() : null)
     } else if (e.type === 'key-state') {
       // THE SEQUENCE, IN FULL. Every key and the state it left behind, so a
       // transition bug can be read straight off the log instead of inferred.
@@ -5030,6 +5184,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:set-orchestrate-focus', async (_e, id: string | null) => {
     orchestrateFocusId = id || null
     log.event('orchestrate-focus-set', { taskId: orchestrateFocusId })
+    voiceTargetMoved()
     // THE PAD'S DESTINATIONS ARE LIVE, NOT A SNAPSHOT. scratchpadDestinations()
     // runs only inside a pad push, so without this the "Add to <task>" button
     // reflected whichever task was focused the last time the PAD changed —
@@ -5057,6 +5212,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     settings.get('unmuteAgentAvailable') === true)
   ipcMain.handle('remote:set-unmute-agent-available', async (_e, on: boolean) => {
     settings.set('unmuteAgentAvailable', on === true)
+    // Keep the keyboard's copy in step, so its refusal happens before the lane
+    // latches rather than after — see initRemote's own push of this.
+    deps.keyboardManager.setUnmuteAgentAvailable?.(on === true)
     log.event('unmute-agent-availability', { enabled: on === true })
     return settings.get('unmuteAgentAvailable') === true
   })

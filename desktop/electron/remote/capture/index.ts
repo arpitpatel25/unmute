@@ -388,6 +388,17 @@ export function beginSegment(origin: Destination, now: number, observe: boolean)
   if (pad && !armed) discardPadFiles(pad)
   if (!armed) pad = null
   if (!pad) pad = emptyPad(randomUUID(), origin, now)
+  // AN ARMED PAD FOLLOWS THE LANE THAT IS FILLING IT NOW.
+  //
+  // A pad survives across captures, and its origin decides which destinations
+  // the panel offers — an 'agent' pad offers the Agent alone. The origin used
+  // to be set only when a pad was CREATED, so held work kept the address of
+  // whichever capture happened to open it: pause a dictation, resume it with
+  // right-Option, and the panel still offered you the cursor for work that is
+  // now addressed at a task. Resuming in another lane IS a switch, just one
+  // taken across a pause instead of during a capture, so it moves the origin
+  // for the same reason a mid-capture switch does.
+  else if (pad.origin !== origin) pad = { ...pad, origin, updatedAt: now }
   openSegmentId = randomUUID()
   clearOwnSequenceTimer()
   ownSequenceDepth = 0
@@ -400,6 +411,31 @@ export function beginSegment(origin: Destination, now: number, observe: boolean)
   armWatchers(padDirFor(scratchpadRoot, pad.id), observe)
   schedulePersist()
   return openSegmentId
+}
+
+/**
+ * The live capture changed lanes — move the pad's address with it.
+ *
+ * NARROW ON PURPOSE, AND THE ALTERNATIVE IS A DISASTER. The obvious way to
+ * restamp the origin mid-capture is to call beginSegment again with the new
+ * one. It would do three things, all of them wrong here: discard an unarmed
+ * pad and allocate a fresh one, losing every insert recorded so far; mint a
+ * second openSegmentId, so the transcript lands in a new empty segment and
+ * orphans the real one; and reset ownSequenceDepth/suppressDetectedUpTo to
+ * zero. That last is the quiet one — with an own-clipboard sequence in flight
+ * (the selection grab shells out to osascript for ~200ms), the matching
+ * endOwnClipboardSequence then returns early at depth 0, resumeAfterOwnSequence
+ * never runs, and the clipboard watcher stays stopped and disarmed for the rest
+ * of the recording. Every copy and screenshot after that point is silently
+ * dropped.
+ *
+ * So this writes one field and announces. Nothing else.
+ */
+export function setPadOrigin(origin: Destination, now: number): void {
+  if (!pad || pad.origin === origin) return
+  pad = { ...pad, origin, updatedAt: now }
+  schedulePersist()
+  announcePad()
 }
 
 export function endSegment(now: number): void {
