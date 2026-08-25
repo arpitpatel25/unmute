@@ -151,7 +151,16 @@ async function attachMicChunkTap(
   workletRegistered: boolean,
 ): Promise<(() => void) | null> {
   const chunkDurationMs = Math.round((MIC_CHUNK_SAMPLES / ctx.sampleRate) * 1000)
+  // Renderer-side proof the audio graph is actually PRODUCING samples, distinct
+  // from main's own 'mic-chunk heartbeat' (which only proves the IPC message
+  // arrived) — logging both sides of the same handoff is what makes "the tap
+  // attached but nothing ever flowed" distinguishable from "IPC dropped it".
+  let chunksSent = 0
   const send = (samples: ArrayBuffer) => {
+    chunksSent++
+    if (chunksSent === 1) {
+      wlog('debug', 'first mic chunk sent to main over IPC', { sampleBytes: samples.byteLength })
+    }
     // Timestamp the START of the chunk, not the moment it finished filling —
     // the main process aligns the two channels' transcripts by first
     // timestamp, so a systematic one-chunk lag would skew the merge.
@@ -197,7 +206,7 @@ async function attachMicChunkTap(
       node.port.onmessage = (e: MessageEvent) => send(e.data as ArrayBuffer)
       source.connect(node)
       node.connect(sink)
-      wlog('info', 'mic tap attached via AudioWorklet', { chunkDurationMs, contextSampleRate: ctx.sampleRate })
+      wlog('info', 'mic tap attached via AudioWorklet', { chunkDurationMs, contextSampleRate: ctx.sampleRate, contextState: ctx.state })
       return () => {
         node.port.onmessage = null
         try { node.disconnect() } catch { /* graph already torn down */ }
@@ -219,7 +228,7 @@ async function attachMicChunkTap(
     }
     source.connect(processor)
     processor.connect(sink)
-    wlog('info', 'mic tap attached via ScriptProcessorNode (AudioWorklet fallback)', { chunkDurationMs, contextSampleRate: ctx.sampleRate })
+    wlog('info', 'mic tap attached via ScriptProcessorNode (AudioWorklet fallback)', { chunkDurationMs, contextSampleRate: ctx.sampleRate, contextState: ctx.state })
     return () => {
       processor.onaudioprocess = null
       try { processor.disconnect() } catch { /* already disconnected */ }
@@ -444,6 +453,18 @@ export function NotetakerWidget({
  * strictly inside the same window as the stream it reads.
  */
 export function NotetakerWidgetRoute() {
+  // Stable across the whole life of this mount (React only evaluates a
+  // useRef initializer once) — everything below logs its own timing against
+  // this, since "was the listener even mounted yet when main's signal
+  // arrived" is exactly the race that dropped a capture-active signal on the
+  // widget's very first load (see notetakerWidget.ts's own broadcast logs
+  // for the main-process side of the same timeline).
+  const mountedAtRef = useRef(Date.now())
+
+  useEffect(() => {
+    wlog('info', 'widget route mounted', { at: mountedAtRef.current })
+  }, [])
+
   // The engine's body defaults to an opaque `--color-cream` fill (styles.css)
   // that the dictation widget (WidgetApp.tsx) strips with this exact
   // 'widget-body' class + documentElement override. This route never needed
@@ -485,8 +506,10 @@ export function NotetakerWidgetRoute() {
   useEffect(() => {
     const ctx = new AudioContext()
     audioContextRef.current = ctx
+    wlog('info', 'AudioContext created', { initialState: ctx.state, sampleRate: ctx.sampleRate, msSinceMount: Date.now() - mountedAtRef.current })
     workletReadyRef.current = registerMicWorklet(ctx)
     return () => {
+      wlog('info', 'AudioContext closing (route unmounting)', { stateAtClose: ctx.state })
       audioContextRef.current = null
       workletReadyRef.current = null
       void ctx.close()
@@ -494,8 +517,10 @@ export function NotetakerWidgetRoute() {
   }, [])
 
   useEffect(() => {
+    const registeredAt = Date.now()
+    wlog('debug', 'capture-active listener mounted', { msSinceMount: registeredAt - mountedAtRef.current })
     const unsubscribe = api().notetakerOnCaptureActive?.((active) => {
-      wlog('debug', 'capture-active signal received from main', { active, wasActive: captureActiveRef.current })
+      wlog('debug', 'capture-active signal received from main', { active, wasActive: captureActiveRef.current, msSinceListenerMounted: Date.now() - registeredAt })
       if (active && !captureActiveRef.current) setSessionId((n) => n + 1)
       captureActiveRef.current = active
       setCaptureActive(active)
@@ -507,8 +532,10 @@ export function NotetakerWidgetRoute() {
   // `stopPending` prop comment: capture keeps running through this window,
   // it is only about to stop unless the user taps left Control again.
   useEffect(() => {
+    const registeredAt = Date.now()
+    wlog('debug', 'stop-pending listener mounted', { msSinceMount: registeredAt - mountedAtRef.current })
     const unsubscribe = api().notetakerOnStopPending?.((pending) => {
-      wlog('debug', 'stop-pending signal received from main', { pending })
+      wlog('debug', 'stop-pending signal received from main', { pending, msSinceListenerMounted: Date.now() - registeredAt })
       setStopPending(pending)
     })
     return () => unsubscribe?.()
@@ -527,11 +554,19 @@ export function NotetakerWidgetRoute() {
     let analyserNode: AnalyserNode | null = null
     let disposeMicTap: (() => void) | null = null
 
-    wlog('info', 'requesting mic capture for a new session')
+    const requestedAt = Date.now()
+    wlog('info', 'requesting mic capture for a new session', { contextStateAtRequest: ctx.state })
     navigator.mediaDevices
       .getUserMedia({ audio: true })
       .then(async (s) => {
+        // Silent before this fix: if the session was stopped WHILE
+        // getUserMedia was still pending (a real observed shape — a session
+        // this short never even reached the next log line), this branch fired
+        // and nothing downstream of it ever ran or logged anything at all.
         if (cancelled) {
+          wlog('info', 'mic capture granted but session already ended — discarding', {
+            msFromRequestToGrant: Date.now() - requestedAt,
+          })
           s.getTracks().forEach((t) => t.stop())
           return
         }
@@ -544,12 +579,30 @@ export function NotetakerWidgetRoute() {
           // OS declines to disclose the device name.
           deviceLabel: track?.label || '<no label>',
           deviceId: track?.getSettings?.().deviceId,
+          // Whether the OS itself thinks this track is live — a track can be
+          // granted but already 'ended' or muted if the device was yanked or
+          // handed to someone else between permission grant and this line.
+          trackReadyState: track?.readyState,
+          trackMuted: track?.muted,
+          trackEnabled: track?.enabled,
+          contextStateAtGrant: ctx.state,
+          msFromRequestToGrant: Date.now() - requestedAt,
         })
 
         // The previous session suspended this context on teardown; resume is
         // near-instant (nothing to negotiate — the device stayed warm).
-        if (ctx.state === 'suspended') await ctx.resume()
+        if (ctx.state === 'suspended') {
+          const resumeStartedAt = Date.now()
+          wlog('debug', 'resuming suspended AudioContext')
+          await ctx.resume()
+          wlog('debug', 'AudioContext resumed', { newState: ctx.state, resumeDurationMs: Date.now() - resumeStartedAt })
+        }
         if (cancelled) {
+          // Also previously silent — the session ended DURING ctx.resume()'s
+          // await, so the tap/analyser below never got created either.
+          wlog('info', 'session ended while resuming the AudioContext — discarding this grant', {
+            contextStateAtCancel: ctx.state,
+          })
           s.getTracks().forEach((t) => t.stop())
           return
         }
@@ -602,6 +655,8 @@ export function NotetakerWidgetRoute() {
 
     return () => {
       cancelled = true
+      const hadDisposer = !!disposeMicTap
+      const hadStream = !!stream
       // Detach the tap BEFORE the tracks and nodes go away, so no chunk is
       // posted from a graph that is already being torn down.
       disposeMicTap?.()
@@ -614,13 +669,23 @@ export function NotetakerWidgetRoute() {
       // mount effect above). Suspending still fully releases the mic — only
       // the now-stopped MediaStreamTrack does that — while keeping the next
       // session's resume() instant instead of paying addModule() again.
+      const stateBeforeSuspend = audioContextRef.current?.state
       if (audioContextRef.current && audioContextRef.current.state === 'running') {
         void audioContextRef.current.suspend()
       }
       // Dropping the analyser is what stops the waveform's rAF loop (its
       // effect keys off this prop).
       setAnalyser(null)
-      wlog('debug', 'mic capture torn down for this session')
+      // hadDisposer/hadStream distinguish a session that actually got a mic
+      // tap attached (normal, clean teardown) from one that never did (this
+      // IS the "no mic ever captured" signature — everything above is a
+      // no-op, and this line is the only trace it happened at all).
+      wlog('debug', 'mic capture torn down for this session', {
+        hadDisposer,
+        hadStream,
+        durationMs: Date.now() - requestedAt,
+        contextStateBeforeSuspend: stateBeforeSuspend,
+      })
     }
   }, [captureActive])
 

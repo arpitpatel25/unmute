@@ -32,6 +32,13 @@ import { createLogger } from './log'
 const log = createLogger('notetaker-widget')
 
 let widgetWindow: BrowserWindow | null = null
+/** When the CURRENT widgetWindow was created — null until createNotetakerWidget()
+ *  first runs. Every broadcast/did-finish-load log below reports its elapsed
+ *  time against this, since "the widget window hadn't finished loading yet"
+ *  (a real, observed cause of a dropped capture-active signal — see
+ *  broadcastCaptureActive's own comment) is only diagnosable if the log shows
+ *  HOW LONG the window had been loading when a signal was sent. */
+let windowCreatedAt: number | null = null
 
 /** The capture-active signal last broadcast to the widget's renderer.
  *
@@ -50,10 +57,21 @@ let captureActive = false
 
 /** Tell the widget's renderer whether a REAL capture is running. Safe to
  *  call before the window exists or before its renderer has loaded — the
- *  state is cached and re-sent on every 'did-finish-load'. */
+ *  state is cached and re-sent on every 'did-finish-load'.
+ *
+ *  LOGS THE "COULD NOT SEND" CASE EXPLICITLY, not just the successful send:
+ *  a window that doesn't exist yet or is destroyed silently drops this call
+ *  (the cache still updates, so did-finish-load's resend recovers it LATER
+ *  — but only if that resend actually manages to reach a listener that has
+ *  mounted by then; see NotetakerWidget.tsx's own new mount-timing logs). */
 function broadcastCaptureActive(active: boolean): void {
   captureActive = active
-  if (!widgetWindow || widgetWindow.isDestroyed()) return
+  const msSinceWindowCreated = windowCreatedAt === null ? null : Date.now() - windowCreatedAt
+  if (!widgetWindow || widgetWindow.isDestroyed()) {
+    log.event('capture-active-broadcast-dropped', { active, reason: !widgetWindow ? 'no-window' : 'window-destroyed', msSinceWindowCreated })
+    return
+  }
+  log.event('capture-active-broadcast-sent', { active, webContentsIsLoading: widgetWindow.webContents.isLoading(), msSinceWindowCreated })
   widgetWindow.webContents.send('notetaker:capture-active', active)
 }
 
@@ -70,7 +88,12 @@ let stopPending = false
  *  on why this widget can only be reached via injected hooks). */
 export function broadcastStopPending(pending: boolean): void {
   stopPending = pending
-  if (!widgetWindow || widgetWindow.isDestroyed()) return
+  const msSinceWindowCreated = windowCreatedAt === null ? null : Date.now() - windowCreatedAt
+  if (!widgetWindow || widgetWindow.isDestroyed()) {
+    log.event('stop-pending-broadcast-dropped', { pending, reason: !widgetWindow ? 'no-window' : 'window-destroyed', msSinceWindowCreated })
+    return
+  }
+  log.event('stop-pending-broadcast-sent', { pending, msSinceWindowCreated })
   widgetWindow.webContents.send('notetaker:stop-pending', pending)
 }
 
@@ -107,8 +130,12 @@ function widgetBounds(): { x: number; y: number; width: number; height: number }
 
 /** Create the widget window (hidden). Idempotent, like overlay.ts's createOverlayWindow(). */
 export function createNotetakerWidget(): BrowserWindow {
-  if (widgetWindow && !widgetWindow.isDestroyed()) return widgetWindow
+  if (widgetWindow && !widgetWindow.isDestroyed()) {
+    log.event('notetaker-widget-create-reused', { msSinceWindowCreated: windowCreatedAt === null ? null : Date.now() - windowCreatedAt })
+    return widgetWindow
+  }
   const { x, y, width, height } = widgetBounds()
+  windowCreatedAt = Date.now()
 
   widgetWindow = new BrowserWindow({
     width, height, x, y,
@@ -161,11 +188,17 @@ export function createNotetakerWidget(): BrowserWindow {
   // load makes the signal self-healing in both.
   widgetWindow.webContents.on('did-finish-load', () => {
     if (!widgetWindow || widgetWindow.isDestroyed()) return
+    const msSinceWindowCreated = windowCreatedAt === null ? null : Date.now() - windowCreatedAt
+    log.event('notetaker-widget-did-finish-load', { msSinceWindowCreated, resendingCaptureActive: captureActive, resendingStopPending: stopPending })
     widgetWindow.webContents.send('notetaker:capture-active', captureActive)
     widgetWindow.webContents.send('notetaker:stop-pending', stopPending)
   })
 
-  widgetWindow.on('closed', () => { widgetWindow = null })
+  widgetWindow.on('closed', () => {
+    log.event('notetaker-widget-closed', { msSinceWindowCreated: windowCreatedAt === null ? null : Date.now() - windowCreatedAt })
+    widgetWindow = null
+    windowCreatedAt = null
+  })
   log.event('notetaker-widget-created', {})
   return widgetWindow
 }
@@ -197,22 +230,29 @@ function reassertOmnipresence(win: BrowserWindow): void {
  *  for its own presentations). Called from NotetakerSession start, per the
  *  plan: the widget's visibility must always match actual capture state. */
 export function showNotetakerWidget(): void {
+  const alreadyExisted = !!widgetWindow && !widgetWindow.isDestroyed()
+  const wasVisibleBefore = alreadyExisted && !!widgetWindow?.isVisible()
   const win = createNotetakerWidget()
   ensureWidgetRoute(win)
   win.setBounds(widgetBounds())
   if (!win.isVisible()) win.showInactive()
   reassertOmnipresence(win)
+  log.event('notetaker-widget-shown', {
+    windowAlreadyExisted: alreadyExisted,
+    wasVisibleBefore,
+    webContentsIsLoading: win.webContents.isLoading(),
+  })
   // Arm the renderer's mic capture. This call site is exactly
   // NotetakerSession.start() (notetakerInit.ts injects showNotetakerWidget as
   // its onSessionStart hook), so the widget's mic is live for precisely as
   // long as a real capture is.
   broadcastCaptureActive(true)
-  log.event('notetaker-widget-shown', {})
 }
 
 /** Hide the widget without destroying it (fast to bring back). Called from
  *  NotetakerSession stop. */
 export function hideNotetakerWidget(): void {
+  const wasVisible = !!widgetWindow && !widgetWindow.isDestroyed() && widgetWindow.isVisible()
   // Disarm BEFORE hiding: hiding alone does not unmount the renderer (the
   // window keeps running unthrottled), so without this the widget's
   // getUserMedia stream would stay open forever — see `captureActive` above.
@@ -225,7 +265,7 @@ export function hideNotetakerWidget(): void {
   if (widgetWindow && !widgetWindow.isDestroyed() && widgetWindow.isVisible()) {
     widgetWindow.hide()
   }
-  log.event('notetaker-widget-hidden', {})
+  log.event('notetaker-widget-hidden', { wasVisible })
 }
 
 /** `close()` isn't in our trimmed Electron typings (same situation overlay.ts

@@ -6,6 +6,7 @@ declare module 'electron' {
     send(channel: string, ...args: unknown[]): void
     on(event: string, cb: (...a: unknown[]) => void): void
     getURL(): string
+    isLoading(): boolean
   }
   export interface Rectangle { x: number; y: number; width: number; height: number }
   export class BrowserWindow {

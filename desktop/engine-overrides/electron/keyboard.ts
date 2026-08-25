@@ -11,6 +11,14 @@ import {
 // import on purpose — a lazy require of a relative path dies in the bundled
 // main process, and a silently-missing gate would leave Remote ungated.
 import { isRemoteTriggerEnabled } from './remoteTriggerGate'
+// Persistent, always-on log for the notes key specifically — console.log
+// alone (used throughout this file for every OTHER key) only survives while
+// DevTools/Console.app happens to be open, which made "what exactly did the
+// key do, and when" undiagnosable after the fact. Same-directory import
+// (both live in engine-overrides/electron/), so it resolves identically pre-
+// and post-wire — no cross-tree hazard the way this file's own
+// './paywall/remote/capture/agentGesture' import has.
+import { createNotetakerLogger } from './notetaker/notetakerLog'
 
 export type SessionMode = 'dictation' | 'instruction'
 export type KeyboardEvent =
@@ -57,6 +65,12 @@ type NotesChordKeyEvent =
   /** Some OTHER key (or modifier) arrived while left-Control was held — see
    *  the notes-chord-spoil block in listener.mm. */
   | 'notes-chord-spoil'
+
+// Module-level, not per-instance: every KeyboardManager in a test file gets
+// its own instance, but they should all still log to the same run's file
+// (createNotetakerLogger is itself idempotent per component name — see its
+// own module-level RUN_ID/logFilePath caching).
+const notesLog = createNotetakerLogger('keyboard')
 
 // Exported (was module-private) so tests can construct an isolated instance
 // instead of sharing the process-wide `keyboardManager` singleton below.
@@ -454,8 +468,24 @@ export class KeyboardManager extends EventEmitter {
   // notesActive is never read by their guards either — the note-taker is a
   // fully independent lane.
   private feedNotesGesture(kind: GestureEventKind): void {
+    const before = this.notesGesture
     const result = recogniseTap(this.notesGesture, { kind, at: Date.now() })
     this.notesGesture = result.state
+    // Every raw left-Control event, logged BEFORE any decision below — this
+    // is the "what button, when" record: kind is 'down'/'up'/'other' (a
+    // spoiling key or modifier), heldBefore/heldAfter and spoiledBefore/
+    // spoiledAfter show exactly how the hold's state moved, and `tap` is
+    // whether this event completed a clean tap at all (most 'down'/'other'
+    // events won't — only a clean 'up' can).
+    notesLog.debug('raw key event', {
+      kind,
+      heldBefore: before.held,
+      spoiledBefore: before.spoiled,
+      heldAfter: this.notesGesture.held,
+      spoiledAfter: this.notesGesture.spoiled,
+      tap: result.tap,
+      notesActive: this.notesActive,
+    })
     if (!result.tap) return
 
     const now = Date.now()
@@ -471,6 +501,7 @@ export class KeyboardManager extends EventEmitter {
       this.lastNotesToggleTime = now
       this.lastNotesTapAt = 0
       console.log('[keyboard] Notes STOP (single tap)')
+      notesLog.event('tap-stop-emitted', { at: now })
       this.emit('notes-stop-requested')
       return
     }
@@ -478,6 +509,7 @@ export class KeyboardManager extends EventEmitter {
     // Debounce only the START.
     if (now - this.lastNotesToggleTime < this.DEBOUNCE_MS) {
       console.log('[keyboard] Notes toggle DEBOUNCED (too fast)')
+      notesLog.event('tap-debounced', { at: now, msSinceLastToggle: now - this.lastNotesToggleTime })
       return
     }
 
@@ -487,13 +519,16 @@ export class KeyboardManager extends EventEmitter {
     const paired = this.lastNotesTapAt > 0 && now - this.lastNotesTapAt <= DOUBLE_TAP_WINDOW_MS
     if (!paired) {
       this.lastNotesTapAt = now
+      notesLog.event('tap-1-of-2-recorded', { at: now })
       return
     }
+    const msBetweenTaps = now - this.lastNotesTapAt
     this.lastNotesTapAt = 0
 
     this.lastNotesToggleTime = now
     this.notesActive = true
     console.log('[keyboard] Notes START (double tap)')
+    notesLog.event('tap-start-emitted', { at: now, msBetweenTaps })
     this.emit('notes-start-requested')
   }
 
@@ -504,6 +539,7 @@ export class KeyboardManager extends EventEmitter {
   confirmNotesStop(): void {
     this.notesActive = false
     console.log('[keyboard] Notes STOPPED (confirmed)')
+    notesLog.event('notes-stopped-confirmed', { at: Date.now() })
     this.emit('notes-stopped')
   }
 

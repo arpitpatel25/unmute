@@ -546,14 +546,27 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // Log-only heartbeat counter, reset in start() — see the mic-chunk IPC
   // handler below.
   let micChunksReceived = 0
+  // Same idea, SYSTEM side — this one had NO equivalent at all before: the
+  // native tap's onChunk callback (below) fed straight into systemEmitter
+  // with zero visibility, so "did the native tap ever actually deliver a
+  // single chunk" was undiagnosable from the log. Reset in start(), same as
+  // micChunksReceived.
+  let systemChunksReceived = 0
 
   class HookedNotetakerSession extends NotetakerSession {
     start(pid: number): AudioTapStartResult | undefined {
       sessionStartedAt = Date.now()
       sessionMeetingId = newMeetingId()
       micChunksReceived = 0
+      systemChunksReceived = 0
       const mlog = log.child({ meetingId: sessionMeetingId })
-      mlog.event('capture-start-requested', { targetPid: pid })
+      // "Who else has the mic/audio lanes right now" — dictation/
+      // instruction/agent/remote are all tracked via otherCaptureActive
+      // (see the keyboardManager 'key-state' listener below this class).
+      // Logged once, right here, rather than continuously: this is the one
+      // moment contention would actually matter (right as this session is
+      // about to ask for its own mic stream and start its own native tap).
+      mlog.event('capture-start-requested', { targetPid: pid, otherCaptureActiveAtStart: otherCaptureActive })
       // Created eagerly (not lazily on first chunk) so the directory exists
       // before any WavAppender tries to open a file inside it — mkdir
       // failure is logged but never blocks capture from starting; a channel
@@ -570,8 +583,10 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker, meetingDir, mlog))
       systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker, meetingDir, mlog))
       let tapResult: AudioTapStartResult | undefined
+      const nativeStartCalledAt = Date.now()
       try {
         tapResult = super.start(pid) // throws if the tap won't start — no placeholder row in that case
+        mlog.debug('native audio tap startCapture() returned', { callDurationMs: Date.now() - nativeStartCalledAt })
       } catch (e) {
         mlog.error('native audio tap failed to start — capture did not begin (likely a TCC "System Audio Recording Only" denial)', {
           targetPid: pid,
@@ -749,11 +764,17 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       const wasZoomSession = zoomSessionActive
       const mlog = log.child({ meetingId })
       mlog.event('capture-stop-requested', { wasActive })
+      const nativeStopCalledAt = Date.now()
       super.stop()
+      mlog.debug('native audio tap stopCapture() returned', { callDurationMs: Date.now() - nativeStopCalledAt, wasActive })
       if (wasActive) {
         hooks.onSessionStop?.()
         const endedAt = Date.now()
-        mlog.event('capture-stopped', { durationMs: endedAt - startedAt })
+        mlog.event('capture-stopped', {
+          durationMs: endedAt - startedAt,
+          micChunksReceivedTotal: micChunksReceived,
+          systemChunksReceivedTotal: systemChunksReceived,
+        })
         // flush() finalizes each channel's trailing partial segment by
         // firing onSegment ONE more time, through the exact same
         // makeChunkHandler path as any other cut — no special-casing needed,
@@ -818,10 +839,26 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       }
     }
   }
+  /** Same cadence reasoning as MIC_CHUNK_LOG_EVERY below (~every 100th chunk
+   *  is a heartbeat, not a flood) — system chunks arrive from the native tap
+   *  at whatever rate audiotap.mm's own buffer size delivers them, not
+   *  necessarily the mic's ~12/sec, but the same "log 1, then every 100th"
+   *  shape answers the same question: did the native tap ever actually
+   *  deliver anything at all, and is it still alive right now. */
+  const SYSTEM_CHUNK_LOG_EVERY = 100
   const session = new HookedNotetakerSession(nativeAudioTap, (chunk) => {
     if (chunk.source === 'mic') {
       micEmitter.feed(chunk.samples, chunk.sampleRate, chunk.channels, chunk.timestampMs)
     } else {
+      systemChunksReceived++
+      if (systemChunksReceived % SYSTEM_CHUNK_LOG_EVERY === 1) {
+        log.child({ meetingId: sessionMeetingId }).debug('system-chunk heartbeat', {
+          chunksReceivedThisSession: systemChunksReceived,
+          sampleCount: chunk.samples.length,
+          sampleRate: chunk.sampleRate,
+          channels: chunk.channels,
+        })
+      }
       systemEmitter.feed(chunk.samples, chunk.sampleRate, chunk.channels, chunk.timestampMs)
     }
   })
