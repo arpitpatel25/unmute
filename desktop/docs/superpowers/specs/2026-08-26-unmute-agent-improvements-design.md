@@ -98,13 +98,20 @@ lookup the facts could not disambiguate), then cached keyed by
 `(sessionId, mtime)` so it is computed once per change and never on a timer.
 Zero background cost; the expensive thing happens only when it is the answer.
 
-**Where it lives:** `unmute-agent/sessions/index.sqlite`, mode `0600`.
+**Where it lives:** `unmute-agent/sessions/index.json`, mode `0600`, keyed by
+`(path, mtime)`.
+
 Deliberately **not** in the encrypted memory store. Memory is what the user
 authored and asked to keep; this is a reconstructible cache over plaintext files
 that already sit unencrypted on the same disk. Encrypting a derived index of
 public-on-disk data buys nothing and couples two lifecycles that should be able
 to fail independently — a corrupt index should be deletable without touching a
 single user memory.
+
+*Built as JSON, not SQLite.* At 1,061 records it is ~640 KB, discovery is 85 ms
+and a warm refresh 25 ms, so a second native dependency bought nothing the
+property above did not already give. Revisit if the record count grows an order
+of magnitude.
 
 ### What the Agent is handed without asking
 
@@ -120,8 +127,27 @@ you finish the sentence.* A bounded digest, not the index — the index is what
 ### Tools
 
 - `sessions_list` — rewritten over the index. Real project names. All harnesses.
-- `sessions_search(query)` — **new.** Over facts first, summaries when present.
-- `session_read(id)` — reads the transcript, generating and caching the summary.
+- `sessions_search(query)` — **new.** Over facts, with recency scored rather
+  than sorted: "a day or two back" is half of most questions.
+- `session_read(id)` — reads the transcript. The only path that opens one in
+  full, which is the point: you open a session because you need what is inside
+  it, not to find out whether you do.
+
+### What the real disk taught, that the design did not predict
+
+- **A fifth of recently-touched sessions are not the user's work.** 16 of 81
+  were subagent forks, plan workers, reviewers, or the router's classifier REPL.
+  Enumerating their phrasings was whack-a-mole, so the rule became the *form*:
+  an opening addressed as "You are …", or one that begins by stating an absolute
+  path, is a briefing written by software for software. They stay indexed and
+  searchable; they are never offered as something you were working on.
+- **Codex hides the conversation behind its own system prompt.** `session_meta`
+  embeds the full base instructions — one real file is 21 MB before its first
+  turn — so any fixed head window lands inside the blob. Oversized lines are
+  skipped unparsed, with identity recovered from a bounded prefix.
+- **The digest has to be paid for on every utterance.** 25 entries at 120
+  characters measured 4,867 characters, ~1,200 tokens, on questions with nothing
+  to do with sessions. Trimmed to 15 at 80.
 
 ---
 
@@ -177,7 +203,17 @@ The limit is quantity, not principle — "summarise that note" has an answer tha
 is inherently longer than a caption and is *itself the deliverable*, not a
 pointer to one.
 
-### Decision: the caption gains a persistent twin, not a panel
+### Decision: the overflow case becomes the reader
+
+The surface follows the **answer**, and neither the model nor a tool picks it.
+Asking the model to choose hands it a second thing to get wrong on a surface
+with no window to inspect; derived from the text, it cannot drift.
+
+A near miss is still clipped — held open, a two-line answer is a small permanent
+box the user must go and dismiss, which is worse than the caption it replaced.
+The threshold is 1.5× the cap.
+
+### The caption gains a persistent twin, not a panel
 
 A **reader** in the caption's own visual language — black slabs, centred, no
 border, no title bar, no app affordance — that does not time out. It is the
@@ -231,7 +267,17 @@ file on the clipboard — into the same opaque handle the capture path mints.
 
 ---
 
-## 6. Order, and why
+## 6. What shipped
+
+| § | Commit | |
+|---|---|---|
+| 1 · Act | `16d6626` | preamble ↔ constitution, eval harness fixed |
+| 2 · Know | `2c3bed9` | index, facts, digest, search, store |
+| 2+3 · Continue | `c69b0b9` | tools wired, resume + cross-harness seed |
+| 5 · Keep | `a64ab19` | constitution, real capture mime types |
+| 4 · Answer | `6250ff0` | the held caption |
+
+## 7. Order, and why
 
 ```
 §1 act ──> §2 know ──> §3 continue
@@ -245,7 +291,7 @@ cross-harness seed *is* §2's summary. §4 after §2 because session summaries a
 the first answers that genuinely do not fit a caption. §5 is independent and
 sized accordingly.
 
-## 7. What this design deliberately does not do
+## 8. What this design deliberately does not do
 
 - **No new regexes over what the user said.** `5ae30b6`/`75014ad` deleted every
   one; nothing here reintroduces intent matching.
@@ -254,3 +300,19 @@ sized accordingly.
   session goes through `dispatch`, which is the same path the Remote key uses.
 - **No second chat surface.** The reader in §4 renders one answer and is
   dismissed; it never accumulates a transcript.
+
+## 9. Still open
+
+- **Model-written session summaries are specified but not built.** Facts turned
+  out to carry most of the value — the first user message identifies a session
+  better than a paragraph would — so `session_read` returns the transcript and
+  lets the Agent reason over it, exactly as it already does for a note. Add the
+  cached summary when a real question needs one that facts cannot answer.
+- **Storage ingestion is narrower than §5 describes.** Files still enter only as
+  capture handles; there is no "save the file I am pointing at" from a Finder
+  selection or a clipboard file. The store itself is already general (any mime
+  type, spill-to-reference above the cap), so this is a call-site gap, not an
+  architectural one.
+- **The held caption has no keyboard dismissal.** Close control, next answer, or
+  the ten-minute ceiling. Escape would need a global monitor; worth doing, not
+  worth blocking on.
