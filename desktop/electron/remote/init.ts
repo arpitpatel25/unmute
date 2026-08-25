@@ -773,6 +773,28 @@ async function copyAgentAttachment(
   cleanup.unref()
 }
 
+/**
+ * What a captured file actually is.
+ *
+ * The attachment store already infers a type when none is declared; this exists
+ * so the declaration itself stops being a lie. Screenshots remain the common
+ * case and still resolve to image/png through the same table.
+ */
+const CAPTURE_MIME: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.heic': 'image/heic',
+  '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown',
+  '.json': 'application/json', '.csv': 'text/csv',
+  '.mov': 'video/quicktime', '.mp4': 'video/mp4', '.m4v': 'video/x-m4v',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
+}
+
+function captureMimeType(path: string): string {
+  const at = basename(path).lastIndexOf('.')
+  const extension = at < 0 ? '' : basename(path).slice(at).toLowerCase()
+  return CAPTURE_MIME[extension] ?? 'application/octet-stream'
+}
+
 const AGENT_CONSTITUTION = agentConstitution(SESSION_PREAMBLE)
 
 /**
@@ -3696,7 +3718,11 @@ async function dispatchFromCaptureInner(
       attachments: attachments.map((path) => ({
         path,
         name: basename(path),
-        mimeType: 'image/png',
+        // Declared from the file, not assumed. Every capture used to be
+        // labelled image/png regardless of what it was, so a PDF or a video
+        // the user pointed at arrived describing itself as a screenshot — and
+        // the mime type is what a delivery later opens it by.
+        mimeType: captureMimeType(path),
       })),
       // CONTINUITY FOLLOWS ATTENTION, NOT THE CLOCK. An explicit prior run
       // still wins; otherwise the last conversation is resumed only if this
