@@ -203,12 +203,31 @@ final class AppController: NSObject, NotchResizing {
             NotchLog.log("CMD setState \(state.rawValue) attention=\(attention) working=\(working)")
             model.attention = attention
             model.working = working
-            // A cached detail is not evidence that the task is still running.
-            // Compact active may name a task only when there is exactly one
-            // worker and the freshly supplied detail agrees. This also drops
-            // stale expanded-task identity when the system goes idle.
-            if state == .dormant || (state == .active &&
-                (working != 1 || model.task?.status != .processing)) {
+            // A cached detail is not evidence that the task is still running —
+            // but a FINISHED task's detail is not making that claim in the
+            // first place, so it is not this check's business to evict it.
+            //
+            // This used to read `model.task?.status != .processing` — clearing
+            // model.task on ANY compact-active refresh whose task was not the
+            // one live worker, terminal statuses included. A refresh like that
+            // fires constantly from ordinary ambient activity, not just from
+            // the task actually finishing. Observed in the field: open a
+            // finished task's detail (Inspect session), close it, and the very
+            // next ambient refresh silently wiped it — reopening the panel any
+            // normal way after that landed on "All clear. Nothing needs you."
+            // forever, with no way back to that task's Resume/terminal short
+            // of re-triggering whatever explicit action showed it the first
+            // time.
+            //
+            // The thing actually worth correcting is a STALE claim: cached
+            // detail says .processing while the fresh worker count says
+            // otherwise. A done/failed/stuck/needsUser task was never claiming
+            // to be running, so it is left alone here — the explicit dismiss
+            // path (below) is still how the user actually closes it, and
+            // .dormant still clears unconditionally on system idle.
+            if state == .dormant {
+                model.task = nil
+            } else if state == .active, model.task?.status == .processing, working != 1 {
                 model.task = nil
             }
             commandedState = state
