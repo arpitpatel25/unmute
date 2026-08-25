@@ -467,8 +467,8 @@ final class AppController: NSObject, NotchResizing {
             scratchModel.state = payload
             reconcileSurfaces()
 
-        case let .caption(text, dwellMs):
-            showCaption(text: text, dwellMs: dwellMs)
+        case let .caption(text, dwellMs, hold):
+            showCaption(text: text, dwellMs: dwellMs, hold: hold)
 
         case .collapse:
             model.focusedId = nil
@@ -1433,35 +1433,48 @@ final class AppController: NSObject, NotchResizing {
     // the first rather than stacking, so there is never a queue to reason
     // about and never two captions competing for the same eye.
 
-    private func showCaption(text: String, dwellMs: Int) {
+    /// A HELD caption is never left on screen forever.
+    ///
+    /// It has no dwell because the point is to read it slowly, but a surface
+    /// with no clock and no owner is how the notch process once outlived the
+    /// app that started it. Ten minutes is far past reading and far short of
+    /// abandonment.
+    private static let heldCaptionCeiling: TimeInterval = 600
+
+    private func showCaption(text: String, dwellMs: Int, hold: Bool = false) {
         captionTimer?.invalidate()
         captionTimer = nil
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, dwellMs > 0 else {
+        // A held answer carries no dwell, so only the empty text means "down".
+        guard !trimmed.isEmpty, hold || dwellMs > 0 else {
             dismissCaption()
             return
         }
 
         let window = captionWindow ?? CaptionWindow()
         captionWindow = window
-        let host = NSHostingView(rootView: CaptionView(text: trimmed) { [weak self] in
+        let host = NSHostingView(rootView: CaptionView(text: trimmed, holding: hold) { [weak self] in
             self?.dismissCaption()
         })
         host.setFrameSize(host.fittingSize)
         window.contentView = host
         window.setContentSize(host.fittingSize)
+        // Held open, the body scrolls, so it must accept the clicks a caption
+        // deliberately refuses.
+        window.ignoresMouseEvents = false
         window.positionOnActiveScreen()
         window.orderFrontRegardless()
 
         // Dwell is computed by the sender from the text length: video captions
         // are timed to speech, and these have no clock.
         captionTimer = Timer.scheduledTimer(
-            withTimeInterval: Double(dwellMs) / 1000.0, repeats: false
+            withTimeInterval: hold ? Self.heldCaptionCeiling : Double(dwellMs) / 1000.0,
+            repeats: false
         ) { [weak self] _ in
             self?.dismissCaption()
         }
-        NotchLog.log("caption shown chars=\(trimmed.count) dwellMs=\(dwellMs)")
+        NotchLog.log("caption shown chars=\(trimmed.count) dwellMs=\(dwellMs) hold=\(hold)")
     }
 
     private func dismissCaption() {

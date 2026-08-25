@@ -356,8 +356,14 @@ export type NotchCommand =
   | { type: 'pill'; state: PillStateP }
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
   | { type: 'agentActivity'; activity: UnmuteAgentActivityP }
-  /** The Agent's conclusion. Empty text takes the caption down. */
-  | { type: 'caption'; text: string; dwellMs: number }
+  /**
+   * The Agent's conclusion. Empty text takes it down.
+   *
+   * `hold` is the caption kept open: same slabs, same voice, no clock, for an
+   * answer that IS the deliverable rather than a pointer to one. Still not the
+   * notch — the notch stays independent of anything the Agent says.
+   */
+  | { type: 'caption'; text: string; dwellMs: number; hold?: boolean }
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
   | { type: 'surfaceFill'; fill: number }

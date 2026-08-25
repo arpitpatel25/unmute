@@ -20,6 +20,9 @@ import SwiftUI
 /// are that decision, not defaults.
 struct CaptionView: View {
     let text: String
+    /// Held open: no clock, many lines, scrollable. Same slabs, same voice —
+    /// this is the caption kept on screen, never a panel or a window.
+    var holding: Bool = false
     let onClose: () -> Void
 
     private static let maxWidth: CGFloat = 470
@@ -34,11 +37,21 @@ struct CaptionView: View {
     /// Applied to both sides, because taking it from one would shift the
     /// caption off the centre it is positioned on.
     private static let margin: CGFloat = 14
+    /// A held answer stops growing before it becomes a wall of text on the
+    /// screen. Past this it scrolls, which is the point of holding it.
+    private static let maxHeldHeight: CGFloat = 420
 
     var body: some View {
-        slabs
-            .overlay(alignment: .topTrailing) { closeButton }
-            .fixedSize()
+        Group {
+            if holding {
+                ScrollView(.vertical, showsIndicators: false) { slabs }
+                    .frame(maxWidth: Self.maxWidth + Self.margin * 2)
+                    .frame(maxHeight: Self.maxHeldHeight)
+            } else {
+                slabs.fixedSize()
+            }
+        }
+        .overlay(alignment: .topTrailing) { closeButton }
     }
 
     private var slabs: some View {
@@ -57,9 +70,10 @@ struct CaptionView: View {
                     .background(Color.black)
             }
         }
-        // The body never takes a click: it must not steal one meant for the
-        // app underneath.
-        .allowsHitTesting(false)
+        // A caption never takes a click: it must not steal one meant for the
+        // app underneath. A HELD answer has to, or it cannot be scrolled — and
+        // by then the user has deliberately been given something to read.
+        .allowsHitTesting(holding)
         .padding(.horizontal, Self.margin)
         .padding(.top, Self.margin)
     }
@@ -85,10 +99,23 @@ struct CaptionView: View {
     /// would.
     private static func wrap(_ raw: String) -> [String] {
         // Captions are one sentence, but a stray newline must not become an
-        // empty slab.
+        // empty slab. A held answer arrives with the paragraphs the model
+        // chose, and at that length they are how it is meant to be read — so
+        // each source line is wrapped on its own and blank ones are dropped.
+        let paragraphs = raw
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if paragraphs.count > 1 { return paragraphs.flatMap { wrapOne($0) } }
+
         let flat = raw
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !flat.isEmpty else { return [] }
+        return wrapOne(flat)
+    }
+
+    private static func wrapOne(_ flat: String) -> [String] {
         guard !flat.isEmpty else { return [] }
 
         let font = NSFont.systemFont(ofSize: fontSize, weight: weight)

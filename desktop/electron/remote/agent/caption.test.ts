@@ -69,3 +69,49 @@ test('whitespace is normalised so the caption never renders ragged', () => {
 test('nothing to say produces nothing to show', () => {
   assert.deepEqual(fitCaption('   '), { text: '', truncated: false })
 })
+
+import { presentAnswer, readerText, READER_THRESHOLD } from './caption'
+
+test('a short answer is a caption, timed to its length', () => {
+  const shown = presentAnswer('Saved your competitor list.')
+  assert.equal(shown.surface, 'caption')
+  assert.equal(shown.text, 'Saved your competitor list.')
+  assert.ok(shown.dwellMs >= 2_500)
+})
+
+test('nothing to say opens nothing', () => {
+  assert.deepEqual(presentAnswer('   '), { surface: 'caption', text: '', dwellMs: 0 })
+})
+
+/** Held open, a two-line answer is a small box the user must go and dismiss. */
+test('a near miss is still clipped rather than held', () => {
+  const shown = presentAnswer('x'.repeat(MAX_CAPTION_LENGTH + 20))
+  assert.equal(shown.surface, 'caption')
+  assert.match(shown.text, /…$/)
+})
+
+/**
+ * "Summarise that meeting note" has an answer that IS the deliverable. A
+ * clipped deliverable is a broken promise wearing a tick.
+ */
+test('an answer that is genuinely long is held, whole, with no clock', () => {
+  const long = 'This is the summary. '.repeat(60)
+  const shown = presentAnswer(long)
+  assert.equal(shown.surface, 'reader')
+  assert.equal(shown.dwellMs, 0)
+  assert.ok(shown.text.length > READER_THRESHOLD)
+  assert.doesNotMatch(shown.text, /…$/)
+})
+
+test('the reader keeps paragraphs but never markup', () => {
+  const shown = presentAnswer([
+    '# Heading', '', '**bold** and `code`', '', '> quoted', '', 'x'.repeat(READER_THRESHOLD),
+  ].join('\n'))
+  assert.equal(shown.surface, 'reader')
+  assert.doesNotMatch(shown.text, /[#*`>]/)
+  assert.match(shown.text, /\n\n/, 'paragraphs survive')
+})
+
+test('reader cleanup collapses runs without joining paragraphs', () => {
+  assert.equal(readerText('a  \t b\n\n\n\nc'), 'a b\n\nc')
+})

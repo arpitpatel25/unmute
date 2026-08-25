@@ -403,7 +403,9 @@ enum Command {
     case scratchpad(ScratchpadPayload)
     case agentActivity(AgentActivityP)
     /// The Agent's conclusion, as a caption. `text` empty means "take it down".
-    case caption(String, Int)
+    /// The third value HOLDS it open: no clock, scrollable, for an answer that
+    /// is itself the deliverable rather than a pointer to one.
+    case caption(String, Int, Bool)
     case collapse
     case quit
     case unknown
@@ -463,7 +465,11 @@ enum Command {
             // A caption with no dwell is a request to dismiss, which is why an
             // absent number reads as 0 rather than as a default duration: a
             // malformed push must never leave text stranded on screen.
-            return .caption(obj["text"] as? String ?? "", obj["dwellMs"] as? Int ?? 0)
+            return .caption(
+                obj["text"] as? String ?? "",
+                obj["dwellMs"] as? Int ?? 0,
+                obj["hold"] as? Bool ?? false
+            )
         case "appearance":
             // An unknown value falls back to `.system` rather than being
             // dropped: a malformed preference must never leave the surface

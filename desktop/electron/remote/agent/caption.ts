@@ -79,3 +79,72 @@ export function fitCaption(raw: string): FittedCaption {
   const body = lastSpace > MAX_CAPTION_LENGTH - 40 ? hard.slice(0, lastSpace) : hard
   return { text: `${body.trimEnd()}…`, truncated: true }
 }
+
+
+/**
+ * How long the answer is allowed to stay: a caption, or the caption held open.
+ *
+ * THE SURFACE FOLLOWS THE ANSWER, and neither the model nor a tool chooses it.
+ * Asking the model to pick would hand it a second thing to get wrong on a
+ * surface with no window to inspect; deriving it from the text cannot drift.
+ *
+ * The caption stays exactly what it was — one line, a few seconds, no chrome.
+ * What changes is the overflow case. It used to clip to an ellipsis, which
+ * fails the one job the sentence had: "summarise that meeting note" has an
+ * answer that IS the deliverable, and a clipped deliverable is a broken
+ * promise wearing a tick.
+ *
+ * So an answer that does not fit is not compressed and not truncated. It is
+ * held: same black slabs, same centred column, same voice, no timer. It is
+ * still not the notch, and still not a window — the notch stays independent of
+ * anything the Agent says, which is the boundary that makes the Agent read as
+ * the computer answering rather than an app opening.
+ */
+export type AnswerSurface = 'caption' | 'reader'
+
+export interface PresentedAnswer {
+  surface: AnswerSurface
+  /** What to display. A caption is fitted; a reader keeps the whole answer. */
+  text: string
+  /** Milliseconds to hold a caption. Zero for a reader, which has no clock. */
+  dwellMs: number
+}
+
+/**
+ * A reader is never opened for a near miss.
+ *
+ * Held open, a two-line answer is a small permanent box the user has to go and
+ * dismiss — worse than the caption it replaced. The gap has to be wide enough
+ * that reading it slowly is genuinely the point.
+ */
+export const READER_THRESHOLD = Math.round(MAX_CAPTION_LENGTH * 1.5)
+
+export function presentAnswer(raw: string): PresentedAnswer {
+  const flattened = raw.trim()
+  if (!flattened) return { surface: 'caption', text: '', dwellMs: 0 }
+
+  const fitted = fitCaption(flattened)
+  if (!fitted.truncated) {
+    return { surface: 'caption', text: fitted.text, dwellMs: captionDwellMs(fitted.text) }
+  }
+  if (flattened.length <= READER_THRESHOLD) {
+    // Just over: clipping loses a clause, holding costs a dismissal. Clip.
+    return { surface: 'caption', text: fitted.text, dwellMs: captionDwellMs(fitted.text) }
+  }
+  // Markup is still stripped — the surface draws plain text either way — but
+  // the line breaks the model chose are kept, because at this length they are
+  // how it is meant to be read.
+  return { surface: 'reader', text: readerText(flattened), dwellMs: 0 }
+}
+
+/** The caption's cleanup, minus the flattening to one line. */
+export function readerText(raw: string): string {
+  return raw
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[*_`]+/g, '')
+    .replace(/^\s*#{1,6}\s+/gm, '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}

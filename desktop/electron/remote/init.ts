@@ -80,7 +80,7 @@ import { ClaudeCodeProvider } from './agent/providers/claude'
 import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-headless'
 import { reapCodexHeadlessTurns } from './agent/providers/codex-headless'
 import { agentConstitution } from './agent/constitution'
-import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
+import { MAX_CAPTION_LENGTH, presentAnswer } from './agent/caption'
 import { nextConversation, type Conversation } from './agent/continuity'
 import { HandoffCapability } from './agent/capabilities/handoff'
 import { SessionsCapability } from './agent/capabilities/sessions'
@@ -3760,14 +3760,21 @@ async function dispatchFromCaptureInner(
     const spoken = result.outcome === 'completed'
       ? (result.text?.trim() || 'Done.')
       : (result.error?.message || 'That did not land.')
-    const fitted = fitCaption(spoken)
-    if (fitted.truncated) {
-      // Worth knowing: the model was asked to put detail where the user wanted
-      // it and say where it went, and instead wrote past the cap.
-      log.warn('agent caption clipped', { chars: spoken.length, cap: MAX_CAPTION_LENGTH })
+    // THE SURFACE FOLLOWS THE ANSWER. A short one is a caption, as it always
+    // was. A long one is no longer clipped to an ellipsis — it is the same
+    // caption held open, because "summarise that note" has an answer that is
+    // the deliverable and a clipped deliverable is a broken promise.
+    const shown = presentAnswer(spoken)
+    if (shown.surface === 'reader') {
+      log.event('agent-answer-held', { chars: spoken.length, cap: MAX_CAPTION_LENGTH })
     }
-    if (fitted.text) {
-      notchClient?.send({ type: 'caption', text: fitted.text, dwellMs: captionDwellMs(fitted.text) })
+    if (shown.text) {
+      notchClient?.send({
+        type: 'caption',
+        text: shown.text,
+        dwellMs: shown.dwellMs,
+        ...(shown.surface === 'reader' ? { hold: true } : {}),
+      })
     }
     // Remember where this conversation got to, so the next utterance can tell
     // a follow-up from a new subject.
