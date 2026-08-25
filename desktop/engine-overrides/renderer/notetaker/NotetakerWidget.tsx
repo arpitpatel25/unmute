@@ -302,24 +302,26 @@ async function attachMicChunkTap(
 }
 
 /**
- * Presentational piece: a pill with a live waveform, matching the same
- * fixed-glass PillGlass material and dark fill as the dictation pill
- * (WidgetApp.tsx's own chips, `#000`-family near-black + a whitish hairline
- * border) — this widget and the dictation pill are meant to read as the
- * same design language, not two different-looking overlays (2026-08-26
- * redesign). Pure prop-driven (no IPC, no capture) so it's easy to reason
- * about and reuse — mirrors Widget.tsx's split from WidgetApp.tsx.
+ * Presentational piece: ONE pill, always — matching the same fixed-glass
+ * PillGlass material and dark fill as the dictation pill (WidgetApp.tsx's
+ * own chips, `#000`-family near-black + a whitish hairline border) while
+ * actually recording, so the two overlays read as the same design language
+ * (2026-08-25 redesign). Every other state (discard confirmation, the
+ * undo-window countdown) turns the SAME pill white in place — never a
+ * second, differently-sized element floating above it (2026-08-26, take
+ * three: a separate floating "Discard" box was tried and looked
+ * disproportionate next to the small pill; that's what this replaces).
+ * Pure prop-driven (no IPC, no capture) so it's easy to reason about and
+ * reuse — mirrors Widget.tsx's split from WidgetApp.tsx.
  *
- * Discard confirmation is a click-toggle on the pill, not hover (2026-08-26,
- * take two: hover-to-reveal was tried first, but its hoverable area had to
- * span the whole window — including the gap and the chip's own reserved
- * space above the pill — so ANY mouse movement near, not on, the pill
- * revealed it; there is no hover radius that fixes that without either the
- * same false-positive or the original unreachable-chip bug back). Tapping
- * the pill reveals a white "Discard meeting" box above it; tapping the
- * pill AGAIN dismisses it with no action, and tapping the box itself
- * confirms. This is still spec §6's "stop is never a single, direct
- * action" — one tap to reveal, a second, separate tap to confirm.
+ * Discard confirmation is a click-toggle on the pill, not hover
+ * (2026-08-26, take two: hover-to-reveal was tried first, but its
+ * hoverable area had to span the whole window to bridge the gap to a
+ * floating chip above the pill, so ANY mouse movement near, not on, the
+ * pill revealed it). Tapping the pill while recording turns it into two
+ * explicit zones: a small × (back out, nothing happens) and a "Discard
+ * meeting" zone (confirms). Two separate taps either way — spec §6's
+ * "stop is never a single, direct action."
  */
 export function NotetakerWidget({
   analyser,
@@ -330,8 +332,8 @@ export function NotetakerWidget({
   analyser: AnalyserNode | null
   /** Bumped by the route on every new capture session. The widget WINDOW is
    *  reused across sessions (hidden, never closed), so this component never
-   *  remounts — without this, a discard box left open in one session would
-   *  still be on screen when the next session opened the widget. */
+   *  remounts — without this, the discard option left open in one session
+   *  would still be showing when the next session opened the widget. */
   sessionId?: number
   /** True while the KEYBOARD's own single-tap stop is in its undo window
    *  (main → notetaker:stop-pending, see notetakerWidget.ts's
@@ -343,23 +345,25 @@ export function NotetakerWidget({
   stopPending?: boolean
   onCancelConfirmed: () => void
 }) {
-  const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0.1))
+  const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0.35))
   const [showDiscard, setShowDiscard] = useState(false)
   const rafRef = useRef<number | undefined>(undefined)
 
-  const toggleDiscard = () => { if (!stopPending) setShowDiscard((v) => !v) }
+  const openDiscard = () => { if (!stopPending) setShowDiscard(true) }
+  const dismissDiscard = () => setShowDiscard(false)
+  const confirmDiscard = () => { setShowDiscard(false); onCancelConfirmed() }
 
   // A new session always starts on the waveform face, never a stale
-  // discard box (or a frozen last frame of bars) left over from the last
-  // one.
+  // discard state (or a frozen last frame of bars) left over from the
+  // last one.
   useEffect(() => {
     setShowDiscard(false)
-    setLevels(new Array(BAR_COUNT).fill(0.1))
+    setLevels(new Array(BAR_COUNT).fill(0.35))
   }, [sessionId])
 
-  // The discard box only ever makes sense while actually recording — never
-  // while the undo window (stopPending) is counting down, since the only
-  // affordance that resolves that state is another tap on the key.
+  // The discard option only ever makes sense while actually recording —
+  // never while the undo window (stopPending) is counting down, since the
+  // only affordance that resolves that state is another tap on the key.
   useEffect(() => {
     if (stopPending) setShowDiscard(false)
   }, [stopPending])
@@ -391,126 +395,133 @@ export function NotetakerWidget({
     }
   }, [analyser])
 
-  // Same fixed-glass material as the dictation pill cluster (Theme.swift's
-  // PillGlass, ported to CSS): a top-down sheen over a near-black base, one
-  // hairline rim, no drop shadow — now with the base itself made mostly
-  // transparent (0.42 alpha) plus a backdrop blur, same vibrancy technique
-  // WidgetApp.tsx's own HintChip already uses, rather than the near-opaque
-  // fill this had before. Unlike before, this is no longer tinted red for
-  // stopPending — green/white is this app's own "in-progress, not
-  // destructive" language elsewhere (the connected-agent dot in the
-  // dictation pill, `#6fbf9a`), and stopping a meeting isn't a destructive
-  // outcome the way cancelling one is. Cancel itself no longer tints the
-  // pill at all — see the separate chip below, which carries that meaning
-  // on its own now.
   const NOTETAKER_GREEN = '#6fbf9a'
-  const glassBackground = stopPending
-    ? `linear-gradient(to bottom, rgba(255,255,255,0.08), rgba(255,255,255,0.02) 55%, rgba(111,191,154,0.16) 100%), rgba(14,15,19,0.42)`
+  const NOTETAKER_RED = '#c4482e'
+  // "Recording" is its own look (dark PillGlass, matching the dictation
+  // pill); every other state — discard confirmation, the undo-window
+  // countdown — turns this SAME pill white in place, per feedback that a
+  // second, differently-sized element floating above it read as
+  // disproportionate no matter how either one was sized on its own. A
+  // small static 3-bar glyph (waveGlyph below) stays in every white state
+  // so it's still visibly "the recording thing," just not live-updating.
+  const isWhite = showDiscard || stopPending
+  const glassBackground = isWhite
+    ? '#fff'
     : 'linear-gradient(to bottom, rgba(255,255,255,0.10), rgba(255,255,255,0.02) 55%, rgba(255,255,255,0) 100%), rgba(14,15,19,0.42)'
-  const glassBorder = stopPending ? `1.5px solid rgba(111,191,154,0.55)` : '1px solid rgba(255,255,255,0.12)'
-  // Pill height is fixed across both states (no resize-on-state-change
-  // jank) — short enough to read as a true pill rather than a tall capsule
-  // (2026-08-26: was 40px, roughly as tall as it was wide; halved).
-  const PILL_HEIGHT = 22
+  const glassBorder = showDiscard
+    ? '1px solid rgba(0,0,0,0.08)'
+    : stopPending
+      ? `1.5px solid rgba(111,191,154,0.45)`
+      : '1px solid rgba(255,255,255,0.12)'
+  // Pill height is fixed across every state (no resize-on-state-change
+  // jank) — a true pill, not a tall capsule (2026-08-26: was 40px then
+  // 22px; nudged back up slightly so the waveform has room to actually
+  // read as a waveform rather than a near-flat line).
+  const PILL_HEIGHT = 26
+
+  const waveGlyph = (tone: string) => (
+    <span className="flex items-center flex-none" style={{ gap: 1.5 }}>
+      <span className="block rounded-full" style={{ width: 2, height: 5, background: tone, opacity: 0.55 }} />
+      <span className="block rounded-full" style={{ width: 2, height: 9, background: tone }} />
+      <span className="block rounded-full" style={{ width: 2, height: 6, background: tone, opacity: 0.75 }} />
+    </span>
+  )
 
   return (
     <div
       className="w-full h-full flex flex-col-reverse items-start"
       style={{
-        gap: 6,
         // @ts-expect-error -- WebkitAppRegion is a real, non-standard Electron CSS prop
         WebkitAppRegion: 'no-drag',
       }}
     >
-      {/* The pill itself — a click (or Enter/Space, focused) toggles the
-       *  discard box above it. Content is only ever the waveform or,
-       *  during the undo window, a short in-place message. */}
+      {/* ONE pill, always. Tapping it while recording opens the discard
+       *  option in place; the undo-window countdown also renders in
+       *  place. Never a second element. */}
       <div
-        role="button"
-        tabIndex={0}
-        title={stopPending ? undefined : 'Note taker'}
+        role={!stopPending && !showDiscard ? 'button' : undefined}
+        tabIndex={!stopPending && !showDiscard ? 0 : undefined}
+        title={!stopPending && !showDiscard ? 'Note taker' : undefined}
         aria-label={
           stopPending
-            ? 'Stopping note-taking — tap left Control again to keep recording'
-            : showDiscard ? 'Hide discard option' : 'Note-taking in progress — tap for options'
+            ? 'Stopping note-taking — press left Control again to keep recording'
+            : showDiscard ? undefined : 'Note-taking in progress — tap for options'
         }
-        onClick={toggleDiscard}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleDiscard() } }}
-        className={`rounded-full flex items-center select-none ${stopPending ? 'cursor-default' : 'cursor-pointer'}`}
+        onClick={!stopPending && !showDiscard ? openDiscard : undefined}
+        onKeyDown={
+          !stopPending && !showDiscard
+            ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDiscard() } }
+            : undefined
+        }
+        className={`rounded-full flex items-center select-none overflow-hidden ${!stopPending && !showDiscard ? 'cursor-pointer' : ''}`}
         style={{
           height: PILL_HEIGHT,
-          gap: stopPending ? 6 : 3,
-          padding: stopPending ? '0 12px 0 9px' : '0 12px',
+          padding: showDiscard ? 0 : stopPending ? '0 12px' : '0 13px',
           background: glassBackground,
-          backdropFilter: 'blur(14px)',
+          backdropFilter: isWhite ? undefined : 'blur(14px)',
           // @ts-expect-error -- WebkitBackdropFilter is a real, vendor-prefixed CSS prop Chromium still wants
-          WebkitBackdropFilter: 'blur(14px)',
+          WebkitBackdropFilter: isWhite ? undefined : 'blur(14px)',
           border: glassBorder,
-          boxShadow: 'none',
-          transition: 'background 200ms ease, border-color 200ms ease, padding 200ms ease',
+          boxShadow: isWhite ? '0 6px 16px rgba(0,0,0,0.16)' : 'none',
+          transition: 'background 180ms ease, border-color 180ms ease, padding 180ms ease, box-shadow 180ms ease',
         }}
       >
         {stopPending ? (
-          <>
+          <span className="flex items-center whitespace-nowrap" style={{ gap: 7 }}>
+            {waveGlyph(NOTETAKER_GREEN)}
             <span
               className="rounded-full flex-none"
               style={{ width: 6, height: 6, background: NOTETAKER_GREEN, animation: 'notetaker-dot-pulse 1.1s ease-in-out infinite' }}
             />
-            <span className="text-[10px] font-semibold whitespace-nowrap" style={{ color: 'rgba(255,255,255,0.94)' }}>
-              Tap ⌃ again to keep recording
+            <span className="text-[10.5px] font-semibold" style={{ color: 'rgba(0,0,0,0.78)' }}>
+              Press ⌃ again to keep recording
             </span>
+          </span>
+        ) : showDiscard ? (
+          <>
+            <button
+              type="button"
+              onClick={dismissDiscard}
+              title="Never mind — keep recording"
+              className="flex items-center justify-center flex-none"
+              style={{ width: 24, height: PILL_HEIGHT, color: 'rgba(0,0,0,0.35)' }}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={confirmDiscard}
+              className="flex items-center flex-1 whitespace-nowrap"
+              style={{ gap: 6, height: PILL_HEIGHT, paddingRight: 13 }}
+            >
+              {waveGlyph(NOTETAKER_RED)}
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="flex-none" style={{ color: NOTETAKER_RED }}>
+                <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-12" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="text-[11px] font-bold" style={{ color: NOTETAKER_RED }}>Discard meeting</span>
+            </button>
           </>
         ) : (
-          levels.map((level, i) => (
-            <div
-              key={i}
-              className="w-[2.5px] rounded-full bg-white/90"
-              style={{
-                height: Math.max(2, Math.round(level * 12)),
-                transition: 'height 60ms linear',
-              }}
-            />
-          ))
+          <span className="flex items-end" style={{ gap: 3, height: '100%' }}>
+            {levels.map((level, i) => (
+              <div
+                key={i}
+                className="w-[3px] rounded-full bg-white"
+                style={{
+                  height: Math.max(5, Math.round(level * 18)),
+                  transition: 'height 60ms linear',
+                }}
+              />
+            ))}
+          </span>
         )}
       </div>
 
-      {/* Discard confirmation, click-revealed above the pill — never
-       *  inside it. The whole box is the confirm control (clicking
-       *  anywhere on it discards); tapping the pill again dismisses it
-       *  with no action instead. "Discard" rather than "Cancel" — cancel
-       *  reads as backing out of opening this box, when the actual choice
-       *  being made is throwing the meeting away. */}
-      <button
-        type="button"
-        tabIndex={showDiscard ? 0 : -1}
-        onClick={() => { setShowDiscard(false); onCancelConfirmed() }}
-        className="rounded-2xl flex items-start gap-2 select-none text-left"
-        style={{
-          padding: '8px 12px',
-          maxWidth: 190,
-          background: '#fff',
-          border: '1px solid rgba(0,0,0,0.08)',
-          boxShadow: '0 8px 20px rgba(0,0,0,0.28)',
-          opacity: showDiscard ? 1 : 0,
-          transform: showDiscard ? 'translateY(0) scale(1)' : 'translateY(4px) scale(0.96)',
-          pointerEvents: showDiscard ? 'auto' : 'none',
-          transition: 'opacity 150ms ease, transform 150ms ease',
-        }}
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="flex-none mt-[1px]" style={{ color: '#c4482e' }}>
-          <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-12" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        <span className="flex flex-col gap-[1px]">
-          <span className="text-[11.5px] font-bold" style={{ color: '#c4482e' }}>Discard meeting</span>
-          <span className="text-[10px] leading-snug" style={{ color: 'rgba(0,0,0,0.5)' }}>Nothing will be saved.</span>
-        </span>
-      </button>
-
       {/* @keyframes for the stopPending dot — inlined (no stylesheet in
        *  this window), same reasoning as the waveform preferring CSS
-       *  transitions over extra rAF work. Only the small dot pulses now,
-       *  not the whole pill — a steadier, less alarming read for a
-       *  non-destructive, expected state. */}
+       *  transitions over extra rAF work. */}
       <style>{`
         @keyframes notetaker-dot-pulse {
           0%, 100% { opacity: 1; transform: scale(1); }

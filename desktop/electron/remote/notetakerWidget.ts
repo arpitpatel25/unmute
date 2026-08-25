@@ -2,24 +2,24 @@
 //
 // A tiny, always-on-top, transparent, cross-Space window pinned to the
 // BOTTOM-LEFT corner while a note-taking session is active: a small pill
-// showing a live waveform, no timer (2026-08-26: was a circle; redesigned
-// to a pill sharing the dictation pill's own dark-glass material — see
-// NotetakerWidget.tsx). Clicking it reveals a "Discard meeting" box above
-// it (spec §6) — stopping is never a single, direct action: one tap
-// reveals, a second, separate tap on the box confirms, or tapping the
-// pill again dismisses with no action. (Hover-to-reveal was tried first
-// and reverted — its hoverable area had to cover the whole window to
-// bridge the gap to the box above, which meant it fired from anywhere
-// near the pill, not just on it.) This module only shows/hides/positions
-// the window; the click/confirm behavior itself lives in the renderer.
+// showing a live waveform, no timer (2026-08-26: was a circle, then a
+// pill with a floating "Discard meeting" box above it; now ONE pill that
+// turns white in place for both the discard option and the undo-window
+// message — a separate floating element next to a small pill read as
+// disproportionate no matter how either was sized on its own). Clicking
+// the pill while recording splits it into an × (back out, no action) and
+// a "Discard meeting" zone (confirms) — spec §6's "stop is never a
+// single, direct action," just as two zones in one shape instead of two
+// separate shapes. This module only shows/hides/positions the window; the
+// click/confirm behavior itself lives in the renderer.
 //
 // Modeled directly on overlay.ts (the docked/expanded task overlay): same
 // BrowserWindow config shape, same all-Spaces/full-screen-following setup,
 // same dev-vs-packaged load pattern. Unlike overlay.ts's docked pill (which
 // defaults to click-through so it never blocks the apps behind it), this
 // widget is deliberately NOT click-through — spec §6/§7 require the click
-// itself to reveal the discard box, and at a corner-docked ~260x86 it has
-// negligible chance of being "in the way" the way a wider dock would.
+// itself to reveal the discard option, and at a corner-docked ~260x26 it
+// has negligible chance of being "in the way" the way a wider dock would.
 //
 // Electron glue (BrowserWindow/screen), so — like overlay.ts — not
 // unit-tested (see notetakerWidget's sibling files for the same rationale).
@@ -142,23 +142,21 @@ ipcMain.on('notetaker:widget-ready', () => {
  *  height things read as "the same shelf" when their bases align, not
  *  their midpoints.
  *
- *  The window is taller than the pill (cancelAreaHeight) to leave room for
- *  the click-revealed "Discard meeting" box ABOVE it (see
- *  NotetakerWidget.tsx) — reserved at all times, not click-through, the
- *  same tradeoff already made for the old circle's square hit-box. Width
- *  is generous enough for the longest content that ever appears in the
- *  pill itself ("Tap ⌃ again to keep recording", the undo-window message)
- *  — the pill's own width is content-driven (CSS), this is just the
- *  window's outer budget. */
+ *  No extra height reserved above the pill anymore (2026-08-26): the
+ *  discard option and the undo-window message both render IN the pill now
+ *  (see NotetakerWidget.tsx) — nothing ever floats above it, so the window
+ *  only ever needs to be exactly pill-height tall. Width is generous
+ *  enough for the longest content that ever appears in the pill itself
+ *  ("Press ⌃ again to keep recording") — the pill's own width is
+ *  content-driven (CSS), this is just the window's outer budget. */
 function widgetBounds(): { x: number; y: number; width: number; height: number } {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const wa = display.workArea
-  const pillHeight = 22 // matches NotetakerWidget.tsx's own PILL_HEIGHT
-  const cancelAreaHeight = 56 // discard box (~48px, two lines + padding) + its gap to the pill
+  const pillHeight = 26 // matches NotetakerWidget.tsx's own PILL_HEIGHT
   const width = 260
   const xMargin = 16
   const baseline = 30 // matches the dictation pill's own clearance from the bottom
-  const windowHeight = pillHeight + cancelAreaHeight
+  const windowHeight = pillHeight
   return {
     width,
     height: windowHeight,
