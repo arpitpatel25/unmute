@@ -70,7 +70,7 @@ import {
 } from './db'
 import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
 import { cleanupTranscript } from './notetaker/transcriptCleanup'
-import { generateNotes, DEFAULT_SUMMARY_INSTRUCTIONS } from './notetaker/notesSummary'
+import { generateNotes, DEFAULT_SUMMARY_INSTRUCTIONS, type MeetingNotes } from './notetaker/notesSummary'
 
 const log = createNotetakerLogger('init')
 
@@ -369,7 +369,14 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     if (!meeting || !meeting.notes_path) return null
     try {
       const meetingDir = path.join(app.getPath('userData'), 'meetings', id)
-      return JSON.parse(fs.readFileSync(path.join(meetingDir, meeting.notes_path), 'utf8'))
+      const raw = JSON.parse(fs.readFileSync(path.join(meetingDir, meeting.notes_path), 'utf8'))
+      // Backfill fields a notes.json written before they existed won't
+      // have (e.g. openQuestions, added 2026-08-26) — the renderer indexes
+      // every field unconditionally (notes.openQuestions.length etc.) with
+      // no error boundary anywhere above it, so an old file missing a
+      // newer field crashed the ENTIRE window blank rather than just that
+      // one section. Same reasoning as parseSummaryOutput's own defaults.
+      return { title: '', summary: '', keyPoints: [], decisions: [], actionItems: [], openQuestions: [], ...raw } as MeetingNotes
     } catch (e) {
       log.child({ meetingId: id }).warn('get-notes: failed to read/parse notes file', { error: (e as Error).message })
       return null
