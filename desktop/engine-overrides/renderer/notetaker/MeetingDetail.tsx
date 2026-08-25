@@ -163,6 +163,13 @@ export function MeetingDetail({
   const [transcriptSubTab, setTranscriptSubTab] = useState<'cleaned' | 'raw'>(
     initialCleanupStatus === 'success' ? 'cleaned' : 'raw',
   )
+  // Whether the user has EXPLICITLY clicked a sub-tab this mount, as opposed
+  // to just seeing whatever default we picked. Cleanup routinely finishes
+  // AFTER this view is first opened (the pipeline runs in the background,
+  // and a failed run can succeed on a later retry) — when that happens we
+  // want to swap the view onto the now-ready Cleaned tab, but only if the
+  // user hasn't deliberately chosen Raw for themselves.
+  const manualSubTabRef = useRef(false)
 
   const [rawSegments, setRawSegments] = useState<NotetakerTranscriptSegment[] | null>(null)
   const [cleanedSegments, setCleanedSegments] = useState<NotetakerTranscriptSegment[] | null>(null)
@@ -182,6 +189,7 @@ export function MeetingDetail({
     let cancelled = false
     setTab('notes')
     setTranscriptSubTab(initialCleanupStatus === 'success' ? 'cleaned' : 'raw')
+    manualSubTabRef.current = false
     setRawSegments(null)
     setCleanedSegments(null)
     setNotes(null)
@@ -232,6 +240,12 @@ export function MeetingDetail({
             // Cleanup just finished — the cleaned transcript file now
             // exists where it didn't a moment ago.
             api().notetakerGetCleanedTranscript?.(id).then((data) => { if (!cancelled) setCleanedSegments(data ?? []) })
+            // Move the view onto it, unless the user deliberately chose Raw
+            // themselves — this is what was making a just-succeeded cleanup
+            // look like "there is no cleaned transcript": the view had
+            // defaulted to Raw while cleanup was still pending/failed and
+            // never re-considered that default once it settled.
+            if (!manualSubTabRef.current) setTranscriptSubTab('cleaned')
           }
           return result.cleanup_status
         })
@@ -372,7 +386,7 @@ export function MeetingDetail({
             {(['cleaned', 'raw'] as const).map((t) => (
               <button
                 key={t}
-                onClick={() => setTranscriptSubTab(t)}
+                onClick={() => { manualSubTabRef.current = true; setTranscriptSubTab(t) }}
                 className={`text-[11.5px] px-2.5 py-1 rounded-full border transition-colors ${
                   transcriptSubTab === t
                     ? 'border-accent text-ink bg-accent/10 font-medium'

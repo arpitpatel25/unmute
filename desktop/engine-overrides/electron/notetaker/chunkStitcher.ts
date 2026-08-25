@@ -13,22 +13,30 @@ const WHISPER_SENTINELS_RE = /\[\s*(?:BLANK_AUDIO|SILENCE|\*SILENCE\*|MUSIC|INAU
  * Whisper large-v3(-turbo) was trained on a lot of podcast/YouTube content
  * and, fed silence or near-silence, deterministically hallucinates one of
  * these high-probability closing lines instead of returning nothing —
- * mirrors dictation's WHISPER_HALLUCINATION_RE (sessionManager.ts). A
- * meeting where nobody was speaking yet (or the room was quiet) previously
- * came back with a literal "Thank you." on both channels because this file
- * only ever stripped the bracketed sentinels above, never this.
+ * started life mirroring dictation's WHISPER_HALLUCINATION_RE
+ * (sessionManager.ts), now broadened for the notetaker's own failure modes
+ * (see JUNK_SENTENCE_RE below for why it diverged).
  *
- * Trailing-anchored per chunk (not per whole transcript) so a hallucination
- * on one chunk is caught before it lands mid-string once chunks are joined —
- * same reasoning as dictation's cleanChunk().
+ * Matched only when it is the WHOLE of a sentence, never as a substring of
+ * a longer real one — "So I just wanted to say thank you for coming" must
+ * survive untouched. Deliberately narrow beyond that: short genuine replies
+ * like "Thanks." or "Okay." alone are left alone; only closing-credits-style
+ * lines Whisper is known to invent on silence are listed.
  */
-const WHISPER_HALLUCINATION_RE = /\s*(?:thanks? for watching[.!]?|please subscribe[.!]?|thank you[.!]?|bye[.!]?|see you next time[.!]?|subtitles? by\s+[^.!]+[.!]?)\s*$/i
+const JUNK_SENTENCE_RE =
+  /^(?:thanks? for (?:watching|listening)|thank you(?: (?:very|so) much)?|thank you for (?:watching|listening)|please subscribe(?: to (?:my|the|this) channel)?|don'?t forget to (?:like and )?subscribe|like and subscribe|subscribe(?: to (?:my|the|this) channel)?|bye(?:\s*bye)?|goodbye|see you (?:next time|soon|later|in the next video)|i'?ll see you (?:next time|soon|later|in the next video)|subtitles? by\s+.+|closed captions? by\s+.+|captions? by\s+.+|transcri(?:pt|ption|bed) by\s+.+|translated by\s+.+)[.!?]*$/i
 
 export function cleanChunkText(text: string): string {
-  let t = text.replace(WHISPER_SENTINELS_RE, ' ').trim()
+  const t = text.replace(WHISPER_SENTINELS_RE, ' ').trim()
   if (!t) return ''
-  t = t.replace(WHISPER_HALLUCINATION_RE, '').trim()
-  return t
+  // Split into sentences (keeping each one's own trailing punctuation) and
+  // drop only the ones that are ENTIRELY a known hallucination — not just
+  // the chunk's trailing one. A long silent stretch routinely makes Whisper
+  // loop the same line ("Thank you. Thank you. Thank you.") rather than say
+  // it once; a trailing-anchored replace only ever caught the last
+  // occurrence and left the rest sitting in the transcript verbatim.
+  const sentences = t.split(/(?<=[.!?])\s+/).filter((s) => s.length > 0)
+  return sentences.filter((s) => !JUNK_SENTENCE_RE.test(s.trim())).join(' ').trim()
 }
 
 /**

@@ -67,4 +67,31 @@ describe('cleanChunkText', () => {
   test('leaves real speech that happens to end similarly alone', () => {
     assert.equal(cleanChunkText('So I just wanted to say thank you for coming'), 'So I just wanted to say thank you for coming')
   })
+
+  test('a chunk that loops the same hallucination collapses to empty, not just its last occurrence', () => {
+    assert.equal(cleanChunkText('Thank you. Thank you. Thank you.'), '')
+    assert.equal(cleanChunkText('Thank you.  Thank you.   Thank you.  Thank you.'), '')
+  })
+
+  test('a looped hallucination followed by real speech keeps only the real speech', () => {
+    assert.equal(cleanChunkText('Thank you. Thank you. Actually let\'s move to the next slide.'), 'Actually let\'s move to the next slide.')
+  })
+
+  test('real speech followed by a looped hallucination keeps only the real speech', () => {
+    assert.equal(cleanChunkText('Let\'s move to the next slide. Thank you. Thank you.'), 'Let\'s move to the next slide.')
+  })
+
+  test('broadened phrase list covers other well-known Whisper silence hallucinations', () => {
+    assert.equal(cleanChunkText('Please subscribe to my channel.'), '')
+    assert.equal(cleanChunkText("Don't forget to like and subscribe!"), '')
+    assert.equal(cleanChunkText('Bye bye.'), '')
+    assert.equal(cleanChunkText('Goodbye!'), '')
+    assert.equal(cleanChunkText("See you in the next video."), '')
+    assert.equal(cleanChunkText('Thanks for listening.'), '')
+    assert.equal(cleanChunkText('Subtitles by the Amara.org community'), '')
+  })
+
+  test('still leaves an unrelated filler word (not a known hallucination phrase) alone', () => {
+    assert.equal(cleanChunkText('Hmm. Hmm. Hmm.'), 'Hmm. Hmm. Hmm.')
+  })
 })
