@@ -149,7 +149,7 @@ ipcMain.on('notetaker:widget-ready', () => {
 function widgetBounds(): { x: number; y: number; width: number; height: number } {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const wa = display.workArea
-  const pillHeight = 40
+  const pillHeight = 22 // matches NotetakerWidget.tsx's own PILL_HEIGHT
   const cancelAreaHeight = 46 // hover-revealed Cancel chip (32px) + its gap to the pill
   const width = 260
   const xMargin = 16

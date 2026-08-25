@@ -344,11 +344,33 @@ export function NotetakerWidget({
   const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0.1))
   const [showCancel, setShowCancel] = useState(false)
   const rafRef = useRef<number | undefined>(undefined)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Hover/focus handlers live on the OUTER wrapper (pill + gap + chip),
+  // not on the pill alone — this was the actual bug: with the handlers on
+  // just the pill, moving the mouse up into the gap toward the chip left
+  // the pill's own bounding box first, firing mouseleave and hiding the
+  // chip before the cursor ever reached it, so it was never clickable.
+  // The wrapper's box already includes the gap AND the chip's reserved
+  // layout space (opacity:0 still occupies room, it just isn't painted),
+  // so the cursor never truly exits it while moving between the two. The
+  // scheduleClose debounce is a defensive backstop on top of that fix, not
+  // the fix itself — mirrors WidgetApp.tsx's own open()/scheduleClose().
+  const openCancel = () => {
+    if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null }
+    if (!stopPending) setShowCancel(true)
+  }
+  const scheduleCloseCancel = () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = setTimeout(() => setShowCancel(false), 150)
+  }
+  useEffect(() => () => { if (closeTimerRef.current) clearTimeout(closeTimerRef.current) }, [])
 
   // A new session always starts on the waveform face, never a stale
   // hover-revealed Cancel chip (or a frozen last frame of bars) left over
   // from the last one.
   useEffect(() => {
+    if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null }
     setShowCancel(false)
     setLevels(new Array(BAR_COUNT).fill(0.1))
   }, [sessionId])
@@ -389,8 +411,11 @@ export function NotetakerWidget({
 
   // Same fixed-glass material as the dictation pill cluster (Theme.swift's
   // PillGlass, ported to CSS): a top-down sheen over a near-black base, one
-  // hairline rim, no drop shadow. Unlike before, this is no longer tinted
-  // red for stopPending — green/white is this app's own "in-progress, not
+  // hairline rim, no drop shadow — now with the base itself made mostly
+  // transparent (0.42 alpha) plus a backdrop blur, same vibrancy technique
+  // WidgetApp.tsx's own HintChip already uses, rather than the near-opaque
+  // fill this had before. Unlike before, this is no longer tinted red for
+  // stopPending — green/white is this app's own "in-progress, not
   // destructive" language elsewhere (the connected-agent dot in the
   // dictation pill, `#6fbf9a`), and stopping a meeting isn't a destructive
   // outcome the way cancelling one is. Cancel itself no longer tints the
@@ -398,9 +423,13 @@ export function NotetakerWidget({
   // on its own now.
   const NOTETAKER_GREEN = '#6fbf9a'
   const glassBackground = stopPending
-    ? `linear-gradient(to bottom, rgba(255,255,255,0.07), rgba(255,255,255,0.02) 55%, rgba(111,191,154,0.14) 100%), rgb(14,15,19)`
-    : 'linear-gradient(to bottom, rgba(255,255,255,0.09), rgba(255,255,255,0.02) 55%, rgba(255,255,255,0) 100%), rgb(14,15,19)'
-  const glassBorder = stopPending ? `1.5px solid rgba(111,191,154,0.55)` : '1px solid rgba(255,255,255,0.10)'
+    ? `linear-gradient(to bottom, rgba(255,255,255,0.08), rgba(255,255,255,0.02) 55%, rgba(111,191,154,0.16) 100%), rgba(14,15,19,0.42)`
+    : 'linear-gradient(to bottom, rgba(255,255,255,0.10), rgba(255,255,255,0.02) 55%, rgba(255,255,255,0) 100%), rgba(14,15,19,0.42)'
+  const glassBorder = stopPending ? `1.5px solid rgba(111,191,154,0.55)` : '1px solid rgba(255,255,255,0.12)'
+  // Pill height is fixed across both states (no resize-on-state-change
+  // jank) — short enough to read as a true pill rather than a tall capsule
+  // (2026-08-26: was 40px, roughly as tall as it was wide; halved).
+  const PILL_HEIGHT = 22
 
   return (
     <div
@@ -410,11 +439,19 @@ export function NotetakerWidget({
         // @ts-expect-error -- WebkitAppRegion is a real, non-standard Electron CSS prop
         WebkitAppRegion: 'no-drag',
       }}
+      // Hover/focus tracking lives HERE, on the wrapper spanning pill + gap
+      // + chip, not on the pill alone — see openCancel/scheduleCloseCancel's
+      // own comment for why that was the actual bug (moving toward the chip
+      // through the gap used to fire the pill's own mouseleave first,
+      // hiding the chip before the cursor ever reached it).
+      onMouseEnter={openCancel}
+      onMouseLeave={scheduleCloseCancel}
+      onFocus={openCancel}
+      onBlur={scheduleCloseCancel}
     >
-      {/* The pill itself — no longer clickable. Hovering (or focusing, for
-       *  keyboard users) is what reveals the separate Cancel chip below;
-       *  the pill's own content only ever shows the waveform or, during
-       *  the undo window, a short in-place message — never a control. */}
+      {/* The pill itself — not clickable, and no longer a hover target on
+       *  its own (see the wrapper above). Content is only ever the
+       *  waveform or, during the undo window, a short in-place message. */}
       <div
         tabIndex={0}
         title={stopPending ? undefined : 'Note taker'}
@@ -423,15 +460,15 @@ export function NotetakerWidget({
             ? 'Stopping note-taking — tap left Control again to keep recording'
             : 'Note-taking in progress'
         }
-        onMouseEnter={() => !stopPending && setShowCancel(true)}
-        onMouseLeave={() => setShowCancel(false)}
-        onFocus={() => !stopPending && setShowCancel(true)}
-        onBlur={() => setShowCancel(false)}
-        className="h-10 rounded-full flex items-center select-none cursor-default"
+        className="rounded-full flex items-center select-none cursor-default"
         style={{
-          gap: stopPending ? 7 : 3,
-          padding: stopPending ? '0 14px 0 11px' : '0 14px',
+          height: PILL_HEIGHT,
+          gap: stopPending ? 6 : 3,
+          padding: stopPending ? '0 12px 0 9px' : '0 12px',
           background: glassBackground,
+          backdropFilter: 'blur(14px)',
+          // @ts-expect-error -- WebkitBackdropFilter is a real, vendor-prefixed CSS prop Chromium still wants
+          WebkitBackdropFilter: 'blur(14px)',
           border: glassBorder,
           boxShadow: 'none',
           transition: 'background 200ms ease, border-color 200ms ease, padding 200ms ease',
@@ -441,9 +478,9 @@ export function NotetakerWidget({
           <>
             <span
               className="rounded-full flex-none"
-              style={{ width: 7, height: 7, background: NOTETAKER_GREEN, animation: 'notetaker-dot-pulse 1.1s ease-in-out infinite' }}
+              style={{ width: 6, height: 6, background: NOTETAKER_GREEN, animation: 'notetaker-dot-pulse 1.1s ease-in-out infinite' }}
             />
-            <span className="text-[11.5px] font-semibold whitespace-nowrap" style={{ color: 'rgba(255,255,255,0.94)' }}>
+            <span className="text-[10px] font-semibold whitespace-nowrap" style={{ color: 'rgba(255,255,255,0.94)' }}>
               Tap ⌃ again to keep recording
             </span>
           </>
@@ -451,9 +488,9 @@ export function NotetakerWidget({
           levels.map((level, i) => (
             <div
               key={i}
-              className="w-[3px] rounded-full bg-white/90"
+              className="w-[2.5px] rounded-full bg-white/90"
               style={{
-                height: Math.max(4, Math.round(level * 24)),
+                height: Math.max(2, Math.round(level * 12)),
                 transition: 'height 60ms linear',
               }}
             />

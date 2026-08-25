@@ -139,7 +139,7 @@ export default function History() {
   if (loading) {
     return (
       <div>
-        <h2 className="font-display text-[22px] font-bold text-ink tracking-tight mb-6">History</h2>
+        <h2 className="font-display text-[22px] font-bold text-ink tracking-tight mb-6">Dictation</h2>
         <div className="flex items-center gap-3 py-20 justify-center">
           <div className="w-[5px] h-[5px] rounded-full bg-accent animate-dot-bounce" />
           <div className="w-[5px] h-[5px] rounded-full bg-accent animate-dot-bounce" style={{ animationDelay: '0.15s' }} />
@@ -152,7 +152,7 @@ export default function History() {
   if (sessions.length === 0 && scratchpads.length === 0) {
     return (
       <div>
-        <h2 className="font-display text-[22px] font-bold text-ink tracking-tight mb-6">History</h2>
+        <h2 className="font-display text-[22px] font-bold text-ink tracking-tight mb-6">Dictation</h2>
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <div className="w-20 h-20 rounded-2xl bg-ink-07 flex items-center justify-center mb-5">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-ink-35">
@@ -190,14 +190,14 @@ export default function History() {
        * and a retention line that lists two rules is one nobody finishes
        * reading. Settings → Privacy is where the full posture belongs. */}
       <div className="mb-4">
-        <h2 className="font-display text-[22px] font-bold text-ink tracking-tight">History</h2>
+        <h2 className="font-display text-[22px] font-bold text-ink tracking-tight">Dictation</h2>
         <p className="text-[11px] text-ink-35 mt-1">
           Unsaved captures are removed after 24 hours. Saved scratchpads stay until you delete them.
         </p>
       </div>
 
       <div className="flex gap-1 mb-4 rounded-xl bg-ink-07 p-1 w-fit">
-        <button onClick={() => setTab('dictations')} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === 'dictations' ? 'bg-surface-2 text-ink shadow-sm' : 'text-ink-35'}`}>Dictations</button>
+        <button onClick={() => setTab('dictations')} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === 'dictations' ? 'bg-surface-2 text-ink shadow-sm' : 'text-ink-35'}`}>History</button>
         <button onClick={() => setTab('scratchpads')} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === 'scratchpads' ? 'bg-surface-2 text-ink shadow-sm' : 'text-ink-35'}`}>Scratchpads</button>
       </div>
 

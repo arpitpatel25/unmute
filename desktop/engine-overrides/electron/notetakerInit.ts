@@ -1386,20 +1386,33 @@ async function runSummaryStage(meetingId: string, cleanedSegments: TranscriptSeg
   }
   writeMeetingJsonFile(meetingId, NOTES_FILENAME, result.notes)
   updateMeetingPipelineStatus(meetingId, { summary_status: 'success', notes_path: NOTES_FILENAME })
+  let finalTitle: string
   if (result.degraded) {
     // The model's response didn't come back as the JSON shape we asked
     // for, so notes.title is deliberately blank (generateNotes never
     // fabricates one) — leave the meeting's existing title (persistSession
     // always sets one) alone rather than overwrite it with nothing.
     mlog.event('pipeline-summary-succeeded-degraded', { summaryLength: result.notes.summary.length })
-    return
+    finalTitle = getMeeting(meetingId)?.title ?? 'Meeting'
+  } else {
+    // notes.json's title supersedes generateTitle()'s first-line heuristic
+    // for this meeting once summarization succeeds (spec §5) — the row
+    // already has SOME title (persistSession always sets one), this just
+    // replaces it with the real one.
+    updateMeetingTitle(meetingId, result.notes.title)
+    mlog.event('pipeline-summary-succeeded', { title: result.notes.title })
+    finalTitle = result.notes.title
   }
-  // notes.json's title supersedes generateTitle()'s first-line heuristic
-  // for this meeting once summarization succeeds (spec §5) — the row
-  // already has SOME title (persistSession always sets one), this just
-  // replaces it with the real one.
-  updateMeetingTitle(meetingId, result.notes.title)
-  mlog.event('pipeline-summary-succeeded', { title: result.notes.title })
+  // The notes are the last stage a meeting goes through — this is the one
+  // moment worth interrupting the user for, since by now cleanup AND
+  // summary have both actually finished and there's something real to
+  // look at. Clicking the notification opens straight to the meeting via
+  // the same openMeetingInApp() the Agent's notetaker_open tool uses.
+  showNotetakerNotification({
+    title: 'Meeting notes ready',
+    body: finalTitle,
+    onClick: () => openMeetingInApp(meetingId),
+  })
 }
 
 /** Runs the full cleanup → summary pipeline for a freshly-persisted

@@ -318,7 +318,7 @@ function AppInner() {
         <div className="flex flex-col gap-0.5 px-1">
           <SidebarButton
             icon={<HistoryIcon />}
-            label="History"
+            label="Dictation"
             active={activeTab === 'history'}
             onClick={() => setActiveTab('history')}
           />
