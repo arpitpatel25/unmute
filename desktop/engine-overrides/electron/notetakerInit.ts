@@ -69,7 +69,7 @@ import {
   getNotetakerSettings, saveNotetakerSettings, updateMeetingPipelineStatus,
 } from './db'
 import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
-import { cleanupTranscript, DEFAULT_CLEANUP_INSTRUCTIONS } from './notetaker/transcriptCleanup'
+import { cleanupTranscript } from './notetaker/transcriptCleanup'
 import { generateNotes, DEFAULT_SUMMARY_INSTRUCTIONS } from './notetaker/notesSummary'
 
 const log = createNotetakerLogger('init')
@@ -379,16 +379,17 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   ipcMain.handle('notetaker:get-pipeline-settings', async () => {
     const settings = getNotetakerSettings()
     const availability = (await hooks.getAgentAvailability?.()) ?? { claude: false, codex: false }
-    // The renderer needs the real default EDITABLE instructions text to
-    // SHOW (not just infer "using default" from a null override) — see
-    // NotetakerSettings.tsx's InstructionsEditor, which seeds its modal
-    // with this rather than an empty box + placeholder. The fixed
-    // preamble/contract that always bookends this text is never sent here
-    // — it's not shown or editable, see transcriptCleanup.ts/notesSummary.ts.
+    // The renderer needs the real default EDITABLE summary instructions
+    // text to SHOW (not just infer "using default" from a null override)
+    // — see NotetakerSettings.tsx's InstructionsEditor, which seeds its
+    // modal with this rather than an empty box + placeholder. Cleanup has
+    // no editable seam at all (see transcriptCleanup.ts's header) so there
+    // is no default_cleanup_instructions to send. The fixed preamble/
+    // contract that bookends the summary instructions is never sent here
+    // either — it's not shown or editable, see notesSummary.ts.
     return {
       ...settings,
       availability,
-      default_cleanup_instructions: DEFAULT_CLEANUP_INSTRUCTIONS,
       default_summary_instructions: DEFAULT_SUMMARY_INSTRUCTIONS,
     }
   })
@@ -1348,11 +1349,11 @@ const NOTES_FILENAME = 'notes.json'
 /** The cleanup stage alone — segments in, cleaned segments written + status
  *  stamped. Returns whether it succeeded, so callers (the auto pipeline and
  *  the retry path) can decide whether to proceed to the summary stage. */
-async function runCleanupStage(meetingId: string, segments: TranscriptSegment[], provider: 'claude' | 'codex', promptOverride: string | null): Promise<TranscriptSegment[] | null> {
+async function runCleanupStage(meetingId: string, segments: TranscriptSegment[], provider: 'claude' | 'codex'): Promise<TranscriptSegment[] | null> {
   const mlog = log.child({ meetingId })
   updateMeetingPipelineStatus(meetingId, { cleanup_status: 'pending' })
   mlog.event('pipeline-cleanup-started', { provider, segmentCount: segments.length })
-  const result = await cleanupTranscript(segments, provider, promptOverride)
+  const result = await cleanupTranscript(segments, provider)
   if (!result.ok) {
     mlog.error('pipeline-cleanup-failed', { error: result.error })
     updateMeetingPipelineStatus(meetingId, { cleanup_status: 'failed' })
@@ -1402,7 +1403,7 @@ async function runNotetakerPipeline(meetingId: string, segments: TranscriptSegme
     updateMeetingPipelineStatus(meetingId, { cleanup_status: 'disabled', summary_status: 'disabled' })
     return
   }
-  const cleaned = await runCleanupStage(meetingId, segments, settings.provider, settings.cleanup_prompt)
+  const cleaned = await runCleanupStage(meetingId, segments, settings.provider)
   if (!cleaned) return
   await runSummaryStage(meetingId, cleaned, settings.provider, settings.summary_prompt)
 }
@@ -1416,7 +1417,7 @@ async function retryNotetakerPipeline(meetingId: string): Promise<void> {
   const settings = getNotetakerSettings()
   if (meeting.cleanup_status !== 'success') {
     const raw = readTranscriptSegments(meetingId)
-    const cleaned = await runCleanupStage(meetingId, raw, settings.provider, settings.cleanup_prompt)
+    const cleaned = await runCleanupStage(meetingId, raw, settings.provider)
     if (!cleaned) return
     await runSummaryStage(meetingId, cleaned, settings.provider, settings.summary_prompt)
     return

@@ -4,8 +4,8 @@ import { parseSummaryOutput, generateNotes, buildSummaryInput, DEFAULT_SUMMARY_I
 import type { TranscriptSegment } from './transcriptMerge'
 import type { HeadlessProvider } from './headlessAgent'
 
-function seg(channel: 'mic' | 'system', text: string): TranscriptSegment {
-  return { channel, text, startMs: 0, endMs: 1000 }
+function seg(channel: 'mic' | 'system', text: string, speakerName?: string | null): TranscriptSegment {
+  return { channel, text, startMs: 0, endMs: 1000, speakerName }
 }
 
 describe('parseSummaryOutput', () => {
@@ -23,6 +23,7 @@ describe('parseSummaryOutput', () => {
       keyPoints: ['Point A'],
       decisions: ['Approved the plan'],
       actionItems: ['Alice to send the doc'],
+      openQuestions: [],
     })
   })
 
@@ -36,7 +37,12 @@ describe('parseSummaryOutput', () => {
 
   test('missing optional arrays default to []', () => {
     const out = parseSummaryOutput(JSON.stringify({ title: 'T', summary: 'S' }))
-    assert.deepEqual(out, { title: 'T', summary: 'S', keyPoints: [], decisions: [], actionItems: [] })
+    assert.deepEqual(out, { title: 'T', summary: 'S', keyPoints: [], decisions: [], actionItems: [], openQuestions: [] })
+  })
+
+  test('openQuestions parses like the other list fields', () => {
+    const out = parseSummaryOutput(JSON.stringify({ title: 'T', summary: 'S', openQuestions: ['Which harness?', 5, 'Popup or panel?'] }))
+    assert.deepEqual(out?.openQuestions, ['Which harness?', 'Popup or panel?'])
   })
 
   test('malformed JSON is null', () => {
@@ -55,17 +61,32 @@ describe('parseSummaryOutput', () => {
 
   test('a ```json fenced response (the real, live-observed Claude Code shape) still parses', () => {
     const fenced = '```json\n{"title":"T","summary":"S"}\n```'
-    assert.deepEqual(parseSummaryOutput(fenced), { title: 'T', summary: 'S', keyPoints: [], decisions: [], actionItems: [] })
+    assert.deepEqual(parseSummaryOutput(fenced), { title: 'T', summary: 'S', keyPoints: [], decisions: [], actionItems: [], openQuestions: [] })
   })
 })
 
 describe('buildSummaryInput', () => {
-  test('joins segments as channel-labeled lines, with the instructions sandwiched between the fixed preamble and contract', () => {
-    const input = buildSummaryInput([seg('mic', 'hello'), seg('system', 'hi there')], 'MY INSTRUCTIONS')
+  test('labels lines exactly like the Transcript tab does — mic as "You", system as its speaker name or "Them" — since the ownership rule tells the model to use these literal labels', () => {
+    const input = buildSummaryInput([seg('mic', 'hello'), seg('system', 'hi there'), seg('system', 'hey', 'Priya')], 'MY INSTRUCTIONS')
     const instructionsIndex = input.indexOf('MY INSTRUCTIONS')
     assert.ok(instructionsIndex > 0, 'fixed preamble should come before the instructions')
-    assert.ok(input.endsWith('mic: hello\nsystem: hi there'))
+    assert.ok(input.endsWith('You: hello\nThem: hi there\nPriya: hey'))
     assert.ok(input.includes('no markdown code fence'))
+  })
+
+  test('the fixed contract carries the language, garbled-content, and decision-ownership rules — none of it user-supplied', () => {
+    const input = buildSummaryInput([seg('mic', 'a')], 'MY INSTRUCTIONS')
+    assert.ok(input.includes('LANGUAGE'))
+    assert.ok(input.includes('GARBLED CONTENT'))
+    assert.ok(input.includes('openQuestions'))
+  })
+
+  test('the language rule names no specific language — it must generalize', () => {
+    const input = buildSummaryInput([seg('mic', 'a')], 'MY INSTRUCTIONS')
+    const languageSection = input.slice(input.indexOf('LANGUAGE'), input.indexOf('GARBLED CONTENT'))
+    for (const langName of ['Hindi', 'Spanish', 'Mandarin', 'French', 'English']) {
+      assert.ok(!languageSection.includes(langName), `should not name ${langName} specifically`)
+    }
   })
 })
 
@@ -98,6 +119,13 @@ describe('generateNotes', () => {
     const result = await generateNotes([seg('mic', 'hi')], 'claude', undefined, runner)
     assert.equal(result.ok, true)
     if (result.ok) assert.equal(result.notes.title, 'T')
+  })
+
+  test('openQuestions flows through end to end', async () => {
+    const runner = fakeRunner({ ok: true, output: JSON.stringify({ title: 'T', summary: 'S', openQuestions: ['Which harness?'] }) })
+    const result = await generateNotes([seg('mic', 'hi')], 'claude', undefined, runner)
+    assert.equal(result.ok, true)
+    if (result.ok) assert.deepEqual(result.notes.openQuestions, ['Which harness?'])
   })
 
   test('DEFAULT_SUMMARY_INSTRUCTIONS is real instructions text, not a placeholder', () => {

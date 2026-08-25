@@ -184,17 +184,19 @@ export interface NotetakerTranscriptSegment {
 }
 
 // Mirrors db.ts's NotetakerSettingsRow, same cross-tree-duplication reason
-// as NotetakerMeetingSnapshot above. cleanup_prompt/summary_prompt are the
-// EDITABLE instructions override only (null = using the built-in default)
-// — the fixed preamble/contract that always bookends them at call time is
-// never sent to the renderer, see transcriptCleanup.ts/notesSummary.ts.
+// as NotetakerMeetingSnapshot above. cleanup_prompt is a legacy DB column,
+// still spread through by the IPC handler but never read or written by the
+// renderer — cleanup has no user-editable seam (see transcriptCleanup.ts's
+// header). summary_prompt is the EDITABLE instructions override for
+// summary only (null = using the built-in default) — the fixed preamble/
+// contract that always bookends it at call time is never sent to the
+// renderer, see notesSummary.ts.
 export interface NotetakerPipelineSettings {
   auto_pipeline_enabled: 0 | 1
   provider: 'claude' | 'codex'
   cleanup_prompt: string | null
   summary_prompt: string | null
   availability: { claude: boolean; codex: boolean }
-  default_cleanup_instructions: string
   default_summary_instructions: string
 }
 
@@ -205,6 +207,7 @@ export interface NotetakerMeetingNotes {
   keyPoints: string[]
   decisions: string[]
   actionItems: string[]
+  openQuestions: string[]
 }
 
 export const remotePreloadExtensions = {
@@ -737,7 +740,7 @@ export const remotePreloadExtensions = {
    *  only an actually-usable provider may be selected). */
   notetakerGetPipelineSettings: (): Promise<NotetakerPipelineSettings> =>
     ipcRenderer.invoke('notetaker:get-pipeline-settings'),
-  notetakerSavePipelineSettings: (patch: Partial<Pick<NotetakerPipelineSettings, 'auto_pipeline_enabled' | 'provider' | 'cleanup_prompt' | 'summary_prompt'>>): Promise<void> =>
+  notetakerSavePipelineSettings: (patch: Partial<Pick<NotetakerPipelineSettings, 'auto_pipeline_enabled' | 'provider' | 'summary_prompt'>>): Promise<void> =>
     ipcRenderer.invoke('notetaker:save-pipeline-settings', patch),
   /** Re-runs whichever pipeline stage(s) haven't succeeded yet for this
    *  meeting (spec §6) — never redoes a stage that already succeeded. */

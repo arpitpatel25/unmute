@@ -1,4 +1,17 @@
-export type TranscriptSegment = { channel: 'mic' | 'system'; text: string; startMs: number; endMs: number; speakerName?: string | null }
+// alt/note are only ever set by cleanup's code-switching recovery (see
+// transcriptCleanup.ts): `alt` is a low-confidence guess at what a segment
+// actually said, `note` names the suspected other language — set together,
+// only when cleanup wasn't confident enough to correct `text` itself. Never
+// present on a raw (pre-cleanup) segment.
+export type TranscriptSegment = {
+  channel: 'mic' | 'system'
+  text: string
+  startMs: number
+  endMs: number
+  speakerName?: string | null
+  alt?: string
+  note?: string
+}
 
 /**
  * Merges the two channels' whole-recording transcripts into ordered

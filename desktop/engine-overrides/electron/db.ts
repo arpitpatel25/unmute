@@ -66,9 +66,12 @@ export interface DBMeeting {
 
 /** Single-row settings for the cleanup/summarization pipeline. provider
  *  matches PROVIDERS registry ids (electron/remote/providers.ts) —
- *  'claude' | 'codex' — not a prose label. cleanup_prompt/summary_prompt
- *  are null when the user hasn't overridden the built-in default (see
- *  transcriptCleanup.ts/notesSummary.ts's own DEFAULT_*_PROMPT). */
+ *  'claude' | 'codex' — not a prose label. summary_prompt is null when the
+ *  user hasn't overridden the built-in default (see notesSummary.ts's own
+ *  DEFAULT_SUMMARY_INSTRUCTIONS). cleanup_prompt is a legacy column kept
+ *  for schema stability — cleanup has no user-editable prompt at all
+ *  (2026-08-26, see transcriptCleanup.ts's header), so nothing reads or
+ *  writes it anymore; it's never surfaced past getNotetakerSettings(). */
 export interface NotetakerSettingsRow {
   auto_pipeline_enabled: 0 | 1
   provider: 'claude' | 'codex'

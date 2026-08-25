@@ -7,18 +7,21 @@
 //
 // Pipeline section: transcript cleanup + auto-summarization (2026-08-25
 // spec) — one toggle, a provider picker gated on real availability (same
-// ✓/○ visual language as RemoteSetup.tsx's Agents checklist), and two
-// independently editable "instructions" (2026-08-26: renamed from "prompt"
-// in every user-facing string — the model-facing term isn't what a user
-// is editing here, they're editing behavior guidance).
+// ✓/○ visual language as RemoteSetup.tsx's Agents checklist), and an
+// editable "instructions" for summary only (2026-08-26: renamed from
+// "prompt" in every user-facing string — the model-facing term isn't what
+// a user is editing here, they're editing behavior guidance). Cleanup has
+// no user-facing instructions at all — its correction rules (including
+// language recovery and the hallucination-handling rule) are fixed for
+// every meeting, see transcriptCleanup.ts's own header for why.
 //
-// Instructions are shown collapsed (label + one-line status), not inline —
-// the full editable text only appears in InstructionsEditorModal, opened
-// via the pencil icon, with its own Save/Cancel. What's edited here is only
-// ever the MIDDLE, user-customizable third of the real prompt sent to the
-// model — a fixed preamble and contract (I/O shape, the hallucination-
-// clearing rule) always bookend it and are never shown or editable, see
-// transcriptCleanup.ts/notesSummary.ts.
+// Summary instructions are shown collapsed (label + one-line status), not
+// inline — the full editable text only appears in InstructionsEditorModal,
+// opened via the pencil icon, with its own Save/Cancel. What's edited
+// there is only ever the MIDDLE, user-customizable third of the real
+// prompt sent to the model — a fixed preamble and contract (output shape,
+// language/garbled-content/decision rules) always bookend it and are never
+// shown or editable, see notesSummary.ts.
 
 import { useEffect, useState } from 'react'
 
@@ -27,14 +30,12 @@ type Provider = 'claude' | 'codex'
 type PipelineSettings = {
   auto_pipeline_enabled: 0 | 1
   provider: Provider
-  cleanup_prompt: string | null
   summary_prompt: string | null
   availability: { claude: boolean; codex: boolean }
-  default_cleanup_instructions: string
   default_summary_instructions: string
 }
 
-type SettingsPatch = Partial<Pick<PipelineSettings, 'auto_pipeline_enabled' | 'provider' | 'cleanup_prompt' | 'summary_prompt'>>
+type SettingsPatch = Partial<Pick<PipelineSettings, 'auto_pipeline_enabled' | 'provider' | 'summary_prompt'>>
 
 type API = {
   notetakerGetPipelineSettings?: () => Promise<PipelineSettings>
@@ -72,7 +73,7 @@ function Toggle({ on, onClick, disabled }: { on: boolean; onClick: () => void; d
 
 export function NotetakerSettings() {
   const [settings, setSettings] = useState<PipelineSettings | null>(null)
-  const [editing, setEditing] = useState<'cleanup' | 'summary' | null>(null)
+  const [editingSummary, setEditingSummary] = useState(false)
 
   useEffect(() => {
     api().notetakerGetPipelineSettings?.().then(setSettings)
@@ -147,39 +148,34 @@ export function NotetakerSettings() {
               })}
             </div>
 
-            <InstructionsRow
-              label="Cleanup instructions"
-              isDefault={settings.cleanup_prompt === null}
-              onEdit={() => setEditing('cleanup')}
-            />
+            <p className="text-[11px] text-ink/50 leading-relaxed">
+              Transcript cleanup — including recovering misheard or code-switched speech — runs the
+              same way for every meeting and isn&apos;t user-editable.
+            </p>
+
             <InstructionsRow
               label="Summary instructions"
               isDefault={settings.summary_prompt === null}
-              onEdit={() => setEditing('summary')}
+              onEdit={() => setEditingSummary(true)}
             />
           </div>
         )}
       </div>
 
-      {settings && editing && (
+      {settings && editingSummary && (
         <InstructionsEditorModal
-          title={editing === 'cleanup' ? 'Cleanup instructions' : 'Summary instructions'}
-          initialValue={
-            editing === 'cleanup'
-              ? settings.cleanup_prompt ?? settings.default_cleanup_instructions
-              : settings.summary_prompt ?? settings.default_summary_instructions
-          }
-          defaultValue={editing === 'cleanup' ? settings.default_cleanup_instructions : settings.default_summary_instructions}
+          title="Summary instructions"
+          initialValue={settings.summary_prompt ?? settings.default_summary_instructions}
+          defaultValue={settings.default_summary_instructions}
           onSave={(text) => {
-            const value = text.length > 0 ? text : null
-            save(editing === 'cleanup' ? { cleanup_prompt: value } : { summary_prompt: value })
-            setEditing(null)
+            save({ summary_prompt: text.length > 0 ? text : null })
+            setEditingSummary(false)
           }}
           onReset={() => {
-            save(editing === 'cleanup' ? { cleanup_prompt: null } : { summary_prompt: null })
-            setEditing(null)
+            save({ summary_prompt: null })
+            setEditingSummary(false)
           }}
-          onCancel={() => setEditing(null)}
+          onCancel={() => setEditingSummary(false)}
         />
       )}
     </div>

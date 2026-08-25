@@ -38,6 +38,11 @@ type NotetakerTranscriptSegment = {
   startMs: number
   endMs: number
   speakerName?: string | null
+  // Only ever set by cleanup's language-recovery pass, when it suspected
+  // mis-decoded speech from another language but wasn't confident enough
+  // to correct `text` itself — see transcriptCleanup.ts.
+  alt?: string
+  note?: string
 }
 
 type NotetakerPipelineStatus = 'disabled' | 'pending' | 'success' | 'failed'
@@ -48,6 +53,7 @@ type NotetakerMeetingNotes = {
   keyPoints: string[]
   decisions: string[]
   actionItems: string[]
+  openQuestions: string[]
 }
 
 type API = {
@@ -94,6 +100,11 @@ function TranscriptSegments({ segments, emptyLabel }: { segments: NotetakerTrans
             {seg.channel === 'mic' ? 'You' : (seg.speakerName || 'Them')}:{' '}
           </span>
           <span className="text-ink">{seg.text}</span>
+          {seg.alt && (
+            <div className="text-[11.5px] text-ink/50 italic mt-0.5">
+              possible code-switch{seg.note ? ` (${seg.note})` : ''}: {seg.alt}
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -355,6 +366,7 @@ export function MeetingDetail({
             <NotesSection title="Key Points" items={notes.keyPoints} />
             <NotesSection title="Decisions" items={notes.decisions} />
             <NotesSection title="Action Items" items={notes.actionItems} />
+            <NotesSection title="Open Questions" items={notes.openQuestions} />
           </div>
         ) : (
           <PipelineStatusNotice status={summaryStatus} onRetry={() => void handleRetry()} retrying={retrying} kind="summary" />

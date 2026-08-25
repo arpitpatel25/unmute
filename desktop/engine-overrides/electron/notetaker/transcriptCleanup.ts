@@ -4,22 +4,21 @@
 // headless Claude Code/Codex CLI (headlessAgent.ts) — 2026-08-25 spec §4.
 //
 // THE WHOLE SAFETY ARGUMENT FOR THIS FILE: the model is never asked to
-// produce a timestamp, channel, or speaker — only corrected TEXT, keyed by
-// an id we already control. parseCleanupOutput below splices corrected text
-// back into our own original segment objects; every other field is copied
-// through untouched, never read from the model's response. That's what
-// makes "preserve every timestamp exactly" hold with zero hallucination
-// surface — the risky operation (a model producing a number) simply never
-// happens, because we never ask for one.
+// produce a timestamp, channel, or speaker — only corrected TEXT (plus the
+// optional alt/note pair below), keyed by an id we already control.
+// parseCleanupOutput below splices the correction back into our own
+// original segment objects; every other field is copied through untouched,
+// never read from the model's response. That's what makes "preserve every
+// timestamp exactly" hold with zero hallucination surface — the risky
+// operation (a model producing a number) simply never happens, because we
+// never ask for one.
 //
-// PROMPT IS TWO PARTS (2026-08-26): FIXED_CLEANUP_PREAMBLE/FIXED_CLEANUP_
-// CONTRACT bookend whatever instructions text is in play (the user's own
-// override, or DEFAULT_CLEANUP_INSTRUCTIONS) and are never shown in — or
-// editable from — Settings. They carry the I/O contract this file's own
-// parser depends on (the {id,text} shape, no markdown fence) and the
-// hallucination-clearing rule below, so both hold regardless of whatever
-// the user has customized the "how to correct text" instructions to say.
-// Only the middle instructions text is ever persisted as a user override.
+// FULLY FIXED, NOT USER-EDITABLE (2026-08-26): unlike notesSummary.ts, this
+// prompt has no user-customizable seam at all — Settings offers no cleanup
+// override. The correction rules below (language recovery, hallucination
+// handling, the output contract this file's own parser depends on) are
+// judgment calls we want to hold constant for every meeting, not something
+// a per-user prompt edit should be able to loosen.
 
 import { runHeadlessAgent, type HeadlessProvider } from './headlessAgent'
 import type { TranscriptSegment } from './transcriptMerge'
@@ -28,37 +27,58 @@ import { extractJson } from './extractJson'
 
 const log = createNotetakerLogger('transcript-cleanup')
 
-const FIXED_CLEANUP_PREAMBLE =
+const FIXED_CLEANUP_PROMPT =
   'You are cleaning up a raw speech-to-text transcript of a recorded meeting. ' +
-  'You will receive a JSON array of {id, text} pairs, each one segment of speech, in order.'
+  'You will receive a JSON array of {id, text} pairs, each one segment of speech, in order.\n\n' +
 
-export const DEFAULT_CLEANUP_INSTRUCTIONS =
   'Fix only clear transcription errors — misheard words, garbled phrases, obviously wrong homophones — ' +
-  'using the surrounding segments as context. Do not summarize, shorten, rephrase for style, or change meaning.'
+  'using the surrounding segments as context. Do not summarize, shorten, rephrase for style, or change meaning. ' +
+  'Do not merge, split, or reorder any segment.\n\n' +
 
-const FIXED_CLEANUP_CONTRACT =
-  'Do not merge, split, or reorder any segment. ' +
+  'LANGUAGE AND CODE-SWITCHING\n\n' +
+  'The speaker may switch between languages mid-sentence. The speech-to-text engine may have been locked to a ' +
+  'single output language, so speech in another language is sometimes forced into words of that output language ' +
+  'that are grammatically valid but semantically incoherent in context.\n\n' +
+  'When a segment reads as fluent text in the output language yet makes no sense given the surrounding segments, ' +
+  'consider that it may be mis-decoded speech from another language. Use phonetic similarity to the transcribed ' +
+  'text plus the surrounding discussion to recover what was actually said.\n\n' +
+  'Rules for such segments:\n' +
+  '- Write recovered words in Latin script, romanized phonetically. Never output non-Latin scripts, even if the ' +
+  'input already contains them — romanize those too.\n' +
+  '- Transliterate; do not translate. Preserve the speaker\'s original words as spoken, not their meaning in the ' +
+  'output language.\n' +
+  '- Leave the rest of the segment untouched. Mixed-language segments stay mixed.\n' +
+  '- Only recover where phonetic and contextual evidence agree. If a segment is unintelligible, leave its ' +
+  'original text unchanged rather than guessing.\n\n' +
+
+  'HALLUCINATED SEGMENTS\n\n' +
   'Some segments come from an audio channel that had no real speech in it — total silence or background noise — ' +
-  'and the speech-to-text engine hallucinated a short generic line instead of returning nothing. ' +
-  'If a segment\'s ENTIRE text is one of these invented lines (for example "Thank you.", "Thanks for watching.", ' +
-  '"Please subscribe.", "Bye.", "See you next time.", a bare "Hmm." or "Okay.", or a nonsense loop like the same ' +
-  'word repeated many times) and it does not fit as a real reply to what is being said around it, return an empty ' +
-  'string "" for that segment\'s text instead of correcting it. Only do this when you are confident it is invented, ' +
-  'not real speech — a short but plausible real reply must be left exactly as is. When unsure, leave the text unchanged. ' +
-  'Return a JSON array of {id, text} pairs, one per input id, in the same order, with only the text corrected or, ' +
-  'for a confirmed hallucination, emptied. ' +
+  'and the speech-to-text engine hallucinated a short generic line instead of returning nothing. If a segment\'s ' +
+  'ENTIRE text is one of these invented lines (for example "Thank you.", "Thanks for watching.", "Please ' +
+  'subscribe.", "Bye.", "See you next time.", a bare "Hmm." or "Okay.", or a nonsense loop like the same word ' +
+  'repeated many times) and it does not fit as a real reply to what is being said around it, set that segment\'s ' +
+  '`text` to an empty string instead of correcting it. Only do this when you are confident it is invented, not ' +
+  'real speech — a short but plausible real reply must be left exactly as is. When unsure, leave the text ' +
+  'unchanged.\n\n' +
+
+  'OUTPUT\n\n' +
+  'Return a JSON array of {id, text, alt, note} objects, one per input id, in the same order. ' +
+  'Put a high-confidence correction directly in `text`. When you suspect mis-decoded speech from another ' +
+  'language but cannot recover it with confidence, leave `text` unchanged, put your best guess at the recovered ' +
+  'words in `alt`, and name the suspected language in `note`. For a confirmed hallucination, set `text` to "". ' +
+  'Use an empty string for `alt`/`note` when there is nothing to add — every object must include all four keys. ' +
   'Output ONLY that JSON array — no markdown code fence, no explanation, no other text before or after it.'
 
 /** {id, text} only — channel/speaker/timestamps are deliberately never
- *  sent, since they're never meant to come back (see file header).
- *  `instructions` is the editable middle third; the fixed preamble and
- *  contract always bookend it, whatever it says. */
-export function buildCleanupInput(segments: TranscriptSegment[], instructions: string): string {
+ *  sent, since they're never meant to come back (see file header). No
+ *  instructions parameter: the whole prompt is fixed. */
+export function buildCleanupInput(segments: TranscriptSegment[]): string {
   const payload = segments.map((s, id) => ({ id, text: s.text }))
-  return `${FIXED_CLEANUP_PREAMBLE}\n\n${instructions}\n\n${FIXED_CLEANUP_CONTRACT}\n\n${JSON.stringify(payload)}`
+  return `${FIXED_CLEANUP_PROMPT}\n\n${JSON.stringify(payload)}`
 }
 
-type CleanupEntry = { id: unknown; text: unknown }
+type CleanupEntry = { id: unknown; text: unknown; alt?: unknown; note?: unknown }
+type CleanupCorrection = { text: string; alt?: string; note?: string }
 
 /**
  * Pure. Validates the model's response per-id, not as a monolithic
@@ -68,13 +88,18 @@ type CleanupEntry = { id: unknown; text: unknown }
  * id wins; later ones for the same id are ignored (an unexpected model
  * response, not a reason to prefer the later one over the first).
  *
- * An empty string IS a valid, intentional correction (not a fallback
- * trigger) — FIXED_CLEANUP_CONTRACT tells the model to return "" for a
- * segment it's confident is pure STT hallucination on silence, and
+ * An empty `text` IS a valid, intentional correction (not a fallback
+ * trigger) — the prompt's hallucination rule tells the model to empty a
+ * segment it's confident is pure STT invention on silence, and
  * cleanupTranscript below drops those from the final result entirely.
+ *
+ * `alt`/`note` are only applied when non-empty strings — most segments get
+ * neither, and a segment's original object never carries the two keys at
+ * all unless cleanup actually set them (see transcriptMerge.ts's own note
+ * on TranscriptSegment).
  */
 export function parseCleanupOutput(raw: string, segments: TranscriptSegment[]): TranscriptSegment[] {
-  const corrected = new Map<number, string>()
+  const corrected = new Map<number, CleanupCorrection>()
   // extractJson handles the real, live-observed shape: Claude Code's -p
   // mode commonly wraps its answer in a ```json fence even when told not
   // to — a bare JSON.parse(raw) rejected that outright and was the actual
@@ -89,7 +114,10 @@ export function parseCleanupOutput(raw: string, segments: TranscriptSegment[]): 
       if (id < 0 || id >= segments.length) continue
       if (corrected.has(id)) continue // first occurrence wins
       if (typeof text !== 'string') continue
-      corrected.set(id, text)
+      const correction: CleanupCorrection = { text }
+      if (typeof entry.alt === 'string' && entry.alt.length > 0) correction.alt = entry.alt
+      if (typeof entry.note === 'string' && entry.note.length > 0) correction.note = entry.note
+      corrected.set(id, correction)
     }
   }
   // else: nothing extractable at all — every segment falls back below.
@@ -98,8 +126,12 @@ export function parseCleanupOutput(raw: string, segments: TranscriptSegment[]): 
   // extractable) or just an all-fallback success (some ids legitimately
   // absent from an otherwise-valid response).
   return segments.map((seg, id) => {
-    const text = corrected.get(id)
-    return text === undefined ? seg : { ...seg, text }
+    const correction = corrected.get(id)
+    if (!correction) return seg
+    const next: TranscriptSegment = { ...seg, text: correction.text }
+    if (correction.alt !== undefined) next.alt = correction.alt
+    if (correction.note !== undefined) next.note = correction.note
+    return next
   })
 }
 
@@ -114,22 +146,16 @@ export type CleanupResult =
  * response wasn't parseable as JSON at all") — a response that parsed but
  * left some ids uncorrected is still `ok: true`, those segments just kept
  * their original text via parseCleanupOutput's own per-id fallback.
- *
- * `instructionsOverride` is the user's editable middle-third override, if
- * any — never the full prompt. buildCleanupInput always wraps it in the
- * fixed preamble/contract regardless.
  */
 export async function cleanupTranscript(
   segments: TranscriptSegment[],
   provider: HeadlessProvider,
-  instructionsOverride?: string | null,
   // Injected for testability — defaults to the real headless CLI call.
   // Same shape as NotetakerController's own injected-deps pattern rather
   // than mocking the module graph.
   runAgent: typeof runHeadlessAgent = runHeadlessAgent,
 ): Promise<CleanupResult> {
-  const instructions = instructionsOverride ?? DEFAULT_CLEANUP_INSTRUCTIONS
-  const input = buildCleanupInput(segments, instructions)
+  const input = buildCleanupInput(segments)
   const result = await runAgent(provider, input)
   if (!result.ok) {
     log.error('cleanup call failed', { provider, error: result.error })
@@ -139,10 +165,10 @@ export async function cleanupTranscript(
     log.error('cleanup response was not parseable JSON at all', { provider, outputPreview: result.output.slice(0, 200) })
     return { ok: false, error: 'response was not valid JSON' }
   }
-  // A segment the model confidently emptied (FIXED_CLEANUP_CONTRACT's
-  // hallucination-clearing rule) is dropped here, not kept as a blank line
-  // — same "empty means gone" convention mergeChannelChunks already uses
-  // for the raw capture-time filter.
+  // A segment the model confidently emptied (the hallucination rule above)
+  // is dropped here, not kept as a blank line — same "empty means gone"
+  // convention mergeChannelChunks already uses for the raw capture-time
+  // filter.
   const cleaned = parseCleanupOutput(result.output, segments).filter((s) => s.text.trim().length > 0)
   log.debug('cleanup completed', { provider, segmentCount: segments.length, keptCount: cleaned.length })
   return { ok: true, segments: cleaned }
