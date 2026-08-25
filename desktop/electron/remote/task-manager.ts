@@ -71,7 +71,7 @@ import {
 import { buildDispatch } from './dispatch-prompt'
 import { detectSurface } from './surface'
 import { deriveStatus, isAnswerable, selfContinuationDelaySeconds, type HookEvent, type AskQuestion } from './observer'
-import { readTranscript, hadSideEffects, readLatestExchange } from './transcript'
+import { readTranscript, hadSideEffects, readLatestExchange, parseTurns } from './transcript'
 import type { Block } from './blocks'
 import { blocksFromClaudeTranscript } from './blocks-claude'
 import { blocksFromRollout } from './codex/blocks-rollout'
@@ -2384,6 +2384,39 @@ export class TaskManager extends EventEmitter {
     return conversationFromCodexEvents(events).filter((turn) => turn.role === 'user').length
   }
 
+  /** How many user turns Claude Code has recorded for this task's transcript on
+   *  disk — the SAME durable-authority pattern as codexUserTurns above, for the
+   *  PTY-hosted `claude` CLI's own JSONL.
+   *
+   *  WHY THIS EXISTS: deliverDraft's landed() used to trust ONLY the
+   *  UserPromptSubmit hook for a Claude session — a live, in-process signal
+   *  that has to be scheduled and fired promptly to be seen inside
+   *  verifyAfterMs. Observed in the field: a task whose tool calls were
+   *  hanging (an MCP server not responding) delayed that hook past the
+   *  verification window even though the CLI had already accepted the prompt
+   *  and started working on it. deliverDraft then reported the reply as
+   *  FAILED and kept it in the draft (draftRetained: true, by design — see
+   *  that function's own comment) so nothing typed would be silently lost.
+   *  The next capture appended its own text onto that already-delivered,
+   *  merely-unconfirmed draft and resent the whole growing blob — visible in
+   *  a real session as the same sentence retyped into the terminal, longer,
+   *  several times in a row.
+   *
+   *  Claude Code appends the user's turn to its transcript the moment it
+   *  accepts the prompt — before any tool call that follows runs — so this
+   *  count is not subject to the same stall that can delay the hook. */
+  private async claudeUserTurns(task: Task): Promise<number> {
+    if (!task.sessionId) return 0
+    const path = (await resolveTranscriptById(task.cwd, task.sessionId)) ?? (await locateTranscript(task.cwd))
+    if (!path) return 0
+    try {
+      const raw = await fs.readFile(path, 'utf8')
+      return parseTurns(raw).filter((turn) => turn.role === 'user').length
+    } catch {
+      return 0
+    }
+  }
+
   private async pollCodexDesktop(id: string): Promise<void> {
     const task = this.tasks.get(id)
     // NOTE: `ready` is deliberately NOT terminal for this backend — the Codex
@@ -4458,14 +4491,41 @@ export class TaskManager extends EventEmitter {
     //
     // Codex records each user turn in its rollout without being asked, which is
     // the same durable authority the desktop lane already trusts.
+    //
+    // THE HOOK ALONE HAS THE SAME GAP FOR CLAUDE, JUST HARDER TO HIT: it is a
+    // live, in-process signal, so a task whose own tool call is hanging (an MCP
+    // server not answering, say) can delay the hook past verifyAfterMs even
+    // though the CLI already accepted the prompt and is working on it.
+    // deliverDraft then reports the reply FAILED and keeps it in the draft —
+    // deliberately, so nothing typed is lost on a REAL failure — and the next
+    // capture appends onto that already-delivered text and resends the whole
+    // growing blob. Visible in a real session as the same sentence retyped
+    // into the terminal, longer, several times in a row.
+    //
+    // claudeUserTurns reads the same kind of durable, on-disk authority Codex
+    // already gets: Claude Code appends the user's turn to its transcript the
+    // moment it accepts the prompt, before any tool call that follows runs, so
+    // it is not subject to the stall that can delay the hook. Checked ALONGSIDE
+    // the hook, not instead of it — the hook is usually the faster signal, this
+    // is the fallback that keeps a stalled task from losing the race.
     const submittedBefore = task.promptSubmittedAt ?? 0
     const rolloutTurnsBefore = task.agent === 'codex' ? await this.codexUserTurns(task) : null
+    const claudeTurnsBefore = rolloutTurnsBefore === null ? await this.claudeUserTurns(task) : null
+    let provenBy: 'codex-rollout' | 'prompt-submitted-hook' | 'claude-transcript' | null = null
     const landed = async (): Promise<boolean> => {
-      if (rolloutTurnsBefore === null) return (task.promptSubmittedAt ?? 0) > submittedBefore
-      return (await this.codexUserTurns(task)) > rolloutTurnsBefore
+      if (rolloutTurnsBefore !== null) {
+        if ((await this.codexUserTurns(task)) > rolloutTurnsBefore) { provenBy = 'codex-rollout'; return true }
+        return false
+      }
+      if ((task.promptSubmittedAt ?? 0) > submittedBefore) { provenBy = 'prompt-submitted-hook'; return true }
+      if (claudeTurnsBefore !== null && (await this.claudeUserTurns(task)) > claudeTurnsBefore) {
+        provenBy = 'claude-transcript'
+        return true
+      }
+      return false
     }
     ex.submitDraft()
-    emitTaskReplyStep(tlog, trace, 'submit-key', 'succeeded', { attempt: 1, submittedBefore, rolloutTurnsBefore })
+    emitTaskReplyStep(tlog, trace, 'submit-key', 'succeeded', { attempt: 1, submittedBefore, rolloutTurnsBefore, claudeTurnsBefore })
     // A single Enter is occasionally ignored by both TUIs, so confirm once
     // before repeating it — a retry against a transport that cannot confirm is
     // how one dictated message became two turns.
@@ -4486,7 +4546,7 @@ export class TaskManager extends EventEmitter {
     }
     emitTaskReplyStep(tlog, trace, 'submission-proof', 'succeeded', {
       promptSubmittedAt: task.promptSubmittedAt,
-      provenBy: rolloutTurnsBefore === null ? 'prompt-submitted-hook' : 'codex-rollout',
+      provenBy,
     })
     delete task.deliveryError
     this.noteUserInput(task, 'draft-submitted')
@@ -4498,7 +4558,7 @@ export class TaskManager extends EventEmitter {
     // Name the proof that actually ran. A Codex success reported as
     // "hook-confirmed" sends the next reader looking for a hook Codex has not
     // got, which is the trail this whole lane already cost once.
-    return outcome(true, rolloutTurnsBefore === null ? 'prompt-submitted-hook-confirmed' : 'codex-rollout-turn-confirmed')
+    return outcome(true, provenBy ? `${provenBy}-confirmed` : 'submission-confirmed')
   }
 
   /**
