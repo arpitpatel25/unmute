@@ -158,7 +158,24 @@ function loadNativeAx(): NativeAx | null {
  *  name with a pid — so resolving "the app to target" is: get the frontmost
  *  name, then look it up in listApps(). Spec §9: manual trigger capture
  *  "never needs to know it's looking at a meeting, only which app is
- *  currently frontmost" — this is exactly that, unconditionally. */
+ *  currently frontmost" — this is exactly that, unconditionally.
+ *
+ *  ONE CASE THIS LOOKUP CANNOT PAIR ON ITS OWN: Unmute itself. listApps()
+ *  (native-ax/src/ax.mm's ListApps()) only returns apps with
+ *  NSApplicationActivationPolicyRegular, and Unmute runs as
+ *  NSApplicationActivationPolicyAccessory (a menu-bar-centric app, no Dock
+ *  icon) — so it never appears in listApps() at all, even though
+ *  frontmostApp() (NSWorkspace.frontmostApplication, unfiltered) correctly
+ *  reports it by name whenever its own window is focused. Confirmed live:
+ *  every attempt to start a meeting while looking at Unmute's own window
+ *  logged frontName "unmute" and then "no matching entry in listApps()" —
+ *  not a rare edge case, but exactly what happens any time the trigger is
+ *  used from the Notetaker tab itself. Handled below by recognizing our own
+ *  name and using our own process.pid directly, no lookup needed — the
+ *  actual audio capture doesn't care what pid it's "targeting" anyway
+ *  (global-exclude-self architecture, see notetakerSession.ts's own header
+ *  comment), so this just means the meeting is unlabeled by app name
+ *  instead of silently refusing to start. */
 function resolveTargetPid(ax: NativeAx): number | null {
   try {
     const frontName = ax.frontmostApp()
@@ -167,12 +184,16 @@ function resolveTargetPid(ax: NativeAx): number | null {
       return null
     }
     const match = ax.listApps().find((a) => a.name === frontName)
-    if (!match) {
-      log.warn('resolveTargetPid: frontmost app has no matching entry in listApps() — cannot resolve a pid', { frontName })
-      return null
+    if (match) {
+      log.event('target-app-resolved', { appName: match.name, bundleId: match.bundleId, pid: match.pid })
+      return match.pid
     }
-    log.event('target-app-resolved', { appName: match.name, bundleId: match.bundleId, pid: match.pid })
-    return match.pid
+    if (frontName === app.getName()) {
+      log.event('target-app-resolved', { appName: frontName, pid: process.pid, selfTargeted: true })
+      return process.pid
+    }
+    log.warn('resolveTargetPid: frontmost app has no matching entry in listApps() — cannot resolve a pid', { frontName })
+    return null
   } catch (e) {
     log.error('resolveTargetPid failed', { error: (e as Error).message })
     return null

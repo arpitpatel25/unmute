@@ -82,6 +82,7 @@ declare module 'electron' {
     on(event: string, cb: (...a: unknown[]) => void): void
     getPath(name: string): string
     getAppPath(): string
+    getName(): string
     isPackaged: boolean
   }
   export const app: App
