@@ -12,8 +12,9 @@
 // same dev-vs-packaged load pattern. Unlike overlay.ts's docked pill (which
 // defaults to click-through so it never blocks the apps behind it), this
 // widget is deliberately NOT click-through — spec §6/§7 require the click
-// itself to surface Cancel, and at 56x56 in a corner it has negligible
-// chance of being "in the way" the way a wider dock would.
+// itself to surface Cancel, and at 108x82 (a 56px circle plus room for its
+// hover label) in a corner it has negligible chance of being "in the way"
+// the way a wider dock would.
 //
 // Electron glue (BrowserWindow/screen), so — like overlay.ts — not
 // unit-tested (see notetakerWidget's sibling files for the same rationale).
@@ -52,17 +53,32 @@ function broadcastCaptureActive(active: boolean): void {
 
 /** Bottom-left bounds on the display nearest the cursor — mirrors overlay.ts's
  *  dockedBounds() (screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea)
- *  but anchored to the opposite corner and sized for a small circle. */
+ *  but anchored to the opposite corner and sized for a small circle.
+ *
+ *  Vertically level with the dictation pill cluster, not just "near the
+ *  bottom": NotchGeometry.pillBottomInset (26pt) plus PillView's own 4pt
+ *  bottom padding put the dictation pill's bottom edge 30pt above the visible
+ *  frame's bottom edge. This flushes the circle's bottom edge to that same
+ *  line — a shared BOTTOM, not a shared center, because the pill is 44pt tall
+ *  and this circle is 56pt, and two different-sized things read as "the same
+ *  shelf" when their bases align, not their midpoints.
+ *
+ *  The window is taller than the circle (labelAreaHeight) to leave room for
+ *  the hover-revealed "Note taker" label below it (see NotetakerWidget.tsx)
+ *  — reserved at all times, not click-through, the same tradeoff already
+ *  made for the circle's own square hit-box. */
 function widgetBounds(): { x: number; y: number; width: number; height: number } {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const wa = display.workArea
-  const size = 56 // circular, small — spec §7: "not buried, more like a floating thing"
-  const margin = 16
+  const circleSize = 56 // circular, small — spec §7: "not buried, more like a floating thing"
+  const labelAreaHeight = 26
+  const xMargin = 16
+  const baseline = 30 // matches the dictation pill's own clearance from the bottom
   return {
-    width: size,
-    height: size,
-    x: wa.x + margin,
-    y: wa.y + wa.height - size - margin,
+    width: 108,
+    height: circleSize + labelAreaHeight,
+    x: wa.x + xMargin,
+    y: wa.y + wa.height - baseline - circleSize,
   }
 }
 
