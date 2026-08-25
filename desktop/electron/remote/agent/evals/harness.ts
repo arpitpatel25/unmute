@@ -24,7 +24,12 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 import { MemoryCapability, type MemoryCapabilityService } from '../capabilities/memory'
+import { HandoffCapability, type HandoffAdapters } from '../capabilities/handoff'
+import { SessionsCapability, type SessionAdapters } from '../capabilities/sessions'
+import { HistoryCapability, type HistoryService } from '../capabilities/history'
+import { NotetakerCapability, type NotetakerAdapters } from '../capabilities/notetaker'
 import { AGENT_PRINCIPLES } from '../constitution'
+import { providerTranscript } from '../controller'
 
 export interface RecordedCall {
   tool: string
@@ -67,12 +72,28 @@ function toolText(text: string, isError = false): Record<string, unknown> {
  * supposed to catch.
  */
 function realTools(): Array<Record<string, unknown>> {
-  const capability = new MemoryCapability({} as MemoryCapabilityService)
-  return capability.tools.map((tool) => ({
-    name: `mcp__unmute__${tool.name}`.replace('mcp__unmute__', ''),
+  // EVERY capability the Agent actually holds, not just memory.
+  //
+  // This used to serve MemoryCapability alone, which quietly invalidated a
+  // third of the corpus: 'outside work becomes a task' asserts a task_create
+  // call, and task_create was never on the wire to be called. A case that
+  // cannot pass is worse than a missing one, because the suite still reports
+  // a number.
+  //
+  // Only `.tools` is read, so the adapters are casts — an eval never dispatches
+  // into a real service, it records what the model asked for.
+  const modules = [
+    new MemoryCapability({} as MemoryCapabilityService),
+    new HandoffCapability({} as HandoffAdapters),
+    new SessionsCapability({} as SessionAdapters),
+    new HistoryCapability({} as HistoryService),
+    new NotetakerCapability({} as NotetakerAdapters),
+  ]
+  return modules.flatMap((module) => module.tools.map((tool) => ({
+    name: tool.name,
     description: tool.description,
     inputSchema: tool.inputSchema,
-  }))
+  })))
 }
 
 export async function startStub(behaviour: StubBehaviour): Promise<{
@@ -159,7 +180,22 @@ export async function runTurn(utterance: string, behaviour: StubBehaviour = {}):
       child.on('close', () => {
         try { resolve(String(JSON.parse(out).result ?? '')) } catch { resolve(out) }
       })
-      child.stdin.write(utterance)
+      // THE TURN THE CONTROLLER WOULD ACTUALLY SEND, not the bare utterance.
+      //
+      // The harness used to pipe the raw sentence in, so the per-turn preamble
+      // was never under test — and that preamble is exactly where the 25 August
+      // failure lived ("Never send, submit, publish, or commit it" beat the
+      // constitution and blocked four task_create calls). An eval that skips
+      // the wrapper cannot see the class of bug that wrapper causes.
+      child.stdin.write(providerTranscript(
+        { transcript: utterance, attachments: [] } as Parameters<typeof providerTranscript>[0],
+        [],
+        [],
+        realTools().map((tool) => ({
+          name: String(tool.name),
+          description: String(tool.description),
+        })),
+      ))
       child.stdin.end()
     })
     return { calls: stub.calls, reply, ok: true }

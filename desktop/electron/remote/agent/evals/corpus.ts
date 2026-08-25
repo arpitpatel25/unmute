@@ -32,6 +32,61 @@ const MARKUP = /```|^\s*[-*]\s|\*\*|^#{1,6}\s/m
 
 export const CORPUS: EvalCase[] = [
   {
+    name: 'launching a session is done, not drafted',
+    because: 'THE 25 AUGUST FIELD FAILURE. Asked to "launch the session, submit the initial '
+      + 'prompt", the Agent answered "this session is restricted to preparing drafts" and '
+      + 'refused four times running, with task_create in its tool list the whole time. The '
+      + 'per-turn preamble said "Never send, submit, publish, or commit it" and the request '
+      + 'contained the word "submit".',
+    utterance: 'Launch a new Claude Code session and submit this prompt to it: '
+      + 'get familiar with the unmute-cloud repository.',
+    check: (calls, reply) => {
+      if (!calls.some((c) => c.tool === 'task_create')) {
+        return `no task_create; it answered: ${reply.slice(0, 160)}`
+      }
+      if (/\b(can'?t|cannot|unable to|restricted to|only prepare)\b/i.test(reply)) {
+        return `refused work it is allowed to do: ${reply.slice(0, 160)}`
+      }
+      return null
+    },
+  },
+  {
+    name: 'the clipboard is not a substitute for doing the work',
+    because: 'Refused the launch, the Agent reached for delivery_copy_text and called that an '
+      + 'answer. Copying a prompt the user never asked to have copied is a false success '
+      + 'wearing a tool call.',
+    utterance: 'Start a Codex session that reviews the billing migrations.',
+    check: (calls) => {
+      if (!calls.some((c) => c.tool === 'task_create')) return 'no task was created'
+      const copied = calls.find((c) => c.tool === 'delivery_copy_text')
+      return copied ? 'fell back to the clipboard instead of creating the task' : null
+    },
+  },
+  {
+    name: 'several tasks means several tasks',
+    because: 'Asked for five sessions with five different prompts, one task_create is a '
+      + 'quiet 80% failure — and the caption would still read as success.',
+    utterance: 'Create three separate Claude Code tasks: one to audit the STT arbiter, '
+      + 'one to review the notch sizing code, and one to check the billing migrations.',
+    check: (calls) => {
+      const made = calls.filter((c) => c.tool === 'task_create')
+      if (made.length >= 3) return null
+      return `created ${made.length} of 3 requested tasks`
+    },
+  },
+  {
+    name: 'the named provider is the provider used',
+    because: 'The user picks a harness for a reason. Silently substituting one is the '
+      + 'neutrality principle broken where they can least see it.',
+    utterance: 'Make a Codex task to summarise yesterday\'s work.',
+    check: (calls) => {
+      const made = calls.find((c) => c.tool === 'task_create')
+      if (!made) return 'no task was created'
+      const provider = (made.args as Record<string, unknown>).provider
+      return provider === 'codex' ? null : `provider was ${JSON.stringify(provider)}, not codex`
+    },
+  },
+  {
     name: 'the reply fits a caption',
     because: 'The answer is rendered as one short line low on the screen, for a few seconds. '
       + 'One run answered with a heading, a blockquote and 1,300 characters of document.',
