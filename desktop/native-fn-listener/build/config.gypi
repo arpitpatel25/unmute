@@ -485,17 +485,17 @@
     "v8_use_siphash": 1,
     "want_separate_host_toolset": 0,
     "nodedir": "/Users/zodpatel/Library/Caches/node-gyp/23.11.0",
-    "python": "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "python": "/opt/homebrew/opt/python@3.14/bin/python3.14",
     "standalone_static_library": 1,
-    "prefix": "/opt/homebrew",
-    "user_agent": "npm/10.9.2 node/v23.11.0 darwin arm64 workspaces/false",
-    "cache": "/Users/zodpatel/.npm",
-    "node_gyp": "/opt/homebrew/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js",
-    "npm_version": "10.9.2",
+    "global_prefix": "/opt/homebrew",
+    "local_prefix": "/Users/zodpatel/tools/unmute/unmute-cloud/.claude/worktrees/arpit+notetaker/desktop/native-fn-listener",
+    "globalconfig": "/opt/homebrew/etc/npmrc",
     "init_module": "/Users/zodpatel/.npm-init.js",
     "userconfig": "/Users/zodpatel/.npmrc",
-    "globalconfig": "/opt/homebrew/etc/npmrc",
-    "local_prefix": "/Users/zodpatel/Documents/Codex/2026-08-16/go-through-the-unmute-cloud-depository/work/unmute-cloud/.claude/worktrees/unmute-agent-memory-codex/desktop/native-fn-listener",
-    "global_prefix": "/opt/homebrew"
+    "npm_version": "10.9.2",
+    "node_gyp": "/opt/homebrew/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js",
+    "cache": "/Users/zodpatel/.npm",
+    "user_agent": "npm/10.9.2 node/v23.11.0 darwin arm64 workspaces/false",
+    "prefix": "/opt/homebrew"
   }
 }

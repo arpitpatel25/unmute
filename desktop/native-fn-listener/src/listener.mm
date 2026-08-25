@@ -21,7 +21,6 @@
 //                                //        | 'right-option-up' | 'command-v'
 //                                //        | 'right-command-down' | 'right-command-up'
 //                                //        | 'right-command-chord'
-//                                //        | 'left-option-down' | 'left-option-up'
 //                                //        | 'left-control-down' | 'left-control-up'
 //                                //        | 'notes-chord-spoil'
 //   fn.stop()
@@ -49,14 +48,15 @@ static NSEventModifierFlags g_previousRawFlags = 0;
 // cannot distinguish left from right, so the flagsChanged handler tracks it and
 // the keyDown handler reads it.
 static bool g_rightCommandDown = false;
-/** Whether left-Control AND left-Option are BOTH down right now — the meeting
- *  notetaker's chord. Read by the keyDown handler so any other key pressed
- *  while the chord is engaged can spoil it, exactly as g_rightCommandDown does
- *  for the Agent's right-Command gesture. Left-Control+left-Option is macOS's
- *  own VoiceOver "VO" modifier, so "the user is holding these two keys" is a
- *  very weak signal on its own; "holding them and pressing nothing else" is
- *  the signal the trigger actually needs. */
-static bool g_leftChordDown = false;
+/** Whether left-Control is down right now — the meeting notetaker's trigger
+ *  key. Read by the keyDown handler so any other key (or modifier) pressed
+ *  while it is held can spoil the gesture, exactly as g_rightCommandDown does
+ *  for the Agent's right-Command gesture. Left-Control alone is a common base
+ *  for real Ctrl+key bindings in terminals/editors and for the OS's own
+ *  Ctrl+Click (secondary click) and Ctrl+scroll (zoom) gestures, so "the user
+ *  is holding this key" is a weak signal on its own; "holding it and pressing
+ *  nothing else" is the signal the trigger actually needs. */
+static bool g_leftControlDown = false;
 static Napi::ThreadSafeFunction g_tsfn;
 static bool g_started = false;
 
@@ -92,26 +92,17 @@ static void handle_flags_changed(NSEvent* event) {
   // DEVICE-DEPENDENT BITS, NOT THE COALESCED FLAG. NSEventModifierFlagOption
   // and NSEventModifierFlagControl mean "SOME device with this role is down"
   // — they cannot tell left from right, and the masked `mods` above has the
-  // side bits stripped entirely. Testing them left two holes, both reachable
-  // once the notetaker chord wired up the left side:
-  //
-  //   · right-Option already held, then left-Option pressed → the shared bit
-  //     was ALREADY set, so no left-option-down ever fired and the chord
-  //     could not engage at all;
-  //   · left-Option released while right-Option is still held → the shared
-  //     bit stays set, so no left-option-up fired and keyboard.ts's
-  //     `leftOptionHeld` stuck true FOREVER.
-  //
-  // A permanently-stuck leftOptionHeld/leftControlHeld means a later bare
-  // double-tap of just the OTHER key of the pair reads as the full chord and
-  // can start a system-audio recording (and its TCC prompt) the user never
-  // asked for — a privacy bug, not a papercut. The right-Option handling had
-  // the identical latent flaw; it is fixed here too so the whole file tracks
-  // modifiers one way. (Same recipe already proven for right Command below.)
+  // side bits stripped entirely. Testing the coalesced flag left a real hole:
+  // right-Option already held, then left-Option released elsewhere, or vice
+  // versa — the shared bit stays set from the OTHER side, so the side-specific
+  // down/up pair goes out of sync with reality and can stick "held" FOREVER.
+  // A permanently-stuck held-key state means a later bare tap of that key
+  // reads as still-chorded and can start a system-audio recording (and its
+  // TCC prompt) the user never asked for — a privacy bug, not a papercut.
+  // (Same recipe already proven for right Command below.)
   //
   // Read from event.modifierFlags — the RAW flags — because these low-level
   // NX_DEVICE* bits live outside NSEventModifierFlagDeviceIndependentFlagsMask.
-  const NSEventModifierFlags kLeftOption   = 0x00000020;  // NX_DEVICELALTKEYMASK
   const NSEventModifierFlags kRightOption  = 0x00000040;  // NX_DEVICERALTKEYMASK
   const NSEventModifierFlags kLeftControl  = 0x00000001;  // NX_DEVICELCTLKEYMASK
   const NSEventModifierFlags kRightControl = 0x00002000;  // NX_DEVICERCTLKEYMASK
@@ -125,17 +116,8 @@ static void handle_flags_changed(NSEvent* event) {
     if (hadOpt && !hasOpt) emit_event("right-option-up");
   }
 
-  // Left Option specifically (keyCode 58) — part of the meeting notetaker's
-  // left-Control+left-Option double-tap chord trigger.
-  if (event.keyCode == 58) {
-    bool hadOpt = (g_previousRawFlags & kLeftOption) != 0;
-    bool hasOpt = (event.modifierFlags & kLeftOption) != 0;
-    if (!hadOpt && hasOpt) emit_event("left-option-down");
-    if (hadOpt && !hasOpt) emit_event("left-option-up");
-  }
-
-  // Left Control specifically (keyCode 59) — the other half of the meeting
-  // notetaker's left-Control+left-Option double-tap chord trigger.
+  // Left Control specifically (keyCode 59) — the meeting notetaker's trigger
+  // key: double-tap to start, single tap to stop (see keyboard.ts).
   if (event.keyCode == 59) {
     bool hadCtrl = (g_previousRawFlags & kLeftControl) != 0;
     bool hasCtrl = (event.modifierFlags & kLeftControl) != 0;
@@ -143,29 +125,29 @@ static void handle_flags_changed(NSEvent* event) {
     if (hadCtrl && !hasCtrl) emit_event("left-control-up");
   }
 
-  // ─── The notetaker chord's spoil signal ───────────────────────────
+  // ─── The notetaker trigger's spoil signal ───────────────────────────
   //
-  // Left-Control+left-Option IS the VoiceOver modifier, and a common base for
-  // other Ctrl+Opt bindings. A VoiceOver user navigating normally re-engages
-  // this pair constantly, and the double-tap recogniser cannot tell that from
-  // someone deliberately asking to record a meeting — which would start a
+  // Left-Control alone is a common base for real Ctrl+key bindings
+  // (terminals, editors) and for the OS's own Ctrl+Click (secondary click)
+  // and Ctrl+scroll (zoom) gestures. The double-tap recogniser cannot tell
+  // "pressed Control twice to start a meeting note" from "pressed Control
+  // to Ctrl+Click something, twice" on timing alone — which would start a
   // system-audio capture (and its TCC prompt) nobody asked for.
   //
   // Same answer the Agent's right-Command gesture already uses: a hold with
-  // ANY other key in it is a shortcut, never a tap. This is the flags-changed
-  // half (another MODIFIER joins — VO+Shift+arrow, VO+⌘); handle_key_down
-  // below covers ordinary keys (VO+arrow, VO+letter).
-  const bool leftChordDown =
-    (event.modifierFlags & kLeftControl) != 0 && (event.modifierFlags & kLeftOption) != 0;
-  if (leftChordDown) {
+  // ANY other key or modifier in it is a shortcut, never a tap. This is the
+  // flags-changed half (another MODIFIER joins — ⌃⇧, ⌃⌥, ⌃⌘); handle_key_down
+  // below covers ordinary keys (Ctrl+C, Ctrl+A, …).
+  const bool leftControlDown = (event.modifierFlags & kLeftControl) != 0;
+  if (leftControlDown) {
     const NSEventModifierFlags kSpoilers =
-      NSEventModifierFlagShift | NSEventModifierFlagCommand |
-      NSEventModifierFlagFunction | kRightControl | kRightOption;
+      NSEventModifierFlagShift | NSEventModifierFlagCommand | NSEventModifierFlagOption |
+      NSEventModifierFlagFunction | kRightControl;
     bool hadSpoiler = (g_previousRawFlags & kSpoilers) != 0;
     bool hasSpoiler = (event.modifierFlags & kSpoilers) != 0;
     if (!hadSpoiler && hasSpoiler) emit_event("notes-chord-spoil");
   }
-  g_leftChordDown = leftChordDown;
+  g_leftControlDown = leftControlDown;
 
   // Right Command specifically (keyCode 54) — the Unmute Agent key. Left
   // Command (55) is ignored because it is where every system shortcut
@@ -242,11 +224,11 @@ static void handle_key_down(NSEvent* event) {
     emit_event("right-command-chord");
   }
 
-  // Same rule for the notetaker chord: a key pressed while left-Control +
-  // left-Option are held makes this VoiceOver navigation (VO+arrow, VO+letter)
-  // or some other Ctrl+Opt shortcut — not a request to start recording a
-  // meeting. Observation only; the event is still delivered.
-  if (g_leftChordDown) {
+  // Same rule for the notetaker trigger: a key pressed while left-Control is
+  // held makes this Ctrl+C, Ctrl+A, or some other real Control shortcut — not
+  // a request to start recording a meeting. Observation only; the event is
+  // still delivered.
+  if (g_leftControlDown) {
     emit_event("notes-chord-spoil");
   }
 }
@@ -280,7 +262,7 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
   // cycle would leave stale device bits and swallow the first transition.
   g_previousRawFlags = 0;
   g_rightCommandDown = false;
-  g_leftChordDown = false;
+  g_leftControlDown = false;
 
   // Global monitor — fires for events from OTHER apps (when our app
   // isn't focused). Standard Cocoa pattern.

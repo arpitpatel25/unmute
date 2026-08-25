@@ -54,10 +54,8 @@ type DualModeState = 'idle' | 'held' | 'awaiting-second' | 'push-recording' | 'h
 type NotesChordKeyEvent =
   | 'left-control-down'
   | 'left-control-up'
-  | 'left-option-down'
-  | 'left-option-up'
-  /** Some OTHER key (or modifier) arrived while both chord keys were held —
-   *  see the notes-chord-spoil block in listener.mm. */
+  /** Some OTHER key (or modifier) arrived while left-Control was held — see
+   *  the notes-chord-spoil block in listener.mm. */
   | 'notes-chord-spoil'
 
 // Exported (was module-private) so tests can construct an isolated instance
@@ -102,24 +100,24 @@ export class KeyboardManager extends EventEmitter {
   private _chainPending = false
   private _chainMode: SessionMode | null = null
 
-  // ─── Meeting Notetaker chord (left-Control + left-Option, double-tap) ───
+  // ─── Meeting Notetaker (left-Control, double-tap start / single-tap stop) ───
   // DELIBERATELY NOT part of the dictation/instruction/agent/remote lock
   // group above, and DELIBERATELY not read or written by any of their
   // mutual-exclusion guards. Notes must never block, and never be blocked
-  // by, those four lanes (spec §5) — so its state lives in its own section,
-  // and stopping is never direct (spec §6): a second double-tap while
-  // active only requests confirmation; `confirmNotesStop()` is the sole
-  // writer that clears `notesActive` back to false.
+  // by, those four lanes (spec §5) — so its state lives in its own section.
+  //
+  // Same GestureState tap-recogniser right-Command already uses for the
+  // Agent (agentGesture.ts) — reused rather than re-derived, because it is
+  // what correctly waits for the key to come back UP, with nothing else
+  // pressed in between, before counting a press as a genuine tap. A naive
+  // "act on key-down" check cannot do that: Ctrl+C typed while a meeting is
+  // running would stop it the instant Control goes down, before the C ever
+  // arrives to spoil it.
   private notesActive = false
-  private leftControlHeld = false
-  private leftOptionHeld = false
-  /** When the first tap of a pending chord pair landed. 0 = none. */
-  private lastNotesChordTapAt = 0
-  /** Another key arrived while the chord was held, so THIS engagement can
-   *  never count as a tap — the same "spoiled" concept agentGesture.ts uses
-   *  for right-Command (`GestureState.spoiled`). Cleared only when both chord
-   *  keys are back up, i.e. when the gesture has genuinely ended. */
-  private notesChordSpoiled = false
+  private notesGesture: GestureState = freshGestureState()
+  /** When the first tap of a pending start-pair landed. 0 = none. */
+  private lastNotesTapAt = 0
+  private lastNotesToggleTime = 0
 
   start(): void {
     keyListener.on('key', (event: KeyEvent) => this.handleKey(event))
@@ -288,31 +286,15 @@ export class KeyboardManager extends EventEmitter {
         // So both events represent a physical key press → treat both as toggle.
         this.handleInstructionToggle()
         break
-      // ─── Meeting Notetaker chord — independent of every lane above ───
+      // ─── Meeting Notetaker — independent of every lane above ───
       case 'left-control-down':
-        this.leftControlHeld = true
-        this.maybeHandleNotesChordDown()
+        this.feedNotesGesture('down')
         break
       case 'left-control-up':
-        this.leftControlHeld = false
-        this.clearNotesChordSpoilIfReleased()
-        break
-      case 'left-option-down':
-        this.leftOptionHeld = true
-        this.maybeHandleNotesChordDown()
-        break
-      case 'left-option-up':
-        this.leftOptionHeld = false
-        this.clearNotesChordSpoilIfReleased()
+        this.feedNotesGesture('up')
         break
       case 'notes-chord-spoil':
-        // Anything else pressed while the chord is held: this is VoiceOver
-        // navigation or another Ctrl+Opt shortcut, not a request to record.
-        // Kill both the current engagement AND any pending first tap, so two
-        // engagements with real work between them cannot pair into a
-        // double-tap.
-        this.notesChordSpoiled = true
-        this.lastNotesChordTapAt = 0
+        this.feedNotesGesture('other')
         break
     }
     // AFTER the handlers have run: exactly what the NEXT key will see.
@@ -450,74 +432,75 @@ export class KeyboardManager extends EventEmitter {
     // Escape, never on release. (Mirrors dictation tap-toggle.)
   }
 
-  // ─── Meeting Notetaker — chord double-tap (left-Control + left-Option) ───
+  // ─── Meeting Notetaker — left-Control, double-tap start / single-tap stop ───
   //
-  // Both native events (left-control-down, left-option-down) call this;
-  // it bails until BOTH modifiers are held together, so it's direction-
-  // independent (either key can complete the chord).
+  // Fed by left-control-down/up and notes-chord-spoil (an event pressed
+  // while Control is held — see listener.mm). recogniseTap does the actual
+  // work: it only reports a tap once the key has gone back UP with nothing
+  // else pressed in between, which is what makes a Ctrl+C typed while a
+  // meeting is running spoil the gesture instead of stopping it the instant
+  // Control goes down (see the class-level comment on `notesGesture`).
   //
-  // Pairing mirrors feedAgentGesture's own tap-pairing above, including the
-  // part the brief for this task's sketch got wrong: `lastNotesChordTapAt`
-  // must be RESET to 0 once a pair has been consumed into a toggle, not set
-  // to `now`. Leaving it set to `now` after a toggle makes the very next
-  // chord-engage (e.g. the next double-tap the user performs) pair against
-  // the toggle that just fired, rather than starting a fresh pair — which
-  // in a synchronous test (or just fast typing) turns one double-tap into
-  // two toggles. `feedAgentGesture` already avoids this (`lastAgentTapAt = 0`
-  // right before it acts); this follows the same shape.
+  // ASYMMETRIC ON PURPOSE, same shape as feedAgentGesture: a single clean
+  // tap while a meeting is already running stops it immediately — ending
+  // something already happening is the user's own deliberate act and does
+  // not need a second confirmation (spec §6 revised: the confirm-dialog
+  // flow stays for the AUTOMATIC meeting-ended detection in
+  // notetakerController.ts's onMeetingEnded(), which is unrelated to this
+  // key). Starting one is the bigger commitment — it turns on system-audio
+  // capture and raises its own TCC prompt — so that still needs two taps.
   //
   // NO EXCLUSION CHECK, ON PURPOSE (spec §5): dictationActive/
   // instructionActive/agentActive/remoteActive are never read here, and
   // notesActive is never read by their guards either — the note-taker is a
   // fully independent lane.
-  private maybeHandleNotesChordDown(): void {
-    if (!this.leftControlHeld || !this.leftOptionHeld) return // both must be down together
-    // SPOILED ENGAGEMENTS ARE NOT TAPS (spec §6's spirit, and a real privacy
-    // concern): left-Control+left-Option is macOS's OWN VoiceOver modifier.
-    // A VoiceOver user re-engages this exact pair constantly during normal
-    // navigation, and without this check two of those engagements landing
-    // inside DOUBLE_TAP_WINDOW_MS would start a system-audio recording — and
-    // raise its TCC prompt — that nobody asked for. Same rule agentGesture.ts
-    // applies to right-Command: a hold with any other key in it is a
-    // shortcut, never a tap.
-    if (this.notesChordSpoiled) {
-      console.log('[keyboard] Notes chord engage IGNORED — spoiled by another key (shortcut, not a tap)')
-      return
-    }
+  private feedNotesGesture(kind: GestureEventKind): void {
+    const result = recogniseTap(this.notesGesture, { kind, at: Date.now() })
+    this.notesGesture = result.state
+    if (!result.tap) return
+
     const now = Date.now()
 
-    const paired = this.lastNotesChordTapAt > 0 && now - this.lastNotesChordTapAt <= DOUBLE_TAP_WINDOW_MS
-    if (!paired) {
-      this.lastNotesChordTapAt = now
-      return
-    }
-    this.lastNotesChordTapAt = 0
-
+    // STOP FIRST — a single clean tap ends a running capture, never debounced
+    // (the stop tap must always go through so the user can end a meeting
+    // without delay). `confirmNotesStop()` remains the sole writer that
+    // clears `notesActive` back to false — the owning module (notetakerInit.ts)
+    // calls it right after the real session.stop() actually runs, mirroring
+    // the widget's own direct-cancel path.
     if (this.notesActive) {
-      // Spec §6: never stop directly — the confirm-dialog flow (owned
-      // elsewhere, out of scope for this task) decides whether to call
-      // confirmNotesStop().
-      console.log('[keyboard] Notes chord double-tap while active — requesting stop confirmation')
-      this.emit('notes-stop-confirm-requested')
+      this.lastNotesToggleTime = now
+      this.lastNotesTapAt = 0
+      console.log('[keyboard] Notes STOP (single tap)')
+      this.emit('notes-stop-requested')
       return
     }
 
+    // Debounce only the START.
+    if (now - this.lastNotesToggleTime < this.DEBOUNCE_MS) {
+      console.log('[keyboard] Notes toggle DEBOUNCED (too fast)')
+      return
+    }
+
+    // Pair the taps. A lone tap is remembered, not acted on. Reset to 0 (not
+    // left at `now`) once consumed — see feedAgentGesture's own comment on
+    // why, same shape here.
+    const paired = this.lastNotesTapAt > 0 && now - this.lastNotesTapAt <= DOUBLE_TAP_WINDOW_MS
+    if (!paired) {
+      this.lastNotesTapAt = now
+      return
+    }
+    this.lastNotesTapAt = 0
+
+    this.lastNotesToggleTime = now
     this.notesActive = true
-    console.log('[keyboard] Notes chord double-tap — START')
+    console.log('[keyboard] Notes START (double tap)')
     this.emit('notes-start-requested')
   }
 
-  /** The spoil lasts until the gesture genuinely ends — BOTH chord keys back
-   *  up. Clearing it on the first release instead would hand the spoil back
-   *  the moment a VoiceOver user lifts one key mid-navigation, which is
-   *  exactly when they are most likely to press it again. */
-  private clearNotesChordSpoilIfReleased(): void {
-    if (!this.leftControlHeld && !this.leftOptionHeld) this.notesChordSpoiled = false
-  }
-
-  /** Called by the owning module once the user has confirmed they want to
-   *  stop (spec §6). The ONLY place `notesActive` is cleared back to false —
-   *  a double-tap while active never clears it directly. */
+  /** Called by the owning module once a stop has actually happened — either
+   *  the automatic confirm-dialog flow (onMeetingEnded) or this key's own
+   *  direct single-tap stop. The ONLY place `notesActive` is cleared back to
+   *  false. */
   confirmNotesStop(): void {
     this.notesActive = false
     console.log('[keyboard] Notes STOPPED (confirmed)')

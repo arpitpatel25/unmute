@@ -53,19 +53,20 @@ export class NotetakerController {
   onMeetingDetected(): void {
     this.deps.showNotification({
       title: "Looks like you're in a meeting",
-      body: 'Double-tap Control+Option to start notes.',
+      body: 'Double-tap left Control to start notes.',
     })
   }
 
   /**
-   * A detected meeting has ended. Spec §6: this drives the SAME confirm-to-
-   * stop prompt as the chord double-tap while active — never auto-stops.
+   * A detected meeting has ended. Unmute noticed this itself (the user did
+   * not ask to stop), so it still asks before stopping — unlike the key's
+   * own single-tap stop, which IS the user's confirmation.
    *
    * Returns the settled promise (the original sketch fired-and-forgot this
    * internally) so the composition root can sequence
    * `keyboardManager.confirmNotesStop()` after a stop has actually
-   * happened, keeping the chord's own `notesActive` flag in sync with
-   * reality rather than only with its own double-tap.
+   * happened, keeping the key's own `notesActive` flag in sync with
+   * reality rather than only with its own tap.
    */
   onMeetingEnded(): Promise<void> {
     if (!this.deps.session.isActive) return Promise.resolve()
