@@ -1,15 +1,34 @@
 export type StitchableChunk = { chunkIndex: number; text: string; startTimestampMs: number }
 
 /**
- * Known Whisper hallucination/sentinel outputs on silent or near-silent
- * audio — mirrors dictation's cleanChunk() list (sessionManager.ts).
+ * Whisper's own non-speech sentinel tags — mirrors dictation's
+ * WHISPER_SENTINELS_RE (sessionManager.ts). Previously this only matched two
+ * of them ([BLANK_AUDIO], [MUSIC]) as a whole-string check; broadened to the
+ * same set dictation strips, anywhere in the text, not just when the tag is
+ * the entire chunk.
  */
-const HALLUCINATION_SENTINELS = [/^\[BLANK_AUDIO\]$/i, /^\[MUSIC\]$/i]
+const WHISPER_SENTINELS_RE = /\[\s*(?:BLANK_AUDIO|SILENCE|\*SILENCE\*|MUSIC|INAUDIBLE|NO\s*SPEECH|NOISE|SOUND|APPLAUSE|LAUGHTER)\s*\]/gi
 
-function cleanChunkText(text: string): string {
-  const trimmed = text.trim()
-  if (HALLUCINATION_SENTINELS.some((re) => re.test(trimmed))) return ''
-  return trimmed
+/**
+ * Whisper large-v3(-turbo) was trained on a lot of podcast/YouTube content
+ * and, fed silence or near-silence, deterministically hallucinates one of
+ * these high-probability closing lines instead of returning nothing —
+ * mirrors dictation's WHISPER_HALLUCINATION_RE (sessionManager.ts). A
+ * meeting where nobody was speaking yet (or the room was quiet) previously
+ * came back with a literal "Thank you." on both channels because this file
+ * only ever stripped the bracketed sentinels above, never this.
+ *
+ * Trailing-anchored per chunk (not per whole transcript) so a hallucination
+ * on one chunk is caught before it lands mid-string once chunks are joined —
+ * same reasoning as dictation's cleanChunk().
+ */
+const WHISPER_HALLUCINATION_RE = /\s*(?:thanks? for watching[.!]?|please subscribe[.!]?|thank you[.!]?|bye[.!]?|see you next time[.!]?|subtitles? by\s+[^.!]+[.!]?)\s*$/i
+
+export function cleanChunkText(text: string): string {
+  let t = text.replace(WHISPER_SENTINELS_RE, ' ').trim()
+  if (!t) return ''
+  t = t.replace(WHISPER_HALLUCINATION_RE, '').trim()
+  return t
 }
 
 /**
