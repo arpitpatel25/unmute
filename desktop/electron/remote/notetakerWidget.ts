@@ -4,19 +4,22 @@
 // BOTTOM-LEFT corner while a note-taking session is active: a small pill
 // showing a live waveform, no timer (2026-08-26: was a circle; redesigned
 // to a pill sharing the dictation pill's own dark-glass material — see
-// NotetakerWidget.tsx). Hovering it reveals a separate Cancel chip above
-// it (spec §6) — stopping is never a single, direct action; this module
-// only shows/hides/positions the window, the hover/confirm behavior itself
-// lives in the renderer.
+// NotetakerWidget.tsx). Clicking it reveals a "Discard meeting" box above
+// it (spec §6) — stopping is never a single, direct action: one tap
+// reveals, a second, separate tap on the box confirms, or tapping the
+// pill again dismisses with no action. (Hover-to-reveal was tried first
+// and reverted — its hoverable area had to cover the whole window to
+// bridge the gap to the box above, which meant it fired from anywhere
+// near the pill, not just on it.) This module only shows/hides/positions
+// the window; the click/confirm behavior itself lives in the renderer.
 //
 // Modeled directly on overlay.ts (the docked/expanded task overlay): same
 // BrowserWindow config shape, same all-Spaces/full-screen-following setup,
 // same dev-vs-packaged load pattern. Unlike overlay.ts's docked pill (which
 // defaults to click-through so it never blocks the apps behind it), this
-// widget is deliberately NOT click-through — a click-through window never
-// receives mouse-enter events either, and hover is now what surfaces
-// Cancel. At a corner-docked ~260x86 it still has negligible chance of
-// being "in the way" the way a wider dock would.
+// widget is deliberately NOT click-through — spec §6/§7 require the click
+// itself to reveal the discard box, and at a corner-docked ~260x86 it has
+// negligible chance of being "in the way" the way a wider dock would.
 //
 // Electron glue (BrowserWindow/screen), so — like overlay.ts — not
 // unit-tested (see notetakerWidget's sibling files for the same rationale).
@@ -140,17 +143,18 @@ ipcMain.on('notetaker:widget-ready', () => {
  *  their midpoints.
  *
  *  The window is taller than the pill (cancelAreaHeight) to leave room for
- *  the hover-revealed Cancel chip ABOVE it (see NotetakerWidget.tsx) —
- *  reserved at all times, not click-through, the same tradeoff already
- *  made for the old circle's square hit-box. Width is generous enough for
- *  the longest content that ever appears in the pill itself ("Tap ⌃ again
- *  to keep recording", the undo-window message) — the pill's own width is
- *  content-driven (CSS), this is just the window's outer budget. */
+ *  the click-revealed "Discard meeting" box ABOVE it (see
+ *  NotetakerWidget.tsx) — reserved at all times, not click-through, the
+ *  same tradeoff already made for the old circle's square hit-box. Width
+ *  is generous enough for the longest content that ever appears in the
+ *  pill itself ("Tap ⌃ again to keep recording", the undo-window message)
+ *  — the pill's own width is content-driven (CSS), this is just the
+ *  window's outer budget. */
 function widgetBounds(): { x: number; y: number; width: number; height: number } {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const wa = display.workArea
   const pillHeight = 22 // matches NotetakerWidget.tsx's own PILL_HEIGHT
-  const cancelAreaHeight = 46 // hover-revealed Cancel chip (32px) + its gap to the pill
+  const cancelAreaHeight = 56 // discard box (~48px, two lines + padding) + its gap to the pill
   const width = 260
   const xMargin = 16
   const baseline = 30 // matches the dictation pill's own clearance from the bottom

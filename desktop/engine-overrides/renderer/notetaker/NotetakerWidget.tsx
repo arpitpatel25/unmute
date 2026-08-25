@@ -310,13 +310,16 @@ async function attachMicChunkTap(
  * redesign). Pure prop-driven (no IPC, no capture) so it's easy to reason
  * about and reuse — mirrors Widget.tsx's split from WidgetApp.tsx.
  *
- * Cancel is no longer a click-then-click-again toggle INSIDE the pill —
- * hovering (or focusing, for keyboard users) reveals a separate white
- * "Cancel" chip ABOVE the pill; only clicking THAT confirms. The pill
- * itself is not a button anymore. This still satisfies spec §6's "stop is
- * never a single, direct action" — hovering to reveal, then moving to a
- * physically distinct control, is at least as deliberate as the old
- * same-spot double-click, it just reads better.
+ * Discard confirmation is a click-toggle on the pill, not hover (2026-08-26,
+ * take two: hover-to-reveal was tried first, but its hoverable area had to
+ * span the whole window — including the gap and the chip's own reserved
+ * space above the pill — so ANY mouse movement near, not on, the pill
+ * revealed it; there is no hover radius that fixes that without either the
+ * same false-positive or the original unreachable-chip bug back). Tapping
+ * the pill reveals a white "Discard meeting" box above it; tapping the
+ * pill AGAIN dismisses it with no action, and tapping the box itself
+ * confirms. This is still spec §6's "stop is never a single, direct
+ * action" — one tap to reveal, a second, separate tap to confirm.
  */
 export function NotetakerWidget({
   analyser,
@@ -327,59 +330,38 @@ export function NotetakerWidget({
   analyser: AnalyserNode | null
   /** Bumped by the route on every new capture session. The widget WINDOW is
    *  reused across sessions (hidden, never closed), so this component never
-   *  remounts — without this, a hover-revealed Cancel chip left open in one
-   *  session would still be on screen when the next session opened the
-   *  widget. */
+   *  remounts — without this, a discard box left open in one session would
+   *  still be on screen when the next session opened the widget. */
   sessionId?: number
   /** True while the KEYBOARD's own single-tap stop is in its undo window
    *  (main → notetaker:stop-pending, see notetakerWidget.ts's
    *  broadcastStopPending). Recording is still running — this is a separate
    *  signal from `analyser` going null, which only happens once a stop is
    *  actually finalized. The pill's own content swaps to a short message
-   *  for this state (see below) — the Cancel chip never shows here, since
+   *  for this state (see below) — the discard box never shows here, since
    *  the only way to resolve it is another tap on the key. */
   stopPending?: boolean
   onCancelConfirmed: () => void
 }) {
   const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0.1))
-  const [showCancel, setShowCancel] = useState(false)
+  const [showDiscard, setShowDiscard] = useState(false)
   const rafRef = useRef<number | undefined>(undefined)
-  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Hover/focus handlers live on the OUTER wrapper (pill + gap + chip),
-  // not on the pill alone — this was the actual bug: with the handlers on
-  // just the pill, moving the mouse up into the gap toward the chip left
-  // the pill's own bounding box first, firing mouseleave and hiding the
-  // chip before the cursor ever reached it, so it was never clickable.
-  // The wrapper's box already includes the gap AND the chip's reserved
-  // layout space (opacity:0 still occupies room, it just isn't painted),
-  // so the cursor never truly exits it while moving between the two. The
-  // scheduleClose debounce is a defensive backstop on top of that fix, not
-  // the fix itself — mirrors WidgetApp.tsx's own open()/scheduleClose().
-  const openCancel = () => {
-    if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null }
-    if (!stopPending) setShowCancel(true)
-  }
-  const scheduleCloseCancel = () => {
-    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
-    closeTimerRef.current = setTimeout(() => setShowCancel(false), 150)
-  }
-  useEffect(() => () => { if (closeTimerRef.current) clearTimeout(closeTimerRef.current) }, [])
+  const toggleDiscard = () => { if (!stopPending) setShowDiscard((v) => !v) }
 
   // A new session always starts on the waveform face, never a stale
-  // hover-revealed Cancel chip (or a frozen last frame of bars) left over
-  // from the last one.
+  // discard box (or a frozen last frame of bars) left over from the last
+  // one.
   useEffect(() => {
-    if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null }
-    setShowCancel(false)
+    setShowDiscard(false)
     setLevels(new Array(BAR_COUNT).fill(0.1))
   }, [sessionId])
 
-  // The Cancel chip only ever makes sense while actually recording — never
+  // The discard box only ever makes sense while actually recording — never
   // while the undo window (stopPending) is counting down, since the only
   // affordance that resolves that state is another tap on the key.
   useEffect(() => {
-    if (stopPending) setShowCancel(false)
+    if (stopPending) setShowDiscard(false)
   }, [stopPending])
 
   // Live waveform: reads the analyser every animation frame. No setInterval —
@@ -435,32 +417,26 @@ export function NotetakerWidget({
     <div
       className="w-full h-full flex flex-col-reverse items-start"
       style={{
-        gap: 8,
+        gap: 6,
         // @ts-expect-error -- WebkitAppRegion is a real, non-standard Electron CSS prop
         WebkitAppRegion: 'no-drag',
       }}
-      // Hover/focus tracking lives HERE, on the wrapper spanning pill + gap
-      // + chip, not on the pill alone — see openCancel/scheduleCloseCancel's
-      // own comment for why that was the actual bug (moving toward the chip
-      // through the gap used to fire the pill's own mouseleave first,
-      // hiding the chip before the cursor ever reached it).
-      onMouseEnter={openCancel}
-      onMouseLeave={scheduleCloseCancel}
-      onFocus={openCancel}
-      onBlur={scheduleCloseCancel}
     >
-      {/* The pill itself — not clickable, and no longer a hover target on
-       *  its own (see the wrapper above). Content is only ever the
-       *  waveform or, during the undo window, a short in-place message. */}
+      {/* The pill itself — a click (or Enter/Space, focused) toggles the
+       *  discard box above it. Content is only ever the waveform or,
+       *  during the undo window, a short in-place message. */}
       <div
+        role="button"
         tabIndex={0}
         title={stopPending ? undefined : 'Note taker'}
         aria-label={
           stopPending
             ? 'Stopping note-taking — tap left Control again to keep recording'
-            : 'Note-taking in progress'
+            : showDiscard ? 'Hide discard option' : 'Note-taking in progress — tap for options'
         }
-        className="rounded-full flex items-center select-none cursor-default"
+        onClick={toggleDiscard}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleDiscard() } }}
+        className={`rounded-full flex items-center select-none ${stopPending ? 'cursor-default' : 'cursor-pointer'}`}
         style={{
           height: PILL_HEIGHT,
           gap: stopPending ? 6 : 3,
@@ -498,34 +474,36 @@ export function NotetakerWidget({
         )}
       </div>
 
-      {/* Separate white Cancel chip, hover/focus-revealed above the pill —
-       *  never inside it. One click confirms immediately; getting here at
-       *  all already required a deliberate hover + move, which is the
-       *  "not a single, direct action" guarantee spec §6 asks for, just
-       *  via spatial separation instead of a same-spot double-click. */}
+      {/* Discard confirmation, click-revealed above the pill — never
+       *  inside it. The whole box is the confirm control (clicking
+       *  anywhere on it discards); tapping the pill again dismisses it
+       *  with no action instead. "Discard" rather than "Cancel" — cancel
+       *  reads as backing out of opening this box, when the actual choice
+       *  being made is throwing the meeting away. */}
       <button
         type="button"
-        tabIndex={showCancel ? 0 : -1}
-        onClick={() => { setShowCancel(false); onCancelConfirmed() }}
-        className="h-8 rounded-full flex items-center gap-1.5 select-none"
+        tabIndex={showDiscard ? 0 : -1}
+        onClick={() => { setShowDiscard(false); onCancelConfirmed() }}
+        className="rounded-2xl flex items-start gap-2 select-none text-left"
         style={{
-          padding: '0 12px 0 10px',
+          padding: '8px 12px',
+          maxWidth: 190,
           background: '#fff',
-          color: '#c4482e',
           border: '1px solid rgba(0,0,0,0.08)',
           boxShadow: '0 8px 20px rgba(0,0,0,0.28)',
-          fontSize: 11.5,
-          fontWeight: 700,
-          opacity: showCancel ? 1 : 0,
-          transform: showCancel ? 'translateY(0) scale(1)' : 'translateY(4px) scale(0.96)',
-          pointerEvents: showCancel ? 'auto' : 'none',
+          opacity: showDiscard ? 1 : 0,
+          transform: showDiscard ? 'translateY(0) scale(1)' : 'translateY(4px) scale(0.96)',
+          pointerEvents: showDiscard ? 'auto' : 'none',
           transition: 'opacity 150ms ease, transform 150ms ease',
         }}
       >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round" />
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="flex-none mt-[1px]" style={{ color: '#c4482e' }}>
+          <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-12" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        Cancel
+        <span className="flex flex-col gap-[1px]">
+          <span className="text-[11.5px] font-bold" style={{ color: '#c4482e' }}>Discard meeting</span>
+          <span className="text-[10px] leading-snug" style={{ color: 'rgba(0,0,0,0.5)' }}>Nothing will be saved.</span>
+        </span>
       </button>
 
       {/* @keyframes for the stopPending dot — inlined (no stylesheet in
