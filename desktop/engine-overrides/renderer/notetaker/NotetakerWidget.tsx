@@ -504,7 +504,7 @@ export function NotetakerWidget({
             </button>
           </>
         ) : (
-          <span className="flex items-end" style={{ gap: 3, height: '100%' }}>
+          <span className="flex items-center" style={{ gap: 3, height: '100%' }}>
             {levels.map((level, i) => (
               <div
                 key={i}
