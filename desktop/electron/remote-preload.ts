@@ -184,15 +184,18 @@ export interface NotetakerTranscriptSegment {
 }
 
 // Mirrors db.ts's NotetakerSettingsRow, same cross-tree-duplication reason
-// as NotetakerMeetingSnapshot above.
+// as NotetakerMeetingSnapshot above. cleanup_prompt/summary_prompt are the
+// EDITABLE instructions override only (null = using the built-in default)
+// — the fixed preamble/contract that always bookends them at call time is
+// never sent to the renderer, see transcriptCleanup.ts/notesSummary.ts.
 export interface NotetakerPipelineSettings {
   auto_pipeline_enabled: 0 | 1
   provider: 'claude' | 'codex'
   cleanup_prompt: string | null
   summary_prompt: string | null
   availability: { claude: boolean; codex: boolean }
-  default_cleanup_prompt: string
-  default_summary_prompt: string
+  default_cleanup_instructions: string
+  default_summary_instructions: string
 }
 
 // Mirrors notesSummary.ts's MeetingNotes, same reason.

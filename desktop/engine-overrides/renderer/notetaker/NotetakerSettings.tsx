@@ -8,7 +8,17 @@
 // Pipeline section: transcript cleanup + auto-summarization (2026-08-25
 // spec) — one toggle, a provider picker gated on real availability (same
 // ✓/○ visual language as RemoteSetup.tsx's Agents checklist), and two
-// independently editable prompts with reset-to-default.
+// independently editable "instructions" (2026-08-26: renamed from "prompt"
+// in every user-facing string — the model-facing term isn't what a user
+// is editing here, they're editing behavior guidance).
+//
+// Instructions are shown collapsed (label + one-line status), not inline —
+// the full editable text only appears in InstructionsEditorModal, opened
+// via the pencil icon, with its own Save/Cancel. What's edited here is only
+// ever the MIDDLE, user-customizable third of the real prompt sent to the
+// model — a fixed preamble and contract (I/O shape, the hallucination-
+// clearing rule) always bookend it and are never shown or editable, see
+// transcriptCleanup.ts/notesSummary.ts.
 
 import { useEffect, useState } from 'react'
 
@@ -20,8 +30,8 @@ type PipelineSettings = {
   cleanup_prompt: string | null
   summary_prompt: string | null
   availability: { claude: boolean; codex: boolean }
-  default_cleanup_prompt: string
-  default_summary_prompt: string
+  default_cleanup_instructions: string
+  default_summary_instructions: string
 }
 
 type SettingsPatch = Partial<Pick<PipelineSettings, 'auto_pipeline_enabled' | 'provider' | 'cleanup_prompt' | 'summary_prompt'>>
@@ -62,18 +72,10 @@ function Toggle({ on, onClick, disabled }: { on: boolean; onClick: () => void; d
 
 export function NotetakerSettings() {
   const [settings, setSettings] = useState<PipelineSettings | null>(null)
-  const [cleanupDraft, setCleanupDraft] = useState('')
-  const [summaryDraft, setSummaryDraft] = useState('')
+  const [editing, setEditing] = useState<'cleanup' | 'summary' | null>(null)
 
   useEffect(() => {
-    api().notetakerGetPipelineSettings?.().then((s) => {
-      setSettings(s)
-      // Seeded with the REAL default text when there's no override yet —
-      // not an empty box with a placeholder — so the user sees exactly
-      // what will run and can edit from there.
-      setCleanupDraft(s.cleanup_prompt ?? s.default_cleanup_prompt)
-      setSummaryDraft(s.summary_prompt ?? s.default_summary_prompt)
-    })
+    api().notetakerGetPipelineSettings?.().then(setSettings)
   }, [])
 
   const save = (patch: SettingsPatch) => {
@@ -145,68 +147,150 @@ export function NotetakerSettings() {
               })}
             </div>
 
-            <PromptEditor
-              label="Cleanup prompt"
-              value={cleanupDraft}
-              onChange={setCleanupDraft}
-              onBlurSave={(text) => save({ cleanup_prompt: text.length > 0 ? text : null })}
-              onReset={() => { setCleanupDraft(settings.default_cleanup_prompt); save({ cleanup_prompt: null }) }}
+            <InstructionsRow
+              label="Cleanup instructions"
               isDefault={settings.cleanup_prompt === null}
+              onEdit={() => setEditing('cleanup')}
             />
-            <PromptEditor
-              label="Summary prompt"
-              value={summaryDraft}
-              onChange={setSummaryDraft}
-              onBlurSave={(text) => save({ summary_prompt: text.length > 0 ? text : null })}
-              onReset={() => { setSummaryDraft(settings.default_summary_prompt); save({ summary_prompt: null }) }}
+            <InstructionsRow
+              label="Summary instructions"
               isDefault={settings.summary_prompt === null}
+              onEdit={() => setEditing('summary')}
             />
           </div>
         )}
       </div>
+
+      {settings && editing && (
+        <InstructionsEditorModal
+          title={editing === 'cleanup' ? 'Cleanup instructions' : 'Summary instructions'}
+          initialValue={
+            editing === 'cleanup'
+              ? settings.cleanup_prompt ?? settings.default_cleanup_instructions
+              : settings.summary_prompt ?? settings.default_summary_instructions
+          }
+          defaultValue={editing === 'cleanup' ? settings.default_cleanup_instructions : settings.default_summary_instructions}
+          onSave={(text) => {
+            const value = text.length > 0 ? text : null
+            save(editing === 'cleanup' ? { cleanup_prompt: value } : { summary_prompt: value })
+            setEditing(null)
+          }}
+          onReset={() => {
+            save(editing === 'cleanup' ? { cleanup_prompt: null } : { summary_prompt: null })
+            setEditing(null)
+          }}
+          onCancel={() => setEditing(null)}
+        />
+      )}
     </div>
   )
 }
 
-/** A prompt override is `null` (use the built-in default) until the user
- *  actually edits it — resetting clears the STORED value back to `null`
- *  rather than saving a copy of the default text, so a later change to the
- *  built-in default is inherited automatically instead of getting stuck at
- *  whatever text was in the box at reset time. The textarea's visible
- *  VALUE is always real text either way (the caller seeds `value` with the
- *  actual default, fetched from main, whenever there's no override) — this
- *  component only tracks whether that text is currently the inherited
- *  default or a saved override, to decide whether "Reset to default" makes
- *  sense to show. */
-function PromptEditor({ label, value, onChange, onBlurSave, onReset, isDefault }: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  onBlurSave: (v: string) => void
-  onReset: () => void
-  isDefault: boolean
-}) {
+/** Collapsed reference to one set of instructions — a label, a one-line
+ *  status (default vs. customized), and a pencil button that opens the
+ *  modal. The full text never appears inline; Settings shouldn't read like
+ *  a text editor. */
+function InstructionsRow({ label, isDefault, onEdit }: { label: string; isDefault: boolean; onEdit: () => void }) {
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[12px] font-medium text-ink">{label}</span>
-        {!isDefault && (
-          <button
-            type="button"
-            onClick={onReset}
-            className="text-[11px] text-ink/50 hover:text-ink px-1.5 py-0.5 rounded hover:bg-black/5"
-          >
-            Reset to default
-          </button>
-        )}
+    <div className="flex items-center justify-between gap-3 py-1">
+      <div>
+        <div className="text-[12px] font-medium text-ink">{label}</div>
+        <div className="text-[11px] text-ink/50">
+          {isDefault ? 'Using the default instructions.' : 'Using your customized instructions.'}
+        </div>
       </div>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={(e) => onBlurSave(e.target.value)}
-        rows={4}
-        className="w-full text-[12px] leading-relaxed p-2 rounded border border-black/10 bg-white/50 resize-y"
-      />
+      <button
+        type="button"
+        onClick={onEdit}
+        aria-label={`Edit ${label.toLowerCase()}`}
+        title={`Edit ${label.toLowerCase()}`}
+        className="shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-ink/50 hover:text-ink hover:bg-black/5 transition-colors"
+      >
+        <svg viewBox="0 0 20 20" fill="none" className="w-4 h-4">
+          <path
+            d="M14.5 3.5a1.5 1.5 0 0 1 2 2.1L7 15.1l-3 .9.9-3L14.5 3.5Z"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+    </div>
+  )
+}
+
+/** Full-text editor, opened from InstructionsRow's pencil. `initialValue`
+ *  is always real text (the stored override, or the fetched built-in
+ *  default) — never an empty box with a placeholder. Reset clears the
+ *  STORED value back to `null` rather than saving a copy of the default
+ *  text, so a later change to the built-in default is inherited
+ *  automatically instead of getting stuck at whatever text was here at
+ *  reset time. Save/Cancel are explicit — nothing here saves on blur. */
+function InstructionsEditorModal({ title, initialValue, defaultValue, onSave, onReset, onCancel }: {
+  title: string
+  initialValue: string
+  defaultValue: string
+  onSave: (v: string) => void
+  onReset: () => void
+  onCancel: () => void
+}) {
+  const [draft, setDraft] = useState(initialValue)
+  const isDefaultText = draft === defaultValue
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-lg max-h-[80vh] flex flex-col rounded-lg bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 pt-4 pb-2">
+          <h3 className="text-[14px] font-semibold text-ink">{title}</h3>
+          <p className="text-[11.5px] text-ink-60 mt-1 leading-relaxed">
+            This is the guidance that customizes how {title.toLowerCase()} behave. It always runs
+            alongside Unmute&apos;s own required rules for input/output format and known
+            transcription artifacts, which aren&apos;t shown here and can&apos;t be changed.
+          </p>
+        </div>
+        <div className="px-4 flex-1 overflow-y-auto min-h-[160px]">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            autoFocus
+            className="w-full h-full min-h-[160px] text-[12px] leading-relaxed p-2 rounded border border-black/10 bg-white/50 resize-none"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-2 px-4 py-3 border-t border-black/10">
+          {!isDefaultText ? (
+            <button
+              type="button"
+              onClick={onReset}
+              className="text-[11.5px] text-ink/50 hover:text-ink px-2 py-1 rounded hover:bg-black/5"
+            >
+              Reset to default
+            </button>
+          ) : <span />}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="text-[12px] px-3 py-1.5 rounded border border-black/15 hover:bg-black/5"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => onSave(draft)}
+              className="text-[12px] px-3 py-1.5 rounded bg-accent text-white hover:opacity-90"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseSummaryOutput, generateNotes, buildSummaryInput, DEFAULT_SUMMARY_PROMPT } from './notesSummary'
+import { parseSummaryOutput, generateNotes, buildSummaryInput, DEFAULT_SUMMARY_INSTRUCTIONS } from './notesSummary'
 import type { TranscriptSegment } from './transcriptMerge'
 import type { HeadlessProvider } from './headlessAgent'
 
@@ -60,9 +60,12 @@ describe('parseSummaryOutput', () => {
 })
 
 describe('buildSummaryInput', () => {
-  test('joins segments as channel-labeled lines, prefixed with the prompt', () => {
-    const input = buildSummaryInput([seg('mic', 'hello'), seg('system', 'hi there')], 'PROMPT')
-    assert.equal(input, 'PROMPT\n\nmic: hello\nsystem: hi there')
+  test('joins segments as channel-labeled lines, with the instructions sandwiched between the fixed preamble and contract', () => {
+    const input = buildSummaryInput([seg('mic', 'hello'), seg('system', 'hi there')], 'MY INSTRUCTIONS')
+    const instructionsIndex = input.indexOf('MY INSTRUCTIONS')
+    assert.ok(instructionsIndex > 0, 'fixed preamble should come before the instructions')
+    assert.ok(input.endsWith('mic: hello\nsystem: hi there'))
+    assert.ok(input.includes('no markdown code fence'))
   })
 })
 
@@ -97,8 +100,8 @@ describe('generateNotes', () => {
     if (result.ok) assert.equal(result.notes.title, 'T')
   })
 
-  test('DEFAULT_SUMMARY_PROMPT is real prompt text, not a placeholder', () => {
-    assert.ok(DEFAULT_SUMMARY_PROMPT.length > 50)
-    assert.match(DEFAULT_SUMMARY_PROMPT, /title/i)
+  test('DEFAULT_SUMMARY_INSTRUCTIONS is real instructions text, not a placeholder', () => {
+    assert.ok(DEFAULT_SUMMARY_INSTRUCTIONS.length > 50)
+    assert.match(DEFAULT_SUMMARY_INSTRUCTIONS, /title/i)
   })
 })

@@ -5,6 +5,13 @@
 // runNotetakerPipeline in notetakerInit.ts, which only calls this after
 // cleanup has succeeded) through the user's own headless Claude Code/Codex
 // CLI — 2026-08-25 spec §5.
+//
+// PROMPT IS TWO PARTS (2026-08-26), same split as transcriptCleanup.ts:
+// FIXED_SUMMARY_PREAMBLE/FIXED_SUMMARY_CONTRACT bookend the editable
+// instructions text (the user's own override, or DEFAULT_SUMMARY_
+// INSTRUCTIONS) and are never shown in — or editable from — Settings. The
+// contract carries the output JSON shape this file's own parser depends on,
+// so it holds regardless of what the editable instructions say.
 
 import { runHeadlessAgent, type HeadlessProvider } from './headlessAgent'
 import type { TranscriptSegment } from './transcriptMerge'
@@ -13,12 +20,16 @@ import { extractJson } from './extractJson'
 
 const log = createNotetakerLogger('notes-summary')
 
-export const DEFAULT_SUMMARY_PROMPT =
-  'You are producing meeting notes from a cleaned meeting transcript. Produce: a short, specific title ' +
-  '(a few descriptive words — not one word, not a full sentence); a plain-language summary of what the meeting ' +
-  'was about and what happened; a list of key points discussed; a list of any decisions that were made; a list ' +
-  'of any action items, naming who owns each one if that\'s clear from the transcript. Only include items in a ' +
-  'list if the transcript actually contains that kind of content — never invent items to fill a section. ' +
+const FIXED_SUMMARY_PREAMBLE = 'You are producing meeting notes from a cleaned meeting transcript.'
+
+export const DEFAULT_SUMMARY_INSTRUCTIONS =
+  'Produce: a short, specific title (a few descriptive words — not one word, not a full sentence); a ' +
+  'plain-language summary of what the meeting was about and what happened; a list of key points discussed; a ' +
+  'list of any decisions that were made; a list of any action items, naming who owns each one if that\'s clear ' +
+  'from the transcript. Only include items in a list if the transcript actually contains that kind of content ' +
+  '— never invent items to fill a section.'
+
+const FIXED_SUMMARY_CONTRACT =
   'Return this as JSON: {title, summary, keyPoints: string[], decisions: string[], actionItems: string[]}. ' +
   'Output ONLY that JSON object — no markdown code fence, no explanation, no other text before or after it.'
 
@@ -32,10 +43,12 @@ export type MeetingNotes = {
 
 /** Plain channel-labeled prose, not raw JSON segment structure — this pass
  *  produces prose, not a 1:1 mapping, so there's nothing positional worth
- *  preserving the way cleanup's {id, text} shape matters. */
-export function buildSummaryInput(segments: TranscriptSegment[], prompt: string): string {
+ *  preserving the way cleanup's {id, text} shape matters. `instructions` is
+ *  the editable middle third; the fixed preamble and contract always
+ *  bookend it, whatever it says. */
+export function buildSummaryInput(segments: TranscriptSegment[], instructions: string): string {
   const transcript = segments.map((s) => `${s.channel}: ${s.text}`).join('\n')
-  return `${prompt}\n\n${transcript}`
+  return `${FIXED_SUMMARY_PREAMBLE}\n\n${instructions}\n\n${FIXED_SUMMARY_CONTRACT}\n\n${transcript}`
 }
 
 function asStringArray(value: unknown): string[] {
@@ -77,11 +90,11 @@ export type SummaryResult =
 export async function generateNotes(
   segments: TranscriptSegment[],
   provider: HeadlessProvider,
-  promptOverride?: string | null,
+  instructionsOverride?: string | null,
   runAgent: typeof runHeadlessAgent = runHeadlessAgent,
 ): Promise<SummaryResult> {
-  const prompt = promptOverride ?? DEFAULT_SUMMARY_PROMPT
-  const input = buildSummaryInput(segments, prompt)
+  const instructions = instructionsOverride ?? DEFAULT_SUMMARY_INSTRUCTIONS
+  const input = buildSummaryInput(segments, instructions)
   const result = await runAgent(provider, input)
   if (!result.ok) {
     log.error('summary call failed', { provider, error: result.error })

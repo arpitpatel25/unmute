@@ -69,8 +69,8 @@ import {
   getNotetakerSettings, saveNotetakerSettings, updateMeetingPipelineStatus,
 } from './db'
 import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
-import { cleanupTranscript, DEFAULT_CLEANUP_PROMPT } from './notetaker/transcriptCleanup'
-import { generateNotes, DEFAULT_SUMMARY_PROMPT } from './notetaker/notesSummary'
+import { cleanupTranscript, DEFAULT_CLEANUP_INSTRUCTIONS } from './notetaker/transcriptCleanup'
+import { generateNotes, DEFAULT_SUMMARY_INSTRUCTIONS } from './notetaker/notesSummary'
 
 const log = createNotetakerLogger('init')
 
@@ -379,11 +379,18 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   ipcMain.handle('notetaker:get-pipeline-settings', async () => {
     const settings = getNotetakerSettings()
     const availability = (await hooks.getAgentAvailability?.()) ?? { claude: false, codex: false }
-    // The renderer needs real default text to SHOW (not just infer "using
-    // default" from a null override) — see NotetakerSettings.tsx's
-    // PromptEditor, which seeds the textarea with this rather than an
-    // empty box + placeholder.
-    return { ...settings, availability, default_cleanup_prompt: DEFAULT_CLEANUP_PROMPT, default_summary_prompt: DEFAULT_SUMMARY_PROMPT }
+    // The renderer needs the real default EDITABLE instructions text to
+    // SHOW (not just infer "using default" from a null override) — see
+    // NotetakerSettings.tsx's InstructionsEditor, which seeds its modal
+    // with this rather than an empty box + placeholder. The fixed
+    // preamble/contract that always bookends this text is never sent here
+    // — it's not shown or editable, see transcriptCleanup.ts/notesSummary.ts.
+    return {
+      ...settings,
+      availability,
+      default_cleanup_instructions: DEFAULT_CLEANUP_INSTRUCTIONS,
+      default_summary_instructions: DEFAULT_SUMMARY_INSTRUCTIONS,
+    }
   })
 
   ipcMain.handle('notetaker:save-pipeline-settings', (_event, patch: Parameters<typeof saveNotetakerSettings>[0]) => {
