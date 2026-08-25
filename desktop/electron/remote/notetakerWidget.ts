@@ -25,7 +25,7 @@
 // NotetakerController.onNotesStopRequested for the arm/cancel/finalize shape
 // this mirrors, and NotetakerWidget.tsx for the widget's visual response.
 
-import { BrowserWindow, screen } from 'electron'
+import { BrowserWindow, screen, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { createLogger } from './log'
 
@@ -96,6 +96,34 @@ export function broadcastStopPending(pending: boolean): void {
   log.event('stop-pending-broadcast-sent', { pending, msSinceWindowCreated })
   widgetWindow.webContents.send('notetaker:stop-pending', pending)
 }
+
+/**
+ * A THIRD, AUTHORITATIVE resend trigger — on top of the immediate send in
+ * broadcastCaptureActive/broadcastStopPending and the inferred resend on
+ * 'did-finish-load' above. Live-observed: on the widget's very first-ever
+ * show() (right after app launch), BOTH of those could fire before this
+ * window's React effects had actually registered their IPC listeners —
+ * did-finish-load only proves the page's script started running, not that
+ * React has mounted — so the very first meeting of a session sometimes
+ * never acquired a mic (main believed it had told the widget to start; the
+ * widget never heard it). This handler is fed by the renderer's OWN
+ * confirmation that its listeners exist (see NotetakerWidgetRoute's
+ * post-mount ready ping), so unlike the other two triggers, this one is
+ * never a guess about timing.
+ *
+ * Registered once at module load — there is only ever one widget window
+ * (the module-level `widgetWindow` singleton), so one handler for its whole
+ * lifetime is correct; a fresh window still sends its own fresh ready ping
+ * after its own fresh mount, and this handler just resends whatever the
+ * CURRENT cached state is at that moment, same as the other two triggers.
+ */
+ipcMain.on('notetaker:widget-ready', () => {
+  const msSinceWindowCreated = windowCreatedAt === null ? null : Date.now() - windowCreatedAt
+  log.event('notetaker-widget-ready-received', { msSinceWindowCreated, resendingCaptureActive: captureActive, resendingStopPending: stopPending })
+  if (!widgetWindow || widgetWindow.isDestroyed()) return
+  widgetWindow.webContents.send('notetaker:capture-active', captureActive)
+  widgetWindow.webContents.send('notetaker:stop-pending', stopPending)
+})
 
 /** Bottom-left bounds on the display nearest the cursor — mirrors overlay.ts's
  *  dockedBounds() (screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea)

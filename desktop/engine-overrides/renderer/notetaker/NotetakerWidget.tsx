@@ -21,6 +21,7 @@ type API = {
   notetakerCancelRequested?: () => void
   notetakerOnCaptureActive?: (cb: (active: boolean) => void) => () => void
   notetakerOnStopPending?: (cb: (pending: boolean) => void) => () => void
+  notetakerWidgetReady?: () => void
   notetakerMicChunk?: (samples: ArrayBuffer, sampleRate: number, timestampMs: number) => void
   notetakerWidgetLog?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>) => void
 }
@@ -497,9 +498,12 @@ export function NotetakerWidgetRoute() {
   // regardless of whether one ever happens. See registerMicWorklet's own
   // comment for the field data: addModule() cold-starting inside a session
   // (the old per-session `new AudioContext()`) is what silently lost every
-  // short meeting's mic audio. A session now only ever RESUMES this context
-  // and opens a fresh MediaStreamSource on it — cheap, synchronous-fast
-  // operations with nothing left on the critical path to race against.
+  // short meeting's mic audio. A session now just opens a fresh
+  // MediaStreamSource on this context — see the mic-acquisition effect's own
+  // teardown comment below for why the context is NEVER suspended between
+  // sessions (it used to be, which is what this comment used to say) —
+  // cheap, synchronous-fast operations with nothing left on the critical
+  // path to race against.
   const audioContextRef = useRef<AudioContext | null>(null)
   const workletReadyRef = useRef<Promise<boolean> | null>(null)
 
@@ -539,6 +543,19 @@ export function NotetakerWidgetRoute() {
       setStopPending(pending)
     })
     return () => unsubscribe?.()
+  }, [])
+
+  // Fires once both listener-registering effects above have actually run —
+  // React commits effects with empty deps in declaration order on mount, so
+  // by the time THIS effect body runs, both subscriptions are guaranteed
+  // live. Tells main it can safely resend the current capture-active/
+  // stop-pending state and have it actually arrive — see
+  // notetakerWidget.ts's 'notetaker:widget-ready' handler for why this
+  // exists (a real dropped-signal bug on the widget's first-ever load that
+  // neither the immediate send nor the 'did-finish-load' resend closed).
+  useEffect(() => {
+    wlog('info', 'widget ready — listeners mounted, telling main', { msSinceMount: Date.now() - mountedAtRef.current })
+    api().notetakerWidgetReady?.()
   }, [])
 
   useEffect(() => {
@@ -589,13 +606,28 @@ export function NotetakerWidgetRoute() {
           msFromRequestToGrant: Date.now() - requestedAt,
         })
 
-        // The previous session suspended this context on teardown; resume is
-        // near-instant (nothing to negotiate — the device stayed warm).
+        // DEFENSIVE ONLY, NOT THE NORMAL PATH ANYMORE. This context is no
+        // longer suspended by anything in this file (see the teardown
+        // below) — a real, repeated field failure: live-logged evidence
+        // across one test run showed resume() taking 2852ms the FIRST time
+        // this context was reused after a suspend, then simply never
+        // resolving at all the two times after that, silently killing both
+        // the mic tap and (independently) the native system tap for that
+        // whole session. The fix is to never suspend this context in the
+        // first place (nothing meaningful is saved by it — the mic is
+        // actually released by stopping the MediaStreamTrack below, not by
+        // suspending the context), so this branch should now never fire
+        // in normal operation. It stays as a defensive fallback ONLY for
+        // the case where something OUTSIDE this file suspends the context
+        // (Chromium's own power-saving/visibility policies can still do
+        // this to a backgrounded window) — logged at WARN, not the old
+        // debug level, because hitting this now means something unexpected
+        // happened and is worth noticing, not routine housekeeping.
         if (ctx.state === 'suspended') {
           const resumeStartedAt = Date.now()
-          wlog('debug', 'resuming suspended AudioContext')
+          wlog('warn', 'AudioContext was suspended by something other than this file — resuming defensively', { contextState: ctx.state })
           await ctx.resume()
-          wlog('debug', 'AudioContext resumed', { newState: ctx.state, resumeDurationMs: Date.now() - resumeStartedAt })
+          wlog('warn', 'defensive AudioContext resume completed', { newState: ctx.state, resumeDurationMs: Date.now() - resumeStartedAt })
         }
         if (cancelled) {
           // Also previously silent — the session ended DURING ctx.resume()'s
@@ -664,15 +696,24 @@ export function NotetakerWidgetRoute() {
       stream?.getTracks().forEach((t) => t.stop())
       try { sourceNode?.disconnect() } catch { /* already disconnected */ }
       try { analyserNode?.disconnect() } catch { /* already disconnected */ }
-      // SUSPEND, don't close: this context and its registered worklet module
-      // are shared across every session in this window's life (see the
-      // mount effect above). Suspending still fully releases the mic — only
-      // the now-stopped MediaStreamTrack does that — while keeping the next
-      // session's resume() instant instead of paying addModule() again.
-      const stateBeforeSuspend = audioContextRef.current?.state
-      if (audioContextRef.current && audioContextRef.current.state === 'running') {
-        void audioContextRef.current.suspend()
-      }
+      // DELIBERATELY NEVER SUSPENDED. This context and its registered
+      // worklet module are shared across every session in this window's
+      // life (see the mount effect above) — it used to be suspended here
+      // and resumed at the next session's start, on the theory that
+      // suspending saved some idle CPU between meetings for free. Live
+      // data proved that resume() is NOT free on a context reused this way:
+      // 2852ms the first time, then hanging indefinitely (never resolving
+      // at all) on subsequent reuses — silently killing the mic AND, in the
+      // same window, the independent native system-audio tap for that
+      // whole session. The mic is fully released by stopping the
+      // MediaStreamTrack two lines up regardless of what the context itself
+      // is doing, so suspending bought nothing that track.stop() didn't
+      // already give us — only the failure mode. Leaving it running is the
+      // fix; see the mic-acquisition `if (ctx.state === 'suspended')` guard
+      // above, which stays only as a defensive fallback for something
+      // OUTSIDE this file suspending it (Chromium's own policies can still
+      // do that to a backgrounded window).
+      const stateAtTeardown = audioContextRef.current?.state
       // Dropping the analyser is what stops the waveform's rAF loop (its
       // effect keys off this prop).
       setAnalyser(null)
@@ -684,7 +725,11 @@ export function NotetakerWidgetRoute() {
         hadDisposer,
         hadStream,
         durationMs: Date.now() - requestedAt,
-        contextStateBeforeSuspend: stateBeforeSuspend,
+        // Expected to read 'running' from now on — anything else here means
+        // something outside this file suspended the context mid-session,
+        // which the defensive resume() branch above will have to deal with
+        // next time (and will now log loudly if it does).
+        contextStateAtTeardown: stateAtTeardown,
       })
     }
   }, [captureActive])

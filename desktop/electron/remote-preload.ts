@@ -634,6 +634,19 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('notetaker:stop-pending', handler)
     return () => ipcRenderer.removeListener('notetaker:stop-pending', handler)
   },
+  /** Tells main the widget's IPC listeners (capture-active, stop-pending)
+   *  are actually mounted and ready to receive — sent once, right after the
+   *  route mounts both. Fixes a real, observed race: on the widget's very
+   *  first-ever show() (right after app launch), main's initial
+   *  broadcastCaptureActive(true) call and even its own 'did-finish-load'
+   *  resend could both land before this window's React effects had
+   *  registered their listeners, so the signal was silently dropped and the
+   *  meeting never acquired a mic. did-finish-load only proves the page's
+   *  script STARTED running, not that React has mounted — this message is
+   *  the renderer's own, authoritative confirmation instead of an inferred
+   *  one, so main can resend the current state knowing it will actually
+   *  arrive. See notetakerWidget.ts's 'notetaker:widget-ready' handler. */
+  notetakerWidgetReady: (): void => ipcRenderer.send('notetaker:widget-ready'),
   /** The Unmute Agent asked to open one meeting (notetaker_open) — main has
    *  already shown/focused the window by the time this fires; the renderer's
    *  only job is to land on the Notetaker tab with this meeting selected. */
