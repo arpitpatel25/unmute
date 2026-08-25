@@ -84,6 +84,10 @@ import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
 import { nextConversation, type Conversation } from './agent/continuity'
 import { HandoffCapability } from './agent/capabilities/handoff'
 import { SessionsCapability } from './agent/capabilities/sessions'
+import { SessionIndex, defaultCachePath } from './agent/sessions/store'
+import { searchSessions } from './agent/sessions/search'
+import { digestSection } from './agent/sessions/digest'
+import type { SessionRecord } from './agent/sessions/scan'
 import { HistoryCapability } from './agent/capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
 import { selectSessions, type IndexedSession } from './agent/sessions/index'
@@ -771,6 +775,32 @@ async function copyAgentAttachment(
 
 const AGENT_CONSTITUTION = agentConstitution(SESSION_PREAMBLE)
 
+/**
+ * An index record as the Agent's tools describe a session.
+ *
+ * `project` is the one field worth watching: for a session Unmute started it
+ * comes from the TASK, because the cwd is a scratch directory named after the
+ * task and reporting that uuid as a project is exactly what made the old
+ * sessions_list unreadable.
+ */
+function indexedFrom(record: SessionRecord): IndexedSession {
+  const task = record.unmuteTaskId ? manager?.get(record.unmuteTaskId) : undefined
+  const project = task?.name
+    ?? (task?.cwd ? basename(task.cwd) : undefined)
+    ?? record.project
+  return {
+    id: record.sessionId ?? record.path,
+    source: record.unmuteTaskId ? 'unmute' : 'external',
+    startedAt: record.lastTouchedAt,
+    updatedAt: record.lastTouchedAt,
+    turns: record.turnsSeen,
+    ...(project ? { project } : {}),
+    ...(record.opening ? { intent: record.opening, opening: record.opening } : {}),
+    ...(task?.state ? { state: String(task.state) } : {}),
+    ...(record.unmuteTaskId ? { taskId: record.unmuteTaskId } : {}),
+  }
+}
+
 function providerAvailability(probes: readonly ProviderProbe[]): UnmuteAgentProviderAvailability[] {
   return (['claude', 'codex'] as const).map((id) => {
     const probe = probes.find((candidate) => candidate.provider === id)
@@ -970,6 +1000,11 @@ async function initializeUnmuteAgent(): Promise<void> {
     await memory.initialize()
     const tokens = new AgentTokenStore()
     const journal = new AgentJournal({ root: join(root, 'runtime') })
+    // The session index is a cache over transcripts that already sit in
+    // plaintext on this disk, so it lives beside the Agent's runtime rather
+    // than inside its encrypted memory: deleting it costs a rescan and
+    // nothing else, and it must be able to fail without risking a memory.
+    const sessionIndex = new SessionIndex({ cachePath: defaultCachePath(root) })
     const constitutionPath = join(root, 'runtime', 'constitution.md')
     mkdirSync(dirname(constitutionPath), { recursive: true, mode: 0o700 })
     writeFileSync(constitutionPath, AGENT_CONSTITUTION, { encoding: 'utf8', mode: 0o600 })
@@ -1026,43 +1061,102 @@ async function initializeUnmuteAgent(): Promise<void> {
       // already holds every session Unmute created — so v1 needs no filesystem
       // scanner, and the Agent's OWN runs are excluded by construction because
       // they are not tasks.
+      // EVERY session on this machine, not the ones Unmute happened to start.
+      // Backed by the on-disk index (agent/sessions/), so a session the user
+      // ran themselves in a terminal is as reachable as one from a card.
       new SessionsCapability({
         async list(query) {
-          const all = (manager?.list() ?? [])
-            .filter((task) => task.origin !== 'unmute-agent')
-            .map((task): IndexedSession => ({
-              id: task.id,
-              source: 'unmute',
-              startedAt: task.createdAt ?? 0,
-              updatedAt: task.updatedAt ?? task.createdAt ?? 0,
-              turns: task.conversation?.length ?? 0,
-              ...(task.cwd ? { project: basename(task.cwd) } : {}),
-              ...(task.intent ? { intent: task.intent, opening: task.intent } : {}),
-              ...(task.state ? { state: String(task.state) } : {}),
-              taskId: task.id,
-            }))
-          return selectSessions(all, query)
+          await sessionIndex.refresh()
+          const within = query.includeCold ? 90 * 86_400_000 : 7 * 86_400_000
+          return sessionIndex.recent(within)
+            .filter((record) => !record.derived)
+            .slice(0, query.limit ?? 25)
+            .map(indexedFrom)
+        },
+        async search(query) {
+          await sessionIndex.refresh()
+          return searchSessions(sessionIndex.all(), {
+            text: query.text,
+            ...(query.harness === 'claude' || query.harness === 'codex'
+              ? { harness: query.harness }
+              : {}),
+            ...(query.limit === undefined ? {} : { limit: query.limit }),
+          }, query.now).map((hit) => ({
+            ...indexedFrom(hit.record),
+            matched: hit.matched,
+            harness: hit.record.harness,
+          }))
         },
         async read(sessionId) {
-          const task = manager?.get(sessionId)
-          if (!task || task.origin === 'unmute-agent') return null
-          // Lazily assembled from what the task already holds — still no model
-          // call. A richer summary can be generated and cached here later
-          // without changing the tool's contract.
-          const parts = [
-            task.intent ? `Intent: ${task.intent}` : '',
-            task.result?.summary ? `Outcome: ${task.result.summary}` : '',
-            task.result?.detail ?? '',
-          ].filter(Boolean)
+          await sessionIndex.refresh()
+          const record = sessionIndex.find(sessionId)
+          if (!record) return null
+          // Opening a transcript is what you do because you need what is
+          // inside it — which is why this is the only path that reads one in
+          // full, and why nothing does it during indexing.
+          const content = await sessionIndex.readFull(sessionId)
           return {
-            session: {
-              id: task.id, source: 'unmute' as const,
-              startedAt: task.createdAt ?? 0, updatedAt: task.updatedAt ?? 0,
-              turns: task.conversation?.length ?? 0,
-              ...(task.intent ? { intent: task.intent } : {}),
-            },
-            content: parts.join('\n\n') || 'Nothing was recorded for this session.',
+            session: indexedFrom(record),
+            content: content ?? 'That session could not be read.',
           }
+        },
+        async resume(input) {
+          if (!manager) throw new Error('Unmute Remote is not initialized')
+          const record = sessionIndex.find(input.sessionId)
+          if (!record) throw new Error('That session is not on this machine')
+
+          // An Unmute task already has a card and a runtime: wake that one
+          // rather than minting a second card for the same conversation.
+          if (record.unmuteTaskId && manager.get(record.unmuteTaskId)) {
+            await manager.resume(record.unmuteTaskId)
+            // followUp is the same path the router uses to land a follow-up
+            // utterance in a live task, so a resumed session receives the
+            // request exactly as it would have by voice.
+            if (input.intent) manager.followUp(record.unmuteTaskId, input.intent)
+            return { taskId: record.unmuteTaskId }
+          }
+
+          // A session Unmute never started has no card. Forking it into a new
+          // task keeps the whole conversation and gives it one — the same
+          // dispatch the Remote key uses, so nothing here is a special case.
+          const taskId = await manager.dispatch(input.intent ?? 'Continue from where we left off.', {
+            kind: 'session',
+            agent: record.harness,
+            ...(record.sessionId ? { forkFromSessionId: record.sessionId } : {}),
+            ...(record.cwd ? { cwd: record.cwd } : {}),
+          })
+          log.event('agent-session-resumed', {
+            taskId, sessionId: record.sessionId, harness: record.harness, forked: true,
+          })
+          return { taskId }
+        },
+        async continueIn(input) {
+          if (!manager) throw new Error('Unmute Remote is not initialized')
+          const record = sessionIndex.find(input.sessionId)
+          if (!record) throw new Error('That session is not on this machine')
+
+          // A CONVERSATION CANNOT MOVE BETWEEN HARNESSES. Codex cannot resume
+          // a Claude thread and vice versa, so this is a SEED, not a fork:
+          // what the old session was about, then the new request. Saying
+          // otherwise would be the false success this Agent must never hand
+          // back.
+          const seed = [
+            `Continuing work from an earlier ${record.harness} session.`,
+            record.opening ? `It began: ${record.opening}` : '',
+            record.closing ? `It last said: ${record.closing}` : '',
+            '',
+            input.intent,
+          ].filter(Boolean).join('\n')
+          const taskId = await manager.dispatch(seed, {
+            kind: 'session',
+            agent: input.harness as NonNullable<Parameters<typeof manager.dispatch>[1]>['agent'],
+            ...(record.cwd ? { cwd: record.cwd } : {}),
+          })
+          log.event('agent-session-continued', {
+            taskId, sessionId: record.sessionId,
+            from: record.harness, to: input.harness,
+          })
+          return { taskId }
         },
       }),
       // What the user recorded. Optional: only present when the notetaker
@@ -1206,6 +1300,23 @@ async function initializeUnmuteAgent(): Promise<void> {
         }
       },
       onActivity: broadcastUnmuteAgentActivity,
+      // Handed over every turn so "that thing I was working on yesterday" does
+      // not cost a tool round-trip before the Agent knows what exists.
+      async sessionDigest() {
+        await sessionIndex.refresh()
+        return digestSection(
+          sessionIndex.recent(48 * 3_600_000),
+          Date.now(),
+          (taskId) => {
+            const task = manager?.get(taskId)
+            if (!task) return undefined
+            return {
+              ...(task.name ? { name: task.name } : {}),
+              ...(task.cwd ? { project: basename(task.cwd) } : {}),
+            }
+          },
+        )
+      },
     })
     pendingController = controller
     await supervisor.initialize()
