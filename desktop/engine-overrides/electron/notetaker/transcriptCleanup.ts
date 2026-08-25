@@ -15,6 +15,7 @@
 import { runHeadlessAgent, type HeadlessProvider } from './headlessAgent'
 import type { TranscriptSegment } from './transcriptMerge'
 import { createNotetakerLogger } from './notetakerLog'
+import { extractJson } from './extractJson'
 
 const log = createNotetakerLogger('transcript-cleanup')
 
@@ -24,7 +25,8 @@ export const DEFAULT_CLEANUP_PROMPT =
   'Fix only clear transcription errors — misheard words, garbled phrases, obviously wrong homophones — ' +
   'using the surrounding segments as context. Do not summarize, shorten, rephrase for style, or change meaning. ' +
   'Do not merge, split, reorder, or drop any segment. ' +
-  'Return a JSON array of {id, text} pairs, one per input id, in the same order, with only the text corrected.'
+  'Return a JSON array of {id, text} pairs, one per input id, in the same order, with only the text corrected. ' +
+  'Output ONLY that JSON array — no markdown code fence, no explanation, no other text before or after it.'
 
 /** {id, text} only — channel/speaker/timestamps are deliberately never
  *  sent, since they're never meant to come back (see file header). */
@@ -46,27 +48,28 @@ type CleanupEntry = { id: unknown; text: unknown }
  */
 export function parseCleanupOutput(raw: string, segments: TranscriptSegment[]): TranscriptSegment[] {
   const corrected = new Map<number, string>()
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    if (Array.isArray(parsed)) {
-      for (const entry of parsed as CleanupEntry[]) {
-        if (!entry || typeof entry !== 'object') continue
-        const id = entry.id
-        const text = entry.text
-        if (typeof id !== 'number' || !Number.isInteger(id)) continue
-        if (id < 0 || id >= segments.length) continue
-        if (corrected.has(id)) continue // first occurrence wins
-        if (typeof text !== 'string' || text.length === 0) continue
-        corrected.set(id, text)
-      }
+  // extractJson handles the real, live-observed shape: Claude Code's -p
+  // mode commonly wraps its answer in a ```json fence even when told not
+  // to — a bare JSON.parse(raw) rejected that outright and was the actual
+  // cause of cleanup failing every time, not a real CLI/model problem.
+  const parsed = extractJson(raw, 'array')
+  if (Array.isArray(parsed)) {
+    for (const entry of parsed as CleanupEntry[]) {
+      if (!entry || typeof entry !== 'object') continue
+      const id = entry.id
+      const text = entry.text
+      if (typeof id !== 'number' || !Number.isInteger(id)) continue
+      if (id < 0 || id >= segments.length) continue
+      if (corrected.has(id)) continue // first occurrence wins
+      if (typeof text !== 'string' || text.length === 0) continue
+      corrected.set(id, text)
     }
-  } catch {
-    // Unparseable response as a whole — every segment falls back below.
-    // Not a thrown error: the caller (cleanupTranscript) is the one that
-    // decides whether a fully-empty `corrected` map means the overall call
-    // failed (raw itself never having been valid JSON) or just an
-    // all-fallback success (some ids legitimately absent).
   }
+  // else: nothing extractable at all — every segment falls back below.
+  // The caller (cleanupTranscript) is the one that decides whether a fully-
+  // empty `corrected` map means the overall call failed (nothing
+  // extractable) or just an all-fallback success (some ids legitimately
+  // absent from an otherwise-valid response).
   return segments.map((seg, id) => {
     const text = corrected.get(id)
     return text === undefined ? seg : { ...seg, text }
@@ -101,9 +104,7 @@ export async function cleanupTranscript(
     log.error('cleanup call failed', { provider, error: result.error })
     return { ok: false, error: result.error }
   }
-  try {
-    JSON.parse(result.output)
-  } catch {
+  if (!Array.isArray(extractJson(result.output, 'array'))) {
     log.error('cleanup response was not parseable JSON at all', { provider, outputPreview: result.output.slice(0, 200) })
     return { ok: false, error: 'response was not valid JSON' }
   }

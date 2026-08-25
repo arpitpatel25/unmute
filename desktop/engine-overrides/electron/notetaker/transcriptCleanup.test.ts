@@ -50,6 +50,13 @@ describe('parseCleanupOutput', () => {
     const out = parseCleanupOutput(JSON.stringify([{ id: 0, text: 'hello', channel: 'mic', startMs: 0, endMs: 0 }]), segments)
     assert.deepEqual(out[0], { channel: 'system', text: 'hello', startMs: 500, endMs: 900, speakerName: 'Alice' })
   })
+
+  test('a ```json fenced response (the real, live-observed Claude Code shape) is still corrected, not a total fallback', () => {
+    const segments = [seg('helo'), seg('wrold')]
+    const fenced = '```json\n[{"id":0,"text":"hello"},{"id":1,"text":"world"}]\n```'
+    const out = parseCleanupOutput(fenced, segments)
+    assert.deepEqual(out.map((s) => s.text), ['hello', 'world'])
+  })
 })
 
 describe('buildCleanupInput', () => {
@@ -83,6 +90,13 @@ describe('cleanupTranscript', () => {
     const runner = fakeRunner({ ok: true, output: 'not json {{{' })
     const result = await cleanupTranscript([seg('helo')], 'claude', undefined, runner)
     assert.equal(result.ok, false)
+  })
+
+  test('a ```json fenced response is ok:true, not a false failure — this was the live bug', async () => {
+    const runner = fakeRunner({ ok: true, output: '```json\n[{"id":0,"text":"hello"}]\n```' })
+    const result = await cleanupTranscript([seg('helo')], 'claude', undefined, runner)
+    assert.equal(result.ok, true)
+    if (result.ok) assert.equal(result.segments[0].text, 'hello')
   })
 
   test('a promptOverride is used instead of the default when provided', async () => {

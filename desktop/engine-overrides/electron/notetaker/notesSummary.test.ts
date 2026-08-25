@@ -52,6 +52,11 @@ describe('parseSummaryOutput', () => {
     const out = parseSummaryOutput(JSON.stringify({ title: 'T', summary: 'S', keyPoints: ['a', 5, null, 'b'] }))
     assert.deepEqual(out?.keyPoints, ['a', 'b'])
   })
+
+  test('a ```json fenced response (the real, live-observed Claude Code shape) still parses', () => {
+    const fenced = '```json\n{"title":"T","summary":"S"}\n```'
+    assert.deepEqual(parseSummaryOutput(fenced), { title: 'T', summary: 'S', keyPoints: [], decisions: [], actionItems: [] })
+  })
 })
 
 describe('buildSummaryInput', () => {
@@ -83,6 +88,13 @@ describe('generateNotes', () => {
     const runner = fakeRunner({ ok: true, output: JSON.stringify({ keyPoints: ['x'] }) })
     const result = await generateNotes([seg('mic', 'hi')], 'claude', undefined, runner)
     assert.equal(result.ok, false)
+  })
+
+  test('a ```json fenced response is ok:true, not a false failure — this was the live bug', async () => {
+    const runner = fakeRunner({ ok: true, output: '```json\n{"title":"T","summary":"S"}\n```' })
+    const result = await generateNotes([seg('mic', 'hi')], 'claude', undefined, runner)
+    assert.equal(result.ok, true)
+    if (result.ok) assert.equal(result.notes.title, 'T')
   })
 
   test('DEFAULT_SUMMARY_PROMPT is real prompt text, not a placeholder', () => {

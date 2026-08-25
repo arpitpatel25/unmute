@@ -9,6 +9,7 @@
 import { runHeadlessAgent, type HeadlessProvider } from './headlessAgent'
 import type { TranscriptSegment } from './transcriptMerge'
 import { createNotetakerLogger } from './notetakerLog'
+import { extractJson } from './extractJson'
 
 const log = createNotetakerLogger('notes-summary')
 
@@ -18,7 +19,8 @@ export const DEFAULT_SUMMARY_PROMPT =
   'was about and what happened; a list of key points discussed; a list of any decisions that were made; a list ' +
   'of any action items, naming who owns each one if that\'s clear from the transcript. Only include items in a ' +
   'list if the transcript actually contains that kind of content — never invent items to fill a section. ' +
-  'Return this as JSON: {title, summary, keyPoints: string[], decisions: string[], actionItems: string[]}.'
+  'Return this as JSON: {title, summary, keyPoints: string[], decisions: string[], actionItems: string[]}. ' +
+  'Output ONLY that JSON object — no markdown code fence, no explanation, no other text before or after it.'
 
 export type MeetingNotes = {
   title: string
@@ -47,12 +49,12 @@ function asStringArray(value: unknown): string[] {
  *  list fields default to [] when absent, since the prompt explicitly
  *  allows omitting empty sections. */
 export function parseSummaryOutput(raw: string): MeetingNotes | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return null
-  }
+  // extractJson handles the real, live-observed shape: Claude Code's -p
+  // mode commonly wraps its answer in a ```json fence even when told not
+  // to — a bare JSON.parse(raw) rejected that outright and was the actual
+  // cause of summarization failing every time, not a real CLI/model
+  // problem.
+  const parsed = extractJson(raw, 'object')
   if (!parsed || typeof parsed !== 'object') return null
   const obj = parsed as Record<string, unknown>
   const title = obj.title
