@@ -58,11 +58,12 @@ import { readNowPlaying } from './mediaController'
 import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowser } from './browserTabWatcher'
 import { PeriodicChunkEmitter, type FinalizedSegment } from './notetaker/periodicChunkEmitter'
 import { encodeChunk, transcribeEncodedChunk, persistSession, newMeetingId } from './notetaker/transcribeSession'
-import type { TimedChunkText, SpeakerSample } from './notetaker/transcriptMerge'
+import { cleanChunkText } from './notetaker/chunkStitcher'
+import type { TimedChunkText, SpeakerSample, TranscriptSegment } from './notetaker/transcriptMerge'
 import { WavAppender } from './notetaker/wavAppender'
 import { pollZoomSpeaker } from './notetaker/zoomSpeaker'
 import { ZOOM_BUNDLE_ID } from './meetingApps'
-import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting } from './db'
+import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting, type DBMeeting } from './db'
 import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
 
 const log = createNotetakerLogger('init')
@@ -74,6 +75,15 @@ export type NotetakerInitHooks = {
    *  capture state, per the plan. */
   onSessionStart?: () => void
   onSessionStop?: () => void
+  /** Show/focus the main window and land its renderer on this meeting.
+   *  Injected exactly like onSessionStart/onSessionStop above, and for the
+   *  same reason: showing/focusing the main window needs windowManager.ts,
+   *  an OSS-engine file this tree cannot import directly (see this file's
+   *  own header comment on the paywall/remote cross-import hazard — the
+   *  same hazard applies to any base-engine file, not only paywall ones).
+   *  Called by openMeetingInApp(), the Agent's notetaker_open tool's
+   *  eventual destination. */
+  onOpenMeeting?: (meetingId: string) => void
 }
 
 /**
@@ -215,10 +225,15 @@ async function confirmNotetakerDialog(message: string): Promise<boolean> {
 }
 
 let initialized = false
+/** Set from NotetakerInitHooks.onOpenMeeting when initNotetaker() runs — see
+ *  that field's own comment. Read by openMeetingInApp() near the end of this
+ *  file, which is why it is declared at module scope rather than local to
+ *  initNotetaker(). */
+let openMeetingHook: ((meetingId: string) => void) | null = null
 
 /**
- * Wire detection (MeetingWatcher, Task 3), the manual chord trigger
- * (keyboardManager's notes-start-requested/notes-stop-confirm-requested,
+ * Wire detection (MeetingWatcher, Task 3), the manual key trigger
+ * (keyboardManager's notes-start-requested/notes-stop-requested,
  * Task 7), capture (NotetakerSession backed by the real
  * unmute-native-audio-tap addon, Task 8), and the widget (via `hooks`,
  * Task 9) together. Idempotent, like initRemote() — safe if main.ts's
@@ -233,6 +248,11 @@ let initialized = false
 export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   if (initialized) return
   initialized = true
+  // Captured even if the native-module guard further down disables live
+  // capture — opening an ALREADY-SAVED meeting has nothing to do with
+  // whether new capture works, same reasoning as the five IPC handlers
+  // registered just below, before that guard.
+  openMeetingHook = hooks.onOpenMeeting ?? null
 
   // ── Meeting list/detail surface for the Notetaker tab (Tasks 8-10) ──
   //
@@ -252,23 +272,9 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   })
 
   ipcMain.handle('notetaker:get-transcript', (_event, id: string) => {
-    const meeting = getMeeting(id)
-    if (!meeting || !meeting.transcript_path) {
-      log.child({ meetingId: id }).debug('get-transcript: no meeting or no transcript_path', {
-        found: !!meeting,
-      })
-      return []
-    }
-    const meetingDir = path.join(app.getPath('userData'), 'meetings', id)
-    try {
-      const raw = fs.readFileSync(path.join(meetingDir, meeting.transcript_path), 'utf8')
-      const parsed = JSON.parse(raw)
-      log.child({ meetingId: id }).debug('get-transcript: loaded', { segmentCount: Array.isArray(parsed) ? parsed.length : 0 })
-      return parsed
-    } catch (e) {
-      log.child({ meetingId: id }).warn('get-transcript: failed to read/parse transcript file', { error: (e as Error).message })
-      return []
-    }
+    const segments = readTranscriptSegments(id)
+    log.child({ meetingId: id }).debug('get-transcript: loaded', { segmentCount: segments.length })
+    return segments
   })
 
   ipcMain.handle('notetaker:rename-meeting', (_event, id: string, title: string) => {
@@ -472,7 +478,14 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       // into an unhandled rejection.
       const p = transcribeEncodedChunk(channel, encoded).then((result) => {
         if (!result.failed) tracker.succeeded++
-        return { channel, text: result.text, startMs, endMs } as TimedChunkText
+        // Strip Whisper's own non-speech sentinels ([BLANK_AUDIO], [MUSIC],
+        // ...) and its well-known "Thank you." / "Thanks for watching." /
+        // etc. hallucinations on silent or near-silent chunks — same regexes
+        // dictation applies (sessionManager.ts), now actually wired in here
+        // rather than sitting unused in chunkStitcher.ts. A chunk that comes
+        // back as pure hallucination cleans to '', which mergeChannelChunks
+        // already filters out below.
+        return { channel, text: cleanChunkText(result.text), startMs, endMs } as TimedChunkText
       })
       tracker.promises.push(p)
     }
@@ -846,34 +859,37 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       })
       .finally(() => {
         // keyboard.ts sets notesActive = true BEFORE emitting
-        // notes-start-requested (see maybeHandleNotesChordDown) — if
-        // resolveTargetPid came back null, or session.start() threw,
-        // capture never actually began. Resync the chord's own state back
-        // to false so the NEXT double-tap starts a fresh attempt instead of
-        // raising a "Stop note-taking?" dialog for a capture that never
-        // existed. (When start DID succeed, session.isActive is true here
-        // and this is correctly a no-op.)
+        // notes-start-requested (see feedNotesGesture) — if resolveTargetPid
+        // came back null, or session.start() threw, capture never actually
+        // began. Resync the key's own state back to false so the NEXT
+        // double-tap starts a fresh attempt instead of reading as a stop tap
+        // for a capture that never existed. (When start DID succeed,
+        // session.isActive is true here and this is correctly a no-op.)
         if (!session.isActive) keyboardManager.confirmNotesStop()
       })
   })
-  keyboardManager.on('notes-stop-confirm-requested', () => {
-    log.event('chord-stop-confirm-requested')
-    controller
-      .onNotesStopConfirmRequested()
-      .then(() => {
-        if (!session.isActive) keyboardManager.confirmNotesStop()
-      })
-      .catch((e) => log.error('stop-confirm failed', { error: (e as Error).message }))
+  // ── Single-tap stop (the key's own gesture, spec §6 revised) ──
+  // Wired DIRECTLY to session.stop(), same shape as the widget's own Cancel
+  // below: a single clean tap while a meeting is running IS the user's
+  // confirmation, so there is no dialog to route through here. The
+  // confirm-dialog flow (controller.onNotesStopConfirmRequested) still
+  // exists and still runs — it is onMeetingEnded's path, for the case where
+  // Unmute itself detected the meeting ending and needs to ask, not the case
+  // where the user just told it to stop directly.
+  keyboardManager.on('notes-stop-requested', () => {
+    if (!session.isActive) return
+    log.event('chord-stop-requested')
+    session.stop()
+    keyboardManager.confirmNotesStop()
   })
 
   // ── Widget's own two-click Cancel (spec §6/§7) ──
-  // Wired DIRECTLY to session.stop(), not through
-  // onNotesStopConfirmRequested(): the widget already collected its own
-  // confirmation (click to reveal Cancel, click Cancel to fire) — see
+  // Wired DIRECTLY to session.stop(), same shape as the key's own single-tap
+  // stop above: the widget already collected its own confirmation (click to
+  // reveal Cancel, click Cancel to fire) — see
   // desktop/electron/remote-preload.ts's notetakerCancelRequested comment
   // ("the confirm already happened in the renderer by the time this
-  // fires"). Routing it through the controller's confirm() too would mean a
-  // THIRD click (an OS dialog) on top of the two the user already made.
+  // fires").
   ipcMain.on('notetaker:cancel-requested', () => {
     if (!session.isActive) return
     log.event('widget-cancel-clicked')
@@ -1067,4 +1083,145 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   })
 
   log.event('wired', { logFile: getNotetakerLogFilePath() })
+}
+
+// ─── Unmute Agent MCP integration (notetaker capability) ──────────────────
+//
+// Module-level, standalone, and deliberately independent of initNotetaker()
+// above: wire-into-engine.sh calls initRemote({ ..., notetaker:
+// notetakerAgentAdapters() }) BEFORE initNotetaker() runs (see that file's
+// own patch order), and none of list/search/read/open below need anything
+// initNotetaker() sets up — they only touch the DB rows and transcript
+// files a meeting leaves behind, which exist independently of whether a
+// capture is currently running.
+//
+// electron/remote/agent/capabilities/notetaker.ts (electron/remote/, a
+// SIBLING tree — see this file's own header comment on why a direct import
+// from there back into engine-overrides/electron/ is avoided) defines the
+// NotetakerAdapters shape this must satisfy. Deliberately not imported here:
+// the object below satisfies it structurally, so this file never needs to
+// resolve a path across that boundary in either direction.
+
+function toMeetingSummary(meeting: DBMeeting) {
+  return {
+    id: meeting.id,
+    title: meeting.title,
+    startedAt: meeting.started_at,
+    endedAt: meeting.ended_at,
+    durationMs: meeting.duration_ms,
+    status: meeting.status,
+  }
+}
+
+/** Shared by the notetaker:get-transcript IPC handler above and the Agent's
+ *  notetaker_read/notetaker_search tools below — one place that knows how a
+ *  meeting id turns into its transcript file's path. Never throws: a
+ *  missing meeting, missing path, or unreadable/malformed file all come back
+ *  as an empty transcript, exactly as the IPC handler already behaved. */
+function readTranscriptSegments(meetingId: string): TranscriptSegment[] {
+  const meeting = getMeeting(meetingId)
+  if (!meeting || !meeting.transcript_path) return []
+  const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
+  try {
+    const raw = fs.readFileSync(path.join(meetingDir, meeting.transcript_path), 'utf8')
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed as TranscriptSegment[] : []
+  } catch (e) {
+    log.child({ meetingId }).warn('readTranscriptSegments: failed to read/parse transcript file', { error: (e as Error).message })
+    return []
+  }
+}
+
+/** A short excerpt of `text` centred on the first place `needle` (already
+ *  lower-cased) appears — same "tell hits apart before opening one" purpose
+ *  as history's own snippet(), sized generously since a meeting segment can
+ *  run much longer than a single dictated utterance. */
+const SEARCH_SNIPPET_RADIUS = 160
+function searchSnippet(text: string, needle: string): string {
+  const flat = text.replace(/\s+/gu, ' ').trim()
+  const at = flat.toLocaleLowerCase('en-US').indexOf(needle)
+  if (at < 0) return flat.length <= SEARCH_SNIPPET_RADIUS * 2 ? flat : `${flat.slice(0, SEARCH_SNIPPET_RADIUS * 2)}…`
+  const start = Math.max(0, at - SEARCH_SNIPPET_RADIUS)
+  const end = Math.min(flat.length, at + needle.length + SEARCH_SNIPPET_RADIUS)
+  const prefix = start > 0 ? '…' : ''
+  const suffix = end < flat.length ? '…' : ''
+  return `${prefix}${flat.slice(start, end)}${suffix}`
+}
+
+/** How many of the newest meetings a search scans. A naive per-query
+ *  full-text scan over every transcript, same "an index is machinery for a
+ *  problem this scale does not have" reasoning history's own matchHistory()
+ *  already applies — revisit with a real index (e.g. SQLite FTS5 over
+ *  unmute.db, already the store this reads) once meeting count actually
+ *  makes this slow, not before. */
+const SEARCH_SCAN_LIMIT = 500
+
+/** Bring the app's Notetaker tab to the front, showing one specific meeting.
+ *  The only non-read primitive the Agent's notetaker capability grants —
+ *  everything else only reads what is already on disk. Returns false (does
+ *  nothing) for an id that does not exist, so a hallucinated id cannot pop
+ *  the window open on nothing, and false when the hook itself is unset (a
+ *  build where main.ts injection did not land — see NotetakerInitHooks). */
+export function openMeetingInApp(meetingId: string): boolean {
+  const meeting = getMeeting(meetingId)
+  if (!meeting || !openMeetingHook) return false
+  openMeetingHook(meetingId)
+  log.child({ meetingId }).event('agent-opened-meeting')
+  return true
+}
+
+/** Built once and handed to initRemote({ notetaker: ... }) by main.ts (see
+ *  build/wire-into-engine.sh) — the Agent-facing surface over meeting data.
+ *  Structurally satisfies NotetakerAdapters (electron/remote/agent/
+ *  capabilities/notetaker.ts) without importing that type — see this
+ *  section's own header comment. */
+export function notetakerAgentAdapters() {
+  return {
+    async list(limit?: number) {
+      return getMeetings(limit ?? 200).map(toMeetingSummary)
+    },
+
+    async search(query: string, limit = 20) {
+      const needle = query.trim().toLocaleLowerCase('en-US')
+      if (!needle) return []
+      const hits: Array<{
+        meetingId: string
+        title: string
+        startedAt: number
+        channel: 'mic' | 'system'
+        speakerName: string | null
+        startMs: number
+        endMs: number
+        snippet: string
+      }> = []
+      for (const meeting of getMeetings(SEARCH_SCAN_LIMIT)) {
+        for (const seg of readTranscriptSegments(meeting.id)) {
+          if (!seg.text.toLocaleLowerCase('en-US').includes(needle)) continue
+          hits.push({
+            meetingId: meeting.id,
+            title: meeting.title,
+            startedAt: meeting.started_at,
+            channel: seg.channel,
+            speakerName: seg.speakerName ?? null,
+            startMs: seg.startMs,
+            endMs: seg.endMs,
+            snippet: searchSnippet(seg.text, needle),
+          })
+        }
+      }
+      // Newest meeting first, same ordering rule as everything else here.
+      hits.sort((a, b) => b.startedAt - a.startedAt)
+      return hits.slice(0, limit)
+    },
+
+    async read(meetingId: string) {
+      const meeting = getMeeting(meetingId)
+      if (!meeting) return null
+      return { meeting: toMeetingSummary(meeting), segments: readTranscriptSegments(meetingId) }
+    },
+
+    async open(meetingId: string) {
+      return openMeetingInApp(meetingId)
+    },
+  }
 }

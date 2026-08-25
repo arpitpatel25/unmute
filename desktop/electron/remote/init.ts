@@ -85,6 +85,7 @@ import { nextConversation, type Conversation } from './agent/continuity'
 import { HandoffCapability } from './agent/capabilities/handoff'
 import { SessionsCapability } from './agent/capabilities/sessions'
 import { HistoryCapability } from './agent/capabilities/history'
+import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
 import { selectSessions, type IndexedSession } from './agent/sessions/index'
 
 /** Where the Agent's last conversation got to. Memory is the durable
@@ -192,6 +193,13 @@ interface KeyboardManagerLike {
 export interface RemoteInitDeps {
   sessionManager: SessionManagerLike
   keyboardManager: KeyboardManagerLike
+  /** Opaque, injected exactly like sessionManager/keyboardManager above —
+   *  the real implementation lives in engine-overrides/electron/notetakerInit.ts,
+   *  which cannot be imported directly from this file (see that file's own
+   *  header comment on why a cross-tree import breaks local typecheck).
+   *  Optional: a build without the notetaker feature wired simply never
+   *  registers the capability, same as any other missing dependency. */
+  notetaker?: NotetakerAdapters
 }
 
 const log = createLogger('init')
@@ -601,6 +609,11 @@ let unmuteAgentTokens: AgentTokenStore | null = null
 let unmuteAgentRecords: EncryptedRecordStore | null = null
 let unmuteAgentMemory: MemoryService | null = null
 let unmuteAgentRegistry: CapabilityRegistry = new CapabilityRegistry([])
+/** Set once, at the top of initRemote(deps), from deps.notetaker — see
+ *  RemoteInitDeps's own comment on why this arrives as an injected opaque
+ *  shape rather than a direct import. Read by initializeUnmuteAgent() when
+ *  it builds the registry below. */
+let notetakerAdapters: NotetakerAdapters | null = null
 let unmuteAgentSupervisor: AgentRunSupervisor | null = null
 let unmuteAgentController: UnmuteAgentController | null = null
 let unmuteAgentIndex: ReturnType<typeof openSqlCipherMemoryIndex> | null = null
@@ -987,6 +1000,11 @@ async function initializeUnmuteAgent(): Promise<void> {
           }
         },
       }),
+      // What the user recorded. Optional: only present when the notetaker
+      // feature wired its adapters in via RemoteInitDeps.notetaker — a build
+      // without it simply never registers this capability, the same as any
+      // other missing dependency.
+      ...(notetakerAdapters ? [new NotetakerCapability(notetakerAdapters)] : []),
       // Outside work is handed off, never refused and never attempted. The
       // card carries its origin so the user can see the Agent made it.
       new HandoffCapability({
@@ -3868,6 +3886,7 @@ const LIBRARIAN_PARKED = true
 const CURATOR_PARKED = true
 
 export function initRemote(deps: RemoteInitDeps): TaskManager {
+  notetakerAdapters = deps.notetaker ?? null
   captureHistory.cleanup()
   if (manager) return manager
 

@@ -623,6 +623,14 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('notetaker:capture-active', handler)
     return () => ipcRenderer.removeListener('notetaker:capture-active', handler)
   },
+  /** The Unmute Agent asked to open one meeting (notetaker_open) — main has
+   *  already shown/focused the window by the time this fires; the renderer's
+   *  only job is to land on the Notetaker tab with this meeting selected. */
+  notetakerOnOpenRequested: (cb: (meetingId: string) => void): (() => void) => {
+    const handler = (_e: unknown, meetingId: string) => cb(meetingId)
+    ipcRenderer.on('notetaker:open-meeting-requested', handler)
+    return () => ipcRenderer.removeListener('notetaker:open-meeting-requested', handler)
+  },
   /** The MIC half of a meeting recording: raw Float32 PCM tapped off the
    *  widget's own (already-open, capture-window-scoped) getUserMedia stream,
    *  handed to NotetakerSession.feedMicChunk() in main. The system half comes

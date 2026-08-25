@@ -3,15 +3,29 @@
 // engine-overrides/renderer/app/App.tsx (SegmentedControl + a two-way page
 // switch), the closest existing analog to a sidebar tab with sub-pages.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { SegmentedControl } from '../app/_shared'
 import { MeetingsList } from './MeetingsList'
 import { NotetakerSettings } from './NotetakerSettings'
 
 type NotetakerPage = 'meetings' | 'settings'
 
-export function NotetakerTab() {
+export function NotetakerTab({
+  pendingMeetingId,
+  onConsumedPendingMeetingId,
+}: {
+  /** Set by App.tsx when the Agent's notetaker_open tool fires. */
+  pendingMeetingId?: string | null
+  onConsumedPendingMeetingId?: () => void
+} = {}) {
   const [page, setPage] = useState<NotetakerPage>('meetings')
+
+  // A meeting opened from outside (the Agent) always means "show me the
+  // meetings list with this one selected" — force off Settings if that's
+  // where the user happened to be.
+  useEffect(() => {
+    if (pendingMeetingId) setPage('meetings')
+  }, [pendingMeetingId])
 
   return (
     <>
@@ -27,7 +41,12 @@ export function NotetakerTab() {
         />
       </div>
 
-      {page === 'meetings' && <MeetingsList />}
+      {page === 'meetings' && (
+        <MeetingsList
+          pendingMeetingId={pendingMeetingId}
+          onConsumedPendingMeetingId={onConsumedPendingMeetingId}
+        />
+      )}
       {page === 'settings' && <NotetakerSettings />}
     </>
   )

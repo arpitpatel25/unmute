@@ -134,6 +134,9 @@ type AppAPI = {
   paywallGetLanguage?: () => Promise<string>
   onUpdateDownloaded?: (cb: (version: string) => void) => void
   restartToUpdate?: () => void
+  /** The Unmute Agent's notetaker_open tool fired — main already showed and
+   *  focused this window, so landing on the meeting is the only thing left. */
+  notetakerOnOpenRequested?: (cb: (meetingId: string) => void) => () => void
 }
 function api(): AppAPI {
   return (window as unknown as { electronAPI?: AppAPI }).electronAPI ?? {}
@@ -163,6 +166,10 @@ function AppInner() {
   // Which of the seven Settings sections the sidebar has selected. Pack B's
   // Settings renders one section at a time from this.
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('triggers')
+  // Set by the Agent's notetaker_open tool (via main), consumed once by
+  // NotetakerTab/MeetingsList to select that meeting, then cleared — see the
+  // effect below and notetakerOnOpenRequested's own comment.
+  const [pendingMeetingId, setPendingMeetingId] = useState<string | null>(null)
 
   async function refreshLanguageBadge() {
     try {
@@ -190,7 +197,16 @@ function AppInner() {
     // Listen for downloaded updates and surface a "Restart" banner.
     api().onUpdateDownloaded?.((version) => setPendingUpdate(version))
 
+    // The Agent asked to open a meeting (notetaker_open). main has already
+    // shown/focused the window; land on the Notetaker tab with it selected.
+    const unsubscribeOpenRequested = api().notetakerOnOpenRequested?.((meetingId) => {
+      setView('main')
+      setActiveTab('notetaker')
+      setPendingMeetingId(meetingId)
+    })
+
     refreshLanguageBadge()
+    return () => unsubscribeOpenRequested?.()
   }, [])
 
   // Re-read on any navigation that does not land on the Language section. One
@@ -366,7 +382,12 @@ function AppInner() {
       <main className="flex-1 pt-10 px-10 overflow-y-auto">
         <div className="max-w-2xl mx-auto pb-8">
           {activeTab === 'history' && <History />}
-          {activeTab === 'notetaker' && <NotetakerTab />}
+          {activeTab === 'notetaker' && (
+            <NotetakerTab
+              pendingMeetingId={pendingMeetingId}
+              onConsumedPendingMeetingId={() => setPendingMeetingId(null)}
+            />
+          )}
           {activeTab === 'orchestrator' && (
             <OrchestratorTab page={orchestratorPage} onPageChange={setOrchestratorPage} />
           )}

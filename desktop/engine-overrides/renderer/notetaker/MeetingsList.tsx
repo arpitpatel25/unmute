@@ -47,7 +47,14 @@ function formatDuration(durationMs: number): string {
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
 }
 
-export function MeetingsList() {
+export function MeetingsList({
+  pendingMeetingId,
+  onConsumedPendingMeetingId,
+}: {
+  /** Set by App.tsx when the Agent's notetaker_open tool fires. */
+  pendingMeetingId?: string | null
+  onConsumedPendingMeetingId?: () => void
+} = {}) {
   const [meetings, setMeetings] = useState<NotetakerMeeting[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
@@ -61,6 +68,15 @@ export function MeetingsList() {
       })
     return () => { cancelled = true }
   }, [])
+
+  // Consume once: select it now (resolves once `meetings` has loaded, same
+  // as any other selection) and tell App.tsx it's been picked up so the same
+  // id doesn't re-select after the user navigates away and back.
+  useEffect(() => {
+    if (!pendingMeetingId) return
+    setSelectedId(pendingMeetingId)
+    onConsumedPendingMeetingId?.()
+  }, [pendingMeetingId])
 
   const selected = selectedId ? meetings?.find((m) => m.id === selectedId) ?? null : null
 

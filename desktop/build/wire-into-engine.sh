@@ -474,7 +474,8 @@ NODE_EOF
   # which the paywall patch guarantees. ADDITIVE — dictation init untouched.
   if ! grep -q 'initRemote' "$main_ts"; then
     sed -i.bak "/^import { buildOSSAdapter } from '\.\/buildOSSAdapter'/a\\
-import { initRemote } from './paywall/remote/init'
+import { initRemote } from './paywall/remote/init'\\
+import { notetakerAgentAdapters } from './notetakerInit'
 " "$main_ts"
     rm -f "$main_ts.bak"
     node -e "
@@ -482,7 +483,7 @@ import { initRemote } from './paywall/remote/init'
       if (!s.includes('initRemote({')) {
         s = s.replace(
           'initPaywall(app, buildOSSAdapter())\n',
-          'initPaywall(app, buildOSSAdapter())\n  initRemote({ sessionManager, keyboardManager })\n'
+          'initPaywall(app, buildOSSAdapter())\n  initRemote({ sessionManager, keyboardManager, notetaker: notetakerAgentAdapters() })\n'
         )
       }
       fs.writeFileSync(p, s)
@@ -517,8 +518,21 @@ import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notet
       const fs = require('fs'); const p = '$main_ts'; let s = fs.readFileSync(p, 'utf-8')
       if (!s.includes('initNotetaker({')) {
         s = s.replace(
-          'initRemote({ sessionManager, keyboardManager })\n',
-          'initRemote({ sessionManager, keyboardManager })\n  initNotetaker({ onSessionStart: showNotetakerWidget, onSessionStop: hideNotetakerWidget })\n'
+          'initRemote({ sessionManager, keyboardManager, notetaker: notetakerAgentAdapters() })\n',
+          'initRemote({ sessionManager, keyboardManager, notetaker: notetakerAgentAdapters() })\n' +
+          '  initNotetaker({\n' +
+          '    onSessionStart: showNotetakerWidget,\n' +
+          '    onSessionStop: hideNotetakerWidget,\n' +
+          '    // getMainWindow/createMainWindow/showMainWindow are already imported\n' +
+          '    // above (this file creates its own main window) — the notetaker tree\n' +
+          '    // cannot import windowManager.ts directly (see NotetakerInitHooks\\'s\n' +
+          '    // own comment on onOpenMeeting), so this one closure is the bridge.\n' +
+          '    onOpenMeeting: (meetingId) => {\n' +
+          '      const win = getMainWindow() ?? createMainWindow()\n' +
+          '      showMainWindow()\n' +
+          '      win.webContents.send(\\'notetaker:open-meeting-requested\\', meetingId)\n' +
+          '    },\n' +
+          '  })\n'
         )
       }
       fs.writeFileSync(p, s)
