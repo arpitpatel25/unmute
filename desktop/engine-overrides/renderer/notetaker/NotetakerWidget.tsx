@@ -2,12 +2,16 @@
 // #/notetaker-widget by notetakerWidget.ts, mirroring how OverlayApp.tsx is
 // loaded at #/overlay by overlay.ts).
 //
-// A small circle, bottom-left, showing a live waveform while a note-taking
+// A small pill, bottom-left, showing a live waveform while a note-taking
 // session is active — spec §7: "not buried, more like a floating thing."
-// Clicking it surfaces a Cancel affordance; a second click on Cancel itself
-// confirms (spec §6: stop is NEVER a single, direct action). No timer
-// anywhere in this file — the waveform redraws itself off the AnalyserNode
-// via requestAnimationFrame, matching this codebase's existing precedent in
+// (2026-08-26: was a circle; redesigned to a pill sharing the dictation
+// pill's own PillGlass material, so the two overlays read as one visual
+// language.) Hovering (or focusing) reveals a separate white Cancel chip
+// above it — the pill itself is not clickable (spec §6: stop is NEVER a
+// single, direct action; hover-then-click-a-distinct-control satisfies
+// that as well as the old same-spot double-click did). No timer anywhere
+// in this file — the waveform redraws itself off the AnalyserNode via
+// requestAnimationFrame, matching this codebase's existing precedent in
 // widget/useAudioRecorder.ts + widget/Widget.tsx (WidgetApp owns the
 // getUserMedia capture and analyser; Widget is the prop-driven presentational
 // piece). This file follows the same split, consolidated into one module
@@ -298,10 +302,21 @@ async function attachMicChunkTap(
 }
 
 /**
- * Presentational piece: a circle with either a live waveform or a Cancel
- * button, depending on `confirmingCancel`. Pure prop-driven (no IPC, no
- * capture) so it's easy to reason about and reuse — mirrors Widget.tsx's
- * split from WidgetApp.tsx.
+ * Presentational piece: a pill with a live waveform, matching the same
+ * fixed-glass PillGlass material and dark fill as the dictation pill
+ * (WidgetApp.tsx's own chips, `#000`-family near-black + a whitish hairline
+ * border) — this widget and the dictation pill are meant to read as the
+ * same design language, not two different-looking overlays (2026-08-26
+ * redesign). Pure prop-driven (no IPC, no capture) so it's easy to reason
+ * about and reuse — mirrors Widget.tsx's split from WidgetApp.tsx.
+ *
+ * Cancel is no longer a click-then-click-again toggle INSIDE the pill —
+ * hovering (or focusing, for keyboard users) reveals a separate white
+ * "Cancel" chip ABOVE the pill; only clicking THAT confirms. The pill
+ * itself is not a button anymore. This still satisfies spec §6's "stop is
+ * never a single, direct action" — hovering to reveal, then moving to a
+ * physically distinct control, is at least as deliberate as the old
+ * same-spot double-click, it just reads better.
  */
 export function NotetakerWidget({
   analyser,
@@ -312,32 +327,38 @@ export function NotetakerWidget({
   analyser: AnalyserNode | null
   /** Bumped by the route on every new capture session. The widget WINDOW is
    *  reused across sessions (hidden, never closed), so this component never
-   *  remounts — without this, a "Cancel" the user surfaced but never
-   *  confirmed in one session would still be on screen when the next session
-   *  opened the widget. */
+   *  remounts — without this, a hover-revealed Cancel chip left open in one
+   *  session would still be on screen when the next session opened the
+   *  widget. */
   sessionId?: number
   /** True while the KEYBOARD's own single-tap stop is in its undo window
    *  (main → notetaker:stop-pending, see notetakerWidget.ts's
    *  broadcastStopPending). Recording is still running — this is a separate
    *  signal from `analyser` going null, which only happens once a stop is
-   *  actually finalized. Mutually exclusive with `confirmingCancel` below by
-   *  construction: this widget's own click handler is disabled while true,
-   *  since the only way to resolve THIS state is another tap on the key. */
+   *  actually finalized. The pill's own content swaps to a short message
+   *  for this state (see below) — the Cancel chip never shows here, since
+   *  the only way to resolve it is another tap on the key. */
   stopPending?: boolean
   onCancelConfirmed: () => void
 }) {
   const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0.1))
-  const [confirmingCancel, setConfirmingCancel] = useState(false)
-  const [hovering, setHovering] = useState(false)
+  const [showCancel, setShowCancel] = useState(false)
   const rafRef = useRef<number | undefined>(undefined)
 
-  // A new session always starts on the waveform face, never on a stale
-  // Cancel button (or a frozen last frame of bars) left over from the last one.
+  // A new session always starts on the waveform face, never a stale
+  // hover-revealed Cancel chip (or a frozen last frame of bars) left over
+  // from the last one.
   useEffect(() => {
-    setConfirmingCancel(false)
-    setHovering(false)
+    setShowCancel(false)
     setLevels(new Array(BAR_COUNT).fill(0.1))
   }, [sessionId])
+
+  // The Cancel chip only ever makes sense while actually recording — never
+  // while the undo window (stopPending) is counting down, since the only
+  // affordance that resolves that state is another tap on the key.
+  useEffect(() => {
+    if (stopPending) setShowCancel(false)
+  }, [stopPending])
 
   // Live waveform: reads the analyser every animation frame. No setInterval —
   // requestAnimationFrame both matches the display refresh and stops for free
@@ -368,71 +389,64 @@ export function NotetakerWidget({
 
   // Same fixed-glass material as the dictation pill cluster (Theme.swift's
   // PillGlass, ported to CSS): a top-down sheen over a near-black base, one
-  // hairline rim, no drop shadow. Tinted red (Theme.cError) while confirming
-  // a cancel OR while the key's own undo window is counting down — "one
-  // tinted thing per surface," and here that's the one destructive outcome
-  // on the whole widget, whichever path is heading toward it.
-  const tinted = confirmingCancel || stopPending
-  const glassBackground = tinted
-    ? 'linear-gradient(to bottom, rgba(255,255,255,0.06), rgba(255,255,255,0.02) 55%, rgba(255,69,58,0.10) 100%), rgb(14,15,19)'
+  // hairline rim, no drop shadow. Unlike before, this is no longer tinted
+  // red for stopPending — green/white is this app's own "in-progress, not
+  // destructive" language elsewhere (the connected-agent dot in the
+  // dictation pill, `#6fbf9a`), and stopping a meeting isn't a destructive
+  // outcome the way cancelling one is. Cancel itself no longer tints the
+  // pill at all — see the separate chip below, which carries that meaning
+  // on its own now.
+  const NOTETAKER_GREEN = '#6fbf9a'
+  const glassBackground = stopPending
+    ? `linear-gradient(to bottom, rgba(255,255,255,0.07), rgba(255,255,255,0.02) 55%, rgba(111,191,154,0.14) 100%), rgb(14,15,19)`
     : 'linear-gradient(to bottom, rgba(255,255,255,0.09), rgba(255,255,255,0.02) 55%, rgba(255,255,255,0) 100%), rgb(14,15,19)'
-  const glassBorder = tinted ? '1.5px solid rgba(255,69,58,0.75)' : '1px solid rgba(255,255,255,0.10)'
+  const glassBorder = stopPending ? `1.5px solid rgba(111,191,154,0.55)` : '1px solid rgba(255,255,255,0.10)'
 
   return (
     <div
-      className="w-full h-full flex flex-col items-start"
+      className="w-full h-full flex flex-col-reverse items-start"
       style={{
+        gap: 8,
         // @ts-expect-error -- WebkitAppRegion is a real, non-standard Electron CSS prop
         WebkitAppRegion: 'no-drag',
       }}
     >
+      {/* The pill itself — no longer clickable. Hovering (or focusing, for
+       *  keyboard users) is what reveals the separate Cancel chip below;
+       *  the pill's own content only ever shows the waveform or, during
+       *  the undo window, a short in-place message — never a control. */}
       <div
-        role="button"
         tabIndex={0}
+        title={stopPending ? undefined : 'Note taker'}
         aria-label={
           stopPending
             ? 'Stopping note-taking — tap left Control again to keep recording'
-            : confirmingCancel
-              ? 'Cancel note-taking?'
-              : 'Note-taking in progress'
+            : 'Note-taking in progress'
         }
-        // Click is disabled while stopPending: the only affordance that
-        // resolves THIS state is another tap on the key (see the class-level
-        // prop comment), and letting a click also raise the Cancel button
-        // here would let two different "about to stop" states collide.
-        onClick={stopPending ? undefined : () => setConfirmingCancel((v) => !v)}
-        onKeyDown={
-          stopPending
-            ? undefined
-            : (e) => {
-                if (e.key === 'Enter' || e.key === ' ') setConfirmingCancel((v) => !v)
-              }
-        }
-        onMouseEnter={() => setHovering(true)}
-        onMouseLeave={() => setHovering(false)}
-        className={`w-14 h-14 rounded-full flex items-center justify-center gap-[3px] select-none ${stopPending ? 'cursor-default' : 'cursor-pointer'}`}
+        onMouseEnter={() => !stopPending && setShowCancel(true)}
+        onMouseLeave={() => setShowCancel(false)}
+        onFocus={() => !stopPending && setShowCancel(true)}
+        onBlur={() => setShowCancel(false)}
+        className="h-10 rounded-full flex items-center select-none cursor-default"
         style={{
+          gap: stopPending ? 7 : 3,
+          padding: stopPending ? '0 14px 0 11px' : '0 14px',
           background: glassBackground,
           border: glassBorder,
           boxShadow: 'none',
-          animation: stopPending ? 'notetaker-stop-pending-pulse 1s ease-in-out infinite' : undefined,
+          transition: 'background 200ms ease, border-color 200ms ease, padding 200ms ease',
         }}
       >
-        {confirmingCancel && !stopPending ? (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              setConfirmingCancel(false)
-              onCancelConfirmed()
-            }}
-            className="flex flex-col items-center gap-0.5 bg-transparent border-none cursor-pointer p-0"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M6 6l12 12M18 6L6 18" stroke="white" strokeWidth={2.4} strokeLinecap="round" />
-            </svg>
-            <span className="text-[10px] font-bold text-white">Cancel</span>
-          </button>
+        {stopPending ? (
+          <>
+            <span
+              className="rounded-full flex-none"
+              style={{ width: 7, height: 7, background: NOTETAKER_GREEN, animation: 'notetaker-dot-pulse 1.1s ease-in-out infinite' }}
+            />
+            <span className="text-[11.5px] font-semibold whitespace-nowrap" style={{ color: 'rgba(255,255,255,0.94)' }}>
+              Tap ⌃ again to keep recording
+            </span>
+          </>
         ) : (
           levels.map((level, i) => (
             <div
@@ -446,32 +460,48 @@ export function NotetakerWidget({
           ))
         )}
       </div>
-      {/* @keyframes for the stopPending pulse — inlined (no stylesheet in
-       *  this window) rather than a JS-driven animation, same reasoning as
-       *  the waveform preferring CSS transitions over extra rAF work. */}
+
+      {/* Separate white Cancel chip, hover/focus-revealed above the pill —
+       *  never inside it. One click confirms immediately; getting here at
+       *  all already required a deliberate hover + move, which is the
+       *  "not a single, direct action" guarantee spec §6 asks for, just
+       *  via spatial separation instead of a same-spot double-click. */}
+      <button
+        type="button"
+        tabIndex={showCancel ? 0 : -1}
+        onClick={() => { setShowCancel(false); onCancelConfirmed() }}
+        className="h-8 rounded-full flex items-center gap-1.5 select-none"
+        style={{
+          padding: '0 12px 0 10px',
+          background: '#fff',
+          color: '#c4482e',
+          border: '1px solid rgba(0,0,0,0.08)',
+          boxShadow: '0 8px 20px rgba(0,0,0,0.28)',
+          fontSize: 11.5,
+          fontWeight: 700,
+          opacity: showCancel ? 1 : 0,
+          transform: showCancel ? 'translateY(0) scale(1)' : 'translateY(4px) scale(0.96)',
+          pointerEvents: showCancel ? 'auto' : 'none',
+          transition: 'opacity 150ms ease, transform 150ms ease',
+        }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round" />
+        </svg>
+        Cancel
+      </button>
+
+      {/* @keyframes for the stopPending dot — inlined (no stylesheet in
+       *  this window), same reasoning as the waveform preferring CSS
+       *  transitions over extra rAF work. Only the small dot pulses now,
+       *  not the whole pill — a steadier, less alarming read for a
+       *  non-destructive, expected state. */}
       <style>{`
-        @keyframes notetaker-stop-pending-pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.55; }
+        @keyframes notetaker-dot-pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50%      { opacity: 0.5; transform: scale(0.82); }
         }
       `}</style>
-      {/* Hover-only identity label normally; while stopPending it becomes a
-       *  persistent (not hover-gated) instruction, since that state is
-       *  time-sensitive and the user may not be hovering the widget at all
-       *  when it starts (they just tapped a key). Never shown while
-       *  confirming a cancel, since that state already reads as itself. */}
-      {!confirmingCancel && (
-        <div
-          className="mt-1.5 text-[11px] font-semibold text-white/70 bg-[rgba(14,15,19,0.9)] border border-white/[0.06] rounded-full px-2.5 py-1 whitespace-nowrap"
-          style={{
-            opacity: stopPending || hovering ? 1 : 0,
-            transition: 'opacity 150ms ease-out',
-            pointerEvents: 'none',
-          }}
-        >
-          {stopPending ? 'Tap to keep recording' : 'Note taker'}
-        </div>
-      )}
     </div>
   )
 }

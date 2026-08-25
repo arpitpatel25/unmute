@@ -53,6 +53,40 @@ function formatDuration(durationMs: number): string {
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
 }
 
+/** Calendar-day key in the viewer's own local timezone — two meetings late
+ *  one night and early the next morning must land in different groups, so
+ *  this can't just floor by 24h-since-epoch. */
+function dayKey(ms: number): string {
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+}
+
+function formatDayHeader(ms: number): string {
+  const d = new Date(ms)
+  const today = new Date()
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1)
+  if (dayKey(ms) === dayKey(today.getTime())) return 'Today'
+  if (dayKey(ms) === dayKey(yesterday.getTime())) return 'Yesterday'
+  const sameYear = d.getFullYear() === today.getFullYear()
+  return d.toLocaleDateString(undefined, sameYear
+    ? { weekday: 'long', month: 'long', day: 'numeric' }
+    : { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+}
+
+/** `meetings` arrives newest-first (notetaker:list-meetings' own
+ *  ORDER BY started_at DESC) — grouping is a straight run-length split on
+ *  dayKey, no re-sort needed. */
+function groupMeetingsByDay(meetings: NotetakerMeeting[]): { key: string; day: NotetakerMeeting[] }[] {
+  const groups: { key: string; day: NotetakerMeeting[] }[] = []
+  for (const meeting of meetings) {
+    const key = dayKey(meeting.started_at)
+    const current = groups[groups.length - 1]
+    if (current && current.key === key) current.day.push(meeting)
+    else groups.push({ key, day: [meeting] })
+  }
+  return groups
+}
+
 export function MeetingsList({
   pendingMeetingId,
   onConsumedPendingMeetingId,
@@ -129,29 +163,36 @@ export function MeetingsList({
   }
 
   return (
-    <div className="flex flex-col gap-1">
-      {meetings.map((meeting) => {
-        const date = new Date(meeting.started_at)
-        return (
-          <button
-            key={meeting.id}
-            onClick={() => setSelectedId(meeting.id)}
-            className="text-left px-3 py-2.5 rounded-[10px] hover:bg-ink-07 transition-colors"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-[13px] font-medium text-ink truncate">{meeting.title}</div>
-              {meeting.status !== 'ready' && (
-                <span className="text-[10px] font-semibold text-ink-35 bg-ink-07 px-2 py-0.5 rounded-full shrink-0">
-                  {STATUS_LABEL[meeting.status]}
-                </span>
-              )}
-            </div>
-            <div className="text-[11px] text-ink-60">
-              {date.toLocaleDateString()} · {date.toLocaleTimeString()} · {formatDuration(meeting.duration_ms)}
-            </div>
-          </button>
-        )
-      })}
+    <div className="flex flex-col gap-4">
+      {groupMeetingsByDay(meetings).map(({ key, day }) => (
+        <div key={key} className="flex flex-col gap-1">
+          <div className="text-[11px] font-semibold text-ink-35 uppercase tracking-wide px-3 pb-1">
+            {formatDayHeader(day[0].started_at)}
+          </div>
+          {day.map((meeting) => {
+            const date = new Date(meeting.started_at)
+            return (
+              <button
+                key={meeting.id}
+                onClick={() => setSelectedId(meeting.id)}
+                className="text-left px-3 py-2.5 rounded-[10px] hover:bg-ink-07 transition-colors"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-[13px] font-medium text-ink truncate">{meeting.title}</div>
+                  {meeting.status !== 'ready' && (
+                    <span className="text-[10px] font-semibold text-ink-35 bg-ink-07 px-2 py-0.5 rounded-full shrink-0">
+                      {STATUS_LABEL[meeting.status]}
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] text-ink-60">
+                  {date.toLocaleDateString()} · {date.toLocaleTimeString()} · {formatDuration(meeting.duration_ms)}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      ))}
     </div>
   )
 }
