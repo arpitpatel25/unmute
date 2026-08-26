@@ -79,7 +79,7 @@ struct WallView: View {
 
                 // "Nothing here" means nothing EXISTS — not "everything is
                 // folded", which is a different thing with a way out.
-                if visibleGroups.isEmpty {
+                if visibleGroups.isEmpty, let emptyMessage {
                     Text(emptyMessage)
                         .font(Theme.fBody).foregroundColor(Theme.textFaint)
                         .padding(.top, 34).frame(maxWidth: .infinity, alignment: .center)
@@ -194,9 +194,16 @@ struct WallView: View {
         }
     }
 
-    private var emptyMessage: String {
+    /// Nil where the emptiness speaks for itself.
+    ///
+    /// The needs-you view said "Nothing needs you here". Removed at the user's
+    /// request: an empty list already says that, and being congratulated for
+    /// having no work reads well once and grates every time after. Optional
+    /// rather than an empty string, so the row is skipped entirely instead of
+    /// leaving a padded blank where the text used to be.
+    private var emptyMessage: String? {
         switch selectedView {
-        case .needsYou: return "Nothing needs you here"
+        case .needsYou: return nil
         case .finished: return "No finished work here"
         default: return "No sessions — speak to spawn one"
         }

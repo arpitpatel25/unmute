@@ -3279,6 +3279,14 @@ export function hideNativePill(): void {
     return
   }
   pillController?.hide()
+  // The native surface and the capture renderer are two views of the same
+  // lifecycle. Hiding only Swift left React parked on `processing`, so any
+  // later device/settings render could publish that stale phase and reopen the
+  // pill. Reset React at the exact authoritative hide point; paused sessions
+  // deliberately return above and remain resumable.
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('pill:event', { type: 'pillSyncHidden' })
+  }
 }
 
 /** Is there held work behind a paused pill? EXACTLY the rule that decides
@@ -3371,7 +3379,11 @@ function speakAbout(taskId: string | undefined): void {
   const all = manager.list()
   const needs = all.filter((t) => t.state === 'needs-user' || t.state === 'failed' || t.state === 'stuck')
   const working = all.filter((t) => t.state === 'processing')
-  if (!needs.length && !working.length) { speakLine('All clear. Nothing running.'); return }
+  // NOTHING TO SAY WHEN THERE IS NOTHING. This used to speak "All clear.
+  // Nothing running." — removed at the user's request. The early return stays:
+  // without it an empty `parts` falls through and speakLine is handed an empty
+  // string, which is a malformed utterance rather than silence.
+  if (!needs.length && !working.length) return
   const parts: string[] = []
   if (needs.length) {
     const first = needs[0]
