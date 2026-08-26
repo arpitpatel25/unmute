@@ -1116,6 +1116,69 @@ test('2nd follow-up graduates a oneoff to a session (and cancels its warm-kill)'
   tm.killAll()
 })
 
+// Field failure (2026-08-20, task b8388aec): the user's actual reply channel
+// is Right-Option/composer (deliverDraft), not the CLI followUp() path this
+// suite already covered above. Only followUp()/followUpCodexDesktop() ever
+// counted toward graduation, so a oneoff replied to twice through deliverDraft
+// sat at followUps=0 forever and got reaped by the warm-kill regardless of how
+// many times the user actually continued it. noteFollowUp() now backs every
+// real follow-up path — this proves deliverDraft is one of them.
+test('2nd deliverDraft reply graduates a oneoff to a session (Right-Option path)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  let submitted: () => void = () => {}
+  const ex = Object.assign(fake, {
+    writeDraftText(_t: string) {},
+    submitDraft() { submitted() },
+  })
+  const tm = new TaskManager({ executorFactory: () => ex, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, verifyAfterMs: 20, pollMs: 25, warmMs: 120 })
+  const id = await tm.dispatch('check the twitter folder')
+  submitted = () => tm.onHookEvent({ kind: 'prompt-submitted', sessionId: tm.get(id)!.sessionId })
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'found it' } })
+  await done // parked warm
+
+  assert.equal(await tm.deliverDraft(id, 'now summarize the README', []), true)
+  assert.equal(tm.get(id)!.kind, 'oneoff', 'one reply is a correction, not a thread')
+  const done2 = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'summarized' } })
+  await done2
+
+  assert.equal(await tm.deliverDraft(id, 'and the fastlane folder too', []), true)
+  assert.equal(tm.get(id)!.kind, 'session', 'second reply through deliverDraft proves a thread')
+  const done3 = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'all done' } })
+  await done3
+  await new Promise((r) => setTimeout(r, 250)) // well past the warm window
+  assert.equal(ex.alive, true, 'graduated session is never idle-killed')
+  tm.killAll()
+})
+
+test('2nd typed-terminal submission graduates a oneoff to a session (sendInput path)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 120 })
+  const id = await tm.dispatch('check the twitter folder')
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'found it' } })
+  await done // parked warm
+
+  tm.sendInput(id, 'now summarize the README\r')
+  assert.equal(tm.get(id)!.kind, 'oneoff', 'one typed prompt is a correction, not a thread')
+  const done2 = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'summarized' } })
+  await done2
+
+  tm.sendInput(id, 'and the fastlane folder too\r')
+  assert.equal(tm.get(id)!.kind, 'session', 'second typed prompt through sendInput proves a thread')
+  const done3 = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'all done' } })
+  await done3
+  await new Promise((r) => setTimeout(r, 250)) // well past the warm window
+  assert.equal(fake.alive, true, 'graduated session is never idle-killed')
+  tm.killAll()
+})
+
 test('setKind pin cancels an ALREADY-ARMED warm timer; unpin re-arms the park', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()

@@ -1941,6 +1941,7 @@ export class TaskManager extends EventEmitter {
     const title = task.name
     if (!title) return { ok: false, reason: 'no-title-to-address' }
 
+    this.noteFollowUp(task) // graduation (§5) — counts the attempt, same as followUp()
     const tlog = log.child({ taskId: id })
     task.sending = true
     this.emit('updated', task)
@@ -1981,6 +1982,7 @@ export class TaskManager extends EventEmitter {
     if (!task || task.agent !== 'claude-code-desktop') return { ok: false, reason: 'not-a-claude-desktop-task' }
     const actuator = this.opts.claudeActuator
     if (!actuator) return { ok: false, reason: 'no-actuator' }
+    this.noteFollowUp(task) // graduation (§5) — answering a prompt is real engagement
     const tlog = log.child({ taskId: id })
 
     // Re-read rather than trusting the cached prompt: the user may have
@@ -2627,11 +2629,7 @@ export class TaskManager extends EventEmitter {
     if (!task?.codexThreadId || !driver) return false
     const tlog = log.child({ taskId: id })
     this.noteUserInput(task, 'codex-desktop-follow-up')
-    task.followUps = (task.followUps ?? 0) + 1
-    if (task.kind !== 'session' && task.followUps >= 2) {
-      tlog.event('graduated-to-session', { followUps: task.followUps })
-      this.setKind(id, 'session')
-    }
+    this.noteFollowUp(task)
     tlog.ui('task-row.follow-up', { text })
     // Optimistic: the command was accepted. The poller will correct the state
     // from the rollout either way, so a failed send self-heals rather than
@@ -2978,6 +2976,7 @@ export class TaskManager extends EventEmitter {
       tlog.ui('task-row.answer-submitted', { answer: userAnswer })
       target.conversation = [...(target.conversation ?? []), { role: 'user', text: userAnswer }]
       this.noteUserInput(target, 'codex-cli-answer')
+      this.noteFollowUp(target) // graduation (§5)
       void this.opts.codexHub.send(id, userAnswer, { effort: this.opts.codexCliChoice?.().effort }).then((ok) => {
         if (!ok) tlog.warn('codex-cli reply not delivered', {})
       })
@@ -3027,7 +3026,13 @@ export class TaskManager extends EventEmitter {
       return true
     }
     const answered = this.tasks.get(id)
-    if (answered) this.noteUserInput(answered, 'terminal-answer') // consent clock
+    if (answered) {
+      this.noteUserInput(answered, 'terminal-answer') // consent clock
+      // Graduation (§5) — covers BOTH sub-branches below (the numbered-
+      // picker index answer and the freeform writeStdin fallback), since
+      // both are the same "user answered this task" moment.
+      this.noteFollowUp(answered)
+    }
     tlog.ui('task-row.answer-submitted', { answer: userAnswer }) // user spoke/typed an answer
 
     // A CHOICE IS ANSWERED BY INDEX, NOT BY ITS LABEL.
@@ -4159,6 +4164,26 @@ export class TaskManager extends EventEmitter {
     this.mergeMeta(task, { kind, runtimePinned }, 'setKind')
   }
 
+  /** Graduation (§5): a one-off that keeps receiving follow-ups is a working
+   *  session in denial — the 2nd follow-up promotes it to a persistent
+   *  `session`, permanently exempt from the warm-idle purge. EVERY real
+   *  "the user is continuing to work this task" surface must call this —
+   *  a call site that skips it is invisible: the task just goes quiet 15
+   *  minutes after its last activity and is erased, with nothing left in
+   *  Finished, no warning. (2026-08-26: deliverDraft/sendInput/
+   *  sendClaudeDesktop/answerClaudeDesktop/both branches of answer()'s
+   *  CLI path were all missing this — only followUp() and
+   *  followUpCodexDesktop() had it, which is why a task followed up on
+   *  exclusively through Right-Option/the composer never graduated no
+   *  matter how many times it was replied to.) */
+  private noteFollowUp(task: Task): void {
+    task.followUps = (task.followUps ?? 0) + 1
+    if (task.kind !== 'session' && task.followUps >= 2) {
+      log.child({ taskId: task.id }).event('graduated-to-session', { followUps: task.followUps })
+      this.setKind(task.id, 'session')
+    }
+  }
+
   /** Shelve/unshelve (Orchestrate): preserved-but-out-of-the-way. Persists to
    *  meta.json so the shelf survives restarts; emits 'updated' for the wall. */
   setShelved(id: string, on: boolean): void {
@@ -4233,11 +4258,7 @@ export class TaskManager extends EventEmitter {
     this.noteUserInput(task, 'follow-up') // user spoke to this thread — consent clock
     // Graduation (§5): the 2nd follow-up proves this is a THREAD, not an errand —
     // promote to a persistent session (one follow-up is a common quick correction).
-    task.followUps = (task.followUps ?? 0) + 1
-    if (task.kind !== 'session' && task.followUps >= 2) {
-      tlog.event('graduated-to-session', { followUps: task.followUps })
-      this.setKind(id, 'session')
-    }
+    this.noteFollowUp(task)
     // Cancel the idle-kill so the session can't be reaped while we wait below
     // for it to go idle.
     const wt = this.warmTimers.get(id)
@@ -4315,6 +4336,12 @@ export class TaskManager extends EventEmitter {
       if (inputTrace) emitTaskReplyStep(log, inputTrace, 'delivery-preflight', 'failed', { reason: 'task-no-longer-exists' })
       return false
     }
+    // Graduation (§5) — once here, regardless of which backend branch below
+    // ends up handling delivery. This was the actual bug behind a task
+    // silently vanishing 15 minutes after going quiet no matter how many
+    // times it was replied to via Right-Option/the composer: this is that
+    // path, and it never counted toward graduation before.
+    this.noteFollowUp(task)
     const tlog = log.child({ taskId: id })
     const trace = inputTrace ?? beginTaskReplyTrace(tlog, {
       taskId: id, source: 'internal', textChars: text.length, attachments: attachments.length,
@@ -4844,8 +4871,14 @@ export class TaskManager extends EventEmitter {
     const t = this.tasks.get(id)
     if (t) {
       t.lastUserInputAt = this.clock() // typing into the terminal = consent
-      // Persist at the submission boundary, not on every keystroke.
-      if (data.includes('\r')) this.mergeMeta(t, { lastUserInputAt: t.lastUserInputAt }, 'typed-input')
+      // Persist at the submission boundary, not on every keystroke — same
+      // boundary graduation (§5) counts against, for the same reason: a
+      // task typed at directly in the terminal is exactly as much "still
+      // being worked" as one replied to any other way.
+      if (data.includes('\r')) {
+        this.mergeMeta(t, { lastUserInputAt: t.lastUserInputAt }, 'typed-input')
+        this.noteFollowUp(t)
+      }
     }
     // A user typing into a parked-warm session means they want to keep working;
     // cancel the idle-kill so their hands-on session isn't reaped under them.
