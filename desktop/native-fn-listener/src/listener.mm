@@ -187,12 +187,30 @@ static void handle_flags_changed(NSEvent* event) {
     //
     // Emitting on every qualifying flags change is fine: the receiver treats
     // the signal as a latch, so repeats are idempotent.
+    //
+    // OVERLAP, NOT ARRIVAL ORDER. This asked `!hadOther && hasOther` — "did the
+    // other modifier JUST arrive, while right Command was already held". That is
+    // an edge, and it can only ever see one of the two orders. Press Control
+    // FIRST and right Command second and neither branch fires: on Control's own
+    // flagsChanged `hasRight` is false so the block is skipped, and on Command's
+    // `hadOther` is already true so `!hadOther` is false. The chord was real and
+    // completely invisible, so the release read as a clean single tap.
+    //
+    // Field incident 2026-08-26 07:31:10Z: left Control down, right Command down
+    // 89ms later, released 3.2s after that — and the Agent capture the user was
+    // still speaking into was SUBMITTED by a Ctrl+Cmd shortcut. The same two keys
+    // in the opposite order, 24s later in the same log, spoiled correctly. That
+    // asymmetry is this expression.
+    //
+    // The question is not which key arrived second. It is whether both are held
+    // at once, which is a STATE and has no order to get wrong. Note the emit
+    // order this relies on: right-command-down is emitted ABOVE, so the receiver
+    // sees 'down' then 'other' and latches spoiled — 'down' RESETS spoiled, so a
+    // chord emitted before it would be wiped.
     if (hasRight) {
       const NSEventModifierFlags kOtherChord =
         NSEventModifierFlagShift | NSEventModifierFlagControl | NSEventModifierFlagOption;
-      bool hadOther = (g_previousRawFlags & kOtherChord) != 0;
-      bool hasOther = (event.modifierFlags & kOtherChord) != 0;
-      if (!hadOther && hasOther) emit_event("right-command-chord");
+      if ((event.modifierFlags & kOtherChord) != 0) emit_event("right-command-chord");
     }
   }
 
