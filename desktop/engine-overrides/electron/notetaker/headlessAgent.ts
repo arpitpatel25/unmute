@@ -106,6 +106,33 @@ export function spawnAndCollect(
 }
 
 /**
+ * The argv each provider's headless mode needs.
+ *
+ * CODEX REFUSES TO RUN OUTSIDE A TRUSTED GIT DIRECTORY. Without
+ * `--skip-git-repo-check` it exits in about 70ms with "Not inside a trusted
+ * directory", and every caller here runs somewhere that is deliberately not a
+ * repo: the notetaker's cleanup and note-generation jobs, and the session
+ * summariser, which works out of the Agent's own runtime directory precisely
+ * so its transcripts never land in the user's projects.
+ *
+ * Measured before the fix: 1,352 sessions failing on every sweep, zero
+ * summaries written, and — because a failed call deliberately does not advance
+ * its cursor — all of them retried on the next sweep, forever. Roughly two
+ * minutes of work every two minutes, indefinitely.
+ *
+ * The Agent's OWN turn path never had this bug: codex-headless.ts builds its
+ * own argv and passes the flag. Two launchers, one of them missing it, and only
+ * a machine whose provider was set to Codex would ever show it.
+ *
+ * Exported so the argv is testable without spawning anything.
+ */
+export function headlessArgvFor(provider: HeadlessProvider): [string, string[]] {
+  return provider === 'claude'
+    ? ['claude', ['-p']]
+    : ['codex', ['exec', '--skip-git-repo-check']]
+}
+
+/**
  * Runs `input` through the given provider's headless CLI mode and returns
  * its stdout. `-p`/`--print` for Claude Code (prompt on stdin, matching how
  * the CLI's own headless mode is invoked elsewhere in the ecosystem);
@@ -117,7 +144,7 @@ export async function runHeadlessAgent(
   opts: { timeoutMs?: number } = {},
 ): Promise<HeadlessResult> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const [command, args] = provider === 'claude' ? ['claude', ['-p']] : ['codex', ['exec']]
+  const [command, args] = headlessArgvFor(provider)
   const startedAt = Date.now()
   const result = await spawnAndCollect(command, args, input, timeoutMs)
   const durationMs = Date.now() - startedAt

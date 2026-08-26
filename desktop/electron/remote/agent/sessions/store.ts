@@ -60,6 +60,22 @@ export const FIRST_PASS_BYTES = Number.POSITIVE_INFINITY
  */
 export const REFRESH_CONCURRENCY = 5
 
+/**
+ * A sweep that is failing everywhere stops instead of grinding.
+ *
+ * Not advancing a cursor on failure is right for a blip — the turns are read
+ * again next time and nothing is lost. It is exactly wrong for a PERMANENT
+ * fault, where it means every session retries on every sweep with no way out.
+ * Measured against the Codex trusted-directory bug: 1,352 sessions failing per
+ * sweep, roughly two minutes of work every two minutes, indefinitely, with
+ * nothing above debug level saying so.
+ *
+ * A run gives up once this many sessions have failed CONSECUTIVELY. A real
+ * outage trips it in seconds; one session that failed on its own merits still
+ * gets its retry, because a single success resets the count.
+ */
+export const CONSECUTIVE_FAILURE_CEILING = 8
+
 export interface StoredSession {
   key: string
   path: string
@@ -99,6 +115,8 @@ export interface SessionStoreOptions {
   windowMs?: number
   concurrency?: number
   firstPassBytes?: number
+  /** Consecutive failures that end a run. See CONSECUTIVE_FAILURE_CEILING. */
+  failureCeiling?: number
 }
 
 export function defaultCachePath(agentRoot: string): string {
@@ -226,7 +244,11 @@ export class SessionStore {
     run: RunModel,
     parseJson: (raw: string) => unknown,
     options: { signal?: { aborted: boolean }; idleMs?: number } = {},
-  ): Promise<{ updated: number; skipped: number; failed: number; unchanged: number }> {
+  ): Promise<{
+    updated: number; skipped: number; failed: number; unchanged: number
+    /** True when the run gave up on a run of consecutive failures. */
+    abandoned: boolean
+  }> {
     await this.load()
     const windowMs = this.options.windowMs ?? 5 * 86_400_000
     const roots = this.options.roots ?? defaultRoots()
@@ -243,19 +265,27 @@ export class SessionStore {
     const found = (await discoverSessions(roots))
       .filter((s) => s.lastTouchedAt >= cutoff && s.lastTouchedAt <= idleBefore)
 
-    const tally = { updated: 0, skipped: 0, failed: 0, unchanged: 0 }
+    const tally = { updated: 0, skipped: 0, failed: 0, unchanged: 0, abandoned: false }
     const limit = Math.max(1, this.options.concurrency ?? REFRESH_CONCURRENCY)
+    const ceiling = this.options.failureCeiling ?? CONSECUTIVE_FAILURE_CEILING
     let cursor = 0
+    let consecutiveFailures = 0
     await Promise.all(Array.from({ length: Math.min(limit, found.length) }, async () => {
       for (;;) {
         if (options.signal?.aborted) return
+        // Everything is failing: this is a fault, not a flaky session. Stop and
+        // let the next sweep find out whether it has been fixed.
+        if (consecutiveFailures >= ceiling) { tally.abandoned = true; return }
         const next = cursor++
         if (next >= found.length) return
+        let outcome: 'updated' | 'skipped' | 'failed' | 'unchanged'
         try {
-          tally[await this.updateOne(found[next]!, run, parseJson)] += 1
+          outcome = await this.updateOne(found[next]!, run, parseJson)
         } catch {
-          tally.failed += 1
+          outcome = 'failed'
         }
+        tally[outcome] += 1
+        consecutiveFailures = outcome === 'failed' ? consecutiveFailures + 1 : 0
       }
     }))
     await this.save()

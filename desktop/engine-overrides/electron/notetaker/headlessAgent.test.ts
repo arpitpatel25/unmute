@@ -1,6 +1,6 @@
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnAndCollect } from './headlessAgent'
+import { headlessArgvFor, spawnAndCollect } from './headlessAgent'
 
 // Exercised against REAL child processes (Node itself, via -e inline
 // scripts) rather than mocked child_process internals — deterministic,
@@ -61,4 +61,28 @@ describe('spawnAndCollect', () => {
     )
     assert.deepEqual(result, { ok: true, output: 'padded' })
   })
+})
+
+/**
+ * THE BUG THIS PINS. Codex refuses to run outside a trusted git directory, and
+ * every caller of this helper runs somewhere that deliberately is not a repo —
+ * the notetaker's cleanup jobs, and the session summariser, which works out of
+ * the Agent's own runtime directory so its transcripts never land in the user's
+ * projects. Without the flag it exited in ~70ms, and because a failed summary
+ * does not advance its cursor, all 1,352 sessions retried on every sweep,
+ * forever.
+ *
+ * The Agent's own turn path never had this: codex-headless.ts builds its own
+ * argv and passes the flag. Two launchers, one missing it.
+ */
+test('codex is launched with --skip-git-repo-check', () => {
+  const [command, args] = headlessArgvFor('codex')
+  assert.equal(command, 'codex')
+  assert.deepEqual(args, ['exec', '--skip-git-repo-check'])
+})
+
+test('claude needs no such flag', () => {
+  const [command, args] = headlessArgvFor('claude')
+  assert.equal(command, 'claude')
+  assert.deepEqual(args, ['-p'])
 })

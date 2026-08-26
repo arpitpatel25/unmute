@@ -206,3 +206,51 @@ test('an abort stops a refresh partway', async () => {
 })
 
 function dirname_(p: string): string { return p.slice(0, p.lastIndexOf('/')) }
+
+/**
+ * THE FAILURE MODE THIS EXISTS FOR. Not advancing a cursor on failure is right
+ * for a blip and exactly wrong for a permanent fault: with the Codex
+ * trusted-directory bug it meant 1,352 sessions retrying on every sweep, two
+ * minutes of work every two minutes, indefinitely, with nothing above debug
+ * level saying so.
+ */
+test('a sweep where everything fails gives up instead of grinding', async () => {
+  const { dir, roots, store } = await fixture()
+  try {
+    for (let i = 0; i < 30; i++) {
+      await fs.writeFile(
+        join(roots.claudeProjects, '-Users-me-repo', `s${i}.jsonl`),
+        [userLine(`session ${i}`, '/Users/me/repo', `sess-${i}`), asstLine('ok')].join('\n'),
+      )
+    }
+    let calls = 0
+    const tally = await store.refresh(
+      async () => { calls += 1; return { ok: false as const, error: 'codex refuses to run here' } },
+      JSON.parse,
+    )
+    assert.equal(tally.abandoned, true, 'it stopped')
+    assert.equal(tally.updated, 0)
+    assert.ok(calls < 31, `stopped early, not after all 31 (made ${calls})`)
+  } finally { await fs.rm(dir, { recursive: true, force: true }) }
+})
+
+test('a single failure among successes is still just a retry', async () => {
+  const { dir, roots, store } = await fixture()
+  try {
+    for (let i = 0; i < 12; i++) {
+      await fs.writeFile(
+        join(roots.claudeProjects, '-Users-me-repo', `s${i}.jsonl`),
+        [userLine(`session ${i}`, '/Users/me/repo', `sess-${i}`), asstLine('ok')].join('\n'),
+      )
+    }
+    let n = 0
+    const tally = await store.refresh(async () => {
+      n += 1
+      return n === 3
+        ? { ok: false as const, error: 'transient' }
+        : { ok: true as const, output: answer() }
+    }, JSON.parse)
+    assert.equal(tally.abandoned, false, 'one bad session does not end the sweep')
+    assert.ok(tally.updated >= 10, `kept going (updated ${tally.updated})`)
+  } finally { await fs.rm(dir, { recursive: true, force: true }) }
+})

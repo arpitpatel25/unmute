@@ -111,6 +111,13 @@ export class SessionSweeper {
       if (tally.updated > 0 || tally.failed > 0) {
         log.event('session-record-swept', { ...tally, ms: this.now() - startedAt })
       }
+      // Loud, because the quiet version of this cost 1,352 failed calls a
+      // sweep for hours and nothing said so above debug level.
+      if (tally.abandoned) {
+        log.warn('session sweep abandoned — summaries are failing', {
+          failed: tally.failed, updated: tally.updated,
+        })
+      }
     } catch (error) {
       // A sweep is housekeeping. It must never take the Agent down with it.
       log.warn('session sweep failed', { error: (error as Error).message })
