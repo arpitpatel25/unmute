@@ -32,10 +32,33 @@ import {
 } from './summary'
 
 const CACHE_VERSION = 2
-/** Bounds the first pass over a transcript never read before. */
-export const FIRST_PASS_BYTES = 1024 * 1024
-/** How many sessions are summarised at once. */
-export const REFRESH_CONCURRENCY = 2
+/**
+ * NO CAP ON A FIRST READ. Deliberately.
+ *
+ * A cap bought a faster cold start — 100 seconds down to 0.7 — by stopping at
+ * a byte count and marking the summary partial. But a partial summary is a GAP:
+ * a session whose middle was never read, in a record whose whole job is to say
+ * what happened. The speed was real and the gap was worse, so the transcript is
+ * read whole, once, and the cost is one slow background pass on first launch
+ * that nothing waits on.
+ *
+ * What still bounds it: the probe below skips machine-issued sessions before a
+ * byte of them is read, and every read after the first is a delta of a few
+ * turns. Measured on the real corpus: 155 of 256 skipped outright, and the 101
+ * that remain are read exactly once, ever.
+ */
+export const FIRST_PASS_BYTES = Number.POSITIVE_INFINITY
+/**
+ * How many sessions are summarised at once.
+ *
+ * The bound is not about serving many users — there is one. It is that every
+ * summary spawns a WHOLE CLI PROCESS: a `claude -p` or `codex exec` holding its
+ * own model connection. Running all of them at once would thrash the machine
+ * and hit the user's own rate limit, so this is finite for the same reason a
+ * build is `-j5` rather than `-j∞`. It is a PARALLELISM limit and not a quota:
+ * every eligible session is still processed, five at a time, until none remain.
+ */
+export const REFRESH_CONCURRENCY = 5
 
 export interface StoredSession {
   key: string

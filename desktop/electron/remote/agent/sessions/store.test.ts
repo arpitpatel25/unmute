@@ -92,6 +92,27 @@ test('new turns are summarised, and only the new ones', async () => {
 })
 
 /**
+ * A first read is never capped, so a summary is never partial for want of
+ * bytes. The speed a cap bought was real; the gap it left in a record whose
+ * whole job is to say what happened was worse.
+ */
+test('a whole transcript is read on the first pass, however long', async () => {
+  const { dir, roots, store } = await fixture()
+  try {
+    const lines: string[] = []
+    for (let i = 0; i < 600; i++) {
+      lines.push(userLine(`turn ${i} ${'x'.repeat(400)}`, '/Users/me/repo', 'long-1'), asstLine(`reply ${i}`))
+    }
+    await fs.writeFile(join(roots.claudeProjects, '-Users-me-repo', 'long.jsonl'), lines.join('\n'))
+    await store.refresh(okModel(), JSON.parse)
+    const long = store.all().find((s) => s.sessionId === 'long-1')
+    assert.ok(long, 'the long session was summarised')
+    assert.equal(long!.partial, false, 'nothing was left unread')
+    assert.equal(long!.cursor, 1200, 'the cursor reached the end of the file')
+  } finally { await fs.rm(dir, { recursive: true, force: true }) }
+})
+
+/**
  * A failed call that advanced the cursor would drop those turns forever and
  * leave a permanent hole. A failure must cost a retry and nothing else.
  */

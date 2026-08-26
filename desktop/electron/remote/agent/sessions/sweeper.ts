@@ -19,8 +19,18 @@ import type { RunModel } from './summary'
 
 const log = createLogger('agent-sessions')
 
-/** How long a session must be quiet before its summary is worth updating. */
-export const IDLE_MS = 2 * 60_000
+/**
+ * How long a session must be quiet before its summary is worth updating.
+ *
+ * Two minutes was too eager: people pause mid-thought, and a summary written
+ * during a pause records a state that is about to change. Five is the low end
+ * of the range chosen deliberately, because a longer threshold makes the MOST
+ * RECENT work the least likely to be summarised — and that is exactly the work
+ * "carry on with what I was doing" asks about. It degrades gracefully rather
+ * than failing: the record still names the session and its transcript, so the
+ * Agent reads the tail itself when the summary has not caught up.
+ */
+export const IDLE_MS = 5 * 60_000
 /** How often idleness is checked. Cheap: mtimes only, no file is opened. */
 export const TICK_MS = 60_000
 
