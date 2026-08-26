@@ -84,9 +84,17 @@ export function AgentSettings() {
       <SectionHeader icon={<AgentIcon />} title="Unmute Agent" />
       <div className="bg-white border border-border rounded-[12px] overflow-hidden">
         <div className="px-5 py-4">
-          <p className="text-[13px] font-medium text-ink">Provider for Agent conversations</p>
+          <p className="text-[13px] font-medium text-ink">Provider for the Unmute Agent</p>
+          {/* SAY EVERYTHING THIS PICKER GOVERNS. It used to read "Provider for
+              Agent conversations" and then narrow the promise further — which
+              stopped being true when the background session summariser started
+              following it too. A control that under-describes itself is worse
+              than one that is merely vague: the summariser ran on Codex because
+              this said Codex, and nothing on screen connected the two. */}
           <p className="text-[11px] text-ink-35 mt-0.5 mb-3 leading-relaxed">
-            This choice is independent of task routing. It does not change which agent runs Orchestrator tasks.
+            Runs your Agent conversations, and the background job that keeps your session
+            summaries up to date. It does not change which agent runs Orchestrator tasks —
+            you pick that per task.
           </p>
 
           <div className="space-y-1.5">
