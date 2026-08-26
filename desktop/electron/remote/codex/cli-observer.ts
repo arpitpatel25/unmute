@@ -89,6 +89,35 @@ function messageText(e: RolloutEvent): string {
 export function conversationFromCodexEvents(
   events: readonly RolloutEvent[],
 ): Array<{ role: 'user' | 'assistant'; text: string }> {
+  // THREE READERS, TRIED IN ORDER, NEVER COMBINED.
+  //
+  // Codex has changed how it records an exchange twice, and an old rollout
+  // carries BOTH the old and the new shape for the SAME messages — one measured
+  // file had 8 event_msg/user_message records and 8 response_item/message:user
+  // records describing the same 8 messages. So these are FALLBACKS: the first
+  // reader that finds anything wins outright. Reading them together would
+  // double every turn in the chat view of every task that works today, which
+  // trades a broken-reply bug for a broken-history one.
+  //
+  // Order is oldest-first on purpose: it leaves every rollout that renders
+  // correctly today on byte-for-byte the same path it is on now.
+  return fromEventMessages(events)
+    || fromItemCompleted(events)
+    || fromResponseItems(events)
+    || []
+}
+
+/** Null, not [], so "this reader found nothing" is distinguishable from "this
+ *  reader read an empty conversation" — that difference is what makes the
+ *  fallback chain above a chain rather than three merged passes. */
+type Turns = Array<{ role: 'user' | 'assistant'; text: string }> | null
+
+function nonEmpty(turns: Array<{ role: 'user' | 'assistant'; text: string }>): Turns {
+  return turns.length ? turns : null
+}
+
+/** The original shape: one event_msg per message. Gone in newer Codex. */
+function fromEventMessages(events: readonly RolloutEvent[]): Turns {
   const turns: Array<{ role: 'user' | 'assistant'; text: string }> = []
   for (const e of events) {
     if (e.type !== 'event_msg') continue
@@ -98,7 +127,60 @@ export function conversationFromCodexEvents(
     if (!text) continue
     turns.push({ role: kind === 'user_message' ? 'user' : 'assistant', text })
   }
-  return turns
+  return nonEmpty(turns)
+}
+
+/** Newer Codex (seen from 2026-08-24): every per-kind event_msg collapsed into
+ *  one `item_completed` envelope discriminated by `item.type`, alongside
+ *  custom_tool_call replacing function_call. Reasoning, CommandExecution and
+ *  McpToolCall arrive through the same envelope and are not conversation. */
+function fromItemCompleted(events: readonly RolloutEvent[]): Turns {
+  const turns: Array<{ role: 'user' | 'assistant'; text: string }> = []
+  for (const e of events) {
+    if (e.type !== 'event_msg' || e.payload?.type !== 'item_completed') continue
+    const item = (e.payload as { item?: { type?: string; content?: unknown } }).item
+    const role = item?.type === 'UserMessage' ? 'user'
+      : item?.type === 'AgentMessage' ? 'assistant'
+        : null
+    if (!role) continue
+    const text = contentText(item?.content)
+    if (!text) continue
+    turns.push({ role, text })
+  }
+  return nonEmpty(turns)
+}
+
+/** The durable record, present in EVERY format seen so far — old rollouts and
+ *  new ones both carry it. Last resort precisely because anchoring on a single
+ *  event_msg wrapper is what broke twice. `developer` is the injected
+ *  environment context, not something the user said. */
+function fromResponseItems(events: readonly RolloutEvent[]): Turns {
+  const turns: Array<{ role: 'user' | 'assistant'; text: string }> = []
+  for (const e of events) {
+    if (e.type !== 'response_item' || e.payload?.type !== 'message') continue
+    const p = e.payload as { role?: string; content?: unknown }
+    if (p.role !== 'user' && p.role !== 'assistant') continue
+    const text = contentText(p.content)
+    if (!text) continue
+    turns.push({ role: p.role, text })
+  }
+  return nonEmpty(turns)
+}
+
+/** Both newer shapes carry text as an array of parts. The part's own `type`
+ *  varies by shape and even by case ('text' on a UserMessage, 'Text' on an
+ *  AgentMessage, 'input_text'/'output_text' on a response_item), so it is not
+ *  matched on — every part carrying a string `text` is joined. */
+function contentText(content: unknown): string {
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((part) => (part && typeof (part as { text?: unknown }).text === 'string'
+      ? (part as { text: string }).text
+      : ''))
+    .filter(Boolean)
+    .join('')
+    .trim()
 }
 
 export interface CodexRollupContext {
