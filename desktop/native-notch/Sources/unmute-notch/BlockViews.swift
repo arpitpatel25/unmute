@@ -248,7 +248,7 @@ private struct WorkRunView: View {
                 // NARRATION IS MARKDOWN, and Codex writes **bold headings**
                 // into it — which showed their asterisks under the inline-only
                 // renderer this replaces.
-                MarkdownBody(text: note, size: 14, color: Theme.textDim)
+                RichText(text: note, size: 14, color: Theme.textDim)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if !run.steps.isEmpty {
@@ -580,9 +580,10 @@ private struct BlockUserBubble: View {
 private struct BlockAnswer: View {
     let text: String
     var body: some View {
-        // 14pt, measured off Codex. The old renderer used inline-only markdown,
-        // so bullets and headings arrived as literal dashes and hashes.
-        MarkdownBody(text: text, size: 14, color: Theme.text)
+        // Every native conversation surface uses the same cmark-gfm-backed
+        // renderer. Keeping a second block parser here caused valid tables to
+        // be flattened into literal pipe-delimited paragraphs.
+        RichText(text: text, size: 14, color: Theme.text)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
