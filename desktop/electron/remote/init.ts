@@ -6020,7 +6020,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const needle = typeof query === 'string' ? query.trim().toLocaleLowerCase() : ''
     return (await unmuteAgentRecords.list())
       .filter((record) => !needle || [
-        record.title, record.kind, record.sensitivity, record.provenance.source,
+        record.title, record.kind, record.provenance.source,
         ...record.tags, record.scope?.app, record.scope?.project, record.scope?.purpose,
         record.deletedAt === undefined ? undefined : 'trash',
       ].some((value) => value?.toLocaleLowerCase().includes(needle)))
@@ -6032,7 +6032,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           title: presented.title,
           tags: [...presented.tags],
           ...(presented.scope ? { scope: { ...presented.scope } } : {}),
-          sensitivity: presented.sensitivity,
           provenance: { source: presented.provenance.source },
           attachmentCount: presented.attachments.length,
           createdAt: presented.createdAt,
@@ -6042,7 +6041,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         }
       })
   })
-  ipcMain.handle('remote:get-memory', async (_e, id: unknown, revealSensitive?: unknown) => {
+  ipcMain.handle('remote:get-memory', async (_e, id: unknown) => {
     if (!unmuteAgentMemory || !unmuteAgentRecords || typeof id !== 'string') return null
     const now = Date.now()
     const interactionId = randomUUID()
@@ -6059,9 +6058,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         {
           principal,
           now,
-          ...(revealSensitive === true
-            ? { interaction: { id: interactionId, active: true, intents: ['memory.reveal-sensitive'] } }
-            : {}),
         },
         id,
         { includeContent: true, includeDeleted: true },
@@ -6072,7 +6068,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         title: view.title,
         tags: [...view.tags],
         ...(view.scope ? { scope: { ...view.scope } } : {}),
-        sensitivity: view.sensitivity,
         provenance: { source: view.provenance.source },
         content: view.content,
         attachmentCount: record.attachments.length,

@@ -1,12 +1,10 @@
-import type { MemoryRecord, MemoryScope, MemorySensitivity } from './types.ts'
+import type { MemoryRecord, MemoryScope } from './types.ts'
 
 export interface MemoryIndexSearchQuery {
   text: string
   kinds?: readonly string[]
   tags?: readonly string[]
   scope?: MemoryScope
-  includePrivate?: boolean
-  includeSensitive?: boolean
   limit?: number
 }
 
@@ -16,7 +14,6 @@ export interface MemoryIndexSearchHit {
   title: string
   tags: string[]
   scope?: MemoryScope
-  sensitivity: MemorySensitivity
   updatedAt: number
   exactTitle: boolean
   lexicalRank: number

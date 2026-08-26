@@ -10,7 +10,6 @@ function record(partial: Partial<MemoryRecord> & { id: string }): MemoryRecord {
     title: partial.id,
     tags: [],
     links: [],
-    sensitivity: 'normal',
     attachments: [],
     references: [],
     provenance: { source: 'voice' },

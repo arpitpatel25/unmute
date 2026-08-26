@@ -5,10 +5,8 @@ import {
   memoryAttachmentLabel,
   memoryKindLabel,
   memoryScopeChips,
-  memorySensitivityLabel,
   memorySourceLabel,
   memoryVersionLabel,
-  sensitiveContentConcealed,
   type MemoryPresentationRecord,
 } from './memoryPresentation'
 
@@ -19,7 +17,7 @@ interface MemoryRecord extends MemoryPresentationRecord {
 
 interface MemoryApi {
   remoteListMemories?: () => Promise<MemoryRecord[]>
-  remoteGetMemory?: (id: string, revealSensitive?: boolean) => Promise<MemoryRecord | null>
+  remoteGetMemory?: (id: string) => Promise<MemoryRecord | null>
   remoteForgetMemory?: (id: string) => Promise<boolean>
   remoteRestoreMemory?: (id: string) => Promise<boolean>
 }
@@ -37,7 +35,6 @@ export default function MemoryManager({ onBack }: { onBack: () => void }) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [details, setDetails] = useState<Record<string, MemoryRecord>>({})
-  const [revealed, setRevealed] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -61,22 +58,9 @@ export default function MemoryManager({ onBack }: { onBack: () => void }) {
   async function expand(record: MemoryRecord): Promise<void> {
     if (expanded === record.id) { setExpanded(null); return }
     setExpanded(record.id)
-    if (record.sensitivity === 'sensitive' || details[record.id]) return
-    const detail = await api().remoteGetMemory?.(record.id, false)
+    if (details[record.id]) return
+    const detail = await api().remoteGetMemory?.(record.id)
     if (detail) setDetails((current) => ({ ...current, [record.id]: detail }))
-  }
-
-  async function reveal(record: MemoryRecord): Promise<void> {
-    setBusy(record.id)
-    try {
-      const detail = await api().remoteGetMemory?.(record.id, true)
-      if (!detail) { setError('That sensitive memory could not be revealed.'); return }
-      setDetails((current) => ({ ...current, [record.id]: detail }))
-      setRevealed((current) => new Set(current).add(record.id))
-      setError(null)
-    } finally {
-      setBusy(null)
-    }
   }
 
   async function changeTrash(record: MemoryRecord): Promise<void> {
@@ -134,7 +118,6 @@ export default function MemoryManager({ onBack }: { onBack: () => void }) {
         {visible.map((record) => {
           const isOpen = expanded === record.id
           const detail = details[record.id]
-          const concealed = sensitiveContentConcealed(record, revealed.has(record.id))
           const trashed = record.deletedAt !== undefined
           return (
             <article key={record.id} className={`bg-surface-2 border rounded-2xl overflow-hidden shadow-sm ${trashed ? 'border-border opacity-75' : 'border-border'}`}>
@@ -149,9 +132,6 @@ export default function MemoryManager({ onBack }: { onBack: () => void }) {
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-[14px] font-semibold text-ink truncate">{record.title}</h3>
                       {trashed && <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-cream-dark text-ink-60">Trash</span>}
-                      <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${record.sensitivity === 'sensitive' ? 'bg-warm-soft text-warm' : 'bg-cream-mid text-ink-60'}`}>
-                        {memorySensitivityLabel(record.sensitivity)}
-                      </span>
                     </div>
                     <p className="text-[11px] text-ink-35 mt-1">
                       {memoryKindLabel(record.kind)} · {memorySourceLabel(record.provenance?.source)} · Updated {dateTime.format(record.updatedAt)}
@@ -174,24 +154,9 @@ export default function MemoryManager({ onBack }: { onBack: () => void }) {
                     {trashed && <span>Forgotten {dateTime.format(record.deletedAt!)}</span>}
                   </div>
 
-                  {concealed ? (
-                    <div className="rounded-xl border border-border bg-cream-mid px-4 py-3">
-                      <p className="text-[12.5px] font-semibold text-ink">Sensitive content is concealed</p>
-                      <p className="text-[11px] text-ink-60 mt-1">Reveal is explicit and recorded in the memory audit.</p>
-                      <button
-                        type="button"
-                        disabled={busy === record.id}
-                        onClick={() => { void reveal(record) }}
-                        className="mt-3 px-3 py-1.5 rounded-full bg-ink text-white text-[11px] font-semibold disabled:opacity-50"
-                      >
-                        {busy === record.id ? 'Revealing…' : 'Reveal content'}
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border border-border bg-cream-mid px-4 py-3 text-[12.5px] text-ink-60 leading-relaxed whitespace-pre-wrap break-words">
-                      {detail ? (detail.content?.trim() || 'This memory has no text content.') : 'Loading content…'}
-                    </div>
-                  )}
+                  <div className="rounded-xl border border-border bg-cream-mid px-4 py-3 text-[12.5px] text-ink-60 leading-relaxed whitespace-pre-wrap break-words">
+                    {detail ? (detail.content?.trim() || 'This memory has no text content.') : 'Loading content…'}
+                  </div>
 
                   <div className="flex items-center justify-between gap-3 mt-4">
                     <p className="text-[11px] text-ink-35">Permanent deletion is not available here.</p>

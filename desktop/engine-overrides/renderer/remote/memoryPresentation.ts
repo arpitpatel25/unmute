@@ -1,12 +1,9 @@
-export type MemorySensitivity = 'normal' | 'private' | 'sensitive'
-
 export interface MemoryPresentationRecord {
   id: string
   kind: string
   title: string
   tags: string[]
   scope?: { app?: string; project?: string; purpose?: string }
-  sensitivity: MemorySensitivity
   provenance?: { source: string }
   attachmentCount?: number
   updatedAt: number
@@ -46,12 +43,6 @@ export function memoryScopeChips(scope?: MemoryPresentationRecord['scope']): str
   return chips.length ? chips : ['All contexts']
 }
 
-export function memorySensitivityLabel(sensitivity: MemorySensitivity): string {
-  if (sensitivity === 'sensitive') return 'Sensitive'
-  if (sensitivity === 'private') return 'Private'
-  return 'Normal'
-}
-
 export function memoryVersionLabel(version = 1): string {
   return `${version} ${version === 1 ? 'version' : 'versions'}`
 }
@@ -70,17 +61,9 @@ export function filterMemories<T extends MemoryPresentationRecord>(records: read
   return records.filter((record) => [
     record.title,
     memoryKindLabel(record.kind),
-    memorySensitivityLabel(record.sensitivity),
     memorySourceLabel(record.provenance?.source),
     ...record.tags,
     ...memoryScopeChips(record.scope),
     record.deletedAt === undefined ? '' : 'trash',
   ].some((value) => value.toLocaleLowerCase().includes(needle)))
-}
-
-export function sensitiveContentConcealed(
-  record: Pick<MemoryPresentationRecord, 'sensitivity'>,
-  explicitlyRevealed: boolean,
-): boolean {
-  return record.sensitivity === 'sensitive' && !explicitlyRevealed
 }

@@ -94,7 +94,7 @@ export const CORPUS: EvalCase[] = [
     behaviour: {
       searchResults: [{
         id: 'memory-1', title: 'Coffee', kind: 'note', snippet: 'oat milk',
-        score: 900, sensitivity: 'normal', attachmentCount: 0, scopes: [],
+        score: 900, attachmentCount: 0, scopes: [],
       }],
       getRecord: { id: 'memory-1', title: 'Coffee', kind: 'note', content: 'Prefers oat milk.' },
     },
@@ -108,7 +108,7 @@ export const CORPUS: EvalCase[] = [
     behaviour: {
       searchResults: [{
         id: 'memory-2', title: 'Resume', kind: 'document', snippet: 'resume',
-        score: 900, sensitivity: 'normal', attachmentCount: 1, scopes: [],
+        score: 900, attachmentCount: 1, scopes: [],
       }],
     },
     check: (calls, reply) => {
@@ -197,7 +197,7 @@ export const CORPUS: EvalCase[] = [
     behaviour: {
       searchResults: [{
         id: 'memory-7', title: 'Primary email', kind: 'note', snippet: 'old@example.com',
-        score: 900, sensitivity: 'normal', attachmentCount: 0, scopes: [],
+        score: 900, attachmentCount: 0, scopes: [],
       }],
       storeFails: 'A memory titled "Primary email" already exists in this scope (id memory-7). '
         + 'Use memory_update on that record instead of storing a second copy.',
@@ -224,7 +224,7 @@ export const CORPUS: EvalCase[] = [
     behaviour: {
       searchResults: [{
         id: 'memory-9', title: 'Product philosophy', kind: 'note', snippet: 'centred around the human',
-        score: 900, sensitivity: 'normal', attachmentCount: 0, scopes: [],
+        score: 900, attachmentCount: 0, scopes: [],
       }],
       getRecord: {
         id: 'memory-9', title: 'Product philosophy', kind: 'note',
@@ -240,7 +240,7 @@ export const CORPUS: EvalCase[] = [
     behaviour: {
       searchResults: [{
         id: 'memory-3', title: 'Onboarding', kind: 'note', snippet: 'see record',
-        score: 900, sensitivity: 'normal', attachmentCount: 0, scopes: [],
+        score: 900, attachmentCount: 0, scopes: [],
       }],
       getRecord: {
         id: 'memory-3', title: 'Onboarding', kind: 'note',
@@ -258,7 +258,7 @@ export const CORPUS: EvalCase[] = [
     behaviour: {
       searchResults: [{
         id: 'memory-4', title: 'Address', kind: 'note', snippet: 'old address',
-        score: 900, sensitivity: 'normal', attachmentCount: 0, scopes: [],
+        score: 900, attachmentCount: 0, scopes: [],
       }],
     },
     check: (calls) => calls.some((c) => c.tool === 'memory_forget')
@@ -293,7 +293,7 @@ export const CORPUS: EvalCase[] = [
       },
       searchResults: [{
         id: 'memory-c', title: 'Competitor list', kind: 'note', snippet: 'Tasklet.ai',
-        score: 900, sensitivity: 'normal', attachmentCount: 0, scopes: [],
+        score: 900, attachmentCount: 0, scopes: [],
       }],
     },
     check: (calls) => {
@@ -313,7 +313,7 @@ export const CORPUS: EvalCase[] = [
       map: { total: 6, ungrouped: 1, groups: [{ id: 'g-meta', title: 'Meta ads', memberCount: 3 }] },
       searchResults: [{
         id: 'memory-h', title: 'Hook variants', kind: 'note', snippet: 'hooks',
-        score: 900, sensitivity: 'normal', attachmentCount: 0, scopes: [],
+        score: 900, attachmentCount: 0, scopes: [],
       }],
     },
     check: (calls) => {

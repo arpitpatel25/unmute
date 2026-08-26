@@ -35,10 +35,10 @@ import type {
 const DEFAULT_SEARCH_LIMIT = 20
 const MAX_SEARCH_LIMIT = 100
 const UNASSIGNED_MEMORY_ID = 'unassigned'
-const SEARCH_QUERY_KEYS = new Set(['text', 'kinds', 'tags', 'scope', 'includeSensitive', 'limit'])
+const SEARCH_QUERY_KEYS = new Set(['text', 'kinds', 'tags', 'scope', 'limit'])
 const GET_OPTION_KEYS = new Set(['includeContent', 'includeAttachments', 'includeDeleted'])
 const UPDATE_PATCH_KEYS = new Set([
-  'kind', 'title', 'content', 'tags', 'scope', 'sensitivity', 'references', 'provenance',
+  'kind', 'title', 'content', 'tags', 'scope', 'references', 'provenance',
 ])
 
 
@@ -167,7 +167,6 @@ function requireSearchQuery(query: MemorySearchQuery): Required<Pick<MemorySearc
     || Object.keys(query).some((key) => !SEARCH_QUERY_KEYS.has(key))
     || typeof query.text !== 'string' || query.text.trim().length === 0
     || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_SEARCH_LIMIT
-    || (query.includeSensitive !== undefined && typeof query.includeSensitive !== 'boolean')
     || (query.kinds !== undefined && (
       !Array.isArray(query.kinds)
       || query.kinds.some((value) => typeof value !== 'string' || value.trim().length === 0)
@@ -222,7 +221,6 @@ function rollbackPatch(record: MemoryRecord): MemoryRecordPatch {
     content: record.content ?? null,
     tags: [...record.tags],
     scope: record.scope === undefined ? null : { ...record.scope },
-    sensitivity: record.sensitivity,
     attachments: [...record.attachments],
     references: record.references.map((reference) => ({ ...reference })),
     provenance: { ...record.provenance },
@@ -245,7 +243,6 @@ function view(record: MemoryRecord, options: MemoryGetOptions): MemoryRecordView
     tags: [...presented.tags],
     links: [...presented.links],
     ...(presented.scope === undefined ? {} : { scope: { ...presented.scope } }),
-    sensitivity: presented.sensitivity,
     references: pathFreeReferences(presented.references),
     provenance: { source: presented.provenance.source },
     createdAt: presented.createdAt,
@@ -341,14 +338,11 @@ export class MemoryService {
   async search(ctx: CapabilityCallContext, query: MemorySearchQuery): Promise<MemorySearchResult[]> {
     requireAgent(ctx)
     const validated = requireSearchQuery(query)
-    if (query.includeSensitive) requireActiveInteraction(ctx)
     await this.ready('search')
     try {
       const indexQuery = {
         text: validated.text,
         ...(query.kinds === undefined ? {} : { kinds: query.kinds }),
-        includePrivate: query.includeSensitive === true,
-        includeSensitive: query.includeSensitive === true,
         limit: MAX_SEARCH_LIMIT,
       }
       let hits: ReturnType<MemoryIndex['search']>
@@ -369,7 +363,6 @@ export class MemoryService {
           title: record.title,
           tags: [...record.tags],
           ...(record.scope === undefined ? {} : { scope: { ...record.scope } }),
-          sensitivity: record.sensitivity,
           updatedAt: record.updatedAt,
           exactTitle: tier === 2,
           lexicalRank: 0,
@@ -380,7 +373,6 @@ export class MemoryService {
         try {
           const record = await this.options.records.read(hit.id)
           if (record.deletedAt !== undefined) continue
-          if (!query.includeSensitive && record.sensitivity !== 'normal') continue
           if (query.kinds?.length && !query.kinds.includes(record.kind)) continue
           candidates.push({ hit, record })
         } catch (error) {
@@ -504,9 +496,6 @@ export class MemoryService {
       }
       if (options.includeAttachments && record.deletedAt !== undefined) {
         throw new MemoryServiceError('not-found', 'Memory record was not found')
-      }
-      if ((options.includeContent || options.includeAttachments) && record.sensitivity === 'sensitive') {
-        requireActiveInteraction(ctx)
       }
       const result = view(record, options)
       await this.audit(ctx, id, 'get', 'success')
@@ -700,7 +689,6 @@ export class MemoryService {
           .sort((left, right) => left.id === right.id ? 0 : left.id < right.id ? -1 : 1)[0]
         if (!owner) throw new MemoryServiceError('not-found', 'Memory record was not found')
         memoryId = owner.id
-        if (owner.sensitivity === 'sensitive') requireActiveInteraction(ctx)
         const handle = await this.options.attachments.open(ctx.principal, id)
         await this.audit(ctx, memoryId, 'open-attachment', 'success')
         return handle

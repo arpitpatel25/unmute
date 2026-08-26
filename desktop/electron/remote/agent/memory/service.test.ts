@@ -22,7 +22,7 @@ const agent: McpPrincipal = {
   kind: 'unmute-agent', runId: 'run-1', interactionId: 'ix-1', expiresAt: 20_000,
 }
 
-function ctx(intent?: 'store' | 'update' | 'forget' | 'restore' | 'reveal-sensitive'): CapabilityCallContext {
+function ctx(intent?: 'store' | 'update' | 'forget' | 'restore'): CapabilityCallContext {
   return {
     principal: agent,
     now: NOW,
@@ -41,7 +41,6 @@ function input(overrides: Partial<CreateMemoryRecordInput> = {}): CreateMemoryRe
     tags: [],
     links: [],
     scope: { project: 'Atlas' },
-    sensitivity: 'normal',
     attachments: [],
     references: [],
     provenance: { source: 'voice' },
@@ -123,7 +122,6 @@ class FakeRecordStore {
     if (patch.links !== undefined) next.links = clone(patch.links)
     if (patch.scope === null) delete next.scope
     else if (patch.scope !== undefined) next.scope = clone(patch.scope)
-    if (patch.sensitivity !== undefined) next.sensitivity = patch.sensitivity
     if (patch.attachments !== undefined) next.attachments = clone(patch.attachments)
     if (patch.references !== undefined) next.references = clone(patch.references)
     if (patch.provenance !== undefined) next.provenance = clone(patch.provenance)
@@ -240,14 +238,11 @@ class FakeIndex implements MemoryIndex {
     const normalized = query.text.toLocaleLowerCase('en-US')
     return [...this.projected.values()]
       .filter((record) => record.deletedAt === undefined)
-      .filter((record) => record.sensitivity === 'normal'
-        || (record.sensitivity === 'private' && query.includePrivate)
-        || (record.sensitivity === 'sensitive' && query.includeSensitive))
       .filter((record) => [record.title, record.content ?? '', ...record.tags]
         .some((value) => value.toLocaleLowerCase('en-US').includes(normalized)))
       .map((record) => ({
         id: record.id, kind: record.kind, title: record.title, tags: clone(record.tags),
-        scope: clone(record.scope), sensitivity: record.sensitivity, updatedAt: record.updatedAt,
+        scope: clone(record.scope), updatedAt: record.updatedAt,
         exactTitle: record.title.toLocaleLowerCase('en-US') === normalized, lexicalRank: 0,
       }))
   }
@@ -526,13 +521,13 @@ test('deleting needs a live interaction and nothing else', async () => {
 // Reading a secret back to the person who saved it, during their own live
 // interaction, is the point of saving it. Disclosure to anywhere ELSE is a
 // delivery, which is a separate capability with its own boundary.
-test('revealing a sensitive record needs a live interaction and nothing else', async () => {
+test('reads a stored record without a separate reveal authorization', async () => {
   const { service } = fixture()
   const secret = await service.store(ctx(), input({
-    title: 'Secret', content: 'sensitive-body', sensitivity: 'sensitive',
+    title: 'Resume', content: 'resume-body',
   }))
   const revealed = await service.get(ctx(), secret.id, { includeContent: true })
-  assert.equal(revealed.content, 'sensitive-body')
+  assert.equal(revealed.content, 'resume-body')
 })
 
 test('stores captured attachment handles as opaque canonical attachment identifiers and audits success', async () => {
@@ -673,7 +668,7 @@ test('ranks exact normalized titles, then exact aliases, then BM25 with bounded 
   }
   index.searchHits = values.map((value) => ({
     id: value.id, kind: 'note', title: value.title, tags: [...value.tags],
-    scope: clone(value.scope), sensitivity: 'normal', updatedAt: 9_500,
+    scope: clone(value.scope), updatedAt: 9_500,
     exactTitle: value.id === 'memory-title', lexicalRank: value.rank,
   }))
 
@@ -694,7 +689,7 @@ test('keeps ambiguous equal-rank results equal-scored and breaks their order by 
     })
   }
   index.searchHits = ['memory-b', 'memory-a'].map((id) => ({
-    id, kind: 'note', title: 'Atlas note', tags: [], sensitivity: 'normal',
+    id, kind: 'note', title: 'Atlas note', tags: [],
     updatedAt: 9_000, exactTitle: false, lexicalRank: -1,
   }))
 
@@ -703,23 +698,22 @@ test('keeps ambiguous equal-rank results equal-scored and breaks their order by 
   assert.equal(results[0]?.score, results[1]?.score)
 })
 
-test('excludes deleted and protected records defensively unless sensitive access is explicit', async () => {
+test('search returns every live record even when legacy data carries a sensitivity field', async () => {
   const { service, records, index } = fixture()
   const values: MemoryRecord[] = [
     { ...input({ title: 'Normal atlas' }), id: 'normal', createdAt: 1, updatedAt: 2, version: 1 },
-    { ...input({ title: 'Private atlas', sensitivity: 'private' }), id: 'private', createdAt: 1, updatedAt: 2, version: 1 },
-    { ...input({ title: 'Sensitive atlas', sensitivity: 'sensitive' }), id: 'sensitive', createdAt: 1, updatedAt: 2, version: 1 },
+    { ...input({ title: 'Private atlas' }), sensitivity: 'private', id: 'private', createdAt: 1, updatedAt: 2, version: 1 } as MemoryRecord,
+    { ...input({ title: 'Sensitive atlas' }), sensitivity: 'sensitive', id: 'sensitive', createdAt: 1, updatedAt: 2, version: 1 } as MemoryRecord,
     { ...input({ title: 'Deleted atlas' }), id: 'deleted', createdAt: 1, updatedAt: 2, version: 1, deletedAt: 2 },
   ]
   for (const value of values) records.active.set(value.id, value)
   index.searchHits = values.map((value) => ({
-    id: value.id, kind: value.kind, title: value.title, tags: [], sensitivity: value.sensitivity,
+    id: value.id, kind: value.kind, title: value.title, tags: [],
     updatedAt: value.updatedAt, exactTitle: false, lexicalRank: 0,
   }))
 
-  assert.deepEqual((await service.search(ctx(), { text: 'atlas' })).map(({ id }) => id), ['normal'])
   assert.deepEqual(
-    (await service.search(ctx('reveal-sensitive'), { text: 'atlas', includeSensitive: true })).map(({ id }) => id),
+    (await service.search(ctx(), { text: 'atlas' })).map(({ id }) => id),
     ['normal', 'private', 'sensitive'],
   )
 })
@@ -735,7 +729,7 @@ test('returns malicious stored prompt text only as compact quoted untrusted evid
   const [result] = await service.search(ctx(), { text: 'destructive tools' })
   assert(result)
   assert.deepEqual(Object.keys(result), [
-    'id', 'title', 'kind', 'snippet', 'score', 'sensitivity', 'attachmentCount', 'scopes',
+    'id', 'title', 'kind', 'snippet', 'score', 'attachmentCount', 'scopes',
   ])
   assert.equal(result.id, stored.id)
   assert.equal(result.snippet, JSON.stringify(malicious))
@@ -743,7 +737,7 @@ test('returns malicious stored prompt text only as compact quoted untrusted evid
   assert.equal('content' in result, false)
 })
 
-test('get reveals only requested fields, conceals paths, and gates sensitive content separately', async () => {
+test('get reveals only requested fields and conceals paths', async () => {
   const { service } = fixture()
   const normal = await service.store(ctx('store'), input({
     attachments: ['capture-handle'],
@@ -758,14 +752,6 @@ test('get reveals only requested fields, conceals paths, and gates sensitive con
   assert.equal(expanded.content, 'Memory body')
   assert.deepEqual(expanded.attachments, ['attachment-1'])
 
-  const sensitive = await service.store(ctx('store'), input({
-    title: 'Secret', content: 'sensitive-body', sensitivity: 'sensitive',
-  }))
-  // Sensitivity still shapes what is returned by DEFAULT — a search will not
-  // volunteer it — but reading your own secret back inside your own live
-  // interaction is not something a keyword should have to unlock.
-  const revealed = await service.get(ctx(), sensitive.id, { includeContent: true })
-  assert.equal(revealed.content, 'sensitive-body')
 })
 
 test('rebuilds the disposable index exactly once from canonical active and trash truth', async () => {
@@ -989,15 +975,15 @@ test('retries recovery idempotently when recovery itself is interrupted', async 
   ])
 })
 
-test('gates attachment disclosure by live canonical ownership, deletion, and sensitivity', async () => {
+test('gates attachment disclosure by live canonical ownership and deletion', async () => {
   const value = dependencies()
   value.records.active.set('memory-normal', {
     ...input({ attachments: ['attachment-normal'] }),
     id: 'memory-normal', createdAt: 1, updatedAt: 2, version: 1,
   })
-  value.records.active.set('memory-sensitive', {
-    ...input({ sensitivity: 'sensitive', attachments: ['attachment-sensitive'] }),
-    id: 'memory-sensitive', createdAt: 1, updatedAt: 2, version: 1,
+  value.records.active.set('memory-resume', {
+    ...input({ attachments: ['attachment-resume'] }),
+    id: 'memory-resume', createdAt: 1, updatedAt: 2, version: 1,
   })
   value.records.trash.set('memory-deleted', {
     ...input({ attachments: ['attachment-deleted'] }),
@@ -1005,16 +991,13 @@ test('gates attachment disclosure by live canonical ownership, deletion, and sen
   })
   const service = serviceFor(value)
 
-  // Sensitive material is reachable inside a live interaction; what is still
-  // enforced here is OWNERSHIP and DELETION, which are facts about the store
-  // rather than guesses about the user's phrasing.
-  const sensitiveView = await service.get(ctx(), 'memory-sensitive', { includeAttachments: true })
-  assert.deepEqual(sensitiveView.attachments, ['attachment-sensitive'])
+  const resumeView = await service.get(ctx(), 'memory-resume', { includeAttachments: true })
+  assert.deepEqual(resumeView.attachments, ['attachment-resume'])
   await assert.rejects(
     service.get(ctx(), 'memory-deleted', { includeAttachments: true, includeDeleted: true }),
     (error: unknown) => error instanceof MemoryServiceError && error.code === 'not-found',
   )
-  const opened = await service.openAttachment(ctx(), 'attachment-sensitive')
+  const opened = await service.openAttachment(ctx(), 'attachment-resume')
   assert.equal(typeof opened.handle, 'string')
   await assert.rejects(
     service.openAttachment(ctx(), 'attachment-deleted'),
@@ -1027,14 +1010,12 @@ test('gates attachment disclosure by live canonical ownership, deletion, and sen
   await service.openAttachment(ctx(), 'attachment-normal')
 
   assert.deepEqual(value.attachments.calls, [
-    'open:attachment-sensitive', 'open:attachment-normal',
+    'open:attachment-resume', 'open:attachment-normal',
   ])
   const opens = value.audit.events.filter((event) => event.operation === 'open-attachment')
-  // The sensitive open now succeeds inside a live interaction; the two
-  // 'unassigned' failures are the deleted and orphaned attachments, which are
-  // still refused because ownership is a fact, not an inference.
+  // The two 'unassigned' failures are the deleted and orphaned attachments.
   assert.deepEqual(opens.map(({ memoryId, outcome }) => ({ memoryId, outcome })), [
-    { memoryId: 'memory-sensitive', outcome: 'success' },
+    { memoryId: 'memory-resume', outcome: 'success' },
     { memoryId: 'unassigned', outcome: 'failure' },
     { memoryId: 'unassigned', outcome: 'failure' },
     { memoryId: 'memory-normal', outcome: 'success' },
@@ -1064,7 +1045,7 @@ test('rejects attachment and unknown update fields before canonical or metadata 
 test('swallows only typed not-found projection staleness and fails closed on canonical corruption', async () => {
   const { service, records, index } = fixture()
   const hit = (id: string): MemoryIndexSearchHit => ({
-    id, kind: 'note', title: 'Atlas', tags: [], sensitivity: 'normal',
+    id, kind: 'note', title: 'Atlas', tags: [],
     updatedAt: 2, exactTitle: true, lexicalRank: 0,
   })
   index.searchHits = [hit('stale')]

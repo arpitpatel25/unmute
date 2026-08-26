@@ -27,6 +27,7 @@ const require = createRequire(import.meta.url)
 
 interface NativeDatabase {
   pragma(source: string, options?: { simple?: boolean }): unknown
+  exec(source: string): NativeDatabase
   prepare(source: string): {
     all(...values: unknown[]): unknown[]
     get(...values: unknown[]): unknown
@@ -98,7 +99,6 @@ function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
     content: 'Use concise sentences for the quarterly launch update.',
     tags: ['atlas', 'writing'],
     scope: { app: 'Slack', project: 'Atlas', purpose: 'status update' },
-    sensitivity: 'normal',
     attachments: ['attachment-1'],
     references: [{ type: 'url', value: 'https://example.com/atlas' }],
     provenance: { source: 'voice', original: 'Remember the Atlas launch voice' },
@@ -190,12 +190,45 @@ test('opens a real SQLCipher database and creates the complete projection schema
   assert.deepEqual(indexes, [
     'memories_deleted_at_idx',
     'memories_kind_idx',
-    'memories_sensitivity_idx',
     'memories_title_normalized_idx',
     'memories_updated_at_idx',
     'sqlite_autoindex_memories_1',
   ])
   encrypted.close()
+})
+
+test('rebuilds a legacy sensitivity projection into the field-free schema', async (t) => {
+  const temporary = await temporaryDatabase(t)
+  const Database = nativeDatabase()
+  const legacy = new Database(temporary.path)
+  applyKey(legacy, MASTER_KEY)
+  legacy.exec(`
+    CREATE TABLE memories (
+      id TEXT PRIMARY KEY NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      title_normalized TEXT NOT NULL,
+      sensitivity TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      version INTEGER NOT NULL
+    );
+    INSERT INTO memories VALUES ('stale', 'note', 'Stale', 'stale', 'private', 1, 1, 1);
+  `)
+  legacy.close()
+
+  const index = openSqlCipherMemoryIndex({ databasePath: temporary.path, key: MASTER_KEY })
+  assert.deepEqual(index.search({ text: 'stale' }), [])
+  index.project(record({ id: 'resume', title: 'Resume', content: 'career history' }))
+  assert.deepEqual(index.search({ text: 'career history' }).map(({ id }) => id), ['resume'])
+  index.close()
+
+  const migrated = new Database(temporary.path, { readonly: true, fileMustExist: true })
+  applyKey(migrated, MASTER_KEY)
+  const columns = migrated.prepare("SELECT name FROM pragma_table_info('memories') ORDER BY cid")
+    .all().map((row) => (row as { name: string }).name)
+  assert.equal(columns.includes('sensitivity'), false)
+  migrated.close()
 })
 
 test('clears an invalid temporary key copy without mutating the caller key', () => {
@@ -358,7 +391,7 @@ test('the encrypted schema cannot be read without the key or with the wrong key'
   assert.ok(!failure.message.includes(basename(temporary.path)))
 })
 
-test('finds exact titles and lexical body terms while requiring explicit private access', async (t) => {
+test('finds exact titles and lexical body terms without an extra access flag', async (t) => {
   const temporary = await temporaryDatabase(t)
   const index = openSqlCipherMemoryIndex({ databasePath: temporary.path, key: MASTER_KEY })
   t.after(() => index.close())
@@ -367,7 +400,6 @@ test('finds exact titles and lexical body terms while requiring explicit private
     id: 'memory-private',
     title: 'Private launch checklist',
     content: 'Coordinate the zephyr rehearsal with Mira.',
-    sensitivity: 'private',
   }))
 
   const exact = index.search({ text: 'Atlas launch voice' })
@@ -376,11 +408,7 @@ test('finds exact titles and lexical body terms while requiring explicit private
   const lexical = index.search({ text: 'quarterly concise' })
   assert.deepEqual(lexical.map((item) => item.id), ['memory-1'])
   assert.equal(lexical[0]!.exactTitle, false)
-  assert.deepEqual(index.search({ text: 'zephyr' }), [])
-  assert.deepEqual(
-    index.search({ text: 'zephyr', includePrivate: true }).map((item) => item.id),
-    ['memory-private'],
-  )
+  assert.deepEqual(index.search({ text: 'zephyr' }).map((item) => item.id), ['memory-private'])
 })
 
 test('MemoryService retrieves tokenless Unicode exact titles and aliases through the native index', async (t) => {
@@ -417,7 +445,7 @@ test('MemoryService retrieves tokenless Unicode exact titles and aliases through
   assert.deepEqual(index.search({ text: '🚀 " OR *' }), [])
 })
 
-test('omits secret-bearing bodies and tags from every searchable and returned projection surface', async (t) => {
+test('omits credential-reference bodies and tags from every searchable projection surface', async (t) => {
   const temporary = await temporaryDatabase(t)
   const index = openSqlCipherMemoryIndex({ databasePath: temporary.path, key: MASTER_KEY })
   index.project(record({
@@ -426,15 +454,13 @@ test('omits secret-bearing bodies and tags from every searchable and returned pr
     title: 'Production API credential',
     content: 'raw-secret-value-sk_live_123',
     tags: ['credential-tag-canary'],
-    sensitivity: 'normal',
   }))
   index.project(record({
-    id: 'memory-sensitive',
+    id: 'memory-guidance',
     kind: 'guidance',
     title: 'Private recovery answer',
-    content: 'sensitive-answer-canary',
-    tags: ['sensitive-tag-canary'],
-    sensitivity: 'sensitive',
+    content: 'recovery-answer-canary',
+    tags: ['recovery-tag-canary'],
   }))
 
   assert.deepEqual(index.search({ text: 'sk_live_123' }), [])
@@ -447,16 +473,15 @@ test('omits secret-bearing bodies and tags from every searchable and returned pr
     tags: ['credential-tag-canary'],
   }), [])
 
-  assert.deepEqual(index.search({ text: 'sensitive-answer-canary', includeSensitive: true }), [])
-  assert.deepEqual(index.search({ text: 'sensitive-tag-canary', includeSensitive: true }), [])
-  const sensitiveHits = index.search({ text: 'Private recovery answer', includeSensitive: true })
-  assert.deepEqual(sensitiveHits.map((item) => item.id), ['memory-sensitive'])
-  assert.deepEqual(sensitiveHits[0]!.tags, [])
+  assert.deepEqual(index.search({ text: 'recovery-answer-canary' }).map((item) => item.id), ['memory-guidance'])
+  assert.deepEqual(index.search({ text: 'recovery-tag-canary' }).map((item) => item.id), ['memory-guidance'])
+  const guidanceHits = index.search({ text: 'Private recovery answer' })
+  assert.deepEqual(guidanceHits.map((item) => item.id), ['memory-guidance'])
+  assert.deepEqual(guidanceHits[0]!.tags, ['recovery-tag-canary'])
   assert.deepEqual(index.search({
     text: 'Private recovery answer',
-    tags: ['sensitive-tag-canary'],
-    includeSensitive: true,
-  }), [])
+    tags: ['recovery-tag-canary'],
+  }).map((item) => item.id), ['memory-guidance'])
   index.close()
 
   const Database = nativeDatabase()
@@ -465,18 +490,19 @@ test('omits secret-bearing bodies and tags from every searchable and returned pr
   assert.deepEqual(
     encrypted.prepare(
       `SELECT memory_id, body, tags FROM memory_fts
-        WHERE memory_id IN ('memory-credential', 'memory-sensitive')
+        WHERE memory_id IN ('memory-credential', 'memory-guidance')
         ORDER BY memory_id`,
     ).all(),
     [
       { memory_id: 'memory-credential', body: '', tags: '' },
-      { memory_id: 'memory-sensitive', body: '', tags: '' },
+      { memory_id: 'memory-guidance', body: 'recovery-answer-canary', tags: 'recovery-tag-canary' },
     ],
   )
   assert.deepEqual(encrypted.prepare(
     `SELECT memory_id, tag FROM memory_tags
-      WHERE memory_id IN ('memory-credential', 'memory-sensitive')`,
-  ).all(), [])
+      WHERE memory_id IN ('memory-credential', 'memory-guidance')
+      ORDER BY memory_id`,
+  ).all(), [{ memory_id: 'memory-guidance', tag: 'recovery-tag-canary' }])
   encrypted.close()
 })
 

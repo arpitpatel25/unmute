@@ -7,7 +7,7 @@ import type {
   MemoryIndexSearchHit,
   MemoryIndexSearchQuery,
 } from './index.ts'
-import type { MemoryRecord, MemoryScope, MemorySensitivity } from './types.ts'
+import type { MemoryRecord, MemoryScope } from './types.ts'
 
 const require = createRequire(import.meta.url)
 const MASTER_KEY_BYTES = 32
@@ -21,7 +21,6 @@ const SCHEMA = `
     kind TEXT NOT NULL,
     title TEXT NOT NULL,
     title_normalized TEXT NOT NULL,
-    sensitivity TEXT NOT NULL CHECK (sensitivity IN ('normal', 'private', 'sensitive')),
     scope_app TEXT,
     scope_project TEXT,
     scope_purpose TEXT,
@@ -35,8 +34,6 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS memories_updated_at_idx ON memories(updated_at DESC);
   CREATE INDEX IF NOT EXISTS memories_deleted_at_idx ON memories(deleted_at);
   CREATE INDEX IF NOT EXISTS memories_kind_idx ON memories(kind);
-  CREATE INDEX IF NOT EXISTS memories_sensitivity_idx ON memories(sensitivity);
-
   CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     memory_id UNINDEXED,
     title,
@@ -149,6 +146,21 @@ function closeQuietly(database: NativeDatabase | null): void {
   try { database?.close() } catch { /* opening failure remains authoritative */ }
 }
 
+/** The encrypted index is disposable; canonical records are rebuilt after open. */
+function removeLegacySensitivityProjection(database: NativeDatabase): void {
+  const legacyColumn = database.prepare(
+    "SELECT 1 AS present FROM pragma_table_info('memories') WHERE name = 'sensitivity'",
+  ).get()
+  if (!legacyColumn) return
+  database.exec(`
+    DROP TABLE IF EXISTS attachments;
+    DROP TABLE IF EXISTS memory_versions;
+    DROP TABLE IF EXISTS memory_tags;
+    DROP TABLE IF EXISTS memory_fts;
+    DROP TABLE IF EXISTS memories;
+  `)
+}
+
 function initializeDatabase(
   Database: NativeDatabaseConstructor,
   databasePath: string,
@@ -175,6 +187,7 @@ function initializeDatabase(
     // Force SQLCipher to authenticate an existing file before touching schema.
     database.prepare('SELECT count(*) AS count FROM sqlite_schema').get()
     database.pragma('foreign_keys = ON')
+    removeLegacySensitivityProjection(database)
     database.exec(SCHEMA)
     chmodSync(databasePath, 0o600)
     return { database, cipherVersion: reportedVersion }
@@ -214,9 +227,6 @@ function assertRecord(record: MemoryRecord): void {
   if (!record.title.trim() || !record.kind.trim()) {
     throw new MemoryIndexError('operation-failed', 'Memory index operation failed')
   }
-  if (!['normal', 'private', 'sensitive'].includes(record.sensitivity)) {
-    throw new MemoryIndexError('operation-failed', 'Memory index operation failed')
-  }
 }
 
 function operationFailure<T>(operation: () => T): T {
@@ -232,7 +242,6 @@ interface SearchRow {
   id: string
   kind: string
   title: string
-  sensitivity: MemorySensitivity
   scope_app: string | null
   scope_project: string | null
   scope_purpose: string | null
@@ -285,14 +294,8 @@ class SqlCipherMemoryIndex implements MemoryIndex {
         throw new MemoryIndexError('invalid-query', 'Memory index query is invalid')
       }
 
-      const where = ['m.deleted_at IS NULL', `m.sensitivity IN (${[
-        'normal',
-        ...(query.includePrivate ? ['private'] : []),
-        ...(query.includeSensitive ? ['sensitive'] : []),
-      ].map(() => '?').join(', ')})`]
-      const values: unknown[] = ['normal']
-      if (query.includePrivate) values.push('private')
-      if (query.includeSensitive) values.push('sensitive')
+      const where = ['m.deleted_at IS NULL']
+      const values: unknown[] = []
 
       if (query.kinds?.length) {
         where.push(`m.kind IN (${query.kinds.map(() => '?').join(', ')})`)
@@ -316,7 +319,6 @@ class SqlCipherMemoryIndex implements MemoryIndex {
           m.id,
           m.kind,
           m.title,
-          m.sensitivity,
           m.scope_app,
           m.scope_project,
           m.scope_purpose,
@@ -339,7 +341,6 @@ class SqlCipherMemoryIndex implements MemoryIndex {
         title: row.title,
         tags: tags.all(row.id).map((tag) => (tag as { tag: string }).tag),
         scope: this.rowScope(row),
-        sensitivity: row.sensitivity,
         updatedAt: row.updated_at,
         exactTitle: row.exact_title === 1,
         lexicalRank: row.lexical_rank,
@@ -380,15 +381,14 @@ class SqlCipherMemoryIndex implements MemoryIndex {
     const scope = record.scope ?? {}
     this.database.prepare(`
       INSERT INTO memories (
-        id, kind, title, title_normalized, sensitivity,
+        id, kind, title, title_normalized,
         scope_app, scope_project, scope_purpose,
         created_at, updated_at, version, deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         kind = excluded.kind,
         title = excluded.title,
         title_normalized = excluded.title_normalized,
-        sensitivity = excluded.sensitivity,
         scope_app = excluded.scope_app,
         scope_project = excluded.scope_project,
         scope_purpose = excluded.scope_purpose,
@@ -401,7 +401,6 @@ class SqlCipherMemoryIndex implements MemoryIndex {
       record.kind,
       record.title,
       normalizeSearchable(record.title),
-      record.sensitivity,
       scope.app ?? null,
       scope.project ?? null,
       scope.purpose ?? null,
@@ -414,7 +413,7 @@ class SqlCipherMemoryIndex implements MemoryIndex {
     this.database.prepare('DELETE FROM memory_fts WHERE memory_id = ?').run(record.id)
     this.database.prepare('DELETE FROM memory_tags WHERE memory_id = ?').run(record.id)
     this.database.prepare('DELETE FROM attachments WHERE memory_id = ?').run(record.id)
-    const secretBearing = record.sensitivity === 'sensitive' || record.kind === 'credential-ref'
+    const secretBearing = record.kind === 'credential-ref'
     const body = secretBearing ? '' : record.content ?? ''
     const searchableTags = secretBearing ? '' : record.tags.join(' ')
     this.database.prepare(`

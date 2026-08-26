@@ -22,14 +22,13 @@ import {
   type MemoryRecordPatch,
   type MemoryReference,
   type MemoryScope,
-  type MemorySensitivity,
   type PresentedMemoryRecord,
 } from './types'
 
 const SERIALIZER_FORMAT = 'unmute-memory-record'
-const SERIALIZER_VERSION = 3
+const SERIALIZER_VERSION = 4
 /** Readable versions, oldest first. A record written by any of them parses. */
-const SUPPORTED_SERIALIZER_VERSIONS = [1, 2, 3] as const
+const SUPPORTED_SERIALIZER_VERSIONS = [1, 2, 3, 4] as const
 const LEGACY_SERIALIZER_VERSION = 1
 const FILE_MODE = 0o600
 const DIRECTORY_MODE = 0o700
@@ -122,12 +121,6 @@ function requireScope(value: unknown): asserts value is MemoryScope {
   }
 }
 
-function requireSensitivity(value: unknown): asserts value is MemorySensitivity {
-  if (value !== 'normal' && value !== 'private' && value !== 'sensitive') {
-    throw new RecordStoreError('invalid-input', 'Memory sensitivity is invalid')
-  }
-}
-
 function requireReferences(value: unknown): asserts value is MemoryReference[] {
   if (!Array.isArray(value)) throw new RecordStoreError('invalid-input', 'Memory references are invalid')
   for (const reference of value) {
@@ -194,7 +187,6 @@ function validateRecord(record: MemoryRecord): void {
   }
   requireStringArray(record.tags, 'tags')
   if (record.scope !== undefined) requireScope(record.scope)
-  requireSensitivity(record.sensitivity)
   requireStringArray(record.attachments, 'attachments')
   requireReferences(record.references)
   if (record.summary !== undefined && typeof record.summary !== 'string') {
@@ -215,7 +207,7 @@ function validateCreateInput(input: CreateMemoryRecordInput): void {
     throw new RecordStoreError('invalid-input', 'Memory create input is invalid')
   }
   const expected = new Set([
-    'kind', 'title', 'summary', 'content', 'tags', 'links', 'scope', 'sensitivity',
+    'kind', 'title', 'summary', 'content', 'tags', 'links', 'scope',
     'attachments', 'references', 'provenance',
   ])
   if (Object.keys(input).some((key) => !expected.has(key))) {
@@ -261,7 +253,6 @@ export function serializeMemoryRecord(record: MemoryRecord): string {
     metadataLine('tags', record.tags),
     metadataLine('links', record.links),
     metadataLine('scope', canonicalScope(record.scope)),
-    metadataLine('sensitivity', record.sensitivity),
     metadataLine('attachments', record.attachments),
     metadataLine('references', canonicalReferences(record.references)),
     metadataLine('provenance', canonicalProvenance(record.provenance)),
@@ -318,7 +309,6 @@ function parseDocument(document: unknown, envelopeVersion: number): MemoryRecord
     tags: metadata.get('tags') as string[],
     links: Array.isArray(links) ? links as string[] : [],
     ...(metadata.get('scope') === null ? {} : { scope: metadata.get('scope') as MemoryScope }),
-    sensitivity: metadata.get('sensitivity') as MemorySensitivity,
     attachments: metadata.get('attachments') as string[],
     references: metadata.get('references') as MemoryReference[],
     provenance: metadata.get('provenance') as MemoryProvenance,
@@ -460,7 +450,6 @@ export class EncryptedRecordStore {
       if (patch.links !== undefined) updated.links = patch.links
       if (patch.scope === null) delete updated.scope
       else if (patch.scope !== undefined) updated.scope = patch.scope
-      if (patch.sensitivity !== undefined) updated.sensitivity = patch.sensitivity
       if (patch.attachments !== undefined) updated.attachments = patch.attachments
       if (patch.references !== undefined) updated.references = patch.references
       if (patch.provenance !== undefined) updated.provenance = patch.provenance
@@ -616,7 +605,7 @@ export class EncryptedRecordStore {
       throw new RecordStoreError('invalid-input', 'Memory update patch is invalid')
     }
     const allowed = new Set([
-      'kind', 'title', 'summary', 'content', 'tags', 'links', 'scope', 'sensitivity',
+      'kind', 'title', 'summary', 'content', 'tags', 'links', 'scope',
       'attachments', 'references', 'provenance',
     ])
     if (Object.keys(patch).length === 0 || Object.keys(patch).some((key) => !allowed.has(key))) {

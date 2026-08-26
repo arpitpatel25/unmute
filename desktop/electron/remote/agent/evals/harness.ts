@@ -46,7 +46,7 @@ export interface EvalOutcome {
 export interface StubBehaviour {
   searchResults?: Array<{
     id: string; title: string; kind: string; snippet: string
-    score: number; sensitivity: string; attachmentCount: number; scopes: string[]
+    score: number; attachmentCount: number; scopes: string[]
   }>
   getRecord?: Record<string, unknown>
   storeFails?: string

@@ -15,7 +15,6 @@ export const MEMORY_KINDS = [
 ] as const
 
 export type MemoryKind = typeof MEMORY_KINDS[number]
-export type MemorySensitivity = 'normal' | 'private' | 'sensitive'
 export type MemorySource = 'voice' | 'selection' | 'attachment' | 'import'
 export type MemoryReferenceType = 'url' | 'path' | 'external'
 
@@ -61,7 +60,6 @@ export interface MemoryRecord {
    */
   links: string[]
   scope?: MemoryScope
-  sensitivity: MemorySensitivity
   attachments: string[]
   references: MemoryReference[]
   provenance: MemoryProvenance
@@ -84,7 +82,6 @@ export interface MemoryRecordPatch {
   tags?: string[]
   links?: string[]
   scope?: MemoryScope | null
-  sensitivity?: MemorySensitivity
   attachments?: string[]
   references?: MemoryReference[]
   provenance?: MemoryProvenance

@@ -37,7 +37,6 @@ function input(overrides: Partial<CreateMemoryRecordInput> = {}): CreateMemoryRe
     tags: ['atlas', 'voice'],
     links: [],
     scope: { app: 'Slack', project: 'Atlas', purpose: 'writing' },
-    sensitivity: 'private',
     attachments: ['attachment-1'],
     references: [{ type: 'url', value: 'https://example.com/atlas' }],
     provenance: { source: 'voice', original: 'Remember my Atlas voice' },
@@ -122,7 +121,6 @@ test('serializes deterministic metadata and Markdown in a versioned JSON payload
     content: '# Body\n\nText',
     tags: ['two', 'one'],
     links: [],
-    sensitivity: 'normal',
     attachments: [],
     references: [],
     provenance: { source: 'import' },
@@ -133,10 +131,10 @@ test('serializes deterministic metadata and Markdown in a versioned JSON payload
 
   assert.equal(serializeMemoryRecord(record), JSON.stringify({
     format: 'unmute-memory-record',
-    serializerVersion: 3,
+    serializerVersion: 4,
     document: [
       '---',
-      'serializerVersion: 3',
+      'serializerVersion: 4',
       'id: "memory-1"',
       'kind: "note"',
       'title: "A: title"',
@@ -145,7 +143,6 @@ test('serializes deterministic metadata and Markdown in a versioned JSON payload
       'tags: ["two","one"]',
       'links: []',
       'scope: null',
-      'sensitivity: "normal"',
       'attachments: []',
       'references: []',
       'provenance: {"source":"import"}',
@@ -166,7 +163,6 @@ test('serializes nested metadata deterministically regardless of property insert
     title: 'Reference',
     tags: [],
     links: [],
-    sensitivity: 'normal',
     attachments: [],
     references: [{ type: 'url', value: 'https://example.com' }],
     provenance: { source: 'import', original: 'source' },
@@ -185,10 +181,31 @@ test('serializes nested metadata deterministically regardless of property insert
   assert.equal(serializeMemoryRecord(reordered), serializeMemoryRecord(common))
 })
 
+test('reads legacy sensitivity metadata without preserving or rewriting the concept', () => {
+  const current: MemoryRecord = {
+    id: 'legacy-private', kind: 'document', title: 'Resume', tags: [], links: [],
+    attachments: ['resume-file'], references: [], provenance: { source: 'attachment' },
+    createdAt: 10, updatedAt: 10, version: 1,
+  }
+  const envelope = JSON.parse(serializeMemoryRecord(current)) as {
+    serializerVersion: number
+    document: string
+  }
+  envelope.serializerVersion = 3
+  envelope.document = envelope.document
+    .replace('serializerVersion: 4', 'serializerVersion: 3')
+    .replace('scope: null\n', 'scope: null\nsensitivity: "private"\n')
+
+  const restored = deserializeMemoryRecord(JSON.stringify(envelope))
+
+  assert.deepEqual(restored, current)
+  assert.equal(serializeMemoryRecord(restored).includes('sensitivity:'), false)
+})
+
 test('round-trips absent content distinctly from explicit empty Markdown', () => {
   const withoutContent: MemoryRecord = {
     id: 'without-content', kind: 'note', title: 'Absent', tags: [], links: [],
-    sensitivity: 'normal', attachments: [], references: [],
+    attachments: [], references: [],
     provenance: { source: 'import' }, createdAt: 10, updatedAt: 10, version: 1,
   }
   const withEmptyContent: MemoryRecord = {

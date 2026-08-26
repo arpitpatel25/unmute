@@ -4,7 +4,6 @@ import {
   type MemoryKind,
   type MemoryRecord,
   type MemoryScope,
-  type MemorySensitivity,
 } from './types'
 
 const MAX_SNIPPET_CODE_POINTS = 240
@@ -15,7 +14,6 @@ export interface MemorySearchQuery {
   kinds?: readonly string[]
   tags?: readonly string[]
   scope?: MemoryScope
-  includeSensitive?: boolean
   limit?: number
 }
 
@@ -31,7 +29,6 @@ export interface MemorySearchResult {
   summary?: string
   snippet: string
   score: number
-  sensitivity: MemorySensitivity
   attachmentCount: number
   scopes: string[]
 }
@@ -108,8 +105,8 @@ function kind(record: MemoryRecord): MemoryKind {
  * can be decided on without opening the record.
  */
 function quotedSnippet(record: MemoryRecord): string {
-  if (record.sensitivity === 'sensitive' || record.kind === 'credential-ref') {
-    return JSON.stringify('[sensitive memory content withheld]')
+  if (record.kind === 'credential-ref') {
+    return JSON.stringify('[credential content withheld from search]')
   }
   const source = record.summary ?? record.content ?? record.title
   const codePoints = [...source]
@@ -156,7 +153,6 @@ export function rankMemorySearch(
     ...(candidate.record.summary === undefined ? {} : { summary: candidate.record.summary }),
     snippet: quotedSnippet(candidate.record),
     score: value,
-    sensitivity: candidate.record.sensitivity,
     attachmentCount: candidate.record.attachments.length,
     scopes: scopes(candidate.record.scope),
   }))

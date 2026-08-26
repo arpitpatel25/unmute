@@ -298,8 +298,9 @@ Every operation declares one consequence class:
 - `external-consequence`: defaults to draft/prepare and stop; sending or
   committing requires explicit confirmation.
 
-The Memory module uses the first four. Future modules reuse the same policy
-engine.
+The Memory module uses `read` and `reversible-write`; it does not classify
+records into separate access tiers. Future modules may reuse the other policy
+classes where their external consequences require them.
 
 ## 6. Personal Memory domain
 
@@ -362,8 +363,8 @@ raw credential/secret values are never written to the FTS index even inside the
 encrypted database.
 
 A record contains stable identity, title, canonical content or description,
-kind, tags, scope, sensitivity, provenance, timestamps, attachment handles, and
-external references.
+kind, tags, scope, provenance, timestamps, attachment handles, and external
+references.
 
 ```ts
 interface MemoryRecord {
@@ -373,7 +374,6 @@ interface MemoryRecord {
   content?: string
   tags: string[]
   scope?: { app?: string; project?: string; purpose?: string }
-  sensitivity: 'normal' | 'private' | 'sensitive'
   attachments: string[]
   references: Array<{ type: 'url' | 'path' | 'external'; value: string }>
   provenance: { source: 'voice' | 'selection' | 'attachment' | 'import'; original?: string }
@@ -405,8 +405,7 @@ no live or trashed record references it.
 
 SQLite with FTS5 provides lexical retrieval. The initial logical schema has:
 
-- `memories`: identity, kind, title, sensitivity, timestamps, deleted state,
-  and non-sensitive metadata.
+- `memories`: identity, kind, title, timestamps, deleted state, and metadata.
 - `memory_fts`: memory ID, title, body, tags, extracted text.
 - `memory_tags`: normalized tags.
 - `attachments`: opaque handle, owning/referring memory IDs, MIME type, hash,
@@ -439,11 +438,11 @@ results without changing the service or MCP contracts.
 `MemoryService.search` combines:
 
 1. Exact normalized title and alias matches.
-2. Exact-value matches for non-sensitive indexed values.
+2. Exact-value matches for indexed values.
 3. FTS5 lexical ranking.
 4. Title, tag, app, project, and purpose boosts.
 5. Modest recency/use boosts.
-6. Deduplication and sensitivity filtering.
+6. Deduplication.
 
 It returns compact evidence cards, not full files:
 
@@ -454,7 +453,6 @@ interface MemorySearchResult {
   kind: MemoryKind
   snippet: string
   score: number
-  sensitivity: 'normal' | 'private' | 'sensitive'
   attachmentCount: number
   scopes: string[]
 }
@@ -471,7 +469,6 @@ The controller may answer without a model only when every condition holds:
 - The utterance is read-only.
 - It matches a conservative retrieval grammar.
 - Exactly one record wins above a strict threshold.
-- The record is not sensitive.
 - No composition, explanation, delivery, or external action is requested.
 
 Ambiguity or additional intent falls through to the coding agent. The fast path
@@ -481,9 +478,9 @@ may decline; it must never guess.
 
 The first module exposes:
 
-- `memory_search(query, kinds?, tags?, scope?, limit?, include_sensitive?)`
+- `memory_search(query, kinds?, tags?, scope?, limit?)`
 - `memory_get(id, include_content?, include_attachments?)`
-- `memory_store(title, content?, attachments?, tags?, scope?, sensitivity?)`
+- `memory_store(title, content?, attachments?, tags?, scope?)`
 - `memory_update(id, patch)`
 - `memory_forget(id)`
 - `memory_restore(id)`
@@ -555,12 +552,9 @@ name or provider.
 
 ### 8.3 Memory management
 
-"What Unmute keeps" shows records, types, scopes, sensitivity, attachment
-presence, source, update time, versions, trash, and delete/restore controls. It
-is an audit and management surface, not a text-based alternative to speaking to
-the Agent.
-
-Sensitive content remains concealed until explicitly revealed.
+"What Unmute keeps" shows records, types, scopes, attachment presence, source,
+update time, versions, trash, and delete/restore controls. It is an audit and
+management surface, not a text-based alternative to speaking to the Agent.
 
 ## 9. Failure behavior
 
@@ -655,8 +649,7 @@ does on `main`.
 - Explicit-store enforcement.
 - Record validation, encryption round trips, atomic writes, recovery, and index
   rebuilding.
-- FTS ranking, exact matches, scope/tag boosts, ambiguity, deleted records, and
-  sensitive filtering.
+- FTS ranking, exact matches, scope/tag boosts, ambiguity, and deleted records.
 - Attachment copying, hashing, deduplication, reference counting, and failed
   copy rollback.
 - Version creation, update, forget, restore, and purge boundaries.
@@ -710,14 +703,15 @@ The first vertical slice is complete when:
 - The user can select Claude Code or Codex CLI specifically for Unmute Agent.
 - Two unrelated Agent requests can run concurrently without shared state.
 - The user can explicitly store text, a link, an image, and a local file.
-- Exact non-sensitive retrieval completes locally without a model.
+- Exact retrieval completes locally without a model.
 - Complex natural-language retrieval uses the selected provider and grounded
   Memory MCP evidence.
 - The user can update, forget, restore, open, copy, and deliver a stored item.
 - A writing style, template, or project vocabulary can be retrieved and applied
   to a downstream draft without changing the stored original.
 - Ordinary task sessions cannot list, search, read, or mutate personal memory.
-- Sensitive values are not present in FTS or logs and require explicit reveal.
+- Credential-reference bodies are not present in FTS, while the selected
+  record remains retrievable by title and readable through `memory_get`.
 - Completed Agent runs are reaped safely after the idle window while durable
   state remains available.
 - Consequential Agent-created work is tagged `Unmute` consistently across all
