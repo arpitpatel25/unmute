@@ -90,7 +90,7 @@ struct TaskSurfaceView: View {
                 actions(t)
                 footer(t)
                 } else {
-                    allClear
+                    EmptyView()
                 }
             }
             .padding(.horizontal, Theme.gutter)
@@ -103,18 +103,6 @@ struct TaskSurfaceView: View {
                     .allowsHitTesting(false)
             }
         }
-    }
-
-    /// The honest end state — the moment you're free.
-    private var allClear: some View {
-        VStack(spacing: 7) {
-            Image(systemName: "checkmark.circle")
-                .font(.system(size: 22, weight: .light))
-                .foregroundColor(Theme.cWorking)
-            Text("All clear").font(Theme.fHead).foregroundColor(Theme.text)
-            Text("Nothing needs you.").font(Theme.fSub).foregroundColor(Theme.textDim)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func summaryLine(_ t: TaskDetail) -> String? {
