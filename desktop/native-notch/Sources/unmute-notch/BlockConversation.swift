@@ -91,6 +91,30 @@ struct BlockConversation: View {
     /// measure are both derived from it.
     @State private var width: CGFloat = 900
 
+    /// Open on the last message's FIRST line, not on the thread's last pixel.
+    ///
+    /// Two separate bugs lived here, and only one of them was about anchoring.
+    ///
+    /// ANCHOR AFTER LAYOUT, NOT DURING IT. `onAppear` fires before SwiftUI has
+    /// laid the LazyVStack out, so `scrollTo` from inside it is a no-op and the
+    /// thread opened wherever the scroller happened to be — usually the very
+    /// top. ConversationPanel hit this first and fixed it by hopping to the
+    /// next runloop pass; this surface was written later and did not inherit
+    /// the fix. Hence the DispatchQueue.main.async.
+    ///
+    /// AND THE BOTTOM IS THE WRONG PLACE TO LAND. Scrolling to the bottom
+    /// sentinel puts the END of the newest message against the bottom edge, so
+    /// a long answer opens on its last line and has to be scrolled BACKWARDS to
+    /// read. Anchoring that turn's top instead opens it where you would start
+    /// reading. A short last message cannot leave a gap: the scroller clamps at
+    /// content end, so it simply sits at the bottom as before.
+    private func openAtLatest(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            guard let last = turns.last else { return }
+            proxy.scrollTo(last.id, anchor: .top)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
@@ -135,15 +159,16 @@ struct BlockConversation: View {
                         .transition(.opacity)
                     }
                 }
-                // A THREAD OPENS AT THE LIVE END, and follows as it grows.
-                .onAppear { proxy.scrollTo(BLOCK_BOTTOM, anchor: .bottom) }
+                // A THREAD OPENS AT THE START OF ITS LAST MESSAGE, and
+                // follows the live end as it grows.
+                .onAppear { openAtLatest(proxy) }
                 .onChange(of: turns.count) { _ in
                     guard atBottom else { return }   // do not yank a reader back
                     withAnimation(.easeOut(duration: 0.18)) {
                         proxy.scrollTo(BLOCK_BOTTOM, anchor: .bottom)
                     }
                 }
-                .onChange(of: id) { _ in proxy.scrollTo(BLOCK_BOTTOM, anchor: .bottom) }
+                .onChange(of: id) { _ in openAtLatest(proxy) }
             }
 
             if let usage {
