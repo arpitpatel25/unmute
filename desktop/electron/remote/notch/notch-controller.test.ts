@@ -201,6 +201,23 @@ test('working baseline is active; empty is dormant', () => {
   assert.equal(h.client.last('setState')!.state, 'dormant')
 })
 
+test('dormant teardown invalidates task detail so the same task can be shown again', () => {
+  const h = setup()
+  const task = makeTask({ id: 'w', state: 'processing', name: 'Long-running session' })
+  put(h, task)
+  const first = h.client.ofType('showTask').length
+  assert.ok(first > 0)
+
+  h.tasks.delete(task.id)
+  h.events.emit('removed', { id: task.id })
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'dormant')
+
+  put(h, task)
+  assert.ok(h.client.ofType('showTask').length > first,
+    'native cleared model.task on dormant, so unchanged detail must cross the wire again')
+})
+
 // ── gestures ────────────────────────────────────────────────────────────────
 
 test('tap with a front task → task surface + focus; tap idle → cockpit', () => {

@@ -1070,6 +1070,10 @@ export class NotchController {
     // whichever task had last been opened even after it finished.
     const activeTask = this.soleWorking()
     if (activeTask) this.sendDetail('showTask', activeTask)
+    // The native receiver unconditionally drops model.task on dormant. Its
+    // copy is gone, so our dedupe record must go with it; otherwise an
+    // unchanged task returning later gets only setState and opens empty.
+    if (working === 0) this.lastDetailJson.delete('showTask')
     this.client.send({ type: 'setState', state: working > 0 ? 'active' : 'dormant', attention: 0, working })
   }
 
