@@ -63,6 +63,7 @@ test('the real Memory capability remains invisible to ordinary task principals',
     async search() { return [] }, async get() { throw new Error('not used') },
     async store() { throw new Error('not used') }, async update() { throw new Error('not used') },
     async forget() {}, async restore() {}, async openAttachment() { throw new Error('not used') },
+    async keepFile() { throw new Error('not used') },
   } as MemoryCapabilityService
   const registry = new CapabilityRegistry([tasks, new MemoryCapability(service)])
 
@@ -70,7 +71,7 @@ test('the real Memory capability remains invisible to ordinary task principals',
   assert.deepEqual(registry.tools(agent).map((tool) => tool.name), [
     'memory_list', 'memory_link',
     'memory_search', 'memory_get', 'memory_store', 'memory_update',
-    'memory_forget', 'memory_restore', 'memory_open_attachment',
+    'memory_forget', 'memory_restore', 'memory_keep_file', 'memory_open_attachment',
   ])
   await assert.rejects(registry.call(task, 'memory_get', { id: 'memory-1' }), /not available to task principals/)
 })

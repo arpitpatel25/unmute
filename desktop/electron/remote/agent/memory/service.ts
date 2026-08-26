@@ -90,6 +90,15 @@ export interface MemoryServiceOptions {
   audit: MemoryAuditSink
   journal: MemoryMutationJournal
   createMemoryId?: () => string
+  /**
+   * Turns a path the user designated into an attachment handle. Supplied by the
+   * app because minting a handle is the app's job; absent, memory_keep_file
+   * simply reports that keeping a file is unavailable.
+   */
+  keepFile?: (
+    principal: CapabilityCallContext['principal'],
+    input: { path: string; name?: string },
+  ) => Promise<string>
 }
 
 export type MemoryServiceErrorCode =
@@ -644,6 +653,40 @@ export class MemoryService {
         throw this.failure('restore', error, compensationFailed)
       }
     })
+  }
+
+  /**
+   * A file the user pointed at becomes an attachment handle.
+   *
+   * WHY THIS IS ALLOWED TO TAKE A PATH. The Agent already holds `Read` over the
+   * whole disk, so any path it can name is a file it can already open — this
+   * grants it nothing new. The boundary that matters is DELIVERY, where a
+   * composed path could push a file out to another application, and that gate
+   * lives in delivery.ts and is untouched.
+   *
+   * What is enforced here is what a prompt cannot be trusted to enforce: the
+   * thing must exist, must be a regular file, and must be readable. A directory,
+   * a device node or a broken symlink is refused rather than half-stored.
+   */
+  async keepFile(
+    ctx: CapabilityCallContext,
+    input: { path: string; name?: string },
+  ): Promise<string> {
+    requireActiveInteraction(ctx)
+    await this.ready('keep file')
+    if (!this.options.keepFile) {
+      throw new MemoryServiceError('invalid-input', 'Keeping a file is unavailable')
+    }
+    try {
+      const handle = await this.options.keepFile(ctx.principal, input)
+      await this.audit(ctx, UNASSIGNED_MEMORY_ID, 'keep-file', 'success')
+      return handle
+    } catch (error) {
+      try { await this.audit(ctx, UNASSIGNED_MEMORY_ID, 'keep-file', 'failure') } catch (auditError) {
+        throw this.failure('keep file', auditError)
+      }
+      throw this.failure('keep file', error)
+    }
   }
 
   async openAttachment(ctx: CapabilityCallContext, id: string): Promise<DeliveryHandle> {

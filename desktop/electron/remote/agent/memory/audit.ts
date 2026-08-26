@@ -27,6 +27,7 @@ export const MEMORY_AUDIT_OPERATIONS = [
   'list',
   'link',
   'open-attachment',
+  'keep-file',
 ] as const
 
 export type MemoryAuditOperation = typeof MEMORY_AUDIT_OPERATIONS[number]

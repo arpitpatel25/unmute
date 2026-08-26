@@ -20,11 +20,11 @@
 
 import { ipcMain, BrowserWindow, Notification, shell, app, clipboard, powerMonitor, safeStorage } from 'electron'
 import Store from 'electron-store'
-import { join, dirname, basename } from 'node:path'
+import { join, dirname, basename, isAbsolute } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { existsSync, writeFileSync, mkdirSync, statSync, watch, promises as fs } from 'node:fs'
+import { existsSync, writeFileSync, mkdirSync, statSync, watch, constants as fsConstants, promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
 import { TaskDraftStore } from './task-draft'
@@ -1012,6 +1012,36 @@ async function initializeUnmuteAgent(): Promise<void> {
       records,
       attachments,
       index,
+      /**
+       * A file the user pointed at, turned into an attachment handle.
+       *
+       * The checks are here rather than in the tool description because a
+       * prompt cannot enforce them: the path is expanded, and the target must
+       * exist and be a REGULAR FILE. A directory, a device node or a broken
+       * symlink is refused outright rather than half-stored.
+       *
+       * Nothing here widens the Agent's reach — it already holds Read over the
+       * whole disk, so a path it can name is a file it can already open. Size
+       * is not checked: the attachment store already keeps anything past its
+       * managed ceiling BY REFERENCE to where it lives, so a large video is
+       * remembered rather than refused.
+       */
+      async keepFile(principal, input) {
+        const expanded = input.path.startsWith('~')
+          ? join(homedir(), input.path.slice(1))
+          : input.path
+        if (!isAbsolute(expanded)) throw new Error('That path is not absolute')
+        const stat = await fs.stat(expanded).catch(() => null)
+        if (!stat) throw new Error('There is no file at that path')
+        if (!stat.isFile()) throw new Error('That path is not a file')
+        await fs.access(expanded, fsConstants.R_OK).catch(() => {
+          throw new Error('That file cannot be read')
+        })
+        const name = input.name ?? basename(expanded)
+        const handle = handles.mintCapture(principal, { path: expanded, name })
+        log.event('agent-file-kept', { bytes: stat.size, name })
+        return handle
+      },
       audit: new JsonlMemoryAudit({ root: memoryRoot }),
       journal: new DurableMemoryMutationJournal({ root: memoryRoot }),
     })

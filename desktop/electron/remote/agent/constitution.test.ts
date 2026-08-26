@@ -69,3 +69,19 @@ test('the session preamble is composed in, not replaced', () => {
   assert.match(composed, /^SESSION PREAMBLE HERE/)
   assert.ok(composed.includes(AGENT_PRINCIPLES))
 })
+
+/**
+ * The Agent could always READ a file and could always store a memory, but it
+ * had no way to put the FILE itself into one — attachments only ever arrived as
+ * screenshots taken mid-utterance. "Save this video" produced a sentence about
+ * a video.
+ */
+test('keeping an actual file is named, with the large-file answer', () => {
+  assert.match(AGENT_PRINCIPLES, /memory_keep_file/)
+  assert.match(AGENT_PRINCIPLES, /kept by reference to where it already lives, never refused/)
+  assert.match(AGENT_PRINCIPLES, /A link goes in references/)
+})
+
+test('it is told to find the file rather than guess at its path', () => {
+  assert.match(AGENT_PRINCIPLES, /never assemble a path from where you expect a thing to be/)
+})

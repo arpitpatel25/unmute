@@ -30,10 +30,18 @@ import type { Turn } from '../../transcript'
 const MAX_TURN_CHARS = 2_000
 /** Items are one line each. */
 export const MAX_ITEM_CHARS = 200
-/** Beyond this many items, the oldest are rolled up. */
-export const ROLLUP_AT = 40
-/** How many of the oldest survive a rollup, as one line. */
-export const ROLLUP_KEEP = 20
+/**
+ * Beyond this many items, the oldest are rolled up.
+ *
+ * The binding constraint is the RECORD, not the list. recent-sessions.md is
+ * read whole, and on a real disk it holds around a hundred sessions — so a
+ * single heavy session allowed forty 200-character items is eight kilobytes on
+ * its own, and a handful of those stop the file being something you read in one
+ * go, which was the whole argument for a file over a tool.
+ */
+export const ROLLUP_AT = 25
+/** How many of the newest survive verbatim. Fifteen is still real detail. */
+export const ROLLUP_KEEP = 15
 
 export interface SessionSummary {
   /** One line: what this session is, revised as it changes. */

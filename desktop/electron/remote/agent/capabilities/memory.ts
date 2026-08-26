@@ -319,6 +319,33 @@ const tools = [
     consequence: 'reversible-write',
   },
   {
+    name: 'memory_keep_file',
+    description: 'Keep an actual FILE the user is pointing at — a video, an image, a PDF, a'
+      + ' document, anything. Give it the path and it returns a handle to pass as an'
+      + ' attachment to memory_store, so the thing itself is kept rather than a sentence'
+      + ' describing it. Use this whenever they say to save something that exists on disk.'
+      + ' A file too large to hold is kept by reference to where it already lives, never'
+      + ' refused. If what they are pointing at is a LINK rather than a file, it belongs in'
+      + ' references instead, where it stays clickable.'
+      + ` ${UNTRUSTED}`,
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['path'],
+      properties: {
+        path: {
+          type: 'string', minLength: 1, maxLength: 4_096,
+          description: 'Absolute path to the file, or one starting with ~. It must be a file'
+            + ' that already exists — never a path you assembled from what you expect to be'
+            + ' there. Read it first if you are not certain it is the right one.',
+        },
+        name: {
+          type: 'string', minLength: 1, maxLength: 255,
+          description: 'What to call it in the record. Defaults to the filename.',
+        },
+      },
+    },
+    consequence: 'reversible-write',
+  },
+  {
     name: 'memory_open_attachment',
     description: `Open a selected managed attachment as a short-lived opaque delivery handle; use a separate delivery tool for any destination. ${UNTRUSTED}`,
     inputSchema: {
@@ -344,6 +371,16 @@ export interface MemoryCapabilityService {
   forget(ctx: CapabilityCallContext, id: string): Promise<void>
   restore(ctx: CapabilityCallContext, id: string): Promise<void>
   openAttachment(ctx: CapabilityCallContext, id: string): Promise<DeliveryHandle>
+  /**
+   * Resolves a file the user designated into an attachment handle.
+   *
+   * NOT A NEW REACH. The Agent already holds `Read` over the whole disk, so a
+   * path it can name is a file it can already open — this grants it nothing it
+   * did not have. The boundary that matters is on DELIVERY, where a composed
+   * path could push a file out to another application, and that gate is
+   * unchanged and elsewhere.
+   */
+  keepFile(ctx: CapabilityCallContext, input: { path: string; name?: string }): Promise<string>
 }
 
 type InputObject = Record<string, unknown>
@@ -791,6 +828,21 @@ export class MemoryCapability implements CapabilityModule {
           const id = idInput(input)
           await this.service.restore(ctx, id)
           return success({ id, status: 'restored' })
+        }
+        case 'memory_keep_file': {
+          const value = (input ?? {}) as InputObject
+          const path = typeof value.path === 'string' ? value.path.trim() : ''
+          if (!path || path.length > 4_096) invalid()
+          const name = typeof value.name === 'string' ? value.name.trim() : ''
+          if (name.length > 255) invalid()
+          const handle = await this.service.keepFile(ctx, {
+            path,
+            ...(name ? { name } : {}),
+          })
+          if (typeof handle !== 'string' || handle.length === 0) {
+            throw new Error('Invalid memory service response')
+          }
+          return success({ attachment: handle })
         }
         case 'memory_open_attachment': {
           const opened = await this.service.openAttachment(ctx, attachmentInput(input))

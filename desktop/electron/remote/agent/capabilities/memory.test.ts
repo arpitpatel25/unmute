@@ -123,7 +123,7 @@ function parse(result: ToolResult): unknown {
   return JSON.parse(result.content[0].text as string)
 }
 
-test('declares exactly the nine approved Agent-only tools with strict schemas and untrusted-data guidance', () => {
+test('declares exactly the ten approved Agent-only tools with strict schemas and untrusted-data guidance', () => {
   const capability = new MemoryCapability(new FakeMemoryService())
   assert.equal(capability.id, 'memory')
   assert.deepEqual(capability.roles, ['unmute-agent'])
@@ -138,6 +138,9 @@ test('declares exactly the nine approved Agent-only tools with strict schemas an
     'memory_update',
     'memory_forget',
     'memory_restore',
+    // Closes the gap where a file could only enter memory as a screenshot
+    // taken mid-utterance, so "save this video" produced a sentence about one.
+    'memory_keep_file',
     'memory_open_attachment',
   ])
   assert.deepEqual(capability.tools.map((tool) => ({
@@ -156,6 +159,7 @@ test('declares exactly the nine approved Agent-only tools with strict schemas an
     { name: 'memory_update', consequence: 'reversible-write', intent: undefined },
     { name: 'memory_forget', consequence: 'reversible-write', intent: undefined },
     { name: 'memory_restore', consequence: 'reversible-write', intent: undefined },
+    { name: 'memory_keep_file', consequence: 'reversible-write', intent: undefined },
     { name: 'memory_open_attachment', consequence: 'reversible-write', intent: undefined },
   ])
   for (const tool of capability.tools) {
@@ -793,4 +797,80 @@ test('search snippets are fenced too — they are the same untrusted text', asyn
     (await capability.call(context, 'memory_search', { query: 'x' })).content[0]!.text,
   )) as { result: { results: Array<{ snippet: string }> } }
   assert.match(body.result.results[0]!.snippet, /BEGIN UNTRUSTED/)
+})
+
+// ─── memory_keep_file ───────────────────────────────────────────────────────
+//
+// The gap this closes: a file could only ever enter memory as a capture handle
+// — a screenshot taken while the user was speaking. "Save this video" produced
+// a sentence about a video.
+
+function keepService(over: Partial<MemoryCapabilityService> = {}): MemoryCapabilityService {
+  return {
+    list: async () => ({ groups: [], total: 0 }),
+    link: async () => ({}) as never,
+    search: async () => [],
+    get: async () => ({}) as never,
+    store: async () => ({}) as never,
+    update: async () => ({}) as never,
+    forget: async () => {},
+    restore: async () => {},
+    openAttachment: async () => ({ handle: 'h', expiresAt: 1 }),
+    keepFile: async () => 'attachment-handle-1',
+    ...over,
+  } as MemoryCapabilityService
+}
+
+const keepCtx = {
+  principal: { kind: 'unmute-agent' as const, runId: 'r', interactionId: 'i', expiresAt: 9_999 },
+  now: 1,
+  interaction: { id: 'i', active: true },
+}
+
+test('keeping a file returns a handle to attach', async () => {
+  const seen: unknown[] = []
+  const cap = new MemoryCapability(keepService({
+    keepFile: async (_ctx, input) => { seen.push(input); return 'attachment-handle-1' },
+  }))
+  const result = await cap.call(keepCtx, 'memory_keep_file', { path: '~/Movies/promo.mp4' })
+  const parsed = JSON.parse(String(result.content[0]!.text))
+  assert.equal(parsed.ok, true)
+  assert.equal(parsed.result.attachment, 'attachment-handle-1')
+  assert.deepEqual(seen, [{ path: '~/Movies/promo.mp4' }])
+})
+
+test('a display name is passed through when given', async () => {
+  const seen: unknown[] = []
+  const cap = new MemoryCapability(keepService({
+    keepFile: async (_ctx, input) => { seen.push(input); return 'h' },
+  }))
+  await cap.call(keepCtx, 'memory_keep_file', { path: '/tmp/a.mp4', name: 'Q3 promo cut' })
+  assert.deepEqual(seen, [{ path: '/tmp/a.mp4', name: 'Q3 promo cut' }])
+})
+
+test('an empty or oversized path never reaches the app', async () => {
+  let called = false
+  const cap = new MemoryCapability(keepService({
+    keepFile: async () => { called = true; return 'h' },
+  }))
+  for (const bad of [{}, { path: '   ' }, { path: 'x'.repeat(4_097) }, { path: '/a', name: 'x'.repeat(256) }]) {
+    const result = await cap.call(keepCtx, 'memory_keep_file', bad)
+    assert.equal(result.isError, true, `should refuse: ${JSON.stringify(bad).slice(0, 40)}`)
+  }
+  assert.equal(called, false)
+})
+
+/** Keeping a file changes something, so it needs a live interaction. */
+test('keeping a file is a write, not a read', () => {
+  const cap = new MemoryCapability(keepService())
+  const tool = cap.tools.find((t) => t.name === 'memory_keep_file')
+  assert.equal(tool?.consequence, 'reversible-write')
+})
+
+test('a resolver failure surfaces as an error, not a handle', async () => {
+  const cap = new MemoryCapability(keepService({
+    keepFile: async () => { throw new Error('There is no file at that path') },
+  }))
+  const result = await cap.call(keepCtx, 'memory_keep_file', { path: '/nope.mp4' })
+  assert.equal(result.isError, true)
 })
