@@ -213,3 +213,88 @@ export async function readLatestExchange(path: string | null): Promise<Turn[]> {
     return []
   }
 }
+
+// ─── Codex, into the same Turn shape ────────────────────────────────────────
+//
+// A Codex rollout carries the SAME conversation twice, and taking both doubles
+// every turn. Measured on a real 800 KB rollout:
+//
+//   response_item  message/user  17   message/assistant  312
+//   event_msg      user_message  17   agent_message      313
+//
+// They are duplicates of one another, not two granularities. `response_item` is
+// the canonical record — it states a `role` explicitly, mirrors the shape
+// Claude already uses here, and its content blocks are typed (`input_text` /
+// `output_text`), so filtering is exact rather than positional. `event_msg` is
+// the UI event stream and is ignored for turns.
+//
+// The 312-to-17 ratio is not an error: Codex narrates between tool calls, so a
+// single user turn draws many short assistant messages. That is prose about
+// what it did, which is exactly what a summary wants.
+
+export type Harness = 'claude' | 'codex'
+
+/** Identity out of a Codex `session_meta` line. */
+export function codexIdentity(line: string): { sessionId?: string; cwd?: string } {
+  let o: unknown
+  try { o = JSON.parse(line) } catch { return {} }
+  const rec = o as { type?: unknown; payload?: unknown }
+  if (rec.type !== 'session_meta') return {}
+  const p = (rec.payload ?? {}) as { session_id?: unknown; cwd?: unknown }
+  return {
+    ...(typeof p.session_id === 'string' ? { sessionId: p.session_id } : {}),
+    ...(typeof p.cwd === 'string' ? { cwd: p.cwd } : {}),
+  }
+}
+
+/** Text out of a Codex content array, dropping anything that is not a message. */
+function codexText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const b of content) {
+    if (typeof b !== 'object' || b === null) continue
+    const block = b as { type?: unknown; text?: unknown }
+    // Only the two message block types. Reasoning, tool calls and their output
+    // carry the same weight of noise here that thinking and tool_result do on
+    // the Claude side, and are dropped for the same reason.
+    if ((block.type === 'input_text' || block.type === 'output_text')
+      && typeof block.text === 'string') parts.push(block.text)
+  }
+  return parts.join('\n').trim()
+}
+
+/** One Codex rollout line as a conversation turn, or null if it is not one. */
+export function parseCodexTurnLine(line: string): Turn | null {
+  let o: unknown
+  try { o = JSON.parse(line) } catch { return null }
+  if (typeof o !== 'object' || o === null) return null
+  const rec = o as { type?: unknown; timestamp?: unknown; payload?: unknown }
+  if (rec.type !== 'response_item') return null
+  const p = (rec.payload ?? {}) as { type?: unknown; role?: unknown; content?: unknown }
+  if (p.type !== 'message') return null
+  if (p.role !== 'user' && p.role !== 'assistant') return null
+  const text = codexText(p.content)
+  if (!text) return null
+  return {
+    role: p.role,
+    text,
+    ...(typeof rec.timestamp === 'string' ? { at: rec.timestamp } : {}),
+  }
+}
+
+/** One line into a Turn, whichever harness wrote it. */
+export function parseTurnLineFor(harness: Harness, line: string): Turn | null {
+  return harness === 'codex' ? parseCodexTurnLine(line) : parseTurnLine(line)
+}
+
+/** Every turn in a transcript, oldest first, whichever harness wrote it. */
+export function parseTurnsFor(harness: Harness, raw: string): Turn[] {
+  const out: Turn[] = []
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue
+    const t = parseTurnLineFor(harness, line)
+    if (t) out.push(t)
+  }
+  return out
+}
