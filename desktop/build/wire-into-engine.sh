@@ -519,9 +519,15 @@ import { getAgentAvailability } from './paywall/remote/init'
     node -e "
       const fs = require('fs'); const p = '$main_ts'; let s = fs.readFileSync(p, 'utf-8')
       if (!s.includes('initNotetaker({')) {
+        // ANCHOR ON THE CALL, NOT ITS ARGUMENTS. This used to match the whole
+        // initRemote({...}) line as a literal string, so adding one dependency
+        // to that call silently detached this patcher: the import landed, the
+        // CALL never did, and the build warned that the notetaker would not
+        // start. Matching the line by shape survives the next argument.
+        const remoteCall = /^.*initRemote\(\{[^\n]*\}\)\n/m
         s = s.replace(
-          'initRemote({ sessionManager, keyboardManager, notetaker: notetakerAgentAdapters() })\n',
-          'initRemote({ sessionManager, keyboardManager, notetaker: notetakerAgentAdapters() })\n' +
+          remoteCall,
+          (line) => line +
           '  initNotetaker({\n' +
           '    onSessionStart: showNotetakerWidget,\n' +
           '    onSessionStop: hideNotetakerWidget,\n' +
