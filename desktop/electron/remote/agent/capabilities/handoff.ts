@@ -26,6 +26,13 @@ import type { ProviderId } from '../../providers.ts'
  */
 
 const MAX_INTENT_LENGTH = 2_000
+/**
+ * Carried context is not a request, and is sized for what it actually holds:
+ * what several prior sessions were about, so a new one can start informed.
+ * MAX_INTENT_LENGTH cannot stretch to that, and stretching it would weaken the
+ * rule that keeps `intent` honest.
+ */
+const MAX_CONTEXT_LENGTH = 24_000
 const TASK_KINDS = ['oneoff', 'session'] as const
 const PROVIDERS = ['claude', 'codex', 'codex-desktop', 'claude-code-desktop'] as const
 type TaskKind = typeof TASK_KINDS[number]
@@ -47,7 +54,17 @@ const tools = [
             + ' Do not add steps, places to search, or precautions they did not mention:'
             + ' a one-sentence request becomes a one-sentence task. The session that picks'
             + ' this up is fully tooled, so every extra clause you invent is work it will'
-            + ' actually go and do.',
+            + ' actually go and do. Material carried from earlier work does not belong here —'
+            + ' that is what context is for.',
+        },
+        context: {
+          type: 'string', maxLength: MAX_CONTEXT_LENGTH,
+          description: 'Background the new session should read before starting: what earlier'
+            + ' work established, in your own words. This is how work continues across'
+            + ' harnesses and how several sessions become one — read what you need, then write'
+            + ' the account yourself. It is BACKGROUND, never a list of instructions: the'
+            + ' session is told to get familiar with it, not to carry it out. Never paste'
+            + ' bare session identifiers; the new session cannot look them up.',
         },
         kind: {
           type: 'string', enum: TASK_KINDS,
@@ -60,12 +77,6 @@ const tools = [
             + ' terminal CLIs, and the matching desktop value only when the user explicitly asks'
             + ' for the desktop app. Omit only when the user named no provider; the task will then'
             + ' inherit the provider running this Unmute Agent turn.',
-        },
-        sourceSessionIds: {
-          type: 'array',
-          description: 'Sessions whose content this task should start from — how a'
-            + ' consolidation is expressed. Omit for ordinary work.',
-          items: { type: 'string', minLength: 1 },
         },
       },
     },
@@ -89,10 +100,10 @@ export interface HandoffAdapters {
    *  that the Agent made it and not the user (Law IV). */
   createTask(input: {
     intent: string
+    context?: string
     kind: TaskKind
     provider: ProviderId
     agentRunId: string
-    sourceSessionIds?: readonly string[]
   }): Promise<{ taskId: string }>
   taskStatus(taskId: string): Promise<{ state: string; intent: string } | null>
 }
@@ -152,16 +163,18 @@ export class HandoffCapability implements CapabilityModule {
         ) return fail('invalid-input')
         const provider = requestedProvider as ProviderId | undefined ?? ctx.principal.provider
         if (!provider) return fail('invalid-input')
-        const sources = value.sourceSessionIds
-        if (sources !== undefined && (!Array.isArray(sources) || sources.some((s) => typeof s !== 'string' || !s))) {
+        const context = value.context
+        if (context !== undefined
+          && (typeof context !== 'string' || context.length > MAX_CONTEXT_LENGTH)) {
           return fail('invalid-input')
         }
+        const carried = typeof context === 'string' ? context.trim() : ''
         const created = await this.adapters.createTask({
           intent,
           kind,
           provider,
           agentRunId: ctx.principal.runId,
-          ...(sources ? { sourceSessionIds: sources as string[] } : {}),
+          ...(carried ? { context: carried } : {}),
         })
         return ok({ taskId: created.taskId, status: 'created' })
       }

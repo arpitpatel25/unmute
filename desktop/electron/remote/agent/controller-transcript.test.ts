@@ -65,23 +65,20 @@ test('the user request still travels verbatim', () => {
   assert.match(turn(), /Launch the session and submit the initial prompt\./)
 })
 
-test('the recent-session digest travels with the turn when there is one', () => {
-  const digest = 'Sessions the user has worked in recently:\n- s-1 · claude · unmute-cloud · 2h ago · Draft the pricing sheet'
-  const text = providerTranscript(input, [], [], [], digest)
-  assert.match(text, /Draft the pricing sheet/)
-  assert.match(text, /s-1 · claude/)
-})
-
-/** An empty heading is a line of context that teaches the model nothing. */
 test('no sessions means no section, not an empty one', () => {
   const text = providerTranscript(input, [], [], [], '   ')
   assert.doesNotMatch(text, /Sessions the user has worked in/)
 })
 
-test('the digest sits before the exchange summaries, not after the request', () => {
-  const text = providerTranscript(
-    input, [], [{ outcome: 'completed', summary: 'did a thing' }], [], 'DIGEST-MARKER',
-  )
-  assert.ok(text.indexOf('User request:') < text.indexOf('DIGEST-MARKER'))
-  assert.ok(text.indexOf('DIGEST-MARKER') < text.indexOf('Recent redacted exchange summaries'))
+/**
+ * The digest is gone. It cost 400-500 tokens on every turn — including the
+ * majority that have nothing to do with sessions — and biased the model toward
+ * thinking about them, which is the same failure as the preamble that caused
+ * the 25 August refusal: text near the question beats text far from it. The
+ * record is a file the Agent opens when it is relevant. See D8.
+ */
+test('no session list rides along on every turn', () => {
+  const text = turn()
+  assert.doesNotMatch(text, /Sessions the user has worked in recently/)
+  assert.doesNotMatch(text, /newest first/)
 })

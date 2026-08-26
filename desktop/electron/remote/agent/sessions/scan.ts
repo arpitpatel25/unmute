@@ -106,8 +106,10 @@ function isInfrastructureCwd(cwd: string | undefined): boolean {
 
 async function walk(dir: string, out: string[], depth = 0): Promise<void> {
   if (depth > 6) return
-  let entries: Awaited<ReturnType<typeof fs.readdir>>
-  try { entries = await fs.readdir(dir, { withFileTypes: true }) } catch { return }
+  let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true }) as unknown as typeof entries
+  } catch { return }
   for (const entry of entries) {
     const full = join(dir, entry.name)
     if (entry.isDirectory()) await walk(full, out, depth + 1)

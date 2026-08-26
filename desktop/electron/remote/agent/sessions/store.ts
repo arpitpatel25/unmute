@@ -1,148 +1,241 @@
 /**
- * The session index: a cache over what is already on disk.
+ * The session record: what Unmute knows about the user's own work.
  *
- * NOT IN THE ENCRYPTED MEMORY STORE, and that is deliberate. Memory holds what
- * the user authored and asked to keep; this derives entirely from transcripts
- * sitting in plaintext on the same disk. Encrypting a projection of public-on-
- * disk data buys nothing and couples two lifecycles that must be able to fail
- * separately — a corrupt index has to be deletable without putting a single
- * user memory at risk. Deleting this file costs one rescan and nothing else.
+ * NOT IN THE ENCRYPTED MEMORY STORE, deliberately. Memory holds what the user
+ * authored and asked to keep; this derives entirely from transcripts sitting in
+ * plaintext on the same disk. Encrypting a projection of readable data buys
+ * nothing and couples two lifecycles that must fail separately — a corrupt
+ * record has to be deletable without putting a single memory at risk. Deleting
+ * this file costs one rescan.
  *
- * KEYED BY (path, mtime), so a session is read once per change and never again.
- * Discovery over 1,061 real transcripts costs 85ms and touches no contents;
- * only the ones whose mtime moved are re-read. That is what makes a cold start
- * affordable without a background sweeper.
+ * THE WINDOW BOUNDS GENERATION, NOT RETENTION. Sessions touched inside the
+ * window get their summaries brought up to date. Summaries already written are
+ * kept FOREVER: a few hundred bytes each, and deleting one throws away work
+ * already paid for. So "that thing three weeks ago" is answered instantly from
+ * a summary written when it was fresh, and the full-disk fallback becomes rare
+ * rather than the normal path for anything over a week old.
+ *
+ * A CURSOR IS PER CONVERSATION, NOT PER FILE. Keyed by the harness's own
+ * session id where it states one — the same reasoning as curator.ts's convKey,
+ * so a resumed conversation advances one cursor rather than forking a second.
  */
 import { promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
 
+import type { Harness } from '../../transcript'
 import {
-  type DiscoveredSession, type SessionRecord, type SessionRoots,
-  defaultRoots, discoverSessions, readSession,
+  type DiscoveredSession, type SessionRoots,
+  defaultRoots, discoverSessions, identify, probeSession, readTurnsSince,
 } from './scan'
+import {
+  type RunModel, type SessionSummary, emptySummary, updateSummary,
+} from './summary'
 
-const CACHE_VERSION = 1
+const CACHE_VERSION = 2
+/** Bounds the first pass over a transcript never read before. */
+export const FIRST_PASS_BYTES = 1024 * 1024
+/** How many sessions are summarised at once. */
+export const REFRESH_CONCURRENCY = 2
+
+export interface StoredSession {
+  key: string
+  path: string
+  harness: Harness
+  sessionId?: string
+  cwd?: string
+  project?: string
+  unmuteTaskId?: string
+  lastTouchedAt: number
+  /** Line the next read resumes from. Advanced only when a summary succeeded. */
+  cursor: number
+  userTurns: number
+  opening?: string
+  summary: SessionSummary
+  /** True while a byte-capped first pass has not caught up. */
+  partial: boolean
+  updatedAt: number
+}
 
 interface CacheFile {
   version: number
-  records: Record<string, SessionRecord>
+  sessions: Record<string, StoredSession>
 }
 
-function key(found: Pick<DiscoveredSession, 'path' | 'lastTouchedAt'>): string {
-  return `${found.path}@${found.lastTouchedAt}`
+export function conversationKey(
+  found: Pick<DiscoveredSession, 'path'>,
+  sessionId?: string,
+): string {
+  return sessionId ?? found.path
 }
 
-export interface SessionIndexOptions {
-  /** Where the cache file lives. */
+export interface SessionStoreOptions {
   cachePath: string
   roots?: SessionRoots
   now?: () => number
-  /** How many transcripts to read at once on a refresh. */
+  /** How far back sessions are brought up to date. Retention is unbounded. */
+  windowMs?: number
   concurrency?: number
-}
-
-export class SessionIndex {
-  private records = new Map<string, SessionRecord>()
-  private readonly now: () => number
-  private readonly roots: SessionRoots
-  private readonly concurrency: number
-  private loaded = false
-
-  constructor(private readonly options: SessionIndexOptions) {
-    this.now = options.now ?? Date.now
-    this.roots = options.roots ?? defaultRoots()
-    this.concurrency = Math.max(1, options.concurrency ?? 8)
-  }
-
-  /** A missing or unreadable cache is a cold start, never an error. */
-  private async load(): Promise<void> {
-    if (this.loaded) return
-    this.loaded = true
-    try {
-      const raw = JSON.parse(await fs.readFile(this.options.cachePath, 'utf8')) as CacheFile
-      if (raw?.version !== CACHE_VERSION || !raw.records) return
-      for (const [id, record] of Object.entries(raw.records)) this.records.set(id, record)
-    } catch { /* cold start */ }
-  }
-
-  private async persist(): Promise<void> {
-    const payload: CacheFile = { version: CACHE_VERSION, records: Object.fromEntries(this.records) }
-    const target = this.options.cachePath
-    const staging = `${target}.tmp`
-    try {
-      await fs.mkdir(dirname(target), { recursive: true, mode: 0o700 })
-      await fs.writeFile(staging, JSON.stringify(payload), { mode: 0o600 })
-      await fs.rename(staging, target)
-    } catch { /* an index that cannot be saved is still usable in memory */ }
-  }
-
-  /**
-   * Bring the index level with the disk.
-   *
-   * `within` bounds how far back to READ, not how far back to know: everything
-   * already cached stays queryable however old it is. A cold start therefore
-   * costs the recent tier, and the rest fills in as it is touched.
-   */
-  async refresh(withinMs = 72 * 3_600_000): Promise<SessionRecord[]> {
-    await this.load()
-    const found = await discoverSessions(this.roots)
-    const live = new Set(found.map(key))
-    // Drop entries whose file is gone or whose mtime moved on.
-    for (const id of [...this.records.keys()]) if (!live.has(id)) this.records.delete(id)
-
-    const cutoff = this.now() - withinMs
-    const stale = found.filter((entry) => (
-      entry.lastTouchedAt >= cutoff && !this.records.has(key(entry))
-    ))
-    for (let at = 0; at < stale.length; at += this.concurrency) {
-      const batch = stale.slice(at, at + this.concurrency)
-      const read = await Promise.all(batch.map(async (entry) => {
-        try { return await readSession(entry) } catch { return null }
-      }))
-      for (const record of read) if (record) this.records.set(key(record), record)
-    }
-    if (stale.length > 0) await this.persist()
-    return this.all()
-  }
-
-  all(): SessionRecord[] {
-    return [...this.records.values()].sort((a, b) => b.lastTouchedAt - a.lastTouchedAt)
-  }
-
-  /** Everything touched inside the window, newest first. */
-  recent(withinMs: number): SessionRecord[] {
-    const cutoff = this.now() - withinMs
-    return this.all().filter((record) => record.lastTouchedAt >= cutoff)
-  }
-
-  find(id: string): SessionRecord | undefined {
-    return this.all().find((record) => record.sessionId === id
-      || record.unmuteTaskId === id
-      || record.path === id)
-  }
-
-  /**
-   * Reads a session in full, on demand.
-   *
-   * Deliberately not part of refresh: opening a transcript is what you do
-   * because you need what is inside it, not to find out whether you do.
-   */
-  async readFull(id: string, maxBytes = 512 * 1024): Promise<string | null> {
-    const record = this.find(id)
-    if (!record) return null
-    try {
-      const handle = await fs.open(record.path, 'r')
-      try {
-        const length = Math.min(maxBytes, record.sizeBytes)
-        const buffer = Buffer.alloc(length)
-        const from = Math.max(0, record.sizeBytes - length)
-        const { bytesRead } = await handle.read(buffer, 0, length, from)
-        return buffer.subarray(0, bytesRead).toString('utf8')
-      } finally { await handle.close() }
-    } catch { return null }
-  }
+  firstPassBytes?: number
 }
 
 export function defaultCachePath(agentRoot: string): string {
-  return join(agentRoot, 'sessions', 'index.json')
+  return join(agentRoot, 'sessions', 'record.json')
+}
+
+export class SessionStore {
+  private sessions = new Map<string, StoredSession>()
+  private loaded = false
+  private readonly now: () => number
+
+  constructor(private readonly options: SessionStoreOptions) {
+    this.now = options.now ?? Date.now
+  }
+
+  async load(): Promise<void> {
+    if (this.loaded) return
+    this.loaded = true
+    try {
+      const raw = await fs.readFile(this.options.cachePath, 'utf8')
+      const parsed = JSON.parse(raw) as CacheFile
+      // A record written by an older shape is a cold start, never an error —
+      // everything in it is reconstructible from disk.
+      if (parsed?.version === CACHE_VERSION && parsed.sessions) {
+        for (const [key, value] of Object.entries(parsed.sessions)) {
+          if (value && typeof value === 'object') this.sessions.set(key, value)
+        }
+      }
+    } catch { /* absent or corrupt — rescan */ }
+  }
+
+  async save(): Promise<void> {
+    const payload: CacheFile = {
+      version: CACHE_VERSION,
+      sessions: Object.fromEntries(this.sessions),
+    }
+    const staging = `${this.options.cachePath}.tmp`
+    await fs.mkdir(dirname(this.options.cachePath), { recursive: true, mode: 0o700 })
+    await fs.writeFile(staging, JSON.stringify(payload), { mode: 0o600 })
+    await fs.rename(staging, this.options.cachePath)
+  }
+
+  all(): StoredSession[] {
+    return [...this.sessions.values()].sort((a, b) => b.lastTouchedAt - a.lastTouchedAt)
+  }
+
+  /** Sessions touched since `since`, newest first. */
+  since(since: number): StoredSession[] {
+    return this.all().filter((s) => s.lastTouchedAt >= since)
+  }
+
+  find(id: string): StoredSession | undefined {
+    return this.sessions.get(id)
+      ?? this.all().find((s) => s.sessionId === id || s.unmuteTaskId === id || s.path === id)
+  }
+
+  /**
+   * Bring one session's summary up to date.
+   *
+   * THE CURSOR ADVANCES ONLY ON SUCCESS. A failed model call that advanced it
+   * would drop those turns forever and leave a permanent hole in the record —
+   * so a failure costs a retry on the next sweep and nothing else.
+   */
+  async updateOne(
+    found: DiscoveredSession,
+    run: RunModel,
+    parseJson: (raw: string) => unknown,
+  ): Promise<'updated' | 'skipped' | 'failed' | 'unchanged'> {
+    await this.load()
+    const probe = await probeSession(found)
+    if (probe.derived) return 'skipped'
+
+    const key = conversationKey(found, probe.sessionId)
+    const prior = this.sessions.get(key)
+    const cursor = prior?.cursor ?? 0
+    const firstPass = cursor === 0
+
+    const batch = await readTurnsSince(found, {
+      fromLine: cursor,
+      ...(firstPass ? { maxBytes: this.options.firstPassBytes ?? FIRST_PASS_BYTES } : {}),
+    })
+    if (batch.turns.length === 0) {
+      if (prior) {
+        prior.lastTouchedAt = found.lastTouchedAt
+        return 'unchanged'
+      }
+      return 'skipped'
+    }
+
+    const facts = identify(batch)
+    const result = await updateSummary(
+      prior?.summary ?? emptySummary(),
+      batch.turns,
+      run,
+      parseJson,
+    )
+    if (!result.ok) return 'failed'
+
+    this.sessions.set(key, {
+      key,
+      path: found.path,
+      harness: found.harness,
+      ...(facts.sessionId ? { sessionId: facts.sessionId } : {}),
+      ...(facts.cwd ? { cwd: facts.cwd } : {}),
+      ...(facts.project ? { project: facts.project } : {}),
+      ...(facts.unmuteTaskId ? { unmuteTaskId: facts.unmuteTaskId } : {}),
+      lastTouchedAt: found.lastTouchedAt,
+      cursor: batch.newOffset,
+      userTurns: (prior?.userTurns ?? 0) + facts.userTurns,
+      ...(prior?.opening ?? facts.opening ? { opening: prior?.opening ?? facts.opening } : {}),
+      summary: result.summary,
+      partial: batch.capped,
+      updatedAt: this.now(),
+    })
+    return 'updated'
+  }
+
+  /**
+   * Bring every session inside the window up to date.
+   *
+   * Sessions outside it keep whatever summary they already have — the window is
+   * about what gets WRITTEN, never about what is kept.
+   */
+  async refresh(
+    run: RunModel,
+    parseJson: (raw: string) => unknown,
+    options: { signal?: { aborted: boolean }; idleMs?: number } = {},
+  ): Promise<{ updated: number; skipped: number; failed: number; unchanged: number }> {
+    await this.load()
+    const windowMs = this.options.windowMs ?? 5 * 86_400_000
+    const roots = this.options.roots ?? defaultRoots()
+    const cutoff = this.now() - windowMs
+    // A session still being typed into has no coherent state to record, so it
+    // is left for the next pass rather than summarised mid-turn.
+    //
+    // Applied only when asked for. A zero idle window must mean "no gate at
+    // all", never "must be older than the instant I captured a moment ago" —
+    // a file written microseconds earlier can carry an mtime past that, and
+    // would then be skipped forever by clock skew alone.
+    const idleMs = options.idleMs ?? 0
+    const idleBefore = idleMs > 0 ? this.now() - idleMs : Number.POSITIVE_INFINITY
+    const found = (await discoverSessions(roots))
+      .filter((s) => s.lastTouchedAt >= cutoff && s.lastTouchedAt <= idleBefore)
+
+    const tally = { updated: 0, skipped: 0, failed: 0, unchanged: 0 }
+    const limit = Math.max(1, this.options.concurrency ?? REFRESH_CONCURRENCY)
+    let cursor = 0
+    await Promise.all(Array.from({ length: Math.min(limit, found.length) }, async () => {
+      for (;;) {
+        if (options.signal?.aborted) return
+        const next = cursor++
+        if (next >= found.length) return
+        try {
+          tally[await this.updateOne(found[next]!, run, parseJson)] += 1
+        } catch {
+          tally.failed += 1
+        }
+      }
+    }))
+    await this.save()
+    return tally
+  }
 }

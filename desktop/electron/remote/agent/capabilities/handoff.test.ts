@@ -46,12 +46,43 @@ test('an explicit provider overrides the Agent provider', async () => {
 // Consolidation is task_create with sources, not its own verb — the output of
 // consolidating several sessions is a new working session, an Orchestrator
 // object.
-test('a consolidation is a task seeded from prior sessions', async () => {
-  const a = adapters()
-  await new HandoffCapability(a).call(ctx, 'task_create', {
-    intent: 'consolidate the Meta ads work', kind: 'session', sourceSessionIds: ['s1', 's2', 's3'],
+/**
+ * sourceSessionIds used to live here. It pasted bare uuids into the prompt —
+ * `Start from these earlier sessions: <uuid>, <uuid>` — and hoped the new
+ * session went looking for them, with no path and no way to know where. The
+ * Agent reads what it needs and writes the account itself now.
+ */
+test('carried context reaches the new session as content, not identifiers', async () => {
+  const calls: any[] = []
+  const cap = new HandoffCapability({
+    createTask: async (input) => { calls.push(input); return { taskId: 'task-1' } },
+    taskStatus: async () => null,
   })
-  assert.deepEqual(a.created[0].sourceSessionIds, ['s1', 's2', 's3'])
+  const result = await cap.call(ctx, 'task_create', {
+    intent: 'carry on with the marketing work',
+    kind: 'session',
+    provider: 'codex',
+    context: 'Three earlier sessions covered ad copy, the landing page and competitor pricing.',
+  })
+  assert.equal(parse(result).ok, true)
+  assert.equal(calls[0].context, 'Three earlier sessions covered ad copy, the landing page and competitor pricing.')
+  assert.equal(calls[0].intent, 'carry on with the marketing work', 'the request itself stays unembellished')
+})
+
+test('context is optional, and an oversized one is refused', async () => {
+  const calls: any[] = []
+  const cap = new HandoffCapability({
+    createTask: async (input) => { calls.push(input); return { taskId: 't' } },
+    taskStatus: async () => null,
+  })
+  await cap.call(ctx, 'task_create', { intent: 'send it', kind: 'oneoff', provider: 'claude' })
+  assert.equal(calls[0].context, undefined)
+
+  const huge = await cap.call(ctx, 'task_create', {
+    intent: 'send it', kind: 'oneoff', provider: 'claude', context: 'x'.repeat(24_001),
+  })
+  assert.equal(parse(huge).ok, false)
+  assert.equal(calls.length, 1, 'nothing oversized reached the Orchestrator')
 })
 
 test('an empty or oversized intent never reaches the Orchestrator', async () => {
@@ -63,7 +94,8 @@ test('an empty or oversized intent never reaches the Orchestrator', async () => 
     { intent: 'ok' },
     { intent: 'ok', kind: 'other' },
     { intent: 'ok', kind: 'oneoff', provider: 'other' },
-    { intent: 'ok', kind: 'oneoff', sourceSessionIds: [''] },
+    { intent: 'ok', kind: 'oneoff', context: 42 },
+    { intent: 'ok', kind: 'oneoff', context: 'x'.repeat(24_001) },
   ]) {
     assert.equal((await new HandoffCapability(a).call(ctx, 'task_create', bad)).isError, true)
   }

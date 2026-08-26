@@ -7,6 +7,9 @@
 >
 > Written against the branch as it stands at `282581e` — five modules shipped,
 > Act and Answer unchanged by this plan.
+>
+> **This is one delivery.** The numbered sections are build order — what depends
+> on what — not stages to ship separately or stop between.
 
 ---
 
@@ -20,7 +23,7 @@
 | `agent/sessions/digest.ts` | Per-turn injected digest | **Delete** — D8 |
 | `agent/sessions/search.ts` | Ranking over facts | **Delete** — D1, becomes a file the Agent greps |
 | `agent/capabilities/sessions.ts` | 5 tools | **Reduce to 1** (`session_resume`) — D1/D10 |
-| `agent/capabilities/notetaker.ts` | 4 tools | **Reduce to 1** (`notetaker_open`) — D1 |
+| `agent/capabilities/notetaker.ts` | 4 tools | **Unchanged** — metadata is in SQLite, see 5.2 |
 | `agent/capabilities/handoff.ts` | `task_create`, `task_status` | **Amend** — add `context`, drop `sourceSessionIds` — D11 |
 | `agent/controller.ts` | Injects the digest | **Amend** — remove injection — D8 |
 | `agent/constitution.ts` | No `Glob`/`Grep`; no ladder | **Amend** — restore fallback, add ladder — D9 |
@@ -28,11 +31,12 @@
 | `agent/capabilities/delivery.ts` | 4 tools | **Unchanged** |
 | `agent/caption.ts`, notch Swift | Held caption | **Unchanged** |
 
-Net: **26 tools → roughly 17.**
+Net: **26 tools → 21.** (The plan first estimated 17; the notetaker readers
+turned out to be unreachable rather than duplicative — see 5.2.)
 
 ---
 
-## Phase 1 · Reuse the real transcript parser  · D5
+## 1 · Reuse the real transcript parser  · D5
 
 **1.1** Extend `transcript.ts` with whatever the summariser needs that it does
 not already expose, keeping its existing rules intact: string-content = human,
@@ -45,13 +49,13 @@ tests; port any case it covers that `transcript.ts` does not — notably the
 Unmute-framing filter, the fork-boilerplate filter, and identity recovery from
 an oversized `session_meta` prefix.
 
-**Verify.** The existing 11 `scan.test.ts` cases still pass. Re-run the real-disk
+**Check.** The existing 11 `scan.test.ts` cases still pass. Re-run the real-disk
 probe: 1,061 discovered, 81 in window, and the count carrying a usable opening
 must not fall.
 
 ---
 
-## Phase 2 · Cursor and the summary record  · D3, D4, D6, D7
+## 2 · Cursor and the summary record  · D3, D4, D6, D7
 
 **2.1 — Cursor store.** Per session: transcript path, harness, conversation id,
 `lineOffset`, `lastSummarisedAt`, and a `partial` flag (D6). Keyed by
@@ -84,14 +88,14 @@ No clock sweep.
 **2.9 — Spend controls.** Bounded concurrency, first-pass cap, and an env kill
 switch shaped like `UNMUTE_AGENT_RUNTIME` (D12).
 
-**Verify.** Unit tests for: append-only `done` never rewrites an existing item;
+**Check.** Unit tests for: append-only `done` never rewrites an existing item;
 `about` revision never opens the transcript; cursor advances exactly once per
 turn batch; a resumed session reuses its cursor; `partial` is set past the cap;
 eligibility excludes derived and includes a non-Unmute terminal session.
 
 ---
 
-## Phase 3 · The record on disk, and pointing at it  · D1, D2, D8
+## 3 · The record on disk, and pointing at it  · D1, D2, D8
 
 **3.1 — Write the record.** A flat, dated, human-readable file (or one file per
 day) under `unmute-agent/sessions/`, mode `0600`. Every eligible session in the
@@ -107,12 +111,12 @@ from the controller options, and the injection in `providerTranscript()` (D8).
 exists, it is at this path, it covers the last few days of every session on the
 machine, read it when they refer to past work.
 
-**Verify.** A controller test asserting the turn text no longer carries a
+**Check.** A controller test asserting the turn text no longer carries a
 session list. Measure the per-turn token delta and record it.
 
 ---
 
-## Phase 4 · The ladder, and the regression it repairs  · D9
+## 4 · The ladder, and the regression it repairs  · D9
 
 **4.1 — Restore the fallback.** The constitution must again name `Glob`, `Grep`
 and `Read` as the final rung. It currently mentions them **zero times** while
@@ -126,7 +130,7 @@ questions about **past work only**. Add the explicit seam: a question about what
 is *saved* stays memory-only, and an empty memory is an honest answer, not
 permission to search (D9).
 
-**Verify.** A constitution test asserting `Glob`/`Grep` are named and the ladder
+**Check.** A constitution test asserting `Glob`/`Grep` are named and the ladder
 appears in order — the same shape as `controller-transcript.test.ts`, which
 exists because two instructions disagreed. Add eval cases: a vague past-work
 reference reaches the record; an explicitly old reference skips to search; a
@@ -134,14 +138,26 @@ memory question does **not** trigger a disk crawl.
 
 ---
 
-## Phase 5 · Collapse the tool surface  · D1
+## 5 · Collapse the tool surface  · D1
 
 **5.1 — Sessions: 5 → 1.** Keep `session_resume` (spawns a process — the app
 must act). Delete `sessions_list`, `sessions_search`, `session_read`,
 `session_continue_in`.
 
-**5.2 — Notetaker: 4 → 1.** Keep `notetaker_open` (touches the app UI). Delete
-`notetaker_list`, `notetaker_search`, `notetaker_read`.
+**5.2 — Notetaker: NO CHANGE.** *Corrected during implementation.* The plan
+assumed meetings were files the Agent could read. Half of that is true — each
+meeting's transcript is plaintext at
+`~/Library/Application Support/unmute/meetings/<id>/transcript.json` — but the
+**metadata lives in the `meetings` table of `unmute.db`**, and the Agent has no
+shell and no SQLite. It cannot list meetings, cannot search their titles, and
+cannot map "the meeting about pricing" to a directory uuid.
+
+By D1's own test the data is unreachable, so all four stay tools. The principle
+held; the assumption about where the data lived did not.
+
+(If these should collapse later, the move is to have Unmute write a meetings
+record file the way it writes the session record — then the same reasoning
+applies. That is a separate piece of work, not a deletion.)
 
 **5.3 — History.** Keep `unmute_history_copy` (clipboard + image restoration).
 Determine whether the capture store is plaintext and reachable; if it is,
@@ -152,12 +168,12 @@ code, it comes back to discussion — it is not settled here.**
 constitution sentence naming the file, its shape, and when to read it. A
 deletion without its replacement instruction is a capability regression.
 
-**Verify.** Registry tests updated. An eval per removed tool proving the Agent
+**Check.** Registry tests updated. An eval per removed tool proving the Agent
 still performs the task by reading the file.
 
 ---
 
-## Phase 6 · Seeding replaces cross-harness plumbing  · D10, D11
+## 6 · Seeding replaces cross-harness plumbing  · D10, D11
 
 **6.1 — `task_create` gains `context`.** Separate from `intent`; `intent` keeps
 its wording and cap unchanged; `context` is framed as background to get familiar
@@ -177,13 +193,13 @@ native resume is the narrow same-harness single-source case. Include the honesty
 wording: *"started a Codex session from those three"*, never *"moved them"*
 (D10).
 
-**Verify.** Eval cases: three sessions consolidated into one new session on a
+**Check.** Eval cases: three sessions consolidated into one new session on a
 named harness, with real content in `context`, not identifiers; same-harness
 single-source prefers `session_resume`; the reply never claims a thread moved.
 
 ---
 
-## Phase 7 · Full verification
+## 7 · Full verification
 
 - `npm test` — the whole suite, not only `agent/`.
 - `npm run typecheck` — no new errors over the recorded baseline.
@@ -194,12 +210,18 @@ single-source prefers `session_resume`; the reply never claims a thread moved.
 
 ---
 
-## Sequencing
+## Build order
 
-Phases 1–2 are the foundation and land together. Phase 3 depends on 2 (nothing
-to point at otherwise). Phase 4 can land with 3. Phase 5 depends on 3 and 4 —
-tools may only be deleted once the instructions replacing them exist. Phase 6 is
-independent of 1–5 and may land at any point.
+This is ONE delivery, not a release schedule. The numbering is build order and
+nothing else — it records what cannot be written before what:
+
+- 2 needs 1: the summariser has no parser until the parser is shared.
+- 3 needs 2: there is nothing to write into the record until summaries exist.
+- 5 needs 3 and 4: a tool may only be deleted once the instruction replacing it
+  is in the constitution. Deleting first is a capability regression.
+- 4 and 6 have no dependants and can be written at any point.
+
+Nothing here is a checkpoint to stop at, and none of it ships alone.
 
 ## Open — returns to discussion, not decided here
 

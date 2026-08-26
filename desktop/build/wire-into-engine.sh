@@ -475,7 +475,8 @@ NODE_EOF
   if ! grep -q 'initRemote' "$main_ts"; then
     sed -i.bak "/^import { buildOSSAdapter } from '\.\/buildOSSAdapter'/a\\
 import { initRemote } from './paywall/remote/init'\\
-import { notetakerAgentAdapters } from './notetakerInit'
+import { notetakerAgentAdapters } from './notetakerInit'\\
+import { runHeadlessAgent } from './notetaker/headlessAgent'
 " "$main_ts"
     rm -f "$main_ts.bak"
     node -e "
@@ -483,7 +484,7 @@ import { notetakerAgentAdapters } from './notetakerInit'
       if (!s.includes('initRemote({')) {
         s = s.replace(
           'initPaywall(app, buildOSSAdapter())\n',
-          'initPaywall(app, buildOSSAdapter())\n  initRemote({ sessionManager, keyboardManager, notetaker: notetakerAgentAdapters() })\n'
+          'initPaywall(app, buildOSSAdapter())\n  initRemote({ sessionManager, keyboardManager, notetaker: notetakerAgentAdapters(), runHeadless: (provider, input) => runHeadlessAgent(provider, input, { timeoutMs: 120000 }) })\n'
         )
       }
       fs.writeFileSync(p, s)
