@@ -38,7 +38,7 @@ import SwiftUI
 /// instrument. See PadPaper — it borrows nothing from here and none of Theme's
 /// colours (only its animation curves), so the two vocabularies cannot quietly
 /// bleed into each other.
-struct PillGlass<S: Shape>: ViewModifier {
+struct PillGlass<S: InsettableShape>: ViewModifier {
     let shape: S
     var tint: Color? = nil
     @ObservedObject private var appearance = Appearance.shared
@@ -123,10 +123,22 @@ struct PillGlass<S: Shape>: ViewModifier {
                 // The TINTED case is untouched: a mode still takes its own
                 // colour at full presence, which is the existing idea and the
                 // reason nothing new had to be invented to mark a lane.
+                //
+                // strokeBorder, NOT stroke. A stroke is centred on the path, so
+                // half its width falls OUTSIDE the capsule and anti-aliases
+                // against the desktop — the edge picks up the wallpaper and
+                // reads soft over anything busy. strokeBorder insets by half a
+                // line, so the whole width lands on the black and the edge is
+                // the same crisp white on every backdrop.
+                //
+                // 0.9, not 0.42. White at 0.42 over black composites to a MID
+                // GREY (≈107,107,107) — it is not a dim white, it is a
+                // different colour, and it read as a grey outline rather than
+                // as the white border this surface is supposed to have.
                 .overlay(
-                    shape.stroke(
+                    shape.strokeBorder(
                         tint.map { AnyShapeStyle($0.opacity(0.95)) }
-                            ?? AnyShapeStyle(Color.white.opacity(0.42)),
+                            ?? AnyShapeStyle(Color.white.opacity(0.9)),
                         lineWidth: tint == nil ? 1 : 2))
                 // NO DROP SHADOW. The original says why, in its own words:
                 // "Unmute must occupy ONLY the widget itself — a soft 36px
@@ -144,7 +156,7 @@ struct PillGlass<S: Shape>: ViewModifier {
 }
 
 extension View {
-    func pillGlass<S: Shape>(_ shape: S, tint: Color? = nil) -> some View {
+    func pillGlass<S: InsettableShape>(_ shape: S, tint: Color? = nil) -> some View {
         modifier(PillGlass(shape: shape, tint: tint))
     }
 }
@@ -771,8 +783,12 @@ private struct ChipBody<Content: View>: View {
     @ViewBuilder let content: () -> Content
     var body: some View {
         HStack(spacing: 6) { content() }
-            .padding(.horizontal, 14)
-            .frame(height: PillMetrics.height)
+            // SQUARE, SO THE CAPSULE IS A CIRCLE. These carry one glyph each,
+            // and 14pt of horizontal padding around an 11pt icon made them
+            // 39 × 36 — a stadium, because a Capsule is only a circle when its
+            // frame is square. The padding was inherited from a chip that held
+            // text; nothing here does.
+            .frame(width: PillMetrics.height, height: PillMetrics.height)
             // THE WHOLE CHIP IS THE BUTTON, not the glyph inside it.
             //
             // Without this, SwiftUI hit-tests the RENDERED content — so a chip
