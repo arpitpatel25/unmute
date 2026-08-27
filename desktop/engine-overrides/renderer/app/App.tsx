@@ -27,6 +27,8 @@ import { RemoteSetupEntry } from '../remote/RemoteSetupEntry'
 import { RemoteHowItWorks } from '../remote/RemoteHowItWorks'
 import { TaskPanel } from '../remote/TaskPanel'
 import { NotetakerTab } from '../notetaker/NotetakerTab'
+import { AgentSettings } from '../remote/AgentSettings'
+import AgentHelp from './help/Agent'
 
 /**
  * Five destinations:
@@ -43,13 +45,17 @@ import { NotetakerTab } from '../notetaker/NotetakerTab'
  * to place in the Instruct explainer. That is an obligation, not something
  * already done: on this branch no explainer page exists yet.
  */
-type Tab = 'history' | 'notetaker' | 'orchestrator' | 'account' | 'settings'
+type Tab = 'history' | 'notetaker' | 'agent' | 'orchestrator' | 'account' | 'settings'
 
 /** Sub-pages of the Orchestrator tab. Setup is NOT one-time — a user may add a
  *  second agent months later, and Codex loses its connection whenever its app
  *  is reopened normally — so the way in is permanent, never gated on
  *  "complete". */
 type OrchestratorPage = 'tasks' | 'how' | 'setup' | 'settings'
+/** The Agent is its own destination: its settings and its explanation, nothing
+ *  else. It lived inside Orchestrator → Settings, three levels down, which is
+ *  the wrong place for the one part of Unmute you address directly. */
+type AgentPage = 'settings' | 'how'
 
 type AppView = 'loading' | 'onboarding' | 'whats-new' | 'main'
 
@@ -166,6 +172,7 @@ function AppInner() {
   // Which of the seven Settings sections the sidebar has selected. Pack B's
   // Settings renders one section at a time from this.
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('triggers')
+  const [agentPage, setAgentPage] = useState<AgentPage>('settings')
   // Set by the Agent's notetaker_open tool (via main), consumed once by
   // NotetakerTab/MeetingsList to select that meeting, then cleared — see the
   // effect below and notetakerOnOpenRequested's own comment.
@@ -329,6 +336,12 @@ function AppInner() {
             onClick={() => setActiveTab('notetaker')}
           />
           <SidebarButton
+            icon={<AgentNavIcon />}
+            label="Agent"
+            active={activeTab === 'agent'}
+            onClick={() => setActiveTab('agent')}
+          />
+          <SidebarButton
             icon={<OrchestratorIcon />}
             label="Orchestrator"
             active={activeTab === 'orchestrator'}
@@ -388,6 +401,9 @@ function AppInner() {
               onConsumedPendingMeetingId={() => setPendingMeetingId(null)}
             />
           )}
+          {activeTab === 'agent' && (
+            <AgentTab page={agentPage} onPageChange={setAgentPage} />
+          )}
           {activeTab === 'orchestrator' && (
             <OrchestratorTab page={orchestratorPage} onPageChange={setOrchestratorPage} />
           )}
@@ -419,6 +435,31 @@ function AppInner() {
  * "Tasks". Collapsing TaskPanel's internal pages into this control is Pack C's
  * to do; doing it here would mean editing a file this pack does not own.
  */
+/** The Agent's own destination: what it is, and the switches that govern it. */
+function AgentTab({ page, onPageChange }: {
+  page: AgentPage
+  onPageChange: (page: AgentPage) => void
+}) {
+  return (
+    <>
+      <div className="flex items-center justify-between gap-4 mb-5 flex-wrap">
+        <h2 className="font-display text-[22px] font-bold text-ink tracking-tight">Agent</h2>
+        <SegmentedControl
+          options={[
+            { value: 'settings', label: 'Settings' },
+            { value: 'how', label: 'How it works' },
+          ]}
+          value={page}
+          onChange={(value) => onPageChange(value as AgentPage)}
+        />
+      </div>
+
+      {page === 'settings' && <AgentSettings />}
+      {page === 'how' && <AgentHelp onBack={() => onPageChange('settings')} />}
+    </>
+  )
+}
+
 function OrchestratorTab({ page, onPageChange }: {
   page: OrchestratorPage
   onPageChange: (page: OrchestratorPage) => void
@@ -606,6 +647,17 @@ function NotetakerIcon() {
 }
 
 /** Orchestrator — the cockpit: many panes, many agents, one surface. */
+/** The Agent's glyph: the same head the Settings section has always used, at
+ *  sidebar weight. Deliberately not another grid — Orchestrator owns that. */
+function AgentNavIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 1.75v1.75M3.5 6.5A2.5 2.5 0 0 1 6 4h4a2.5 2.5 0 0 1 2.5 2.5v4A2.5 2.5 0 0 1 10 13H6a2.5 2.5 0 0 1-2.5-2.5z" />
+      <path d="M6 8h.01M10 8h.01M6.5 10.5h3" />
+    </svg>
+  )
+}
+
 function OrchestratorIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">

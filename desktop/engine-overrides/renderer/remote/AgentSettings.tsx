@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
-import { SectionHeader } from '../app/_shared'
+import { SectionHeader, SettingRow, Toggle } from '../app/_shared'
 import { ProviderGlyph } from './ProviderMark'
 
 type AgentProvider = 'claude' | 'codex'
@@ -26,6 +26,8 @@ type AgentSettingsAPI = {
   remoteGetAgentSettings?: () => Promise<AgentSettingsSnapshot>
   remoteSetUnmuteAgentProvider?: (provider: AgentProvider) => Promise<boolean>
   remoteGetAgentAvailability?: () => Promise<AgentAvailabilitySnapshot>
+  remoteGetUnmuteAgentAvailable?: () => Promise<boolean>
+  remoteSetUnmuteAgentAvailable?: (on: boolean) => Promise<boolean>
 }
 
 function api(): AgentSettingsAPI {
@@ -42,7 +44,11 @@ function AgentIcon() {
 }
 
 const AVAILABILITY_COPY: Record<NonNullable<AgentAvailabilitySnapshot['reason']>, string> = {
-  disabled: 'Unmute Agent is not enabled in this build yet. Your existing task routing is unchanged.',
+  // IT WAS NEVER THE BUILD. `unmuteAgentAvailable` is a per-machine setting
+  // that defaults to false, so two Macs on the identical version disagree —
+  // and this copy sent people looking at version numbers. Say where the switch
+  // actually lives.
+  disabled: 'The Agent is switched off on this Mac. Turn it on above — the setting is per-machine, so each Mac starts off.',
   initializing: 'Unmute Agent is preparing its encrypted memory and checking local providers.',
   'keychain-unavailable': 'Encrypted memory is unavailable because macOS Keychain protection could not be opened.',
   'storage-unavailable': 'Encrypted memory could not be opened. Existing memory was left untouched.',
@@ -79,9 +85,33 @@ export function AgentSettings() {
     load()
   }
 
+  const setEnabled = async (on: boolean) => {
+    setSettings((current) => current ? { ...current, unmuteAgentAvailable: on } : current)
+    await api().remoteSetUnmuteAgentAvailable?.(on)
+    load()
+  }
+
+  const enabled = settings.unmuteAgentAvailable
+
   return (
     <div>
       <SectionHeader icon={<AgentIcon />} title="Unmute Agent" />
+
+      {/* THE SWITCH THAT HAD NO CONTROL.
+          `unmuteAgentAvailable` was read in five places, had IPC on both sides
+          and a preload method — and nothing in the UI ever called it. It
+          defaults to false, so the Agent was unreachable on any Mac where it
+          had not been flipped by other means, with Settings offering no way to
+          flip it and copy that blamed the build. This is that control. */}
+      <div className="bg-white border border-border rounded-[12px] overflow-hidden mb-3">
+        <SettingRow
+          label="Unmute Agent"
+          description="Hold right Command and talk to Unmute itself — what it remembers, what you have been working on, and what to pick back up. Off on every Mac until you turn it on here."
+        >
+          <Toggle checked={enabled} onChange={(on) => void setEnabled(on)} />
+        </SettingRow>
+      </div>
+
       <div className="bg-white border border-border rounded-[12px] overflow-hidden">
         <div className="px-5 py-4">
           <p className="text-[13px] font-medium text-ink">Provider for the Unmute Agent</p>

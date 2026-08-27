@@ -23,7 +23,6 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { ComputerUseSettings } from './ComputerUseSettings'
-import { AgentSettings } from './AgentSettings'
 import { ProviderGlyph } from './ProviderMark'
 import { SectionHeader, SettingRow, Toggle } from '../app/_shared'
 
@@ -570,7 +569,11 @@ export function RemoteSettings({ onOpenHowItWorks }: {
 
   return (
     <div>
-      <AgentSettings />
+      {/* The Agent's settings moved to their own destination in the sidebar.
+          They were three levels down here — Orchestrator → Settings → scroll —
+          which is the wrong depth for the one part of Unmute you address
+          directly, and it made the Agent read like a feature of task routing
+          rather than its own thing. */}
 
       <div className="flex items-center justify-between">
         <SectionHeader icon={<AgentIcon />} title="Orchestrator agent" />
