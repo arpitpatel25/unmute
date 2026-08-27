@@ -131,15 +131,20 @@ struct PillGlass<S: InsettableShape>: ViewModifier {
                 // line, so the whole width lands on the black and the edge is
                 // the same crisp white on every backdrop.
                 //
-                // 0.9, not 0.42. White at 0.42 over black composites to a MID
-                // GREY (≈107,107,107) — it is not a dim white, it is a
-                // different colour, and it read as a grey outline rather than
-                // as the white border this surface is supposed to have.
+                // A GREY HAIRLINE, and hairline is meant literally: 0.5pt is
+                // one device pixel on a 2x display, the thinnest line that can
+                // be drawn without dithering into a smear. At 1pt and 0.9 white
+                // the edge stopped reading as an edge and started reading as a
+                // ring drawn around the pill — the border became an object.
+                //
+                // Grey, not white. The rim's whole job is to say where the
+                // capsule ends; at full white it competes with the waveform,
+                // which is the one thing in here that should draw the eye.
                 .overlay(
                     shape.strokeBorder(
                         tint.map { AnyShapeStyle($0.opacity(0.95)) }
-                            ?? AnyShapeStyle(Color.white.opacity(0.9)),
-                        lineWidth: tint == nil ? 1 : 2))
+                            ?? AnyShapeStyle(Color.white.opacity(0.35)),
+                        lineWidth: tint == nil ? 0.5 : 2))
                 // NO DROP SHADOW. The original says why, in its own words:
                 // "Unmute must occupy ONLY the widget itself — a soft 36px
                 // shadow pooled behind the whole pill row and read as a
