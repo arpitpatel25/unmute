@@ -91,6 +91,17 @@ let package = Package(
             dependencies: ["StageSupport"],
             path: "Tests/StageSupportTests"
         ),
+        // The mic-level arithmetic, split out ONLY so it can be tested: these
+        // numbers ARE the behaviour, and a wrong one is invisible in a diff.
+        .target(
+            name: "LevelMeterSupport",
+            path: "Sources/LevelMeterSupport"
+        ),
+        .testTarget(
+            name: "LevelMeterSupportTests",
+            dependencies: ["LevelMeterSupport"],
+            path: "Tests/LevelMeterSupportTests"
+        ),
         .target(
             name: "HoverStateSupport",
             path: "Sources/HoverStateSupport"
@@ -141,6 +152,7 @@ let package = Package(
                 "StageSupport",
                 "WallPresentationSupport",
                 "HoverStateSupport",
+                "LevelMeterSupport",
                 "ComposerSupport",
                 "SurfaceSizeSupport",
                 "SurfaceTransitionSupport",

@@ -1,4 +1,5 @@
 import SwiftUI
+import LevelMeterSupport
 
 /// WHAT THE MIC IS HEARING, as a shape rather than a number.
 ///
@@ -30,8 +31,8 @@ struct Waveform: View {
     var color: Color = Theme.text
 
     @State private var history: [Double] = []
-    /// The loudest recent frame, decaying. See `push`.
-    @State private var peak: Double = Waveform.peakFloor
+    /// The smoothed level the last frame settled on. See `push`.
+    @State private var envelope: Double = 0
 
     var body: some View {
         HStack(alignment: .center, spacing: spacing) {
@@ -45,7 +46,6 @@ struct Waveform: View {
             }
         }
         .frame(height: height)
-        .animation(.linear(duration: 0.08), value: history)
         // The single-argument form: the package targets macOS 13, where the
         // two-argument `onChange` does not exist yet.
         .onChange(of: level) { new in push(new) }
@@ -59,37 +59,12 @@ struct Waveform: View {
         return Array(repeating: 0, count: max(0, bars - h.count)) + h
     }
 
-    /// The quietest peak the gain will normalise against.
-    ///
-    /// Without a floor, auto-gain amplifies a DEAD MIC into a lively wave —
-    /// which is the one lie this view must never tell, since answering "is it
-    /// picking me up" is its whole job. Room tone sits below this, so silence
-    /// stays the flat one-pixel line.
-    static let peakFloor: Double = 0.06
-
-    /// How fast the reference forgets. 0.985 per frame ≈ a couple of seconds,
-    /// long enough to survive the gap between words and short enough to follow
-    /// you from a quiet room into a loud one.
-    static let peakDecay: Double = 0.985
-
+    /// The arithmetic lives in `LevelMeterSupport` so it can be tested; see
+    /// there for why every constant is fixed rather than adaptive.
     private func push(_ v: Double) {
-        // SHAPED, NOT RAW. Mic level is roughly logarithmic in loudness, so a
-        // linear mapping leaves ordinary speech in the bottom fifth of the
-        // height and only shouting moves it. The square root spends the range
-        // where a voice actually lives.
-        let shaped = min(1, max(0, v)).squareRoot()
-
-        // AND MEASURED AGAINST WHAT YOU HAVE BEEN DOING, not against the
-        // theoretical maximum. Shaping alone still leaves a soft speaker, a
-        // distant mic or a quiet room drawing a stub — the level is genuinely
-        // low, so the bars are genuinely short, and the view looks broken while
-        // working perfectly. Dividing by the loudest of the last couple of
-        // seconds means ordinary speech fills the height whoever is speaking.
-        peak = max(shaped, max(peak * Waveform.peakDecay, Waveform.peakFloor))
-        let gained = v <= 0 ? 0 : min(1, shaped / peak)
-
+        envelope = LevelMeter.advance(envelope, toward: LevelMeter.target(for: v))
         var h = history
-        h.append(gained)
+        h.append(envelope)
         if h.count > bars { h.removeFirst(h.count - bars) }
         history = h
     }
