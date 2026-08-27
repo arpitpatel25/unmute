@@ -4122,9 +4122,23 @@ async function dispatchFromCaptureInner(
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
       if (decision.name) manager.setName(newId, decision.name)
-      // Group new PERSISTENT sessions at birth (one-offs stay ungrouped until
-      // they graduate — the wall groups streams, not errands).
-      if (decision.group && decision.kind === 'session') manager.setGroup(newId, decision.group)
+      // GROUP EVERY NEW TASK THAT HAS A SUBJECT, one-offs included.
+      //
+      // This used to read `decision.kind === 'session'`, inherited from spec
+      // 2026-07-16 (which put one-off grouping before graduation out of scope on
+      // the grounds that the wall groups streams, not errands). Two live
+      // dispatches on 2026-08-27 settled it the other way: the router answered
+      // group:"unmute marketing" for a one-off about Unmute's Twitter posts —
+      // the RIGHT stream, joined rather than invented — and this line binned it,
+      // so the card landed in Ungrouped with no trace of the decision anywhere.
+      //
+      // `kind` is about how long a task lives. It was never about whether the
+      // work is about something. An errand on a project belongs to that
+      // project's stream exactly as a session does, and the wall is far more
+      // legible for it. The router's own contract says the same thing now — the
+      // two have to agree or the model simply omits the group and this line
+      // never sees one.
+      if (decision.group) manager.setGroup(newId, decision.group)
       pendingBeat = decision.name ? `On it \u2014 ${decision.name}.` : 'On it.'
       // Declinable offer (§6.2 — never a silent reroute, never a blocking prompt):
       // the router chose NEW but seriously weighed one open task. Surface a

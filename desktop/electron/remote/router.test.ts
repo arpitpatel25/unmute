@@ -465,6 +465,19 @@ test('curation can rename a stream that has no task on screen', () => {
   assert.deepEqual(d.ops, [{ op: 'rename_group', from: 'unmute', to: 'unmute cloud' }])
 })
 
+test('a one-off is grouped too — a quick errand still has a subject', () => {
+  // Field evidence, twice (2026-08-27). The router correctly answered
+  // group:"unmute marketing" for a one-off about Unmute's Twitter posts, and
+  // the host binned it for not being a session. The contract used to tell the
+  // model to omit the group for an errand, so the fix has to be in both places
+  // or the model simply keeps omitting it.
+  const p = buildRoutingPrompt('do a thing', GROUPED, '/d/decision.json')
+  const contract = p.split('\n').find((l) => l.startsWith('group:')) ?? ''
+  assert.ok(contract, 'the group contract line must still exist')
+  assert.match(contract, /one-?off is grouped too/i, 'an errand must be told it still gets a stream')
+  assert.match(contract, /subject-less/, 'being subject-less is the only reason left to omit')
+})
+
 test('buildRoutingPrompt surfaces live groups on task lines and the grouping guidance', () => {
   const p = buildRoutingPrompt('x', GROUPED, '/d/decision.json')
   assert.ok(p.includes('· group: on-call'))
