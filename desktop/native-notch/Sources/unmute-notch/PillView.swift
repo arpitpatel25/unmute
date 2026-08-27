@@ -131,20 +131,29 @@ struct PillGlass<S: InsettableShape>: ViewModifier {
                 // line, so the whole width lands on the black and the edge is
                 // the same crisp white on every backdrop.
                 //
-                // A GREY HAIRLINE, and hairline is meant literally: 0.5pt is
-                // one device pixel on a 2x display, the thinnest line that can
-                // be drawn without dithering into a smear. At 1pt and 0.9 white
-                // the edge stopped reading as an edge and started reading as a
-                // ring drawn around the pill — the border became an object.
+                // GREY, AND 1pt — thin by COLOUR, not by sub-pixel width.
                 //
-                // Grey, not white. The rim's whole job is to say where the
-                // capsule ends; at full white it competes with the waveform,
-                // which is the one thing in here that should draw the eye.
+                // 0.5pt looked like the obvious way to get a thinner line and
+                // is the one width that cannot be drawn reliably: on a 2x
+                // display it is exactly ONE device pixel, so unless it lands
+                // dead on a pixel row it splits across two at ~50% coverage
+                // each — 18% of an already grey line, which is nothing. It
+                // failed on the TOP AND BOTTOM edges first, because those are
+                // long horizontal runs that share one alignment for their whole
+                // length, while the rounded ends always catch some pixel and
+                // kept looking fine. The reported symptom was exactly that: a
+                // border missing along the top.
+                //
+                // 1pt is two device pixels and survives any offset. What made
+                // the earlier 1pt rim look heavy was 0.9 white, not its width,
+                // so the weight comes off the colour instead: 0.30 over black
+                // is about (77,77,77). The rim's whole job is to say where the
+                // capsule ends, and it should not compete with the waveform.
                 .overlay(
                     shape.strokeBorder(
                         tint.map { AnyShapeStyle($0.opacity(0.95)) }
-                            ?? AnyShapeStyle(Color.white.opacity(0.35)),
-                        lineWidth: tint == nil ? 0.5 : 2))
+                            ?? AnyShapeStyle(Color.white.opacity(0.30)),
+                        lineWidth: tint == nil ? 1 : 2))
                 // NO DROP SHADOW. The original says why, in its own words:
                 // "Unmute must occupy ONLY the widget itself — a soft 36px
                 // shadow pooled behind the whole pill row and read as a
