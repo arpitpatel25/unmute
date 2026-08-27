@@ -459,6 +459,116 @@ export function canonicalGroup(label: string | null | undefined, groups: GroupOp
   return groups.find((g) => groupKey(g.label) === key)?.label
 }
 
+/**
+ * STRUCTURED OUTPUT, IMPLEMENTED IN THE HARNESS.
+ *
+ * The router is a CLI session on the user's own subscription, not an API call —
+ * that is what makes routing free, and it is also why there is no
+ * `response_format` to lean on. So the guarantee an API would give us by
+ * construction is done here instead: check the reply against the schema, and
+ * when it does not fit, say exactly what is wrong and ask once more.
+ *
+ * WHY THIS EXISTS, from the field (2026-08-27 19:59). The model answered:
+ *
+ *   { "action": "new", "group": "twitter marketing",
+ *     "task": "Discuss an idea for Unmute's Twitter marketing…",
+ *     "reasoning": "No open tasks exist to continue…" }
+ *
+ * Well-formed JSON, entirely wrong keys. `intent` was missing so the card fell
+ * back to the raw transcript and showed "So there was this idea that came to my
+ * mind abo…"; `name` was missing so nothing ever named it; `kind` was missing so
+ * it defaulted to a one-off, and the group the model HAD chosen was dropped on
+ * the way in. Three visible faults, one malformed reply, and not a single line
+ * in the log saying so — every field failed soft and silently.
+ *
+ * Failing soft is right for a decision we cannot get again. It is wrong for one
+ * we can simply ask for a second time.
+ */
+export interface DecisionComplaint {
+  ok: boolean
+  /** What to tell the model, specific enough to act on. */
+  complaint?: string
+  /** False when re-asking cannot help — nothing came back to correct. */
+  retryable?: boolean
+}
+
+/** Keys the model has reached for instead of ours, mapped to what we meant.
+ *  Naming the wrong key back to it corrects far more reliably than reciting
+ *  the missing one, which it has already read once in the schema. */
+const CONFUSABLE: Record<string, string> = {
+  task: 'intent',
+  request: 'intent',
+  command: 'intent',
+  title: 'name',
+  label: 'name',
+  species: 'kind',
+  type: 'kind',
+}
+
+const KNOWN_ACTIONS = new Set(['new', 'continue', 'resume', 'speak', 'curate', 'skill_feedback'])
+
+/** Does this reply carry what the action it claims actually needs? */
+export function validateDecision(raw: string | null): DecisionComplaint {
+  // Nothing came back — a timeout or a dead session. Re-asking spends the
+  // budget twice for the same silence; the failsafe is the right answer.
+  if (!raw || !raw.trim()) return { ok: false, retryable: false }
+
+  let obj: Record<string, unknown>
+  try {
+    obj = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return { ok: false, retryable: true, complaint: 'your reply was not JSON — no prose, no code fence, just the object' }
+  }
+  if (!obj || typeof obj !== 'object') {
+    return { ok: false, retryable: true, complaint: 'your reply was not a JSON object' }
+  }
+
+  const missing: string[] = []
+  const has = (k: string): boolean => typeof obj[k] === 'string' && !!(obj[k] as string).trim()
+  const action = typeof obj.action === 'string' ? obj.action : ''
+  if (!KNOWN_ACTIONS.has(action)) {
+    return {
+      ok: false,
+      retryable: true,
+      complaint: `"action" must be one of ${[...KNOWN_ACTIONS].map((a) => `"${a}"`).join(', ')}${action ? `, not "${action}"` : ' and was missing'}`,
+    }
+  }
+
+  if (action !== 'curate' && !has('intent')) missing.push('intent')
+  if (action === 'new') {
+    if (!has('name')) missing.push('name')
+    if (!has('kind')) missing.push('kind')
+  }
+  if ((action === 'continue' || action === 'resume') && !has('targetTaskId')) missing.push('targetTaskId')
+  if (action === 'curate' && !Array.isArray(obj.ops)) missing.push('ops')
+  if (action === 'skill_feedback' && !has('skill')) missing.push('skill')
+
+  if (!missing.length) return { ok: true }
+
+  // Point at the key it used instead, where we can see one.
+  const wrong = Object.keys(CONFUSABLE).filter((k) => k in obj && missing.includes(CONFUSABLE[k]))
+  const usedInstead = wrong.length
+    ? ` You sent ${wrong.map((k) => `"${k}"`).join(' and ')} — ${wrong.length > 1 ? 'those are not keys' : 'that is not a key'} in this schema.`
+    : ''
+  return {
+    ok: false,
+    retryable: true,
+    complaint: `missing required key${missing.length > 1 ? 's' : ''} ${missing.map((k) => `"${k}"`).join(', ')} for action "${action}".${usedInstead}`,
+  }
+}
+
+/** The second ask. Short on purpose: the schema was in the first prompt and is
+ *  still in its context — repeating it invites a fresh improvisation, whereas a
+ *  single specific correction is a thing it can act on. */
+export function correctionPrompt(complaint: string, decisionPath: string | null): string {
+  return [
+    `[Unmute router] That reply could not be used: ${complaint}`,
+    decisionPath
+      ? `Write the corrected JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). ONLY the object, exactly the keys described above.`
+      : `Reply again with ONLY that one line of JSON — exactly the keys described above, no prose, no code fence.`,
+  ].join('\n')
+}
+
 /** The default decision when the router gives us nothing usable (timeout, bad
  *  parse, unknown id). A follow-up is likelier than a coincidental brand-new
  *  request when exactly ONE recent task is open — BUT the failsafe must NEVER
@@ -702,7 +812,14 @@ export class Router {
     if (this.engine) {
       try {
         const prompt = buildRoutingPrompt(utterance, tasks, null, projects, finished, coldSessions, wall, skillNames, avail, groups)
-        const raw = await this.engine.decide(prompt, this.o.decisionTimeoutMs)
+        let raw = await this.engine.decide(prompt, this.o.decisionTimeoutMs)
+        // ONE correction, then the failsafe. See validateDecision.
+        const check = validateDecision(raw)
+        if (!check.ok && check.retryable) {
+          log.warn('router reply off-schema — asking once more', { complaint: check.complaint })
+          raw = await this.engine.decide(correctionPrompt(check.complaint!, null), this.o.decisionTimeoutMs)
+          log.event('router-retry', { engine: 'codex', fixed: validateDecision(raw).ok })
+        }
         const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail, groups)
         log.event('route-decision', { engine: 'codex', action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length })
         return decision
@@ -723,7 +840,20 @@ export class Router {
       // explicit confirm Enter to actually submit it. (Proven on the task lane.)
       await this.sleep(this.o.submitConfirmMs)
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
-      const raw = await this.waitForDecision(prompt)
+      let raw = await this.waitForDecision(prompt)
+      // ONE correction, then the failsafe. The schema is still in the session's
+      // context, so the correction is a sentence rather than the whole prompt.
+      const check = validateDecision(raw)
+      if (!check.ok && check.retryable && this.ex?.alive) {
+        log.warn('router reply off-schema — asking once more', { complaint: check.complaint })
+        await fs.rm(this.decisionPath, { force: true }).catch(() => {})
+        const fix = correctionPrompt(check.complaint!, this.decisionPath)
+        this.ex.writeStdin(fix)
+        await this.sleep(this.o.submitConfirmMs)
+        if (this.ex?.alive) this.ex.write('\r')
+        raw = await this.waitForDecision(fix)
+        log.event('router-retry', { engine: 'claude', fixed: validateDecision(raw).ok })
+      }
       const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail, groups)
       devEvent(log, 'route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, group: decision.group ?? null, ops: decision.ops?.length ?? 0 })
       return decision
