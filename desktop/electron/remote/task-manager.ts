@@ -70,6 +70,7 @@ import {
 } from './status-file'
 import { buildDispatch } from './dispatch-prompt'
 import { detectSurface } from './surface'
+import type { GroupRegistry } from './group-registry'
 import { deriveStatus, isAnswerable, selfContinuationDelaySeconds, type HookEvent, type AskQuestion } from './observer'
 import { readTranscript, hadSideEffects, readLatestExchange, parseTurns } from './transcript'
 import type { Block } from './blocks'
@@ -286,12 +287,26 @@ export interface Task {
   blocks?: Block[]
   /** Token usage for the panel footer, when the provider reports it. */
   usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number }
-  /** Workspace group — "what is this work about" ("unmute", "launch video",
-   *  "on-call"). Assigned ONCE by the router (user's own words win), mutated
-   *  only by user curation. Live groups = distinct values across live tasks;
-   *  no registry, no history — the screen is the entire state (spec
-   *  2026-07-16-cockpit-grouping). */
+  /** Workspace group LABEL — "what is this work about" ("unmute", "launch
+   *  video", "on-call"). What every surface renders. Derived from `groupId`;
+   *  never the identity. */
   group?: string
+  /**
+   * The group registry entry this task is filed under — the identity.
+   *
+   * Spec 2026-07-16 §2 made the screen the entire state: live groups were the
+   * distinct label strings across live tasks, with no registry and no history.
+   * That is what re-minted a stream's name every time it went quiet, and what
+   * let one stream become "unmute", "unmute cloud" and "unmute AI".
+   *
+   * Assign-once still holds (§5): the router files a task at dispatch or at the
+   * follow-up that graduates it, and after that only the user moves it. What
+   * changed is only the vocabulary underneath — it now persists.
+   *
+   * Absent on tasks written before the registry; `rehydrate` resolves their
+   * label into an entry on first load.
+   */
+  groupId?: string
   state: UiTaskState
   createdAt: number
   updatedAt: number
@@ -387,6 +402,10 @@ export interface Task {
 export interface TaskManagerOpts {
   /** Creates a fresh executor per task (default: ClaudeCodeExecutor). */
   executorFactory: ExecutorFactory
+  /** The durable vocabulary of workspace streams (group-registry.ts). Absent ⇒
+   *  grouping degrades to bare labels, exactly as it behaved before the
+   *  registry existed — metadata, never a gate. */
+  groupRegistry?: GroupRegistry
   /** The user's path fence, as the Remote screen holds it. Read per dispatch so
    *  a task started after the setting changed honours the new value. Absent ⇒
    *  unfenced. */
@@ -614,8 +633,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -625,6 +644,7 @@ export class TaskManager extends EventEmitter {
       sandboxRoots: opts.sandboxRoots,
       codexFullAccess: opts.codexFullAccess,
       codexCliChoice: opts.codexCliChoice,
+      groupRegistry: opts.groupRegistry,
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       pollMs: opts.pollMs ?? 1000,
       activeReconcileMs: opts.activeReconcileMs ?? (opts.pollMs !== undefined ? opts.pollMs : 30_000),
@@ -3283,7 +3303,7 @@ export class TaskManager extends EventEmitter {
           result: meta.result,
           shelved: meta.shelved || undefined,
           note: meta.note || undefined,
-          group: meta.group || undefined,
+          ...this.groupFromMeta(meta),
         }
         this.tasks.set(id, task)
         this.emit('created', task)
@@ -3333,7 +3353,7 @@ export class TaskManager extends EventEmitter {
           mode: meta.mode ?? 'managed',
           ...(meta.shelved ? { shelved: true } : {}),
           ...(meta.note ? { note: meta.note } : {}),
-          ...(meta.group ? { group: meta.group } : {}),
+          ...this.groupFromMeta(meta),
         } as Task
         this.tasks.set(id, ctask)
         restored++
@@ -3371,7 +3391,7 @@ export class TaskManager extends EventEmitter {
           shelved: meta.shelved || undefined,
           note: meta.note || undefined,
           spawnedBy: meta.spawnedBy || undefined,
-          group: meta.group || undefined,
+          ...this.groupFromMeta(meta),
         } as Task
         this.tasks.set(id, ctask)
         this.emit('created', ctask)
@@ -3447,7 +3467,7 @@ export class TaskManager extends EventEmitter {
         shelved: meta.shelved || undefined,
         note: meta.note || undefined,
         spawnedBy: meta.spawnedBy || undefined,
-        group: meta.group || undefined,
+        ...this.groupFromMeta(meta),
       }
       this.tasks.set(id, task)
       this.emit('created', task)
@@ -4115,7 +4135,11 @@ export class TaskManager extends EventEmitter {
       // idle-killed, never auto-purged.
       kind: 'session' as const,
       state: 'done' as const,
-      ...(input.group ? { group: input.group } : {}),
+      // Filed through the registry at adoption, not left as a bare label for
+      // the next rehydrate to resolve: the wall groups it correctly the moment
+      // it appears, and the cwd basename folds onto an existing stream instead
+      // of sitting beside it under a second spelling.
+      ...this.groupFromMeta({ group: input.group }),
       // The REAL last interaction, not now. Stamping `now` would shove every
       // import to the top of the wall and into Today, which is the same
       // "reading rewrote its history" fault the open path just had.
@@ -4212,30 +4236,108 @@ export class TaskManager extends EventEmitter {
   /** Assign/clear a task's workspace group. Groups are minted lazily by the
    *  router or by user curation — this just records the word. Empty clears.
    *  Persists to meta.json; emits 'updated' for the wall. */
+  /**
+   * File a task under a stream.
+   *
+   * The task stores the registry ENTRY ID; `group` is the entry's label, kept
+   * alongside because every outward surface — the notch payload, the renderer,
+   * the router snapshot — renders a name and has no way to resolve an id.
+   *
+   * Going through the registry is what stops "unmute" and "Unmute" from being
+   * two streams: the label is folded to a key and joins whatever entry already
+   * holds it. Without a registry (older callers, tests) it degrades to the
+   * previous label-only behaviour rather than refusing to group.
+   */
   setGroup(id: string, group: string | null): void {
     const task = this.tasks.get(id)
     if (!task) return
-    const g = (group || '').trim().slice(0, 32)
-    if ((task.group ?? '') === g) return
+    const registry = this.opts.groupRegistry
+    const entry = group ? registry?.resolve(group) : undefined
+    const g = entry ? entry.label : (group || '').trim().slice(0, 32)
+    const gid = entry?.id
+    if ((task.group ?? '') === g && (task.groupId ?? '') === (gid ?? '')) return
     task.group = g || undefined
+    task.groupId = g ? gid : undefined
     task.updatedAt = this.clock()
     this.emit('updated', task)
-    log.child({ taskId: id }).event('group-changed', { group: g || null })
-    this.mergeMeta(task, { group: g }, 'setGroup')
+    log.child({ taskId: id }).event('group-changed', { group: g || null, groupId: task.groupId ?? null })
+    this.mergeMeta(task, { group: g, groupId: task.groupId ?? '' }, 'setGroup')
   }
 
-  /** Rename a live group: every task currently carrying `from` moves to `to`.
-   *  Returns how many tasks moved (0 = the group didn't exist). */
+  /**
+   * Rename a stream. Returns how many tasks now show the new name.
+   *
+   * This USED to walk every task and rewrite the string, which worked only
+   * because groups were live-only — nothing outlived the rename. With a
+   * persisted registry that would orphan every task not currently loaded, and
+   * the next time one was rehydrated its stale label would mint a second
+   * stream. So the rename is now a one-field write on the ENTRY, and the loop
+   * below only refreshes the labels already in memory.
+   *
+   * A name that collides with another stream is REFUSED (0), not merged: two
+   * streams the user kept apart are not ours to join.
+   */
   renameGroup(from: string, to: string): number {
     const f = (from || '').trim()
     const t = (to || '').trim().slice(0, 32)
-    if (!f || !t || f === t) return 0
+    if (!f || !t) return 0
+    const registry = this.opts.groupRegistry
+    if (registry) {
+      const entry = registry.find(f)
+      if (!entry) return 0
+      const out = registry.rename(entry.id, t)
+      if (!out.ok) {
+        log.warn('group rename refused', { from: f, to: t, reason: out.reason, clashesWith: out.entry?.label ?? null })
+        return 0
+      }
+      let relabelled = 0
+      for (const task of this.tasks.values()) {
+        if (task.groupId !== entry.id) continue
+        task.group = out.entry!.label
+        task.updatedAt = this.clock()
+        this.emit('updated', task)
+        this.mergeMeta(task, { group: task.group, groupId: entry.id }, 'renameGroup')
+        relabelled++
+      }
+      log.event('group-renamed', { from: f, to: out.entry!.label, relabelled })
+      return relabelled
+    }
+    if (f === t) return 0
     let moved = 0
     for (const task of this.tasks.values()) {
       if (task.group === f) { this.setGroup(task.id, t); moved++ }
     }
     if (moved) log.event('group-renamed', { from: f, to: t, moved })
     return moved
+  }
+
+  /**
+   * Rehydrate a task's stream from its meta.json — and MIGRATE it if needed.
+   *
+   * Every task written before the registry carries a bare label and no id. The
+   * first load resolves that label into an entry, which is also the first
+   * deduplication the user ever sees: "unmute" and "Unmute" collapse here, with
+   * no model involved and nothing to configure.
+   *
+   * Prefers the stored id when there is one, so a stream renamed while this
+   * task was unloaded comes back under its CURRENT name rather than the name it
+   * had when the task was last written.
+   */
+  private groupFromMeta(meta: { group?: string; groupId?: string }): { group?: string; groupId?: string } {
+    const registry = this.opts.groupRegistry
+    const label = (meta.group || '').trim()
+    if (!registry) return label ? { group: label } : {}
+    const byId = meta.groupId ? registry.get(meta.groupId) : undefined
+    const entry = byId ?? (label ? registry.resolve(label) : undefined)
+    if (!entry) return label ? { group: label } : {}
+    return { group: entry.label, groupId: entry.id }
+  }
+
+  /** Registry ids currently held by a task — what `prune` must never drop. */
+  liveGroupIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const t of this.tasks.values()) if (t.groupId) ids.add(t.groupId)
+    return ids
   }
 
   followUp(id: string, text: string): boolean {
