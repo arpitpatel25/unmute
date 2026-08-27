@@ -84,12 +84,17 @@ struct PillGlass<S: Shape>: ViewModifier {
                             // which suits a product surface that should read as
                             // one instrument rather than as a different colour
                             // depending on what happens to be behind it.
-                            Color(red: 0.055, green: 0.06, blue: 0.075)
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.085),
-                                         Color.white.opacity(0.022),
-                                         Color.white.opacity(0.0)],
-                                startPoint: .top, endPoint: .bottom)
+                            // PITCH BLACK, AND NOTHING ON TOP OF IT.
+                            //
+                            // The near-black base plus a top-down sheen was
+                            // making the surface read as a lit object. Pure
+                            // black reads as a hole punched in the screen: the
+                            // same on every wallpaper, every Space and every
+                            // Mac, with the waveform the only thing in it that
+                            // moves. The sheen is gone for the same reason —
+                            // it implied a light source the capsule no longer
+                            // claims to have.
+                            Color.black
                             if let tint { tint.opacity(0.16) }
                         }
                         .clipShape(shape)
@@ -110,10 +115,18 @@ struct PillGlass<S: Shape>: ViewModifier {
                 // So the stroke carries it: the mode's own colour at full
                 // presence, slightly thicker than the specular rim it replaces.
                 // Untinted pills keep the rim exactly as before.
+                // A HAIRLINE, NOT A SPECULAR RIM. The gradient rim belonged to
+                // a surface pretending to catch light. Over pure black the edge
+                // has one job — say where the capsule ends — and a flat white
+                // line does it identically on every backdrop.
+                //
+                // The TINTED case is untouched: a mode still takes its own
+                // colour at full presence, which is the existing idea and the
+                // reason nothing new had to be invented to mark a lane.
                 .overlay(
                     shape.stroke(
                         tint.map { AnyShapeStyle($0.opacity(0.95)) }
-                            ?? AnyShapeStyle(Glass.rim(highlight: .white)),
+                            ?? AnyShapeStyle(Color.white.opacity(0.42)),
                         lineWidth: tint == nil ? 1 : 2))
                 // NO DROP SHADOW. The original says why, in its own words:
                 // "Unmute must occupy ONLY the widget itself — a soft 36px
@@ -146,6 +159,7 @@ struct PillView: View {
     @ObservedObject var scratch: ScratchpadModel
     /// Whether the selector panel is open. Local to the view — main never needs
     /// to know, and a round-trip would make it feel slow.
+    @State private var pillHovered = false
     @State private var selectorOpen = false
 
     private var s: PillState { model.state }
@@ -354,7 +368,10 @@ struct PillView: View {
                 AgentModelControl(state: s, model: model, open: $selectorOpen)
             }
 
-            pill.pillGlass(Capsule(), tint: pillTint)
+            pill
+                .environment(\.pillHovered, pillHovered)
+                .onHover { pillHovered = $0 }
+                .pillGlass(Capsule(), tint: pillTint)
 
             if chipsVisible {
                 if let opts = s.micOptions, opts.count > 1 {
@@ -428,15 +445,29 @@ struct PillView: View {
             EmptyView()
 
         case .recording:
-            // dot (or the Remote glyph) + timer + stop. Nothing else, ever.
-            HStack(spacing: 11) {
+            // THE WAVEFORM, AND NOTHING ELSE AT REST.
+            //
+            // It used to be dot + waveform + stop. All three said the same
+            // thing: a red dot means recording, a moving waveform means
+            // recording, and a stop button is only there while recording. Three
+            // marks for one fact, permanently on screen.
+            //
+            // The dot is gone. The stop button is gone — the trigger key
+            // already stops, and it is the only way anyone stops with their
+            // hands off the mouse. What the pointer gains instead is CANCEL,
+            // revealed on hover, which is a different act the key cannot
+            // express: throw this away rather than finish it.
+            //
+            // The Remote glyph STAYS. It is not a recording indicator, it is
+            // the lane — "these words are going to a session, not your cursor"
+            // — and no other element carries that, since an untinted pill takes
+            // the plain white rim.
+            HStack(spacing: 10) {
                 if s.kind == .remote {
                     // A Remote capture reads as Remote AT A GLANCE, from the
                     // glyph — which is why the original swapped the dot rather
                     // than adding a word.
                     RemoteGlyph()
-                } else {
-                    RecordDot()
                 }
                 // WHAT IT IS HEARING, not how long you have been at it.
                 //
@@ -453,11 +484,13 @@ struct PillView: View {
                     TimerText(elapsed: s.elapsed, max: s.maxSeconds)
                 } else {
                     Waveform(level: s.level, color: Theme.text)
-                        .frame(width: 70)
+                        .frame(width: 78)
                 }
-                StopButton { model.emit(.stop) }
+                CancelOnHover { model.emit(.cancel) }
             }
-            .padding(.leading, 15).padding(.trailing, 7)
+            // SYMMETRIC, because there is no longer anything to counterweight.
+            // 15/7 existed to balance a 30pt stop button hanging off the right.
+            .padding(.horizontal, 14)
             .frame(height: PillMetrics.height)
 
         case .paused:
@@ -567,22 +600,6 @@ struct PillView: View {
 
 // MARK: - Pieces
 
-/// The recording indicator. Red and pulsing for Remote, white for dictation —
-/// matching the original's dot classes.
-private struct RecordDot: View {
-    @State private var small = false
-    var body: some View {
-        Circle()
-            .fill(Color.white.opacity(0.88))
-            .frame(width: 8, height: 8)
-            .scaleEffect(small ? 0.83 : 1)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
-                    small = true
-                }
-            }
-    }
-}
 
 /// A Remote capture swaps the dot for a small remote-control glyph, so the pill
 /// reads as "remote" without a word of explanation.
@@ -646,24 +663,65 @@ private struct TimerText: View {
     }
 }
 
-private struct StopButton: View {
+/// CANCEL, AND ONLY WHILE THE POINTER IS ON THE PILL.
+///
+/// The capsule holds the waveform alone at rest. Hovering reveals this and the
+/// capsule widens by exactly the room it needs — the waveform never moves, only
+/// the right edge travels.
+///
+/// WHY WIDTH AND PADDING, NOT `if hovering`. Inserting a view on hover makes
+/// SwiftUI re-lay the row and the waveform jumps sideways. Keeping it in the
+/// hierarchy at zero width and animating the width means the capsule grows and
+/// nothing inside it moves.
+///
+/// AND WHY THE PADDING IS ON THIS VIEW. `HStack(spacing:)` applies its spacing
+/// to every child including a zero-width one, so at rest the row would carry
+/// 10pt of dead space on the right and the waveform would sit off-centre in a
+/// capsule that looked symmetric. The leading pad belongs to the control and
+/// collapses with it.
+private struct CancelOnHover: View {
     let action: () -> Void
     @State private var hovering = false
+    /// Set by the parent capsule, so the control appears when the pointer is
+    /// anywhere on the pill rather than only on the 22pt target itself.
+    @Environment(\.pillHovered) private var pillHovered
+
+    private var shown: Bool { pillHovered || hovering }
+
     var body: some View {
         Button(action: action) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.white.opacity(0.85))
-                .frame(width: 9, height: 9)
-                .frame(width: 30, height: 30)
-                .background(Circle().fill(Color.white.opacity(hovering ? 0.14 : 0.08)))
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(Color.white.opacity(hovering ? 0.95 : 0.55))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(hovering ? 0.14 : 0)))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .animation(Theme.hover, value: hovering)
-        .help("Stop recording")
+        .frame(width: shown ? 22 : 0)
+        .padding(.leading, shown ? 9 : 0)
+        .opacity(shown ? 1 : 0)
+        .allowsHitTesting(shown)
+        .clipped()
+        .animation(Theme.hover, value: shown)
+        .help("Cancel — discard this recording")
     }
 }
+
+/// True while the pointer is anywhere on the capsule. Read by CancelOnHover so
+/// the control answers to the whole pill, not to its own 22pt.
+private struct PillHoveredKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var pillHovered: Bool {
+        get { self[PillHoveredKey.self] }
+        set { self[PillHoveredKey.self] = newValue }
+    }
+}
+
 
 private struct CapsuleButton: View {
     let label: String
@@ -701,7 +759,12 @@ private struct CapsuleButton: View {
 /// sets `height: 44, borderRadius: 9999` on all of them; deviating is what made
 /// the row look assembled from spare parts.
 enum PillMetrics {
-    static let height: CGFloat = 44
+    /// SHORTER AND LONGER. 44 was sized around a row that carried a dot, a
+    /// timer and a stop button; with only the waveform inside, that height is
+    /// mostly air. 36 is the floor: the 18pt note-pen glyph the scratchpad chip
+    /// draws still clears the capsule's curve, and it keeps 8pt above and below
+    /// the 20pt waveform.
+    static let height: CGFloat = 36
 }
 
 private struct ChipBody<Content: View>: View {
