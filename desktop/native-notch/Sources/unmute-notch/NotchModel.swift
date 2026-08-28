@@ -184,6 +184,11 @@ final class NotchModel: ObservableObject {
     /// text on a dummy notch would sit under the camera housing on real ones).
     @Published var hasNotch: Bool = false
 
+    /// How far the open pocket card starts below the top edge. Mirrors
+    /// `NotchGeometry.pocketTopInset`, which sizes the window from the same
+    /// number — the view must not compute its own or the card gets clipped.
+    @Published var pocketTopInset: CGFloat = 6
+
     /// Event sink. Real emitter by default; overridable for tests/probe.
     var emit: (Event) -> Void = IPC.emit
     /// Hover relay → AppController (dormant ⇄ idle wake lives there).

@@ -34,12 +34,20 @@ import {
 } from './taskFacts'
 
 // ─── Ops Console palette — neutral everywhere; hue lives ONLY in `status`. ───
+// ONE BLACK, EVERYWHERE. The ground, the cards and the raised state were three
+// shades of near-black (#0d0f12 / #15181d / #191d23); they are now the same
+// #000. A card is no longer a lighter rectangle sitting on a darker one — it is
+// defined by its HAIRLINE. Separation stopped being a fill and became an edge.
+//
+// The borders move DOWN rather than up (#23272e -> #1c1d20): the same value
+// reads heavier against true black than it did against grey, so holding the old
+// number would have drawn a cage instead of a hairline.
 const C = {
-  bg: '#0d0f12',
-  surface: '#15181d',
-  surfaceHi: '#191d23',
-  border: '#23272e',
-  borderHi: '#323843',
+  bg: '#000000',
+  surface: '#000000',
+  surfaceHi: '#000000',
+  border: '#1c1d20',
+  borderHi: '#2b2d31',
   nameText: '#e8eaed',
   midText: '#9aa0a8',
   dimText: '#5b616b',
@@ -1214,7 +1222,7 @@ export default function OrchestrateWall() {
             position: 'fixed', right: hoveredSkill.rightPx, top: Math.max(10, Math.min(hoveredSkill.top - 6, window.innerHeight - 180)), width: 300, zIndex: 60,
             // Flat plane, no backdrop blur — see GlassLip.swift for why every
             // Unmute surface is edged rather than lit.
-            background: '#161820',
+            background: C.surface,
             border: `1px solid ${C.borderHi}`, borderRadius: 9, padding: '11px 13px',
             pointerEvents: 'none', fontFamily: C.mono,
           }}>

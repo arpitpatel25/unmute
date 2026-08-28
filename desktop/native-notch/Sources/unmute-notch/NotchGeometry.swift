@@ -258,9 +258,25 @@ struct NotchGeometry: Equatable {
     /// shows, so the card said "Done" twice and spent a third of itself doing it.
     /// The arithmetic lives in SurfaceSizeSupport beside its tests, so the window
     /// frame and the view cannot drift apart.
+    /// How far the pocket card must start below the top edge.
+    ///
+    /// ONE NUMBER, TWO READERS. The window height below and `NotchView`'s
+    /// `pocketTopPad` both come from here, so the frame and the padding cannot
+    /// disagree — a card padded further down than its window is tall is
+    /// clipped, and the clipping is invisible in a screenshot until someone
+    /// notices the footer is missing.
+    ///
+    /// On a notched display this clears the housing: the card is one surface
+    /// now on every display, so it can no longer sit ON the notch line the way
+    /// the row did, and must open below it instead.
+    var pocketTopInset: CGFloat {
+        hasNotch ? cutoutHeight + 10 : Theme.panelPadding
+    }
+
     func pocketCardFrame(hasAsk: Bool) -> NSRect {
         topPinnedFrame(width: Self.pocketCardWidth,
-                       height: pocketCardHeight(hasAsk: hasAsk) + 2 * Theme.panelPadding)
+                       height: pocketCardHeight(hasAsk: hasAsk)
+                             + pocketTopInset + Theme.panelPadding)
     }
 
     /// The window frame for a bar-level mass.
