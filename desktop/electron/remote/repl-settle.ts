@@ -41,6 +41,8 @@ export const CODEX_READY_RE = /askcodextodoanything|\?forshortcuts/
 export const TRUST_DIALOG_RE = /trustthisfolder|no,exit|esctocancel/
 export const CODEX_TRUST_RE = /doyoutrustthecontentsofthisdirectory/
 export const CODEX_UPDATE_RE = /updateavailable!.*updatenow.*skip.*skipuntilnextversion/
+/** Claude Code's "Quick safety check" for an unseen directory. */
+export const CLAUDE_TRUST_RE = /yes,itrustthisfolder/
 
 /** Is this agent at its own input box? */
 function readyFor(agent: string | undefined, out: string): boolean {
@@ -56,19 +58,44 @@ function readyFor(agent: string | undefined, out: string): boolean {
  * sequence is chosen for the dialog it names, and the destructive default is
  * stepped off rather than confirmed.
  */
-const DIALOGS: Array<{ id: string; agent?: string; match: RegExp; keys: string }> = [
+const DIALOGS: Array<{ id: string; agent?: string; match: RegExp; keys: string[] }> = [
   // Skip the self-update: Down, then Enter. Its default row is "1. Update now",
   // which runs an npm install and QUITS — so the cursor has to be moved off it
   // before anything is confirmed. This exact sequence is field-proven; a row
   // NUMBER would read better here but has never been shown to select anything
   // in this chooser, and guessing wrong lands on the destructive default.
-  { id: 'codex-update', agent: 'codex', match: CODEX_UPDATE_RE, keys: '\x1b[B\r' },
+  { id: 'codex-update', agent: 'codex', match: CODEX_UPDATE_RE, keys: ['\x1b[B\r'] },
   // Trust the directory: its default row IS the one we want ("1. Yes, continue"),
   // so Enter is correct here. What makes this safe is not the keystroke but the
   // targeting — it is sent only once, and only when this dialog is positively
   // on screen, rather than fired at whatever happens to be drawn.
-  { id: 'codex-trust', agent: 'codex', match: CODEX_TRUST_RE, keys: '\r' },
+  { id: 'codex-trust', agent: 'codex', match: CODEX_TRUST_RE, keys: ['\r'] },
+  // Claude's trust dialog, and every part of this was measured rather than
+  // reasoned about (28 Aug), because two plausible guesses were both wrong:
+  //
+  //   Down, then \r          -> the process EXITED (code 1)
+  //   Down, then \n          -> survived, never confirmed
+  //   Down, then \x1b[13u    -> reached the prompt
+  //
+  // Claude runs the kitty keyboard protocol (it emits \x1b[>5u at startup), so a
+  // carriage return is not Enter. And it lists "No, exit" FIRST, so the bare
+  // Enter the old quiet-path sent was confirming the exit - which is what killed
+  // a task at 10:49 and had been doing so intermittently for far longer.
+  { id: 'claude-trust', agent: 'claude', match: CLAUDE_TRUST_RE, keys: ['\x1b[B', '\x1b[13u'] },
 ]
+
+/** Beat between the keystrokes of one dialog answer. */
+const KEY_GAP_MS = 200
+/**
+ * How long a dialog must have been on screen before we answer it.
+ *
+ * Matching the TEXT is not the same as the dialog being ready to take input.
+ * Answering the instant the words appeared sent Down into a dialog that was
+ * still painting: the arrow went nowhere, the Enter that followed confirmed the
+ * highlighted row - "No, exit" - and Claude quit with code 1. Observed directly
+ * against a live CLI, and the only difference from a working run was timing.
+ */
+const DIALOG_ARM_MS = 600
 
 export interface SettleReplOpts {
   /** Provider whose startup screens are being settled. */
@@ -87,6 +114,8 @@ export interface SettleReplOpts {
   pollMs?: number
   maxEnters?: number
   maxWaitMs?: number
+  /** Override the arming beat. Tests set 0; production wants the real delay. */
+  dialogArmMs?: number
 }
 
 export interface SettleResult {
@@ -104,6 +133,7 @@ export async function settleRepl(o: SettleReplOpts): Promise<SettleResult> {
   const POLL_MS = o.pollMs ?? 150
   const MAX_ENTERS = o.maxEnters ?? 6
   const MAX_WAIT_MS = o.maxWaitMs ?? 14_000
+  const ARM_MS = o.dialogArmMs ?? DIALOG_ARM_MS
   const emit = o.onEvent ?? (() => {})
 
   const t0 = Date.now()
@@ -111,6 +141,7 @@ export async function settleRepl(o: SettleReplOpts): Promise<SettleResult> {
   let lastLen = -1
   let lastChange = Date.now()
   const answered = new Set<string>()
+  const seenAt = new Map<string, number>()
   let lastSeenDialog: string | undefined
 
   const finish = (r: SettleResult): SettleResult => {
@@ -134,17 +165,32 @@ export async function settleRepl(o: SettleReplOpts): Promise<SettleResult> {
     // every Codex task was declared ready, typed into the trust menu, and exited
     // 0 about 200ms later (field, 2026-08-28 10:06). A pending dialog outranks a
     // marker that may simply be scrollback.
-    const dialog = DIALOGS.find((d) => (!d.agent || d.agent === o.agent) && d.match.test(out))
+    // Only an UNANSWERED dialog counts. Its text stays in the accumulated buffer
+    // after we answer it, so treating a spent dialog as pending would block the
+    // ready check forever - the same scrollback trap that made ready match too
+    // early, in the other direction.
+    const dialog = DIALOGS.find((d) =>
+      (!d.agent || d.agent === o.agent) && !answered.has(d.id) && d.match.test(out))
     if (!dialog && readyFor(o.agent, out)) return finish({ settled: true, reason: 'ready' })
-    if (dialog && !answered.has(dialog.id)) {
+    if (dialog) {
       lastSeenDialog = dialog.id
+      // Let it become interactive before typing at it. See DIALOG_ARM_MS.
+      const firstSeen = seenAt.get(dialog.id)
+      if (firstSeen === undefined) { seenAt.set(dialog.id, Date.now()); continue }
+      if (Date.now() - firstSeen < ARM_MS) continue
       // Answer each dialog ONCE, then stop treating it as pending: its text
       // lingers in the accumulated buffer exactly like the ready marker does,
       // so a dialog we have already answered must not block the ready check
       // forever.
       if (o.sendRaw) {
         answered.add(dialog.id)
-        o.sendRaw(dialog.keys)
+        // ONE WRITE PER KEYSTROKE. Sent together, "\x1b[B\r" is consumed as a
+        // single input event: the selection moves to the right row and then
+        // bounces straight back, so nothing is confirmed. Observed directly.
+        for (const k of dialog.keys) {
+          o.sendRaw(k)
+          if (dialog.keys.length > 1) await new Promise((r) => setTimeout(r, KEY_GAP_MS))
+        }
         emit('dialog-answered', { dialog: dialog.id, keys: JSON.stringify(dialog.keys) })
         lastChange = Date.now()
         continue

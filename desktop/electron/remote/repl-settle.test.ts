@@ -23,7 +23,7 @@ test('Codex update prompt selects Skip instead of accepting Update now', async (
     isAlive: () => true,
     sendEnter: () => enters.push('\r'),
     sendRaw: (input) => raw.push(input),
-    quietMs: 0,
+    dialogArmMs: 0, quietMs: 0,
     pollMs: 1,
     maxWaitMs: 100,
   })

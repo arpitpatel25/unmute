@@ -32,7 +32,7 @@ test('Codex settles on ITS OWN ready prompt, not on Claude’s footer', async ()
     isAlive: () => true,
     sendEnter: () => {},
     sendRaw: () => {},
-    quietMs: 0, pollMs: 1, maxWaitMs: 200,
+    dialogArmMs: 0, quietMs: 0, pollMs: 1, maxWaitMs: 200,
   })
   assert.equal(out.settled, true)
   assert.equal(out.reason, 'ready')
@@ -53,7 +53,7 @@ test('the Codex trust dialog is answered only when it is positively on screen', 
     isAlive: () => true,
     sendEnter: () => enters.push('\r'),
     sendRaw: (i) => { raw.push(i); screen = CODEX_READY },
-    quietMs: 0, pollMs: 1, maxWaitMs: 200,
+    dialogArmMs: 0, quietMs: 0, pollMs: 1, maxWaitMs: 200,
   })
   assert.deepEqual(raw, ['\r'], 'accept the preselected "1. Yes, continue"')
   assert.deepEqual(enters, [], 'not the untargeted quiet-path Enter')
@@ -74,6 +74,7 @@ test('a repainting dialog is still recognised — quiet is not the only signal',
     isAlive: () => true,
     sendEnter: () => {},
     sendRaw: (i) => { raw.push(i); answered = true },
+    dialogArmMs: 0,
     quietMs: 5_000,          // deliberately unreachable
     pollMs: 1, maxWaitMs: 300,
   })
@@ -92,7 +93,7 @@ test('running out of budget is reported, not silent', async () => {
     sendEnter: () => {},
     sendRaw: () => {},
     onEvent: (e) => events.push(e),
-    quietMs: 0, pollMs: 1, maxWaitMs: 60,
+    dialogArmMs: 0, quietMs: 0, pollMs: 1, maxWaitMs: 60,
   })
   assert.equal(out.settled, false)
   assert.ok(events.includes('repl-not-settled'), `expected a loud failure, got ${events.join(',')}`)
@@ -106,7 +107,7 @@ test('a known dialog still on screen at the end is named, so the caller can refu
     sendEnter: () => {},
     // No sendRaw: nothing can be answered, so the dialog stays up.
     onEvent: () => {},
-    quietMs: 0, pollMs: 1, maxWaitMs: 60,
+    dialogArmMs: 0, quietMs: 0, pollMs: 1, maxWaitMs: 60,
   })
   assert.equal(out.settled, false)
   assert.equal(out.dialog, 'codex-trust', 'the caller needs to know a menu is holding the screen')
@@ -119,7 +120,7 @@ test('Claude’s existing path is untouched', async () => {
     getOutput: () => 'bypass permissions on (shift+tab to cycle)',
     isAlive: () => true,
     sendEnter: () => enters.push('\r'),
-    quietMs: 0, pollMs: 1, maxWaitMs: 100,
+    dialogArmMs: 0, quietMs: 0, pollMs: 1, maxWaitMs: 100,
   })
   assert.equal(out.settled, true)
   assert.equal(out.reason, 'ready')
@@ -142,9 +143,56 @@ test('a dialog drawn AFTER the banner still wins — ready is not a one-way latc
     isAlive: () => true,
     sendEnter: () => {},
     sendRaw: (i) => { raw.push(i); screen = CODEX_READY },
-    quietMs: 0, pollMs: 1, maxWaitMs: 300,
+    dialogArmMs: 0, quietMs: 0, pollMs: 1, maxWaitMs: 300,
   })
   assert.deepEqual(raw, ['\r'], 'the dialog must be answered before we call it ready')
   assert.equal(out.settled, true)
   assert.equal(out.reason, 'ready')
+})
+
+// ── Claude's trust dialog ─────────────────────────────────────────────────
+
+const CLAUDE_TRUST = `
+  Accessing workspace: /Users/x/.unmute/remote/local/abc
+  Quick safety check: Is this a project you created or one you trust?
+  ❯ No, exit
+    Yes, I trust this folder
+  Enter to confirm · Esc to cancel
+`
+const CLAUDE_READY = 'bypass permissions on (shift+tab to cycle)'
+
+test('Claude\'s trust dialog is answered with the keys that were MEASURED to work', async () => {
+  // All three were tried against a real `claude` on 28 Aug:
+  //   Down + \r        -> the process EXITED (code 1)
+  //   Down + \n        -> survived, never confirmed
+  //   Down + \x1b[13u  -> reached the prompt
+  // Claude runs the kitty keyboard protocol, so a carriage return is not Enter;
+  // and "No, exit" is listed FIRST, so a bare Enter confirms the exit.
+  let screen = CLAUDE_TRUST
+  const raw: string[] = []
+  const enters: string[] = []
+  await settleRepl({
+    agent: 'claude',
+    getOutput: () => screen,
+    isAlive: () => true,
+    sendEnter: () => enters.push('\r'),
+    sendRaw: (i) => { raw.push(i); if (raw.length === 2) screen = CLAUDE_READY },
+    dialogArmMs: 0, quietMs: 0, pollMs: 1, maxWaitMs: 2000,
+  })
+  assert.deepEqual(raw, ['\x1b[B', '\x1b[13u'], 'Down, then kitty Enter — as separate writes')
+  assert.deepEqual(enters, [], 'never the bare Enter that was confirming "No, exit"')
+})
+
+test('Claude still gets its quiet-path nudge for screens we cannot name', async () => {
+  // The blind Enter stays for Claude on UNRECOGNISED screens - it is proven
+  // there, and removing it would strand startup shapes nobody has enumerated.
+  const enters: string[] = []
+  await settleRepl({
+    agent: 'claude',
+    getOutput: () => 'some unrecognised startup screen',
+    isAlive: () => true,
+    sendEnter: () => enters.push('\r'),
+    dialogArmMs: 0, quietMs: 0, pollMs: 1, maxWaitMs: 80,
+  })
+  assert.ok(enters.length > 0, 'the nudge must still fire where nothing is recognised')
 })
