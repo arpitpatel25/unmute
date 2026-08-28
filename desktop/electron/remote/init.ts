@@ -59,6 +59,7 @@ import { CodexRouterEngine } from './codex-router-engine'
 import { knownProjects, projectSlug } from './projects'
 import { GroupRegistry, type GroupEntry } from './group-registry'
 import type { GroupOption } from './router'
+import { provisionalName } from './provisional-name'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput, type McpServer } from './mcp-server'
 import { CapabilityRegistry } from './agent/capabilities/registry'
@@ -4143,6 +4144,25 @@ async function dispatchFromCaptureInner(
       // two have to agree or the model simply omits the group and this line
       // never sees one.
       if (decision.group) manager.setGroup(newId, decision.group)
+      // THE LABEL, ARRIVING AFTER THE TASK IS ALREADY RUNNING.
+      //
+      // With deferNaming the router answers the gating question first and is
+      // asked for name+group afterwards, so the user's wait ends here rather
+      // than after the two heaviest rule blocks in the prompt. Deliberately not
+      // awaited: the whole point is that the card is live before this lands.
+      //
+      // A provisional name goes up immediately so the card is never blank in
+      // the gap \u2014 derived locally from the utterance, no model involved, and
+      // replaced the moment the real one arrives.
+      if (decision.enrich) {
+        if (!decision.name) manager.setName(newId, provisionalName(decision.intent || raw))
+        void decision.enrich.then((late) => {
+          if (late.name) manager.setName(newId, late.name)
+          // Assign-once still holds: only fill a group the task does not have.
+          if (late.group && !manager.get(newId)?.group) manager.setGroup(newId, late.group)
+          log.event('late-label-applied', { taskId: newId, name: late.name ?? null, group: late.group ?? null })
+        }).catch(() => {})
+      }
       pendingBeat = decision.name ? `On it \u2014 ${decision.name}.` : 'On it.'
       // Declinable offer (§6.2 — never a silent reroute, never a blocking prompt):
       // the router chose NEW but seriously weighed one open task. Surface a

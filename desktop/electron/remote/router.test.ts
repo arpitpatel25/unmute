@@ -472,8 +472,13 @@ test('a one-off is grouped too — a quick errand still has a subject', () => {
   // model to omit the group for an errand, so the fix has to be in both places
   // or the model simply keeps omitting it.
   const p = buildRoutingPrompt('do a thing', GROUPED, '/d/decision.json')
-  const contract = p.split('\n').find((l) => l.startsWith('group:')) ?? ''
-  assert.ok(contract, 'the group contract line must still exist')
+  // The rule spans several lines now (the altitude test needs the room), so
+  // this reads the whole block from the contract line down rather than
+  // assuming it all fits on one — the assertions below are about what the
+  // model is told, not about how it is wrapped.
+  const start = p.split('\n').findIndex((l) => l.startsWith('group:'))
+  assert.ok(start >= 0, 'the group contract line must still exist')
+  const contract = p.split('\n').slice(start).join('\n')
   assert.match(contract, /one-?off is grouped too/i, 'an errand must be told it still gets a stream')
   assert.match(contract, /subject-less/, 'being subject-less is the only reason left to omit')
 })
@@ -553,7 +558,13 @@ test('buildRoutingPrompt: LIVE GROUPS section lists each group with member examp
   // "they fade when their tasks end"). Under the registry the opposite is true
   // and has to be said, or a returning stream gets a second name.
   assert.ok(p.includes('REMEMBERED while it is quiet'))
-  assert.ok(p.includes('a group that swallows everything is no group'))
+  // The old text warned only about one group swallowing the wall. That single
+  // warning is what split "Reddit marketing for Unmute" away from an existing
+  // "unmute marketing" on 28 Aug: the product word IS "unmute", so "don't join
+  // on the product word" read as "don't join". The rule now names BOTH ways to
+  // get the level wrong, which is the thing worth asserting.
+  assert.ok(p.includes('TOO NARROW'), 'the model must be warned about minting a stream per channel')
+  assert.ok(p.includes('TOO BROAD'), 'the model must still be warned about one group eating the wall')
 })
 
 test('buildRoutingPrompt: no LIVE GROUPS section when nothing is grouped', () => {
