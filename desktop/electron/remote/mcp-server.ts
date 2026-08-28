@@ -87,7 +87,7 @@ const TOOLS = [
       properties: {
         intent: { type: 'string', description: 'What the new task should do — a complete, self-contained instruction (the new session starts blank unless forked).' },
         dir: { type: 'string', description: 'Absolute path of the working directory (e.g. a repo). Omit for an isolated scratch directory.' },
-        name: { type: 'string', description: 'Short display name (2-5 words) for the card.' },
+        name: { type: 'string', description: 'Short display name (2-5 words) for the card. Lead with the SUBJECT the work is about, never the action taken on it — several tasks will share a subject, so the name has to say which one. e.g. "Unmute pricing model", not "Update the pricing model".' },
         kind: { type: 'string', enum: ['oneoff', 'session'], description: 'oneoff = fire-and-forget errand (default); session = persistent working session.' },
         fork_from_session_id: { type: 'string', description: 'Claude Code session ID to fork from — the new session inherits that conversation\'s memory.' },
       },

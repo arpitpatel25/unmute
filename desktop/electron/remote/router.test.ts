@@ -185,6 +185,7 @@ test('Router.route fails safe on timeout: ONE recent task ⇒ CONTINUE it (the f
   const d = await router.route('and what about 2015?', ONE)
   assert.equal(d.action, 'continue')
   assert.equal(d.targetTaskId, 't1')
+  await router.settleHousekeeping()
   router.dispose()
 })
 
@@ -404,6 +405,79 @@ const GROUPED: RoutableTask[] = [
   { id: 'g3', intent: 'ungrouped errand', state: 'done', ageSec: 30 },
 ]
 
+// ─── The durable vocabulary (2026-08-27 — supersedes live-only grouping) ──
+
+const VOCAB = [
+  { label: 'unmute', examples: ['fix the notch freeze'] },
+  { label: 'launch video', examples: ['color grade the outro'], authored: true },
+]
+
+test('the vocabulary the router sees is PASSED IN, not derived from the tasks on screen', () => {
+  // The whole sprawl bug: groups were read off the (per-backend, per-moment)
+  // task list, so a quiet stream — or one living on the other backend — was
+  // invisible and got minted again under a new name.
+  const p = buildRoutingPrompt('do a thing', GROUPED, '/d/decision.json', [], [], [], [], [], undefined, VOCAB)
+  assert.ok(p.includes('unmute'), 'a stream with no task on this list must still be offered')
+  assert.ok(p.includes('fix the notch freeze'), 'examples help it judge belonging, not just word-match')
+})
+
+test('the prompt tells the router a quiet stream is still joinable', () => {
+  // The old wording said the visible groups were "the ONLY groups that exist
+  // right now" and that groups "fade when their tasks end" — true under
+  // live-only grouping, and precisely what made a returning stream get a new
+  // name. The registry makes both false, so the prompt has to say so.
+  const p = buildRoutingPrompt('do a thing', GROUPED, '/d/decision.json', [], [], [], [], [], undefined, VOCAB)
+  assert.match(p, /REMEMBERED while it is quiet/)
+  assert.match(p, /JOINS it/)
+})
+
+test('a group the user authored is marked, so it carries more weight than a guess', () => {
+  const p = buildRoutingPrompt('do a thing', GROUPED, '/d/decision.json', [], [], [], [], [], undefined, VOCAB)
+  const line = p.split('\n').find((l) => l.trimStart().startsWith('• launch video')) ?? ''
+  assert.ok(/yours|user/i.test(line), `expected the authored marker on: ${line}`)
+})
+
+test('a group naming a known stream is canonicalized to the stored label', () => {
+  // "Unmute" and "unmute-cloud" must not become new streams just because the
+  // model capitalized or hyphenated differently from what is on file.
+  const d = parseDecision(
+    JSON.stringify({ action: 'new', intent: 'x', kind: 'session', group: 'Unmute' }),
+    'x', GROUPED, [], [], [], [], [], undefined, VOCAB,
+  )
+  assert.equal(d.group, 'unmute')
+})
+
+test('a genuinely new group survives as written — join-or-create, not join-only', () => {
+  const d = parseDecision(
+    JSON.stringify({ action: 'new', intent: 'x', kind: 'session', group: 'pricing work' }),
+    'x', GROUPED, [], [], [], [], [], undefined, VOCAB,
+  )
+  assert.equal(d.group, 'pricing work')
+})
+
+test('curation can rename a stream that has no task on screen', () => {
+  // Under live-only, `from` was validated against the visible tasks — so a
+  // stream you had parked for a week could not be renamed by voice at all.
+  const d = parseDecision(JSON.stringify({ action: 'curate', intent: 'rename it', ops: [
+    { op: 'rename_group', from: 'unmute', to: 'unmute cloud' },
+  ] }), 'raw', GROUPED, [], [], [], [], [], undefined, VOCAB)
+  assert.equal(d.action, 'curate')
+  assert.deepEqual(d.ops, [{ op: 'rename_group', from: 'unmute', to: 'unmute cloud' }])
+})
+
+test('a one-off is grouped too — a quick errand still has a subject', () => {
+  // Field evidence, twice (2026-08-27). The router correctly answered
+  // group:"unmute marketing" for a one-off about Unmute's Twitter posts, and
+  // the host binned it for not being a session. The contract used to tell the
+  // model to omit the group for an errand, so the fix has to be in both places
+  // or the model simply keeps omitting it.
+  const p = buildRoutingPrompt('do a thing', GROUPED, '/d/decision.json')
+  const contract = p.split('\n').find((l) => l.startsWith('group:')) ?? ''
+  assert.ok(contract, 'the group contract line must still exist')
+  assert.match(contract, /one-?off is grouped too/i, 'an errand must be told it still gets a stream')
+  assert.match(contract, /subject-less/, 'being subject-less is the only reason left to omit')
+})
+
 test('buildRoutingPrompt surfaces live groups on task lines and the grouping guidance', () => {
   const p = buildRoutingPrompt('x', GROUPED, '/d/decision.json')
   assert.ok(p.includes('· group: on-call'))
@@ -475,7 +549,10 @@ test('buildRoutingPrompt: LIVE GROUPS section lists each group with member examp
   assert.ok(p.includes('LIVE GROUPS'))
   assert.ok(p.includes('• Unmute — e.g. "Unmute landing page", "Cloud repo build check"'))
   assert.ok(p.includes('• oasis video — e.g. "Oasis color grade"'))
-  assert.ok(p.includes('creatures of the present'))
+  // Liveness used to be the point of this section ("creatures of the present",
+  // "they fade when their tasks end"). Under the registry the opposite is true
+  // and has to be said, or a returning stream gets a second name.
+  assert.ok(p.includes('REMEMBERED while it is quiet'))
   assert.ok(p.includes('a group that swallows everything is no group'))
 })
 

@@ -1,5 +1,12 @@
 # Cockpit Grouping — Design Spec (signed 2026-07-16)
 
+> **§2 is superseded** by `2026-08-27-group-registry-design.md`. Groups are no
+> longer live-only: they persist in a registry, because the accepted
+> consequence below — "a stream that briefly empties may get a fresh name
+> later — rare" — turned out not to be rare, and was the main source of
+> near-duplicate groups. Everything else here still holds, §5 (assign-once)
+> included.
+
 ## Problem
 
 The Orchestrate wall renders every task as an equivalent card in a flat grid. Field feedback: "what do I do?" — users with many live Claude Code sessions disengage because the wall gives no entry point. People already juggle tens of terminal tabs and refuse to close them; they group in their heads because no tool does it for them. Grouping is the wall's core legibility feature.

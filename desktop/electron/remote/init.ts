@@ -57,6 +57,8 @@ import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrat
 import { Router, type RoutableTask, type AgentAvailability } from './router'
 import { CodexRouterEngine } from './codex-router-engine'
 import { knownProjects, projectSlug } from './projects'
+import { GroupRegistry, type GroupEntry } from './group-registry'
+import type { GroupOption } from './router'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput, type McpServer } from './mcp-server'
 import { CapabilityRegistry } from './agent/capabilities/registry'
@@ -1732,6 +1734,51 @@ let codexRouter: Router | null = null       // codex-desktop
 // Curator store paths (fixed, homedir-based) — shared by initRemote's wiring and
 // the route handler in dispatchFromCaptureInner (both module-scope readers).
 const curatorPathsV: CuratorPaths = curatorPaths()
+
+// THE DURABLE VOCABULARY of workspace streams. One registry, shared by BOTH
+// routers — deliberately, and it is the only thing on the routing interface
+// that is not scoped per backend. Task scoping exists so a router cannot name
+// another backend's task; a group cannot be dispatched into, so sharing it
+// costs none of that guarantee. Withholding it is what let a Claude router and
+// a Codex router mint two names for one stream.
+let groupRegistry: GroupRegistry | null = null
+
+/** How long a machine-authored stream with no members survives. Generous on
+ *  purpose: an empty-but-remembered entry is what lets a returning stream
+ *  rejoin its old name instead of minting a new one, so pruning eagerly
+ *  re-creates the bug the registry exists to fix. */
+const GROUP_IDLE_EVICT_MS = 45 * 86_400_000
+
+/**
+ * The streams the router may file work under, newest-touched first.
+ *
+ * Examples come from the task map across EVERY backend, so belonging can be
+ * judged rather than word-matched. Bounded because this rides in every routing
+ * prompt: a vocabulary too long to read is one the model stops honouring.
+ */
+function groupVocabulary(limit = 24): GroupOption[] {
+  if (!groupRegistry || !manager) return []
+  const examples = new Map<string, string[]>()
+  for (const t of manager.list()) {
+    if (!t.groupId) continue
+    const list = examples.get(t.groupId) ?? []
+    if (list.length < 2) list.push((t.name || t.intent).slice(0, 40))
+    examples.set(t.groupId, list)
+  }
+  return groupRegistry.list().slice(0, limit).map((e: GroupEntry) => ({
+    label: e.label,
+    examples: examples.get(e.id) ?? [],
+    authored: e.source === 'user',
+  }))
+}
+
+/** Forget machine-authored streams nothing has used in a long time. User-named
+ *  ones never decay — their absence would be a deletion nobody asked for. */
+function pruneGroups(): void {
+  if (!groupRegistry || !manager) return
+  groupRegistry.prune({ liveIds: manager.liveGroupIds(), idleMs: GROUP_IDLE_EVICT_MS })
+}
+
 
 /** A minimal, tool-less classifier session for the router: no --chrome, no tmux;
  *  --dangerously-skip-permissions so it can write its decision file unprompted.
@@ -3897,6 +3944,9 @@ async function dispatchFromCaptureInner(
         wall.filter(mine),
         skillNames,
         avail,
+        // NOT filtered by `mine`: the vocabulary is shared across backends on
+        // purpose. See groupVocabulary().
+        groupVocabulary(),
       )
       // GUARD THE ANSWER, NOT JUST THE QUESTION.
       //
@@ -4076,9 +4126,23 @@ async function dispatchFromCaptureInner(
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
       if (decision.name) manager.setName(newId, decision.name)
-      // Group new PERSISTENT sessions at birth (one-offs stay ungrouped until
-      // they graduate — the wall groups streams, not errands).
-      if (decision.group && decision.kind === 'session') manager.setGroup(newId, decision.group)
+      // GROUP EVERY NEW TASK THAT HAS A SUBJECT, one-offs included.
+      //
+      // This used to read `decision.kind === 'session'`, inherited from spec
+      // 2026-07-16 (which put one-off grouping before graduation out of scope on
+      // the grounds that the wall groups streams, not errands). Two live
+      // dispatches on 2026-08-27 settled it the other way: the router answered
+      // group:"unmute marketing" for a one-off about Unmute's Twitter posts —
+      // the RIGHT stream, joined rather than invented — and this line binned it,
+      // so the card landed in Ungrouped with no trace of the decision anywhere.
+      //
+      // `kind` is about how long a task lives. It was never about whether the
+      // work is about something. An errand on a project belongs to that
+      // project's stream exactly as a session does, and the wall is far more
+      // legible for it. The router's own contract says the same thing now — the
+      // two have to agree or the model simply omits the group and this line
+      // never sees one.
+      if (decision.group) manager.setGroup(newId, decision.group)
       pendingBeat = decision.name ? `On it \u2014 ${decision.name}.` : 'On it.'
       // Declinable offer (§6.2 — never a silent reroute, never a blocking prompt):
       // the router chose NEW but seriously weighed one open task. Surface a
@@ -4286,8 +4350,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     onPatch: (p) => { try { manager?.applyHubPatch(p) } catch (e) { log.warn('hub patch failed', { error: (e as Error).message }) } },
   })
 
+  // Load the stream vocabulary BEFORE the task manager, so rehydrate can
+  // resolve every persisted label into an entry on the first pass — which is
+  // also where pre-registry duplicates ('unmute' / 'Unmute') collapse.
+  groupRegistry = new GroupRegistry({ path: join(REMOTE_BASE_DIR, 'groups.json') })
+  void groupRegistry.load().catch(() => { /* metadata, never a gate */ })
   manager = new TaskManager({
     executorFactory,
+    groupRegistry,
     codexHub,
     // The path fence, read fresh per dispatch so a task started after the
     // setting changed honours the new value. This is what stops Codex walking
@@ -4605,9 +4675,20 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // the axis you actually want ("all my unmute-cloud threads"), for
           // free and with no model. A session earns a semantic group later, if
           // the router gives it one when you actually work in it.
+          //
+          // But the basename is EVIDENCE, NOT AN AUTHORITY. It used to be
+          // written straight through, which made this the second independent
+          // namer of the same field: imports produced "unmute-cloud" from the
+          // directory while the router produced "unmute" from what the user
+          // actually says, and nothing ever reconciled them. That is a
+          // mechanical source of near-duplicate groups with no judgement in it
+          // at all. Resolving through the registry folds the two spellings onto
+          // one stream, and only mints an entry when the project genuinely
+          // names a new one.
+          const group = row.project ? groupRegistry?.resolve(row.project)?.label ?? row.project : undefined
           const id = await mgr.adoptCliSession({
             sessionId: row.sessionId, title: row.title, cwd: row.cwd,
-            lastActivityAt: row.lastActivityAt, group: row.project,
+            lastActivityAt: row.lastActivityAt, group,
             agent: codexRow ? 'codex' : 'claude',
           })
           return !!id
@@ -4927,6 +5008,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // dirs from past runs. Kills any leftover session + erases OUR scratch dir +
     // row. Runs once now then hourly. Never touches ~/.claude.
     manager?.startMaintenance()
+    // Forget machine-authored streams nothing has used in weeks. Runs AFTER
+    // rehydrate, so a task that still holds an entry is counted as a member
+    // before anything is dropped. User-named streams never decay.
+    pruneGroups()
   })
   // Daily gardening sweep — consolidates/prunes the skill library. Gated on the
   // write-enabled setting so calibration-mode users are never affected.
@@ -5714,6 +5799,43 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     if (on) cur.add(name); else cur.delete(name)
     settings.set('pinnedSkills', [...cur])
     return true
+  })
+  // ── The stream vocabulary (Orchestrator → Settings → Groups) ─────────────
+  //
+  // Add and edit only. Delete is deliberately absent for now: a task filed under
+  // an entry renders that entry's label, so removing one would leave those cards
+  // pointing at a stream that no longer exists — a bigger decision than this
+  // screen should be making. Machine-authored streams already decay on their own.
+  ipcMain.handle('remote:groups-list', async () => (
+    (groupRegistry?.list() ?? []).map((e) => ({
+      id: e.id,
+      label: e.label,
+      authored: e.source === 'user',
+      tasks: (manager?.list() ?? []).filter((t) => t.groupId === e.id).length,
+    }))
+  ))
+  // Naming a stream makes it the user's: it stops being a router guess, and it
+  // is from then on exempt from decay.
+  ipcMain.handle('remote:groups-create', async (_e, label: string) => {
+    if (!groupRegistry) return { ok: false, reason: 'unavailable' }
+    const existing = groupRegistry.find(label)
+    const out = groupRegistry.define(label)
+    if (!out.ok) return { ok: false, reason: out.reason ?? 'blank' }
+    // `define` ADOPTS a matching entry rather than duplicating it, so say so —
+    // silently doing nothing visible reads as a bug.
+    return { ok: true, adopted: !!existing, label: out.entry?.label }
+  })
+  ipcMain.handle('remote:groups-rename', async (_e, id: string, label: string) => {
+    if (!groupRegistry) return { ok: false, reason: 'unavailable' }
+    const entry = groupRegistry.get(id)
+    if (!entry) return { ok: false, reason: 'unknown' }
+    const moved = manager?.renameGroup(entry.label, label) ?? 0
+    const after = groupRegistry.get(id)
+    if (after?.label === entry.label) {
+      const clash = groupRegistry.find(label)
+      return { ok: false, reason: 'duplicate', clashesWith: clash?.label }
+    }
+    return { ok: true, label: after?.label, relabelled: moved }
   })
   ipcMain.handle('remote:list-projects', async () => {
     const projects = await knownProjects(8).catch(() => [])

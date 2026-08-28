@@ -54,12 +54,19 @@ test('intent-cleanup prompt is byte-identical to the original', () => {
   )
 })
 
-test('task-name prompt is byte-identical to the original', () => {
+test('task-name prompt is pinned — it is the compiled floor, and a silent edit changes every title', () => {
+  // The pin exists to catch ACCIDENTAL drift in a value that ships in the
+  // bundle and is overridable at runtime. It was updated deliberately on
+  // 2026-08-27, when naming moved from action-led to subject-led; the
+  // properties that actually matter are asserted in naming.test.ts.
   assert.equal(
     PROMPTS.taskName,
     'You name a task with a SHORT title for a session list in a UI. ' +
-      'Reply with ONLY a 2-5 word title in plain text — no quotes, no punctuation, no trailing period. ' +
-      'Capture the essence, e.g. "Twitter strategy folder summary", "Open Dodo women\'s page", "Fresh Claude session".',
+    'Reply with ONLY a 2-5 word title in plain text — no quotes, no punctuation, no trailing period. ' +
+    'Lead with the SUBJECT — the thing the work is about — and never with the action being taken on it. ' +
+    'The user will have several tasks about the same subject, so the title must identify which subject it is, ' +
+    'adding a distinguishing detail only after the subject is clear. ' +
+    'e.g. "Dodo checkout page", "Twitter strategy folder", "Notch freeze on wake", "Unmute pricing model".',
   )
 })
 
