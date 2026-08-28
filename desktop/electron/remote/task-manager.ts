@@ -758,7 +758,14 @@ export class TaskManager extends EventEmitter {
     const task = this.tasks.get(id)
     if (!task) return
     void (async () => {
-      const deadline = Date.now() + Math.max(this.opts.verifyAfterMs, 10_000)
+      // MEASURED, NOT GUESSED. A field dispatch (2026-08-28 08:18) pinned its
+      // rollout at t+11s - one second after this window originally closed. A
+      // prover that gives up just before the evidence lands is worse than no
+      // prover at all: every task reads "unproven", so a later death re-sends
+      // work that had in fact started. The window is now generous and the loop
+      // also stops the moment the task reaches a terminal state, so a long
+      // window costs nothing on the happy path.
+      const deadline = Date.now() + Math.max(this.opts.verifyAfterMs, 120_000)
       const rolloutBefore = task.agent === 'codex' ? await this.codexUserTurns(task).catch(() => 0) : null
       const claudeBefore = rolloutBefore === null ? await this.claudeUserTurns(task).catch(() => 0) : null
       const submittedBefore = task.promptSubmittedAt ?? 0
@@ -2458,6 +2465,11 @@ export class TaskManager extends EventEmitter {
       if (!task.sessionId || task.sessionId === id) task.sessionId = found
       tlog.event('codex-cli-session-pinned', { sessionId: found })
       void this.persistState(task).catch(() => {})
+      // A ROLLOUT EXISTS, SO CODEX TOOK THE TURN. The prover polls for this
+      // independently, but the poller is the component that actually discovers
+      // it - saying so here removes the race between the two entirely, rather
+      // than relying on the prover's window being long enough.
+      this.noteDeliveryProven(task.id, 'codex-rollout-discovered')
     }
 
     const path = await findRollout(task.codexRolloutId)
