@@ -56,6 +56,7 @@ import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismi
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask, type AgentAvailability } from './router'
 import { CodexRouterEngine } from './codex-router-engine'
+import { prefersCodexRouter, routerScopeMatches } from './router-select'
 import { HeadlessRouterEngine } from './headless-router-engine'
 import { CodexExecRouterEngine } from './codex-exec-router-engine'
 import { knownProjects, projectSlug } from './projects'
@@ -3923,15 +3924,20 @@ async function dispatchFromCaptureInner(
       // scoping here narrows what can be PROPOSED, never where a chosen task runs.
       // Prefer the picker's engine; fall back to whichever exists, because one of
       // the two may legitimately be absent (no Claude CLI, or no Codex app).
-      const useCodex = (avail.preferred === 'codex-desktop' || !router) && !!codexRouter
+      // EITHER Codex surface picks the Codex router — see router-select.ts.
+      // This read `=== 'codex-desktop'`, from when the desktop app was the only
+      // one, so a user on the Codex CLI silently kept the Claude router.
+      const useCodex = prefersCodexRouter(avail.preferred, { claude: !!router, codex: !!codexRouter })
       const activeRouter = useCodex ? codexRouter! : router!
       // NO DEFAULTING. `?? 'claude'` used to sit here, and it is what turned a
       // missing backend into a positive claim: an agent-less task was asserted
       // to be Claude's and handed to the Claude router. Absence of information
       // is not evidence of Claude — a task whose backend we cannot name belongs
       // to NEITHER router, so it is simply not offered to either.
-      const mine = (t: RoutableTask) =>
-        t.agent === (useCodex ? 'codex-desktop' : 'claude')
+      // Same vendor, either surface. This compared against 'codex-desktop'
+      // alone, so even once the router was selected correctly it would have
+      // been shown NO Codex CLI tasks — it could never have continued one.
+      const mine = (t: RoutableTask) => routerScopeMatches(useCodex, t.agent as ProviderId | undefined)
       log.event('router-selected', {
         engine: useCodex ? 'codex' : 'claude',
         preferred: avail.preferred,
