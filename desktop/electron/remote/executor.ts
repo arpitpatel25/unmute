@@ -61,6 +61,9 @@ export interface AgentExecutor {
   write(data: string): void
   /** Resize the PTY viewport so the TUI reflows to the on-screen terminal. */
   resize(cols: number, rows: number): void
+  /** The pane's RENDERED screen, when something (tmux) holds it for us.
+   *  Absent/null means the caller must fall back to the raw output buffer. */
+  snapshot?(): Promise<string | null>
   /** Subscribe to the raw output stream (for render-on-demand + optional silence hint). */
   onData(cb: (chunk: string) => void): void
   /** Kill the session immediately (PRD §10.4 instant kill switch). */

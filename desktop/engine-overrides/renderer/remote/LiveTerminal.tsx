@@ -30,6 +30,7 @@ import { connectTerminalInputAfterReplay, type TerminalInputSession } from './te
 
 type API = {
   remoteGetOutput?: (taskId: string) => Promise<string>
+  remoteGetTerminalSnapshot?: (taskId: string) => Promise<string | null>
   remoteOnOutput?: (cb: (d: { taskId: string; chunk: string }) => void) => () => void
   remoteTerminalInput?: (taskId: string, data: string) => void
   remoteTerminalResize?: (taskId: string, cols: number, rows: number) => void
@@ -161,7 +162,23 @@ export function LiveTerminal({ taskId, onClose, fill = false }: { taskId: string
       // inside the .then keeps the two ordered through one path.
       setTimeout(() => {
         if (disposed || !term) return
-        void api().remoteGetOutput?.(taskId).then((buf) => {
+        // PREFER THE RENDERED SCREEN over the raw byte log.
+        //
+        // The log is a TUI paint stream — absolute cursor moves computed for
+        // the grid in effect at the time. The tmux window is resized whenever a
+        // terminal is opened, while the attaching client is spawned at a fixed
+        // 120x40, so after a relaunch the log holds frames from several
+        // geometries and replaying them in order lands text from one grid on
+        // top of another. A capture-pane has no cursor addressing at all, so
+        // there is no grid for it to disagree with.
+        //
+        // Falls back to the raw buffer when nothing holds a screen for this
+        // task (no tmux) or the capture comes back empty (dead session) —
+        // seeding an empty string would blank a terminal that had content.
+        void (async () => {
+          const snap = await api().remoteGetTerminalSnapshot?.(taskId).catch(() => null)
+          return snap ?? (await api().remoteGetOutput?.(taskId)) ?? ''
+        })().then((buf) => {
           if (disposed || !term) return
           const replayTarget = term
           inputSession = connectTerminalInputAfterReplay(

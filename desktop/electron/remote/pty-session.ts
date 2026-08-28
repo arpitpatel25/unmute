@@ -17,6 +17,7 @@
 import { createLogger } from './log'
 import type { AgentExecutor, SpawnOpts } from './executor'
 import { sessionNameFor, buildCommand, tmuxNewSessionArgs, tmuxAttachArgs, tmuxKillSessionArgs } from './tmux'
+import { tmuxCapturePaneArgs, snapshotIsUsable } from './tmux-snapshot'
 
 /** When set, the agent runs inside a tmux session (private socket) so it can be
  *  popped out to a real terminal as the SAME session. Session name is derived
@@ -272,6 +273,40 @@ export class CliAgentExecutor implements AgentExecutor {
   interrupt(): void {
     if (!this.pty || this.exited) return
     this.pty.write(this.cfg.interruptSequence ?? '\x03')
+  }
+
+  /**
+   * The pane's RENDERED screen, from tmux, at its current geometry.
+   *
+   * This is what the live terminal seeds itself with instead of replaying the
+   * raw byte log. That log is a paint stream full of absolute cursor moves
+   * computed for whatever grid was in effect at the time; the tmux window gets
+   * resized when a terminal is opened, while the attaching client is spawned
+   * at a fixed 120x40, so after a relaunch the log holds frames from several
+   * geometries and replaying them corrupts the screen.
+   *
+   * A capture has no cursor addressing at all — just lines and colour — so
+   * there is no grid for it to disagree with.
+   *
+   * Returns null for a non-tmux session (nothing else holds its screen, so the
+   * caller keeps the raw buffer) and for a capture that comes back empty,
+   * which is how tmux answers about a session that has gone.
+   */
+  async snapshot(): Promise<string | null> {
+    if (!this.tmuxSession || !this.cfg.tmux) return null
+    const session = this.tmuxSession
+    const bin = this.cfg.tmux.bin
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const cp = require('node:child_process') as typeof import('node:child_process')
+      const out = await new Promise<string>((resolve) => {
+        cp.execFile(bin, tmuxCapturePaneArgs(session), { maxBuffer: 8 * 1024 * 1024 },
+          (err, stdout) => resolve(err ? '' : String(stdout)))
+      })
+      return snapshotIsUsable(out) ? out : null
+    } catch {
+      return null
+    }
   }
 
   kill(): void {

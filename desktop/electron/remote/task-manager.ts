@@ -911,6 +911,16 @@ export class TaskManager extends EventEmitter {
     return this.outputBuffers.get(id) ?? ''
   }
 
+  /** The task's RENDERED screen if its backend can produce one (tmux), else
+   *  null so the caller keeps using getOutput's raw buffer. See
+   *  tmux-snapshot.ts for why a rendered screen and a paint stream are not
+   *  interchangeable. */
+  async getSnapshot(id: string): Promise<string | null> {
+    const ex = this.executors.get(id) as (AgentExecutor & { snapshot?: () => Promise<string | null> }) | undefined
+    if (!ex?.snapshot) return null
+    try { return await ex.snapshot() } catch { return null }
+  }
+
   /** Active = not yet terminal (drives the ambient "N running" count, PRD §13.2). */
   activeCount(): number {
     return [...this.tasks.values()].filter((t) => !TERMINAL.includes(t.state)).length
