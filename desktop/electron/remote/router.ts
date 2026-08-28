@@ -856,6 +856,9 @@ export interface RouterOpts {
     warm(): Promise<void>
     decide(prompt: string, timeoutMs?: number): Promise<string | null>
     dispose(): void
+    /** Name for the logs. Both lanes run through this branch now, so a
+     *  hardcoded "codex" here would mislabel every Claude route. */
+    label?: string
     /** Set when the engine answers by CALLING A TOOL rather than emitting JSON.
      *  The prompt's opening instruction changes with it — and, critically, stops
      *  saying "no tools", which would forbid loading this very tool. */
@@ -991,21 +994,38 @@ export class Router {
     // none of the REPL choreography below (ready grace, paste-confirm Enter,
     // re-inject-on-stall) applies — every one of those exists for Claude's TUI.
     if (this.engine) {
+      const eng = this.engine.label ?? 'engine'
+      const t0 = this.clock()
       try {
         const prompt = buildRoutingPrompt(utterance, tasks, null, projects, finished, coldSessions, wall, skillNames, avail, groups, { tool: this.engine.answerTool })
+        log.event('router-engine-start', {
+          engine: eng, answerTool: this.engine.answerTool ?? null,
+          promptBytes: prompt.length, tasks: tasks.length, groups: groups.length,
+          utterance: utterance.slice(0, 120),
+        })
         let raw = await this.engine.decide(prompt, this.o.decisionTimeoutMs)
         // ONE correction, then the failsafe. See validateDecision.
         const check = validateDecision(raw, { defer: this.o.deferNaming })
         if (!check.ok && check.retryable) {
-          log.warn('router reply off-schema — asking once more', { complaint: check.complaint })
+          log.warn('router reply off-schema — asking once more', { engine: eng, complaint: check.complaint })
           raw = await this.engine.decide(correctionPrompt(check.complaint!, null), this.o.decisionTimeoutMs)
-          log.event('router-retry', { engine: 'codex', fixed: validateDecision(raw).ok })
+          log.event('router-retry', { engine: eng, fixed: validateDecision(raw, { defer: this.o.deferNaming }).ok })
         }
         const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail, groups)
-        log.event('route-decision', { engine: 'codex', action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length })
+        // EVERYTHING THE CARD WILL SHOW, in one line. `unrouted` is the field
+        // that separates "the router never answered" from "naming and grouping
+        // did not work" — they look identical on the wall otherwise.
+        log.event('route-decision', {
+          engine: eng, ms: this.clock() - t0,
+          action: decision.action, targetTaskId: decision.targetTaskId ?? null,
+          name: decision.name ?? null, group: decision.group ?? null,
+          kind: decision.kind ?? null, mode: decision.mode ?? null,
+          dir: decision.dir ?? null, surface: decision.surface ?? null,
+          unrouted: decision.unrouted ?? false, tasks: tasks.length,
+        })
         return decision
       } catch (e) {
-        log.warn('codex route failed — using failsafe', { error: (e as Error).message })
+        log.warn('engine route failed — using failsafe', { engine: eng, ms: this.clock() - t0, error: (e as Error).message })
         return failsafeDecision(tasks, fallback)
       }
     }

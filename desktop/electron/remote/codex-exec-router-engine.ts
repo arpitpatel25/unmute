@@ -30,6 +30,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { createLogger } from './log'
+import { devEvent } from './curator-devlog'
 import { decisionSchema, compactDecision, type DecisionSchemaOpts } from './router-decision-schema'
 
 const log = createLogger('codex-exec-router')
@@ -42,10 +43,14 @@ export interface CodexExecRouterOpts {
 }
 
 export class CodexExecRouterEngine {
+  /** Name for the router's logs. */
+  readonly label = 'codex-exec'
   private readonly dir: string
   private readonly model?: string
   private readonly spawnFn: typeof spawn
   private schemaPath: string | null = null
+  /** Last few stderr lines, kept so a failed route can name its cause. */
+  private stderrTail: string[] = []
 
   constructor(opts: CodexExecRouterOpts = {}, private readonly schemaOpts: DecisionSchemaOpts = { ops: true }) {
     this.dir = opts.dir ?? join(homedir(), '.unmute', 'remote', 'router-codex-exec')
@@ -61,7 +66,7 @@ export class CodexExecRouterEngine {
       const p = join(this.dir, 'decision.schema.json')
       await fs.writeFile(p, JSON.stringify(decisionSchema(this.schemaOpts), null, 2))
       this.schemaPath = p
-      log.event('codex-exec-warm', {})
+      log.event('codex-exec-warm', { dir: this.dir, schemaPath: p, model: this.model ?? 'default' })
     } catch (e) {
       log.warn('codex exec router failed to warm', { error: (e as Error).message })
     }
@@ -74,6 +79,7 @@ export class CodexExecRouterEngine {
     // A per-route output file: two routes must never read each other's answer.
     const outPath = join(this.dir, `decision-${randomUUID()}.json`)
     const t0 = Date.now()
+    this.stderrTail = []
     try {
       await new Promise<void>((resolve, reject) => {
         const args = [
@@ -90,23 +96,56 @@ export class CodexExecRouterEngine {
         // EOF that never comes — the prompt is already in argv, so it hangs
         // until the timeout. Cost one live run to find (28 Aug); execFile
         // cannot express this, which is why this is spawn.
+        log.event('codex-exec-start', {
+          promptBytes: Buffer.byteLength(prompt), timeoutMs, model: this.model ?? 'default',
+        })
         const child = this.spawnFn('codex', args, { cwd: this.dir, stdio: ['ignore', 'ignore', 'pipe'] })
-        const timer = setTimeout(() => { try { child.kill() } catch { /* gone */ } }, timeoutMs)
+
+        // STDERR WAS PIPED AND NEVER READ. It is where codex reports a bad
+        // schema (the strict-mode 400), an auth problem, or the "Reading
+        // additional input from stdin..." hang — none of which are visible
+        // anywhere else. Keeping the tail is what makes a failed route
+        // explainable instead of just late.
+        child.stderr?.on('data', (d: Buffer) => {
+          const t = d.toString().trim()
+          if (t) this.stderrTail = [...this.stderrTail, t].slice(-8)
+        })
+
+        let timedOut = false
+        const timer = setTimeout(() => {
+          timedOut = true
+          try { child.kill() } catch { /* gone */ }
+        }, timeoutMs)
         ;(timer as { unref?: () => void }).unref?.()
         child.on('error', (e: Error) => { clearTimeout(timer); reject(e) })
         child.on('exit', (code: number | null) => {
           clearTimeout(timer)
-          code === 0 ? resolve() : reject(new Error(`codex exec exited ${code}`))
+          if (code === 0) { resolve(); return }
+          reject(new Error(timedOut ? `timed out after ${timeoutMs}ms` : `codex exec exited ${code}`))
         })
       })
 
       const raw = await fs.readFile(outPath, 'utf8')
       const parsed = JSON.parse(raw) as unknown
       const compact = compactDecision(parsed)
-      log.event('codex-exec-decision', { ms: Date.now() - t0, bytes: compact.length })
+      const d = (parsed ?? {}) as Record<string, unknown>
+      log.event('codex-exec-decision', {
+        ms: Date.now() - t0,
+        action: d.action ?? null, name: d.name ?? null, group: d.group ?? null,
+        kind: d.kind ?? null, mode: d.mode ?? null, dir: d.dir ?? null,
+        targetTaskId: d.targetTaskId ?? null, surface: d.surface ?? null,
+      })
+      devEvent(log, 'codex-exec-decision-raw', { raw: compact })
       return compact || null
     } catch (e) {
-      log.warn('codex exec router: no decision', { ms: Date.now() - t0, error: (e as Error).message })
+      log.warn('codex exec router: no decision', {
+        ms: Date.now() - t0,
+        error: (e as Error).message,
+        // The tail names the cause: a strict-mode schema 400, an auth failure,
+        // or "Reading additional input from stdin..." if stdin is ever left
+        // open again (that one silently killed the whole lane once).
+        stderr: this.stderrTail.slice(-4).map((l) => l.slice(0, 300)),
+      })
       return null
     } finally {
       // Awaited, not fired-and-forgotten: a per-route filename means an

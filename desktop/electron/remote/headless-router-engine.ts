@@ -42,6 +42,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createLogger } from './log'
+import { devEvent } from './curator-devlog'
 import { routeDecisionTool, compactDecision, ROUTE_TOOL_NAME, type DecisionSchemaOpts } from './router-decision-schema'
 
 const log = createLogger('headless-router')
@@ -107,6 +108,8 @@ process.stdin.on('data', (d) => {
 export class HeadlessRouterEngine {
   /** Declared to the Router so the prompt asks for a TOOL CALL and, crucially,
    *  stops telling the model "no tools" — which would forbid loading this one. */
+  /** Name for the router's logs. */
+  readonly label = 'claude-headless'
   readonly answerTool = QUALIFIED_TOOL
   private child: ChildProcess | null = null
   private buf = ''
@@ -116,6 +119,14 @@ export class HeadlessRouterEngine {
   private ready = false
   private decisions = 0
   private starting: Promise<void> | null = null
+  // WHAT HAPPENED DURING THIS ROUTE. The failure modes here are all SILENT —
+  // the model answers in prose, or never loads the tool, or the MCP server
+  // never connected — and each looks identical from outside: a timeout. These
+  // fields are what turn "it didn't work" into a named cause in the log.
+  private sawToolSearch = false
+  private sawText: string[] = []
+  private lastResult: Record<string, unknown> | null = null
+  private stderrTail: string[] = []
   private readonly dir: string
   private readonly o: Required<Omit<HeadlessRouterOpts, 'spawnFn' | 'execPath' | 'dir'>> & Pick<HeadlessRouterOpts, 'spawnFn' | 'execPath'>
 
@@ -173,6 +184,12 @@ export class HeadlessRouterEngine {
       '--permission-mode', 'bypassPermissions',
     ], { cwd: this.dir, stdio: ['pipe', 'pipe', 'pipe'], env: process.env })
 
+    log.event('headless-spawn', {
+      model: this.o.model, dir: this.dir, exec,
+      argv: ['claude', '-p', '--input-format stream-json', '--output-format stream-json',
+             '--mcp-config', '--strict-mcp-config', '--permission-mode bypassPermissions'].join(' '),
+    })
+
     this.child = child
     this.buf = ''
     this.calls = []
@@ -181,8 +198,17 @@ export class HeadlessRouterEngine {
     this.ready = false
 
     child.stdout?.on('data', (d: Buffer) => this.onData(d.toString()))
-    child.on('exit', (code) => {
-      log.event('headless-exit', { code })
+    // STDERR WAS BEING DROPPED ENTIRELY. When the CLI refuses to start — bad
+    // flag, auth expired, model unavailable — this is the ONLY place it says
+    // so, and without it the symptom is an unexplained warm timeout.
+    child.stderr?.on('data', (d: Buffer) => {
+      const t = d.toString().trim()
+      if (!t) return
+      this.stderrTail = [...this.stderrTail, t].slice(-6)
+      log.warn('headless stderr', { line: t.slice(0, 400) })
+    })
+    child.on('exit', (code, signal) => {
+      log.event('headless-exit', { code, signal, decisions: this.decisions })
       if (this.child === child) { this.child = null; this.ready = false }
     })
     child.on('error', (e) => log.warn('headless spawn error', { error: e.message }))
@@ -190,8 +216,15 @@ export class HeadlessRouterEngine {
     // Prime: make it load the tool schema now, on our time rather than the
     // user's. Also proves the whole chain is alive before a real utterance.
     this.send(`[Unmute router] Startup check. Load the ${QUALIFIED_TOOL} tool with ToolSearch so it is ready, then reply with the single word READY. Do not call it.`)
+    const tw = Date.now()
     const primed = await this.waitFor(() => this.ready, 60_000)
-    log.event('headless-warm', { primed, model: this.o.model })
+    // `primed:false` here is the single highest-value line in this file: it
+    // means the CLI never even reached init, so every route after it will time
+    // out. Pair it with headless-mcp-status and headless-stderr for the cause.
+    log.event('headless-warm', {
+      primed, ms: Date.now() - tw, model: this.o.model,
+      toolSearchUsed: this.sawToolSearch, stderr: this.stderrTail.slice(-2),
+    })
   }
 
   private onData(chunk: string): void {
@@ -204,15 +237,57 @@ export class HeadlessRouterEngine {
       let ev: Record<string, unknown>
       try { ev = JSON.parse(line) as Record<string, unknown> } catch { continue }
 
-      if (ev.type === 'system' && ev.subtype === 'init') this.ready = true
+      if (ev.type === 'system' && ev.subtype === 'init') {
+        this.ready = true
+        // THE HANDSHAKE, AND WHETHER OUR TOOL SURVIVED IT. If the server shows
+        // anything but "connected", or the tool is missing, every route will
+        // time out with no other explanation anywhere. Measured once already:
+        // without --strict-mcp-config this listed 96 tools and two failed
+        // servers instead of one clean connection.
+        const tools = (ev.tools as string[] | undefined) ?? []
+        log.event('headless-mcp-status', {
+          servers: ev.mcp_servers ?? null,
+          toolVisible: tools.some((t) => t.endsWith(ROUTE_TOOL_NAME)),
+          totalTools: tools.length,
+        })
+      }
 
       if (ev.type === 'assistant') {
         const msg = ev.message as { content?: Array<Record<string, unknown>> } | undefined
         for (const c of msg?.content ?? []) {
-          if (c.type === 'tool_use' && String(c.name).endsWith(ROUTE_TOOL_NAME)) {
-            this.calls.push(c.input)
+          if (c.type === 'tool_use') {
+            const nm = String(c.name)
+            // The deferred-schema hop. Seeing it is normal on a cold process
+            // and is what warm() exists to pay for; NOT seeing it before a
+            // timeout means the model was never able to load the tool.
+            if (nm === 'ToolSearch') {
+              this.sawToolSearch = true
+              log.event('headless-toolsearch', { query: (c.input as { query?: string } | undefined)?.query ?? null })
+            }
+            if (nm.endsWith(ROUTE_TOOL_NAME)) this.calls.push(c.input)
+          }
+          // PROSE INSTEAD OF A TOOL CALL — the failure that has bitten us twice
+          // on the old transport ("your message got cut off", a conversational
+          // answer about work being on hold). Recording the model's own words
+          // is the difference between a named cause and a shrug.
+          if (c.type === 'text') {
+            const t = String(c.text ?? '').trim()
+            if (t) {
+              this.sawText.push(t)
+              devEvent(log, 'headless-assistant-text', { text: t.slice(0, 600) })
+            }
           }
         }
+      }
+
+      if (ev.type === 'result') {
+        this.lastResult = {
+          subtype: ev.subtype ?? null,
+          durationMs: ev.duration_ms ?? null,
+          numTurns: ev.num_turns ?? null,
+          isError: ev.is_error ?? null,
+        }
+        log.event('headless-result', this.lastResult)
       }
     }
   }
@@ -244,6 +319,14 @@ export class HeadlessRouterEngine {
 
     const want = this.taken + 1
     const t0 = Date.now()
+    // Per-route trace resets, so a failure line describes THIS route and not a
+    // previous one's leftovers.
+    this.sawText = []
+    this.lastResult = null
+    log.event('headless-route-start', {
+      promptBytes: Buffer.byteLength(prompt), timeoutMs,
+      decisionsThisProcess: this.decisions, toolAlreadyLoaded: this.sawToolSearch,
+    })
     // buildRoutingPrompt already opens with the tool instruction (it is told
     // via `answerTool`), so nothing is appended here. Keeping the instruction
     // in ONE place is what stops the two halves contradicting each other — the
@@ -253,13 +336,41 @@ export class HeadlessRouterEngine {
 
     const got = await this.waitFor(() => this.calls.length >= want, timeoutMs)
     if (!got) {
-      log.warn('headless router: no decision', { ms: Date.now() - t0 })
+      // NAME THE CAUSE. These four fields separate the failures that used to
+      // look identical from outside:
+      //   alive:false                  the CLI died (see headless-stderr/exit)
+      //   toolSearchUsed:false         it never loaded the tool - the prompt
+      //                                probably forbade it
+      //   assistantText present        it ANSWERED, in prose, instead of
+      //                                calling the tool - the words are here
+      //   result present, no call      it finished its turn and simply chose
+      //                                not to call the tool
+      log.warn('headless router: no decision', {
+        ms: Date.now() - t0,
+        alive: !!this.child && !this.child.killed,
+        toolSearchUsed: this.sawToolSearch,
+        assistantText: this.sawText.slice(-2).map((t) => t.slice(0, 300)),
+        result: this.lastResult,
+        stderr: this.stderrTail.slice(-2),
+      })
       return null
     }
     const args = this.calls[this.taken]
     this.taken = want
     const raw = compactDecision(args)
-    log.event('headless-decision', { ms: Date.now() - t0, bytes: raw.length })
+    // THE DECISION ITSELF, not a byte count. This is the line that answers
+    // "why did my task get that name / land in that group", which is the
+    // question every grouping complaint so far has actually been.
+    const d = (args ?? {}) as Record<string, unknown>
+    log.event('headless-decision', {
+      ms: Date.now() - t0,
+      action: d.action ?? null, name: d.name ?? null, group: d.group ?? null,
+      kind: d.kind ?? null, mode: d.mode ?? null, dir: d.dir ?? null,
+      targetTaskId: d.targetTaskId ?? null, surface: d.surface ?? null,
+      spokeFirst: this.sawText.length > 0,   // prose alongside the call
+      turns: this.lastResult?.numTurns ?? null,
+    })
+    devEvent(log, 'headless-decision-raw', { raw })
 
     if (++this.decisions >= this.o.recycleEvery) void this.recycle()
     return raw || null
