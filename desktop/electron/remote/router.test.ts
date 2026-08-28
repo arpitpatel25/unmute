@@ -22,7 +22,7 @@ test('buildRoutingPrompt includes the utterance, task line, and decision path', 
 })
 
 test('failsafeDecision: one recent task continues it; multiple or stale or none ⇒ new', () => {
-  assert.deepEqual(failsafeDecision(ONE, 'and 2015?'), { action: 'continue', targetTaskId: 't1', intent: 'and 2015?', mode: 'managed' })
+  assert.deepEqual(failsafeDecision(ONE, 'and 2015?'), { action: 'continue', targetTaskId: 't1', intent: 'and 2015?', mode: 'managed', unrouted: true })
   assert.equal(failsafeDecision(TWO, 'x').action, 'new')               // ambiguous ⇒ new
   assert.equal(failsafeDecision([], 'x').action, 'new')                // nothing to continue
   const stale: RoutableTask[] = [{ ...ONE[0], ageSec: 99999 }]
@@ -43,7 +43,7 @@ test('parseDecision: explicit decisions honored; failures use failsafe', () => {
   assert.deepEqual(parseDecision('{"action":"continue","targetTaskId":"t1","intent":"reply"}', 'raw', ONE),
     { action: 'continue', targetTaskId: 't1', intent: 'reply', mode: 'managed', surface: undefined })
   // timeout (null) with one recent task ⇒ continue it (the flip)
-  assert.deepEqual(parseDecision(null, 'and 2015?', ONE), { action: 'continue', targetTaskId: 't1', intent: 'and 2015?', mode: 'managed' })
+  assert.deepEqual(parseDecision(null, 'and 2015?', ONE), { action: 'continue', targetTaskId: 't1', intent: 'and 2015?', mode: 'managed', unrouted: true })
   // malformed with one recent task ⇒ continue it
   assert.equal(parseDecision('not json', 'x', ONE).action, 'continue')
   // null with multiple tasks ⇒ new (can't guess)

@@ -2017,6 +2017,7 @@ function serializeTask(t: Task) {
     note: t.note ?? null,
     spawnedBy: t.spawnedBy ?? null,
     group: t.group ?? null,
+    unrouted: t.unrouted ?? false,
     // WHICH backend runs this task. The cockpit tags every card with it so a
     // wall mixing Claude Code and Codex tasks is never ambiguous about where
     // the work actually lives.
@@ -4066,6 +4067,9 @@ async function dispatchFromCaptureInner(
       const newId = await manager.dispatch(intentText, {
         surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir,
         agent: chosenAgent,
+        // Carried so the card can distinguish "the router never answered" from
+        // "naming and grouping did not work" - they look identical otherwise.
+        unrouted: decision.unrouted,
         ...(chosenAgent === 'codex-desktop' ? { project: decision.codexProject ?? null } : {}),
         attachments,
       })

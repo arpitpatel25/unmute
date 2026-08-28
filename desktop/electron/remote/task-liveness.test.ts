@@ -1,0 +1,84 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { promises as fs } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { TaskManager } from './task-manager.ts'
+import type { AgentExecutor } from './executor.ts'
+
+/** An executor whose PTY we can kill from the test, as node-pty would. */
+function deadableExecutor() {
+  let alive = true
+  let exitCb: ((e: { exitCode: number }) => void) | null = null
+  const ex: AgentExecutor & { onExit(cb: (e: { exitCode: number }) => void): void } = {
+    get alive() { return alive },
+    async spawn() {},
+    async isReady() {},
+    writeStdin() {},
+    write() {},
+    resize() {},
+    onData() {},
+    onExit(cb) { exitCb = cb },
+    kill() { alive = false },
+  }
+  return {
+    ex,
+    /** The CLI quits on its own — an update chooser, a crash, a `2. No, quit`. */
+    die(code = 0) { alive = false; exitCb?.({ exitCode: code }) },
+  }
+}
+
+async function manager() {
+  const base = await fs.mkdtemp(join(tmpdir(), 'unmute-liveness-'))
+  const built = deadableExecutor()
+  const mgr = new TaskManager({
+    executorFactory: () => built.ex,
+    baseDir: base,
+    trustAcceptMs: 0,
+    pollMs: 50,
+  } as never)
+  return { mgr, ...built }
+}
+
+test('a CLI that exits under a running task fails the task instead of leaving it Working', async () => {
+  // FIELD, 2026-08-28: Codex quit 0.5s after dispatch (it had been typed into a
+  // menu). Nothing was watching the PTY, so the card sat at "Working 9m" over a
+  // terminal that had been dead for nine minutes — indistinguishable, to the
+  // user, from a task that was simply slow.
+  const { mgr, die } = await manager()
+  const id = await mgr.dispatch('do a thing', { agent: 'claude' })
+  assert.equal(mgr.get(id)?.state, 'processing')
+
+  die(0)
+  await new Promise((r) => setTimeout(r, 50))
+
+  const task = mgr.get(id)!
+  assert.equal(task.state, 'failed', 'a dead session is not a working one')
+  assert.match(task.error?.reason ?? '', /exited/i, 'and it must say why')
+})
+
+test('the exit code is reported, because 0 and 1 mean different things', async () => {
+  const { mgr, die } = await manager()
+  const id = await mgr.dispatch('do a thing', { agent: 'claude' })
+  die(137)
+  await new Promise((r) => setTimeout(r, 50))
+  assert.match(mgr.get(id)?.error?.detail ?? '', /137/)
+})
+
+test('a task that already finished is not rewritten by its session closing', async () => {
+  // Normal shutdown: the work completed, THEN the REPL is killed. Marking that
+  // failed would turn every successful task into a failure at teardown.
+  const { mgr, die } = await manager()
+  const id = await mgr.dispatch('do a thing', { agent: 'claude' })
+  await mgr.setReportedStatus(id, {
+    state: 'done',
+    result: { summary: 'finished the thing' },
+  } as never)
+  assert.equal(mgr.get(id)?.state, 'done')
+
+  die(0)
+  await new Promise((r) => setTimeout(r, 50))
+
+  assert.equal(mgr.get(id)?.state, 'done', 'a terminal state is final')
+  assert.equal(mgr.get(id)?.error, undefined)
+})

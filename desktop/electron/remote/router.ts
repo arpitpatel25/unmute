@@ -116,6 +116,19 @@ export interface RouteDecision {
    *  (a complaint/correction/suggestion) — nothing is spawned; the host records
    *  it against the named skill. */
   action: 'new' | 'continue' | 'resume' | 'speak' | 'curate' | 'skill_feedback'
+  /**
+   * NOTHING CLASSIFIED THIS — it is the failsafe, not a decision.
+   *
+   * When the router times out or answers unusably, we still dispatch, because
+   * losing something the user said out loud is worse than dispatching it badly.
+   * But the result is a task carrying the RAW TRANSCRIPT as its title, with no
+   * name and no group: identical, on the wall, to naming and grouping having
+   * failed. Two 60s router timeouts on 2026-08-28 were each read as "the
+   * grouping feature is broken" for exactly this reason.
+   *
+   * The flag exists so the card can say which of the two actually happened.
+   */
+  unrouted?: boolean
   targetTaskId?: string
   /** cleaned intent (router folds in transcript cleanup). */
   intent: string
@@ -379,6 +392,39 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
   ].join('\n')
 }
 
+/**
+ * WHAT WE TYPE, instead of the prompt itself.
+ *
+ * The routing prompt is ~8,500 characters and used to be pushed into the REPL
+ * with `writeStdin` - i.e. typed, character by character, into a TUI that is
+ * redrawing itself at the same time. That channel is lossy. The field logs show
+ * Unmute's own words coming back mangled:
+ *
+ *     a group that swallows everythig is no group)
+ *     a grup that swallows everythng isn group)
+ *
+ * Usually the damage is cosmetic and the model still understands. On 2026-08-28
+ * it was not: enough was lost that only the TAIL arrived, the session replied
+ * "your message got cut off - I only see the tail end of it", never wrote the
+ * decision file, and the route timed out after 60 seconds. The failsafe then
+ * produced a task with the raw transcript as its title and no group, which is
+ * indistinguishable from grouping being broken.
+ *
+ * So the payload goes to disk - a write that cannot be half-delivered - and
+ * only this pointer is typed. ~250 characters instead of 8,500. It is also the
+ * same decision we already made for the ANSWER, which comes back through a file
+ * because the TUI stream is too messy to parse; the input side simply never
+ * caught up.
+ */
+export function promptPointer(promptPath: string, decisionPath: string | null): string {
+  return [
+    `[Unmute router] Read ${promptPath} and do exactly what it says.`,
+    decisionPath
+      ? `Write your JSON decision to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Nothing else - no tools, no browser, no research.`
+      : `Reply with ONLY the one line of JSON it asks for. Nothing else.`,
+  ].join('\n')
+}
+
 /** The default decision when the router gives us nothing usable (timeout, bad
  *  parse, unknown id). A follow-up is likelier than a coincidental brand-new
  *  request when exactly ONE recent task is open — BUT the failsafe must NEVER
@@ -392,9 +438,9 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
 export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSec = 180): RouteDecision {
   const clean = (intent || '').trim()
   if (tasks.length === 1 && tasks[0].ageSec <= maxAgeSec && tasks[0].state !== 'processing') {
-    return { action: 'continue', targetTaskId: tasks[0].id, intent: clean, mode: 'managed' }
+    return { action: 'continue', targetTaskId: tasks[0].id, intent: clean, mode: 'managed', unrouted: true }
   }
-  return { action: 'new', intent: clean, mode: 'managed' }
+  return { action: 'new', intent: clean, mode: 'managed', unrouted: true }
 }
 
 /** Parse the decision file. EXPLICIT router decisions (new, or continue→known id)
@@ -556,6 +602,8 @@ export class Router {
   private spawnedAt = 0
   private readonly dir: string
   private readonly decisionPath: string
+  /** Where the full prompt is staged, so only a pointer is typed. */
+  private readonly promptPath: string
   private readonly o: Required<Omit<RouterOpts, 'now' | 'engine' | 'slot'>> & Pick<RouterOpts, 'now'>
   private readonly engine: RouterOpts['engine'] | null
 
@@ -574,6 +622,7 @@ export class Router {
     this.engine = opts.engine ?? null
     this.dir = join(this.o.baseDir, opts.slot ? `router-${opts.slot}` : 'router')
     this.decisionPath = join(this.dir, 'decision.json')
+    this.promptPath = join(this.dir, 'prompt.txt')
   }
 
   /** Classify one utterance against the current task snapshot. Single-flighted;
@@ -618,14 +667,25 @@ export class Router {
       await fs.mkdir(this.dir, { recursive: true })
       await fs.rm(this.decisionPath, { force: true }).catch(() => {})
       const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished, coldSessions, wall, skillNames, avail)
-      this.ex!.writeStdin(prompt)
+      // TO DISK, THEN A POINTER. See promptPointer - typing the whole prompt
+      // into the TUI is what truncated it in the field. If the write fails we
+      // fall back to typing it, because a lossy prompt still beats no prompt.
+      let typed = prompt
+      try {
+        await fs.writeFile(this.promptPath, prompt)
+        typed = promptPointer(this.promptPath, this.decisionPath)
+        log.event('router-prompt-staged', { bytes: prompt.length, typed: typed.length })
+      } catch (e) {
+        log.warn('router prompt could not be staged - typing it instead', { error: (e as Error).message })
+      }
+      this.ex!.writeStdin(typed)
       // The multi-line prompt is captured by Claude's TUI as a paste that lands
       // one Enter short of submitting — so it sits as "[Pasted text]" and the
       // model never runs. Mirror the task dispatch path: settle, then send an
       // explicit confirm Enter to actually submit it. (Proven on the task lane.)
       await this.sleep(this.o.submitConfirmMs)
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
-      const raw = await this.waitForDecision(prompt)
+      const raw = await this.waitForDecision(typed)
       const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail)
       devEvent(log, 'route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, group: decision.group ?? null, ops: decision.ops?.length ?? 0 })
       return decision
@@ -721,6 +781,9 @@ export class Router {
         log.warn('router slow — clearing input and re-injecting prompt once', { elapsedMs: elapsed })
         this.ex.write('\x15')
         await this.sleep(200)
+        // `prompt` here is whatever the caller TYPED — the pointer, not the
+        // staged payload — so the re-inject repeats the same short line rather
+        // than pushing 8,500 characters down the channel that just failed.
         this.ex.writeStdin(prompt)
         await this.sleep(this.o.submitConfirmMs)
         if (this.ex?.alive) this.ex.write('\r')

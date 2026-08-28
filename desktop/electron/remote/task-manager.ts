@@ -286,6 +286,15 @@ export interface Task {
   blocks?: Block[]
   /** Token usage for the panel footer, when the provider reports it. */
   usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number }
+  /**
+   * The router never classified this task — it is the failsafe's output.
+   *
+   * The title is the raw transcript and there is no group, because no decision
+   * was ever made about it. Surfacing that is the difference between "routing
+   * failed" and "grouping is broken", which are indistinguishable on a card and
+   * have been confused twice.
+   */
+  unrouted?: boolean
   /** Workspace group — "what is this work about" ("unmute", "launch video",
    *  "on-call"). Assigned ONCE by the router (user's own words win), mutated
    *  only by user curation. Live groups = distinct values across live tasks;
@@ -677,6 +686,35 @@ export class TaskManager extends EventEmitter {
     })
   }
 
+  /**
+   * The session's process went away.
+   *
+   * TERMINAL STATES ARE FINAL. A normal task ends with the agent reporting done
+   * and the REPL being torn down a moment later, so treating every exit as a
+   * failure would turn every success into one at shutdown. Only a task still
+   * mid-flight - nothing reported, no result - is failed here.
+   *
+   * The exit code travels into `detail` because 0 and non-zero mean genuinely
+   * different things: 0 is the CLI choosing to quit (a menu selection, an
+   * update chooser), non-zero is it falling over. Both look identical on a card
+   * that only says "failed".
+   */
+  private onSessionExit(id: string, exitCode: number): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    if (TERMINAL.includes(task.state)) return
+    log.child({ taskId: id }).warn('session exited mid-task', { exitCode, state: task.state })
+    this.transition(id, 'failed', {
+      state: 'failed',
+      error: {
+        reason: exitCode === 0
+          ? 'The agent exited before finishing'
+          : 'The agent crashed before finishing',
+        detail: `The CLI process ended (exit code ${exitCode}) while the task was still ${task.state}.`,
+      },
+    })
+  }
+
   private clock(): number {
     return this.opts.now ? this.opts.now() : Date.now()
   }
@@ -780,7 +818,7 @@ export class TaskManager extends EventEmitter {
     }
   }
 
-  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[] } = {}): Promise<string> {
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[]; unrouted?: boolean } = {}): Promise<string> {
     // Provider-native routes own dispatch acknowledgement. Codex must not fall
     // through to Claude's PTY submit-and-verify path, which can resend prompts.
     const route = this.dispatchRoute(opts.agent)
@@ -839,6 +877,8 @@ export class TaskManager extends EventEmitter {
     // field ABSENT, never present-and-empty (D6, §3).
     const task: Task = {
       id, intent, sessionId, kind, runtimePinned: kind === 'session', state: 'processing', createdAt: now, updatedAt: now,
+      // Nothing classified this one — see Task.unrouted.
+      ...(opts.unrouted ? { unrouted: true } : {}),
       cwd: runCwd, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
       surface, mode, injectedRecipes: [], lastUserInputAt: now,
       spawnedBy: opts.spawnedBy, agent,
@@ -908,6 +948,13 @@ export class TaskManager extends EventEmitter {
         extraEnv: opts.extraEnv,
         forkFromSessionId: opts.forkFromSessionId,
       })
+      // A DEAD SESSION IS NOT A WORKING ONE. Watch the process itself rather
+      // than waiting for a poller to notice: the status file only ever tells us
+      // what the agent WROTE, so a CLI that quits before writing anything is
+      // invisible to it forever. That is exactly what happened on 2026-08-28 —
+      // Codex exited 0 half a second after dispatch and the card read
+      // "Working 9m" over a terminal that had been gone the whole time.
+      ex.onExit?.(({ exitCode }) => this.onSessionExit(id, exitCode))
       await ex.isReady()
       if (!ex.alive) throw new Error(`${agent} CLI exited before task dispatch`)
 
@@ -925,7 +972,7 @@ export class TaskManager extends EventEmitter {
       // Gated on trustAcceptMs>0 so tests (which pass 0 with a no-output fake
       // executor) dispatch instantly; production keeps the default (>0).
       if (this.opts.trustAcceptMs > 0) {
-        await settleRepl({
+        const settled = await settleRepl({
           agent,
           getOutput: () => this.outputBuffers.get(id) ?? '',
           isAlive: () => ex.alive,
@@ -933,9 +980,22 @@ export class TaskManager extends EventEmitter {
           sendRaw: (input) => ex.write(input),
           onEvent: (event, fields) => tlog.event(event, fields),
         })
+        // NEVER TYPE INTO A MENU. If a startup dialog we RECOGNISE is still
+        // holding the screen, the payload would be keystrokes inside it — which
+        // is precisely how a dispatch became "2. No, quit" and the session
+        // exited 0 while the card read "Working" for nine minutes (2026-08-28).
+        //
+        // Deliberately narrow: only a POSITIVELY IDENTIFIED dialog refuses. An
+        // un-confirmed screen still dispatches exactly as before, because that
+        // permissiveness is load-bearing for startup shapes nobody has
+        // enumerated, and turning "unconfirmed" into a hard failure would break
+        // working tasks to fix a rare one.
+        if (!settled.settled && settled.dialog) {
+          throw new Error(`${agent} CLI stopped at its ${settled.dialog} dialog and never reached its prompt`)
+        }
+        tlog.event('repl-settle-outcome', { settled: settled.settled, reason: settled.reason, dialog: settled.dialog ?? null })
       }
       if (!ex.alive) throw new Error(`${agent} CLI exited before task dispatch`)
-      tlog.event('folder-trust-accepted', {})
 
       if (opts.attachments?.length) {
         task.conversation = [{ role: 'user', text: intent }]
