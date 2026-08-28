@@ -30,7 +30,6 @@ import { connectTerminalInputAfterReplay, type TerminalInputSession } from './te
 
 type API = {
   remoteGetOutput?: (taskId: string) => Promise<string>
-  remoteGetTerminalSnapshot?: (taskId: string) => Promise<string | null>
   remoteOnOutput?: (cb: (d: { taskId: string; chunk: string }) => void) => () => void
   remoteTerminalInput?: (taskId: string, data: string) => void
   remoteTerminalResize?: (taskId: string, cols: number, rows: number) => void
@@ -101,10 +100,8 @@ export function LiveTerminal({ taskId, onClose, fill = false }: { taskId: string
       // Fit to the container BEFORE we replay, so history wraps to the width the
       // user is actually looking at (xterm sets isWrapped correctly as it writes).
       try { fit.fit() } catch { /* first layout not ready; ResizeObserver retries */ }
-      // lastCols/lastRows are set below, once the size has actually been SENT.
-      // Recording the fitted size here without sending it is what silenced the
-      // first syncSize(): it compares against lastCols, saw no change, and the
-      // PTY never learned the width it was being displayed at.
+      lastCols = term.cols
+      lastRows = term.rows
 
       // Shift+Enter → soft newline (no submit). xterm emits the SAME byte (\r)
       // for Enter and Shift+Enter, so the TUI can't tell them apart and submits
@@ -128,80 +125,27 @@ export function LiveTerminal({ taskId, onClose, fill = false }: { taskId: string
         }
         return true
       })
-      // SIZE THE PTY BEFORE CAPTURING ITS SCREEN, not after.
-      //
-      // This resize used to run at the END of the block below, with the note
-      // "so all FUTURE output is painted at this width" — and that was exactly
-      // the bug. The replayed buffer is a capture of what tmux had ALREADY
-      // painted, hard-wrapped at whatever width the pane was then (its spawn
-      // 120x40, or 80 before the first fit). Re-wrapping cannot be done after
-      // the fact: those line breaks are real characters in the buffer by the
-      // time we read them.
-      //
-      // So on open, a session showed text broken mid-word with dead space to
-      // the right of it, and toggling the terminal off and on "fixed" it —
-      // because that re-captured tmux AFTER the resize had landed. The toggle
-      // was never a redraw quirk; it was delivering the width first.
-      //
-      // Order now: fit → tell the PTY → let it repaint → capture → replay.
-      const cols = term.cols
-      const rows = term.rows
-      api().remoteTerminalResize?.(taskId, cols, rows)
-      lastCols = cols
-      lastRows = rows
-
-      // One frame for tmux to receive SIGWINCH and repaint at the new width.
-      // Without the wait the capture races the repaint and we are back to
-      // replaying the old wrapping. 140ms is the debounce above plus a beat;
-      // it is not a correctness guarantee, and the ResizeObserver still
-      // re-syncs if the layout settles differently.
-      const REPAINT_MS = 140
-
       // Replay the buffered RAW output, THEN attach the live stream on top — in
       // that order so history never lands after a newer live chunk. Subscribing
       // inside the .then keeps the two ordered through one path.
-      setTimeout(() => {
+      void api().remoteGetOutput?.(taskId).then((buf) => {
         if (disposed || !term) return
-        // PREFER THE RENDERED SCREEN over the raw byte log.
-        //
-        // The log is a TUI paint stream — absolute cursor moves computed for
-        // the grid in effect at the time. The tmux window is resized whenever a
-        // terminal is opened, while the attaching client is spawned at a fixed
-        // 120x40, so after a relaunch the log holds frames from several
-        // geometries and replaying them in order lands text from one grid on
-        // top of another. A capture-pane has no cursor addressing at all, so
-        // there is no grid for it to disagree with.
-        //
-        // Falls back to the raw buffer when nothing holds a screen for this
-        // task (no tmux) or the capture comes back empty (dead session) —
-        // seeding an empty string would blank a terminal that had content.
-        void (async () => {
-          const snap = await api().remoteGetTerminalSnapshot?.(taskId).catch(() => null)
-          return snap ?? (await api().remoteGetOutput?.(taskId)) ?? ''
-        })().then((buf) => {
-          if (disposed || !term) return
-          const replayTarget = term
-          inputSession = connectTerminalInputAfterReplay(
-            replayTarget,
-            buf ?? '',
-            (data) => api().remoteTerminalInput?.(taskId, data),
-            () => {
-              if (disposed) return
-              off = api().remoteOnOutput?.((d) => {
-                if (!disposed && d.taskId === taskId && term) term.write(d.chunk)
-              })
-              // Re-assert the size only if the layout moved while we waited.
-              // Unconditionally re-sending here is what made the original
-              // ordering look correct while doing nothing for the replay.
-              if (replayTarget.cols !== lastCols || replayTarget.rows !== lastRows) {
-                lastCols = replayTarget.cols
-                lastRows = replayTarget.rows
-                api().remoteTerminalResize?.(taskId, replayTarget.cols, replayTarget.rows)
-              }
-            },
-          )
-        })
-      }, REPAINT_MS)
+        const replayTarget = term
+        inputSession = connectTerminalInputAfterReplay(
+          replayTarget,
+          buf ?? '',
+          (data) => api().remoteTerminalInput?.(taskId, data),
+          () => {
+            if (disposed) return
+            off = api().remoteOnOutput?.((d) => {
+              if (!disposed && d.taskId === taskId && term) term.write(d.chunk)
+            })
+            // Now that the terminal is populated, negotiate the PTY size to match the
+            // grid the user sees, so all FUTURE output is painted at this width.
+            api().remoteTerminalResize?.(taskId, replayTarget.cols, replayTarget.rows)
+          },
+        )
+      })
     }
 
     open()

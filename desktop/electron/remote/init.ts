@@ -5951,14 +5951,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return true
   })
   ipcMain.handle('remote:get-output', async (_e, id: string) => manager?.getOutput(id) ?? '')
-  // The RENDERED screen, when tmux holds one. The terminal prefers this over
-  // the raw byte buffer: a capture has no absolute cursor addressing, so it
-  // cannot be painted against the wrong grid. null ⇒ caller keeps get-output.
-  ipcMain.handle('remote:get-terminal-snapshot', async (_e, id: string) => {
-    const snap = (await manager?.getSnapshot(id)) ?? null
-    log.event('terminal-snapshot', { taskId: id, bytes: snap?.length ?? 0, usable: !!snap })
-    return snap
-  })
   // Open a result artifact in the USER's default app (PRD §13.4 #3 + the
   // consumption handoff): URLs open in the default browser, paths in Finder.
   // activate:false ⇒ open in a background tab WITHOUT stealing focus from what

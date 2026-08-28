@@ -579,10 +579,6 @@ export const remotePreloadExtensions = {
   // ── Render-on-demand live terminal (PRD §13.4 #8) ──
   /** Recent buffered PTY output for a task (for opening the live view). */
   remoteGetOutput: (taskId: string): Promise<string> => ipcRenderer.invoke('remote:get-output', taskId),
-  /** The RENDERED screen (tmux capture) — preferred seed for the live
-   *  terminal. null when nothing holds a screen for this task. */
-  remoteGetTerminalSnapshot: (taskId: string): Promise<string | null> =>
-    ipcRenderer.invoke('remote:get-terminal-snapshot', taskId),
   /** Open a result artifact in the user's default app — URL in the default
    *  browser (background tab, no focus steal), path in Finder. */
   remoteOpenArtifact: (type: 'url' | 'path', value: string): Promise<boolean> =>
