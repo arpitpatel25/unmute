@@ -983,7 +983,16 @@ export class Router {
    *  real utterance never pays cold-start. Idempotent and single-flighted: safe
    *  to call at app init and again on every Remote key-down. */
   warm(): Promise<void> {
-    const run = this.chain.then(() => this.ensureSession())
+    // WARM WHAT ACTUALLY ROUTES. routeOnce() checks `this.engine` first and
+    // returns before ever touching the PTY, so warming a session here for an
+    // engine-backed router spawned a REPL that would never be used AND left
+    // the engine cold — the first utterance then paid cold start plus, on the
+    // headless lane, the deferred-tool ToolSearch hop.
+    //
+    // Observed in the installed 1.5.7-dev.17: two stray `claude` PTYs at
+    // startup, one per router slot, and no engine warm at all. The Codex
+    // router has been doing this for as long as it has existed.
+    const run = this.chain.then(() => this.engine ? this.engine.warm() : this.ensureSession())
     this.chain = run.catch(() => undefined)
     return run
   }
@@ -1183,6 +1192,9 @@ export class Router {
   dispose(): void {
     if (this.ex?.alive) { try { this.ex.kill() } catch { /* best-effort */ } }
     this.ex = null
+    // The engine owns a resident process on the headless lane; without this it
+    // outlives the app.
+    try { this.engine?.dispose() } catch { /* best-effort */ }
   }
 
   private clock(): number { return this.o.now ? this.o.now() : Date.now() }
