@@ -125,33 +125,47 @@ export async function settleRepl(o: SettleReplOpts): Promise<SettleResult> {
     const raw = o.getOutput()
     const out = stripTui(raw.slice(-4000))
 
-    // READY and DIALOGS are judged on CONTENT, every poll, regardless of whether
-    // the terminal has gone quiet. This is the fix for the repainting dialog:
-    // silence was never evidence of anything, and its absence was never evidence
-    // that nothing was waiting.
-    if (readyFor(o.agent, out)) return finish({ settled: true, reason: 'ready' })
-
+    // DIALOGS FIRST, THEN READY - and the order is load-bearing.
+    //
+    // `out` is the ACCUMULATED output, not the current screen. Codex paints its
+    // banner (which contains "Ask Codex to do anything") and only then draws the
+    // trust dialog, so the ready marker is in that buffer permanently and a
+    // dialog arriving afterwards could never win. Checking ready first meant
+    // every Codex task was declared ready, typed into the trust menu, and exited
+    // 0 about 200ms later (field, 2026-08-28 10:06). A pending dialog outranks a
+    // marker that may simply be scrollback.
     const dialog = DIALOGS.find((d) => (!d.agent || d.agent === o.agent) && d.match.test(out))
-    if (dialog) {
+    if (!dialog && readyFor(o.agent, out)) return finish({ settled: true, reason: 'ready' })
+    if (dialog && !answered.has(dialog.id)) {
       lastSeenDialog = dialog.id
-      // Answer each dialog once. Re-sending because it is still painting is how
-      // a second keystroke lands on whatever replaced it.
-      if (!answered.has(dialog.id) && o.sendRaw) {
+      // Answer each dialog ONCE, then stop treating it as pending: its text
+      // lingers in the accumulated buffer exactly like the ready marker does,
+      // so a dialog we have already answered must not block the ready check
+      // forever.
+      if (o.sendRaw) {
         answered.add(dialog.id)
         o.sendRaw(dialog.keys)
         emit('dialog-answered', { dialog: dialog.id, keys: JSON.stringify(dialog.keys) })
         lastChange = Date.now()
+        continue
       }
+      // Nothing can answer it — record it so the caller refuses to type.
       continue
     }
     lastSeenDialog = undefined
 
-    // Below here is the QUIET path, unchanged and still Claude's: nudge an
-    // unrecognised-but-idle screen with Enter. It is a nudge, not a decision —
-    // anything we can actually name is handled above.
+    // Below here is the QUIET path: nudge an unrecognised-but-idle screen with
+    // Enter. It is CLAUDE'S, and it stays because it is proven there.
+    //
+    // Codex is deliberately excluded. It has its own ready marker and its own
+    // named dialogs, so a blind Enter can only ever land somewhere we failed to
+    // recognise — which is the exact move that quit a session by choosing
+    // "Update now". For Codex, not knowing means waiting, and then reporting
+    // not-settled so the caller declines to type.
     if (raw.length !== lastLen) { lastLen = raw.length; lastChange = Date.now(); continue }
     if (Date.now() - lastChange < QUIET_MS) continue
     if (raw.length === 0) return finish({ settled: true, reason: 'no-output' })
+    if (o.agent === 'codex') continue
     if (enters < MAX_ENTERS) {
       o.sendEnter() // Enter = accept trust / no-op on empty prompt; NEVER Esc
       enters += 1

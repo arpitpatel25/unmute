@@ -125,3 +125,26 @@ test('Claude’s existing path is untouched', async () => {
   assert.equal(out.reason, 'ready')
   assert.deepEqual(enters, [], 'already at the prompt — nothing to send')
 })
+
+test('a dialog drawn AFTER the banner still wins — ready is not a one-way latch', async () => {
+  // THE REGRESSION (field, 2026-08-28 10:06). Codex paints its banner, which
+  // contains "Ask Codex to do anything", and only THEN draws the trust dialog.
+  // `out` is the accumulated output tail, so the ready marker stays in that
+  // buffer forever — and because ready was checked first, the trust prompt that
+  // arrived a moment later could never win. Every Codex task was declared ready,
+  // typed into the trust menu, and exited 0 about 200ms after dispatch.
+  const BANNER_THEN_TRUST = CODEX_READY + CODEX_TRUST
+  const raw: string[] = []
+  let screen = BANNER_THEN_TRUST
+  const out = await settleRepl({
+    agent: 'codex',
+    getOutput: () => screen,
+    isAlive: () => true,
+    sendEnter: () => {},
+    sendRaw: (i) => { raw.push(i); screen = CODEX_READY },
+    quietMs: 0, pollMs: 1, maxWaitMs: 300,
+  })
+  assert.deepEqual(raw, ['\r'], 'the dialog must be answered before we call it ready')
+  assert.equal(out.settled, true)
+  assert.equal(out.reason, 'ready')
+})
