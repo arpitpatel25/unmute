@@ -598,6 +598,11 @@ export class TaskManager extends EventEmitter {
   // Idle-kill timers for WARM sessions (kept alive after done for follow-ups).
   private warmTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Background auto-purge sweep (null until startMaintenance()).
+  /** Set once shutdown() begins. Every PTY we then kill emits an exit, and
+   *  without this each one would look like a delivery failure worth retrying —
+   *  so quitting the app would spawn a fresh CLI per live session on the way
+   *  out. Shutting down is not a delivery failure. */
+  private shuttingDown = false
   private purgeTimer: ReturnType<typeof setInterval> | null = null
   // Codex approval inbox sweep (null until startMaintenance()).
   private approvalTimer: ReturnType<typeof setInterval> | null = null
@@ -852,6 +857,10 @@ export class TaskManager extends EventEmitter {
     const task = this.tasks.get(id)
     if (!task) return
     if (TERMINAL.includes(task.state)) return
+    // Quitting kills every live PTY. None of those deaths is a delivery
+    // failure, and re-delivering during teardown would start processes as the
+    // app is trying to stop.
+    if (this.shuttingDown) return
     // NEVER SEEN THE WORDS? THEN SENDING THEM AGAIN IS SAFE.
     //
     // The asymmetry is the whole design: a duplicated side effect is far worse
@@ -4119,6 +4128,7 @@ export class TaskManager extends EventEmitter {
   /** App shutdown is not the UI's destructive Kill All. Every live terminal
    * runtime detaches and continues; `kind` only controls its later retention. */
   shutdown(): void {
+    this.shuttingDown = true
     this.stopMaintenance()
     const ids = [...new Set([...this.tasks.keys(), ...this.executors.keys(), ...this.scheduler.keys()])]
     let detached = 0

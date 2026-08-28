@@ -19,7 +19,9 @@ function deadableExecutor() {
     resize() {},
     onData() {},
     onExit(cb) { exitCb = cb },
-    kill() { alive = false },
+    // A real PTY emits exit when it is killed. A fake that stays silent hides
+    // exactly the paths that matter here.
+    kill() { if (alive) { alive = false; exitCb?.({ exitCode: 0 }) } },
   }
   return {
     ex,
@@ -87,4 +89,20 @@ test('a task that already finished is not rewritten by its session closing', asy
 
   assert.equal(mgr.get(id)?.state, 'done', 'a terminal state is final')
   assert.equal(mgr.get(id)?.error, undefined)
+})
+
+test('app shutdown must not resurrect anything', async () => {
+  // shutdown() kills persistent sessions WITHOUT marking them failed (they are
+  // meant to be resumable). Re-delivery keys off "non-terminal and unproven",
+  // which every such task is - so without a guard, quitting the app would spawn
+  // a fresh CLI per session on the way out.
+  const { mgr, ex } = await manager()
+  const id = await mgr.dispatch('a long-running thing', { agent: 'claude', kind: 'session' })
+  assert.equal(mgr.get(id)?.state, 'processing')
+
+  mgr.shutdown()
+  await new Promise((r) => setTimeout(r, 300))
+
+  assert.equal(mgr.get(id)?.redeliveries ?? 0, 0, 'quitting is not a delivery failure')
+  assert.equal(ex.alive, false, 'and nothing was respawned')
 })
