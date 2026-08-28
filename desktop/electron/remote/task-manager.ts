@@ -287,6 +287,22 @@ export interface Task {
   /** Token usage for the panel footer, when the provider reports it. */
   usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number }
   /**
+   * The agent has POSITIVELY been seen to receive the intent - a rollout turn,
+   * a prompt-submitted hook, or a transcript turn.
+   *
+   * `task-dispatched` only ever meant "we typed it". Whether it ARRIVED was
+   * never checked, and on 2026-08-28 the difference mattered: the words were
+   * typed, Codex ran `npm install -g @openai/codex` instead, and exited twelve
+   * seconds later having never shown them to a model.
+   *
+   * This flag is what makes retrying safe. Re-sending something the agent
+   * already acted on could repeat a side effect; re-sending something it
+   * provably never saw cannot.
+   */
+  deliveryProven?: boolean
+  /** How many times the intent has been sent again after a proven non-delivery. */
+  redeliveries?: number
+  /**
    * The router never classified this task — it is the failsafe's output.
    *
    * The title is the raw transcript and there is no group, because no decision
@@ -699,10 +715,126 @@ export class TaskManager extends EventEmitter {
    * update chooser), non-zero is it falling over. Both look identical on a card
    * that only says "failed".
    */
+  /** The session was seen to receive the intent. Public so the proof can also
+   *  arrive from the hook/observer side, not only from the poller. */
+  noteDeliveryProven(id: string, via: string): void {
+    const task = this.tasks.get(id)
+    if (!task || task.deliveryProven) return
+    task.deliveryProven = true
+    log.child({ taskId: id }).event('delivery-proven', { via })
+    this.mergeMeta(task, { deliveryProven: true }, 'noteDeliveryProven')
+  }
+
+  /**
+   * Watch for evidence that the turn actually started.
+   *
+   * Non-blocking on purpose: dispatch must stay fast, and this is only ever
+   * used to decide whether a LATER death is recoverable. Both backends already
+   * write the proof for their own reasons - Codex a rollout turn, Claude a
+   * transcript turn plus the prompt-submitted hook - so nothing is being asked
+   * of the agent that it was not already doing.
+   */
+  private proveDelivery(id: string): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    void (async () => {
+      const deadline = Date.now() + Math.max(this.opts.verifyAfterMs, 10_000)
+      const rolloutBefore = task.agent === 'codex' ? await this.codexUserTurns(task).catch(() => 0) : null
+      const claudeBefore = rolloutBefore === null ? await this.claudeUserTurns(task).catch(() => 0) : null
+      const submittedBefore = task.promptSubmittedAt ?? 0
+      while (Date.now() < deadline) {
+        const live = this.tasks.get(id)
+        if (!live || live.deliveryProven || TERMINAL.includes(live.state)) return
+        if (rolloutBefore !== null) {
+          if ((await this.codexUserTurns(live).catch(() => 0)) > rolloutBefore) {
+            return this.noteDeliveryProven(id, 'codex-rollout')
+          }
+        } else {
+          if ((live.promptSubmittedAt ?? 0) > submittedBefore) return this.noteDeliveryProven(id, 'prompt-submitted-hook')
+          if (claudeBefore !== null && (await this.claudeUserTurns(live).catch(() => 0)) > claudeBefore) {
+            return this.noteDeliveryProven(id, 'claude-transcript')
+          }
+        }
+        // UNREF'D: a prover must never be the reason the process stays alive.
+        // It is bookkeeping about a task, not work the user is waiting on.
+        await new Promise((r) => { const t = setTimeout(r, 300); (t as { unref?: () => void }).unref?.() })
+      }
+    })()
+  }
+
+  /** How many times an unproven intent may be sent again before we admit defeat.
+   *  Small: a CLI that dies three times is broken, not unlucky. */
+  private static readonly MAX_REDELIVERIES = 2
+
+  /**
+   * Send the user's words again, into a fresh session, keeping the same card.
+   *
+   * The intent has been on disk since task-created - this has never been a
+   * data-loss problem, only a delivery one. All that was missing was something
+   * to notice the delivery failed and try again.
+   */
+  private redeliver(id: string): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    const tlog = log.child({ taskId: id })
+    const attempt = (task.redeliveries ?? 0) + 1
+    task.redeliveries = attempt
+    tlog.warn('intent never reached the agent - sending it again', { attempt })
+    void (async () => {
+      try {
+        const ex = this.opts.executorFactory(false, task.agent ?? 'claude')
+        this.executors.set(id, ex)
+        this.outputBuffers.set(id, '')
+        ex.onData((chunk) => guardPtyCallback(id, () => {
+          const prev = this.outputBuffers.get(id) ?? ''
+          this.outputBuffers.set(id, (prev + chunk).slice(-TaskManager.OUTPUT_CAP))
+          this.emit('output', id, chunk)
+        }))
+        ex.onExit?.(({ exitCode }) => this.onSessionExit(id, exitCode))
+        await ex.spawn({ cwd: task.cwd, env: process.env, taskId: id, sessionId: task.sessionId })
+        await ex.isReady()
+        if (this.opts.trustAcceptMs > 0) {
+          await settleRepl({
+            agent: task.agent ?? 'claude',
+            getOutput: () => this.outputBuffers.get(id) ?? '',
+            isAlive: () => ex.alive,
+            sendEnter: () => ex.write('\r'),
+            sendRaw: (input) => ex.write(input),
+            onEvent: (event, fields) => tlog.event(event, fields),
+          })
+        }
+        if (!ex.alive) throw new Error('CLI exited again before the intent could be sent')
+        ex.writeStdin(buildDispatch({ intent: task.intent }))
+        tlog.event('intent-redelivered', { attempt })
+        this.proveDelivery(id)
+        this.startPolling(id)
+      } catch (e) {
+        tlog.warn('re-delivery failed', { attempt, error: (e as Error).message })
+        this.transition(id, 'failed', {
+          state: 'failed',
+          error: {
+            reason: 'The agent never received the request',
+            detail: `The session ended before your words reached it, and ${attempt} attempt(s) to send them again also failed.`,
+          },
+        })
+      }
+    })()
+  }
+
   private onSessionExit(id: string, exitCode: number): void {
     const task = this.tasks.get(id)
     if (!task) return
     if (TERMINAL.includes(task.state)) return
+    // NEVER SEEN THE WORDS? THEN SENDING THEM AGAIN IS SAFE.
+    //
+    // The asymmetry is the whole design: a duplicated side effect is far worse
+    // than a task you have to re-say, so retrying requires POSITIVE evidence
+    // that nothing landed. With that evidence, the death is recoverable and the
+    // user should never even know it happened.
+    if (!task.deliveryProven && (task.redeliveries ?? 0) < TaskManager.MAX_REDELIVERIES) {
+      log.child({ taskId: id }).warn('session exited before delivery was proven', { exitCode })
+      return this.redeliver(id)
+    }
     log.child({ taskId: id }).warn('session exited mid-task', { exitCode, state: task.state })
     this.transition(id, 'failed', {
       state: 'failed',
@@ -1012,6 +1144,9 @@ export class TaskManager extends EventEmitter {
       const dispatchedAt = Date.now()
       ex.writeStdin(payload)
       tlog.event('task-dispatched', { bytes: payload.length })
+      // "Dispatched" means TYPED. Start watching for evidence it was actually
+      // received - see proveDelivery.
+      this.proveDelivery(id)
       // Show what was asked IMMEDIATELY, before any reply exists. The transcript
       // is the source of truth and replaces this the moment the turn ends — but
       // a card that is blank for the first thirty seconds of every task reads as

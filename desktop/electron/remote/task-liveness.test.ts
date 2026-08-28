@@ -45,9 +45,14 @@ test('a CLI that exits under a running task fails the task instead of leaving it
   // menu). Nothing was watching the PTY, so the card sat at "Working 9m" over a
   // terminal that had been dead for nine minutes — indistinguishable, to the
   // user, from a task that was simply slow.
+  //
+  // Delivery is PROVEN here: an unproven death is re-delivered instead (see
+  // task-redelivery.test.ts), and only a death after the agent demonstrably had
+  // the words is a real failure.
   const { mgr, die } = await manager()
   const id = await mgr.dispatch('do a thing', { agent: 'claude' })
   assert.equal(mgr.get(id)?.state, 'processing')
+  mgr.noteDeliveryProven(id, 'test')
 
   die(0)
   await new Promise((r) => setTimeout(r, 50))
@@ -60,6 +65,7 @@ test('a CLI that exits under a running task fails the task instead of leaving it
 test('the exit code is reported, because 0 and 1 mean different things', async () => {
   const { mgr, die } = await manager()
   const id = await mgr.dispatch('do a thing', { agent: 'claude' })
+  mgr.noteDeliveryProven(id, 'test')
   die(137)
   await new Promise((r) => setTimeout(r, 50))
   assert.match(mgr.get(id)?.error?.detail ?? '', /137/)
