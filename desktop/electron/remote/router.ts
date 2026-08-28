@@ -454,7 +454,22 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
         `codexProject (only with agent "codex-desktop", optional): the Codex project to create it inside, EXACTLY one of: ${avail.codexProjects.join(', ')}. Omit when the user names none.`,
       ] : []),
     ] : []),
-    `group: the workspace group for the task this command creates or continues — the answer to "what is this work ABOUT" (a project, artifact, or stream: a repo name, "launch video", "on-call"), NEVER an activity type ("coding", "research", "media"). EVERY task gets one where it has a subject — a ONE-OFF IS GROUPED TOO. The task's kind decides how long it lives, never whether the work is about something: an errand about a project belongs to that project's stream exactly as a session does. Decide DELIBERATELY, in this order: (1) if the user names a group in the command, use exactly their words; (2) check the LIVE GROUPS list above — JOIN one when this task belongs to that same stream of work (not merely when it mentions the same product/word: a group that swallows everything is no group); (3) otherwise CREATE one — 2-3 words, the subject in the user's own words ("videos", "launch video", "on-call"); (4) omit ONLY when the work is genuinely subject-less — not merely because it is small or quick. A group is the stream, not the deliverable: name what the user will still call this work next week.`,
+    `group: the workspace group for the task this command creates or continues — the answer to "what is this work ABOUT" (a project, artifact, or stream: a repo name, "launch video", "on-call"), NEVER an activity type ("coding", "research", "media"). EVERY task gets one where it has a subject — a ONE-OFF IS GROUPED TOO. The task's kind decides how long it lives, never whether the work is about something: an errand about a project belongs to that project's stream exactly as a session does.`,
+    // ALTITUDE, not word overlap. Both failure modes are the same mistake made
+    // at different levels, so the rule is stated once as a level test rather
+    // than as two competing warnings.
+    //
+    // The old text told the model to join "that same stream of work (not merely
+    // when it mentions the same product/word)". That parenthesis was aimed at
+    // one group swallowing the wall, but on 28 Aug it caused the opposite: the
+    // user said "Reddit marketing for Unmute" with "unmute marketing" already
+    // on the wall, and the model — reading "don't join on the product word" —
+    // minted "reddit marketing" beside it. A channel is a MEMBER of a stream.
+    `A group is a STREAM at the altitude the user thinks about their work — the shelf they would file this on, not the thing being produced. Getting the LEVEL right is the whole job, and it goes wrong in both directions:`,
+    `  • TOO NARROW (the common one): minting a stream for what is really one item inside an existing one. Channels, platforms, surfaces, audiences, individual deliverables and sub-topics are MEMBERS of a stream, not streams. Posting to Reddit and posting to Twitter are both the marketing stream; the pricing page and the docs page are both the website stream; this week's bug and last week's are both that project's stream.`,
+    `  • TOO BROAD: one stream that eats the wall because everything shares a product name. A product's marketing, its iOS app and its pricing are three streams, not one.`,
+    `The test, applied to each live group in turn: would the user expect to find this task sitting NEXT TO that group's existing work? If yes, JOIN it — even when this task's specific channel/page/deliverable is new, and even when the wording differs. Only when the answer is no for every one of them does a new stream exist. If the label you are about to create is an existing group plus a qualifier, it IS that group.`,
+    `Decide DELIBERATELY, in this order: (1) if the user names a group in the command, use exactly their words; (2) apply the test above to the LIVE GROUPS list and JOIN the one it matches; (3) otherwise CREATE one — 2-3 words, the subject in the user's own words ("videos", "launch video", "on-call"); (4) omit ONLY when the work is genuinely subject-less — not merely because it is small or quick. Name what the user will still call this work next week.`,
   ].join('\n')
 }
 
@@ -469,7 +484,38 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
 export function canonicalGroup(label: string | null | undefined, groups: GroupOption[]): string | undefined {
   const key = groupKey(label)
   if (!key) return undefined
-  return groups.find((g) => groupKey(g.label) === key)?.label
+  const exact = groups.find((g) => groupKey(g.label) === key)?.label
+  if (exact) return exact
+
+  // CONTAINMENT: the new label is an existing one PLUS a qualifier.
+  //
+  // Sprawl has two causes. Whether "reddit marketing" belongs to "unmute
+  // marketing" is a judgement about altitude that no string rule can make
+  // safely — merge on shared words and two real products with similar names
+  // collapse into one. That half lives in the prompt.
+  //
+  // This half does not need judgement. When one label's words strictly contain
+  // the other's, the longer is the shorter with detail bolted on — they cannot
+  // be about different subjects. "unmute marketing plan" arriving next to
+  // "unmute marketing" is the same stream said longer, which is how "notch ui"
+  // became "notch ui redesign".
+  //
+  // Only ever folds the LONGER label onto the shorter stored one. Folding down
+  // would let a bare word ("marketing") capture every stream that mentions it,
+  // which is the swallow-everything failure in the other direction.
+  const words = new Set(key.split(' ').filter(Boolean))
+  let best: { label: string; len: number } | undefined
+  for (const g of groups) {
+    const gk = groupKey(g.label)
+    if (!gk) continue
+    const gw = gk.split(' ').filter(Boolean)
+    if (gw.length >= words.size) continue          // never fold onto something longer or equal
+    if (!gw.every((w) => words.has(w))) continue   // must be a strict subset
+    // Most specific stored stream wins, so a three-word label prefers a
+    // two-word parent over a one-word grandparent.
+    if (!best || gw.length > best.len) best = { label: g.label, len: gw.length }
+  }
+  return best?.label
 }
 
 /**
@@ -916,7 +962,19 @@ export class Router {
   private async housekeep(): Promise<void> {
     this.decisionCount++
     if (this.ex?.alive) {
-      try { this.ex.writeStdin('/clear') } catch { /* best-effort */ }
+      // AND SUBMIT IT. Claude's TUI captures written text as a paste that sits
+      // one Enter short of running — the dispatch path above has always known
+      // this. Housekeeping did not, so for the life of this file `/clear` was
+      // typed into the input line and left there: the context was never wiped,
+      // and the stale command was still in the buffer when the next routing
+      // prompt was pasted in behind it. Measured in the field 28 Aug: routing
+      // took 15.9s on a session's first decision and 24.0s on its second, on
+      // near-identical prompts, because every turn kept every turn before it.
+      try {
+        this.ex.writeStdin('/clear')
+        await this.sleep(this.o.submitConfirmMs)
+        if (this.ex?.alive) this.ex.write('\r')
+      } catch { /* best-effort */ }
     }
     const aged = this.spawnedAt > 0 && this.clock() - this.spawnedAt > this.o.maxSessionMs
     if (this.decisionCount >= this.o.recycleEvery || aged) {
