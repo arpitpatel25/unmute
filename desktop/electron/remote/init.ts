@@ -56,6 +56,8 @@ import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismi
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask, type AgentAvailability } from './router'
 import { CodexRouterEngine } from './codex-router-engine'
+import { HeadlessRouterEngine } from './headless-router-engine'
+import { CodexExecRouterEngine } from './codex-exec-router-engine'
 import { knownProjects, projectSlug } from './projects'
 import { GroupRegistry, type GroupEntry } from './group-registry'
 import type { GroupOption } from './router'
@@ -5050,8 +5052,21 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ;(gardenTimer as { unref?: () => void }).unref?.()
   // The warm routing classifier (lazy — spawns on the first routed utterance,
   // idle-kills itself; tool-less, no glow). Star topology: Unmute is the hub.
+  // TRANSPORT, chosen by knob (see ConfigKnobs.routerHeadless).
+  //
+  // headless: a pipe and a schema. One JSON line in, one schema-checked MCP
+  //   tool call out — no PTY, so no paste that lands one Enter short, no
+  //   /clear that never submits, no trust dialog, no decision file.
+  // repl:     the original PTY classifier, kept whole and tested, so this is
+  //   a switch rather than a deletion.
+  //
+  // Everything either side of the transport — buildRoutingPrompt, parse,
+  // validate, the failsafe, dispatch — is shared and untouched.
+  const headlessRouting = getKnobs().routerHeadless === 1
+  log.event('router-transport', { transport: headlessRouting ? 'headless' : 'repl' })
   router = new Router({
     executorFactory: routerExecutorFactory,
+    engine: headlessRouting ? new HeadlessRouterEngine({ model: getModels().router }) : undefined,
     slot: 'claude',
     decisionTimeoutMs: getKnobs().routerDecisionTimeoutMs,
     maxSessionMs: getKnobs().routerMaxSessionMs,
@@ -5064,9 +5079,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
 
   // The Codex router. Same prompt, different transport — and a separate slot so
   // the two can never read each other's decision file.
+  // The Codex lane takes the same switch. It needs no MCP tool: `codex exec
+  // --output-schema` binds the schema to the model's response_format directly,
+  // which is structured output at the strongest point in the chain.
   codexRouter = new Router({
     executorFactory: routerExecutorFactory,   // unused: `engine` takes the path
-    engine: new CodexRouterEngine(),
+    engine: headlessRouting ? new CodexExecRouterEngine() : new CodexRouterEngine(),
     slot: 'codex',
     decisionTimeoutMs: getKnobs().routerDecisionTimeoutMs,
     maxSessionMs: getKnobs().routerMaxSessionMs,

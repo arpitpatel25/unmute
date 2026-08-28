@@ -220,7 +220,7 @@ export function fmtAge(ageSec: number): string {
 
 /** The instruction we type into the warm REPL each call. Self-contained: the
  *  router relies on THIS snapshot, not on accumulated memory (keeps it thin). */
-export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string | null, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability, groups: GroupOption[] = [], opts: { defer?: boolean } = {}): string {
+export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string | null, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability, groups: GroupOption[] = [], opts: { defer?: boolean; tool?: string } = {}): string {
   // GATING vs COSMETIC. With `defer`, the name and group rules are left out and
   // asked for afterwards (buildEnrichPrompt) — see there for why. Everything
   // that decides WHERE the utterance goes stays exactly as it was.
@@ -313,9 +313,19 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     // Everything BELOW this line — targeting rules, consent policy, kinds,
     // groups, skills, ops — is identical for both, and must stay that way: it
     // is how unmute thinks, not how a particular CLI talks.
-    decisionPath
-      ? `[Unmute router] You route a spoken command to where it belongs. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else — no tools, no browser, no research.`
-      : `[Unmute router] You route a spoken command to where it belongs. Reply with ONLY one line of JSON — no prose, no explanation, no code fence. Do nothing else — no tools, no browser, no research.`,
+    // THREE WAYS TO ANSWER, one prompt. The transport picks; the rules below
+    // are identical for all three and must stay that way.
+    //
+    // The `tool` form is NOT just a reworded "reply with JSON". A tool whose
+    // schema is deferred has to be LOADED before it can be called, and the
+    // other two forms end with "no tools" — which forbids exactly that, and
+    // makes the route silently never happen. Three spike runs died on it
+    // (28 Aug) before the cause was found, so the permission is explicit here.
+    opts.tool
+      ? `[Unmute router] You route a spoken command to where it belongs. Answer by calling the ${opts.tool} tool exactly once with your decision — load it with ToolSearch first if it is not already loaded. Beyond that do no work: no files, no browser, no research.`
+      : decisionPath
+        ? `[Unmute router] You route a spoken command to where it belongs. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else — no tools, no browser, no research.`
+        : `[Unmute router] You route a spoken command to where it belongs. Reply with ONLY one line of JSON — no prose, no explanation, no code fence. Do nothing else — no tools, no browser, no research.`,
     ``,
     `Spoken command: "${utterance}"`,
     ``,
@@ -453,7 +463,7 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
       `cleaned. Nothing is spawned.`,
     ] : []),
     ``,
-    `Write exactly: {"action":"new"|"continue"|"resume"|"speak"|"curate"${skillNames.length ? '|"skill_feedback"' : ''},"targetTaskId":"<id when continue/resume/speak>","intent":"<cleaned one-line command>"${defer ? '' : ',"name":"<2-4 word title for a new task>"'},"surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>","contextTaskId":"<task id whose record a NEW task should read, or omit>"${defer ? '' : ',"group":"<workspace group or omit>"'},"ops":[<curate ops, action "curate" only>]${skillNames.length ? ',"skill":"<listed skill name or omit>"' : ''}}`,
+    ...(opts.tool ? [] : [`Write exactly: {"action":"new"|"continue"|"resume"|"speak"|"curate"${skillNames.length ? '|"skill_feedback"' : ''},"targetTaskId":"<id when continue/resume/speak>","intent":"<cleaned one-line command>"${defer ? '' : ',"name":"<2-4 word title for a new task>"'},"surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>","contextTaskId":"<task id whose record a NEW task should read, or omit>"${defer ? '' : ',"group":"<workspace group or omit>"'},"ops":[<curate ops, action "curate" only>]${skillNames.length ? ',"skill":"<listed skill name or omit>"' : ''}}`]),
     ...(defer ? [] : [
     `name (for action "new"): a 2-4 word title for a session list in a UI — plain words, no quotes/punctuation. LEAD WITH THE SUBJECT, the thing the work is about, never with the action taken on it: the user will have more than one task about the same subject, so the title has to identify WHICH subject, with a distinguishing detail only after that is clear. The intent underneath already records what is being done. The group and the name answer DIFFERENT questions and you decide both in this turn: the group is the ongoing stream ("unmute"), the name is which piece of work inside it ("Notch freeze on wake") — so do not simply repeat the group, and do not make the name a verb phrase. e.g. "Unmute pricing model", "WhatsApp reply to Rishi", "Notch freeze on wake".`,
     ]),
@@ -842,7 +852,15 @@ export interface RouterOpts {
    * (file vs direct reply). See codex-router-engine.ts for why this is not an
    * AgentExecutor.
    */
-  engine?: { warm(): Promise<void>; decide(prompt: string, timeoutMs?: number): Promise<string | null>; dispose(): void }
+  engine?: {
+    warm(): Promise<void>
+    decide(prompt: string, timeoutMs?: number): Promise<string | null>
+    dispose(): void
+    /** Set when the engine answers by CALLING A TOOL rather than emitting JSON.
+     *  The prompt's opening instruction changes with it — and, critically, stops
+     *  saying "no tools", which would forbid loading this very tool. */
+    answerTool?: string
+  }
   /**
    * Distinguishes this router's working directory from the other one's.
    *
@@ -974,7 +992,7 @@ export class Router {
     // re-inject-on-stall) applies — every one of those exists for Claude's TUI.
     if (this.engine) {
       try {
-        const prompt = buildRoutingPrompt(utterance, tasks, null, projects, finished, coldSessions, wall, skillNames, avail, groups)
+        const prompt = buildRoutingPrompt(utterance, tasks, null, projects, finished, coldSessions, wall, skillNames, avail, groups, { tool: this.engine.answerTool })
         let raw = await this.engine.decide(prompt, this.o.decisionTimeoutMs)
         // ONE correction, then the failsafe. See validateDecision.
         const check = validateDecision(raw, { defer: this.o.deferNaming })
