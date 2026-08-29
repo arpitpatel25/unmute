@@ -25,7 +25,6 @@ import { randomUUID } from 'node:crypto'
 
 import { MemoryCapability, type MemoryCapabilityService } from '../capabilities/memory'
 import { HandoffCapability, type HandoffAdapters } from '../capabilities/handoff'
-import { SessionsCapability, type SessionAdapters } from '../capabilities/sessions'
 import { HistoryCapability, type HistoryService } from '../capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from '../capabilities/notetaker'
 import { AGENT_PRINCIPLES } from '../constitution'
@@ -85,7 +84,6 @@ function realTools(): Array<Record<string, unknown>> {
   const modules = [
     new MemoryCapability({} as MemoryCapabilityService),
     new HandoffCapability({} as HandoffAdapters),
-    new SessionsCapability({} as SessionAdapters),
     new HistoryCapability({} as HistoryService),
     new NotetakerCapability({} as NotetakerAdapters),
   ]

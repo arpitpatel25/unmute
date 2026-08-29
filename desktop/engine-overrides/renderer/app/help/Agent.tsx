@@ -5,9 +5,6 @@
 //
 //   agent/constitution.ts        what it is told about itself, verbatim
 //   agent/caption.ts             one line, ≤200 chars, 2.5–8s dwell
-//   agent/sessions/sweeper.ts    idle 5 min, tick 1 min, the kill switch
-//   agent/sessions/summary.ts    append-only `done`, no regeneration
-//   agent/sessions/record.ts     recent-sessions.md, written not injected
 //   agent/capabilities/*.ts      the 21 tools and their consequence classes
 //   providers/claude-headless.ts the allowlist and the denylist, with reasons
 

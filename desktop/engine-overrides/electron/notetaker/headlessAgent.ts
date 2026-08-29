@@ -129,7 +129,13 @@ export function spawnAndCollect(
 export function headlessArgvFor(provider: HeadlessProvider): [string, string[]] {
   return provider === 'claude'
     ? ['claude', ['-p']]
-    : ['codex', ['exec', '--skip-git-repo-check']]
+    // --ephemeral: DO NOT PERSIST A SESSION FILE. Without it every background
+    // call writes a full rollout into ~/.codex/sessions — indistinguishable
+    // from a session the user ran themselves, and counted as one by anything
+    // that scans that directory. Headless does not imply ephemeral; Codex
+    // persists exactly as an interactive run does unless asked not to, and
+    // `cwd` does not move where it writes.
+    : ['codex', ['exec', '--skip-git-repo-check', '--ephemeral']]
 }
 
 /**

@@ -90,10 +90,6 @@ import { agentConstitution } from './agent/constitution'
 import { MAX_CAPTION_LENGTH, presentAnswer } from './agent/caption'
 import { nextConversation, type Conversation } from './agent/continuity'
 import { HandoffCapability } from './agent/capabilities/handoff'
-import { SessionsCapability } from './agent/capabilities/sessions'
-import { SessionStore, defaultCachePath } from './agent/sessions/store'
-import { defaultRecordPath } from './agent/sessions/record'
-import { SessionSweeper } from './agent/sessions/sweeper'
 import { ProviderHealth } from './agent/providerHealth'
 import { HistoryCapability } from './agent/capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
@@ -749,7 +745,6 @@ async function runAgentHeadless(
 let unmuteAgentSupervisor: AgentRunSupervisor | null = null
 let unmuteAgentController: UnmuteAgentController | null = null
 let unmuteAgentIndex: ReturnType<typeof openSqlCipherMemoryIndex> | null = null
-let unmuteAgentSweeper: { stop(): void } | null = null
 let unmuteAgentGeneration = 0
 let mcpServer: McpServer | null = null
 let mcpServerGeneration = 0
@@ -1008,8 +1003,6 @@ function disposeUnmuteAgent(): void {
   const controller = unmuteAgentController
   const index = unmuteAgentIndex
   // The sweeper spends money in the background; it must not outlive the Agent.
-  try { unmuteAgentSweeper?.stop() } catch { /* already stopped */ }
-  unmuteAgentSweeper = null
   unmuteAgentSupervisor = null
   unmuteAgentController = null
   unmuteAgentTokens = null
@@ -1116,30 +1109,15 @@ async function initializeUnmuteAgent(): Promise<void> {
     await memory.initialize()
     const tokens = new AgentTokenStore()
     const journal = new AgentJournal({ root: join(root, 'runtime') })
-    // The session index is a cache over transcripts that already sit in
-    // plaintext on this disk, so it lives beside the Agent's runtime rather
-    // than inside its encrypted memory: deleting it costs a rescan and
-    // nothing else, and it must be able to fail without risking a memory.
-    const sessionStore = new SessionStore({ cachePath: defaultCachePath(root) })
-    const sessionRecordPath = defaultRecordPath(root)
-    // Keeps sessions/recent-sessions.md current in the background. Absent
-    // runHeadless (a build without the notetaker tree wired) simply means no
-    // summaries are written and the Agent reads transcripts itself, exactly as
-    // a bare Claude Code session would.
-    const runSummary = runHeadlessSummary
-    const sessionSweeper = runSummary
-      ? new SessionSweeper({
-        store: sessionStore,
-        recordPath: sessionRecordPath,
-        // The provider choice stays where the setting lives; the injected
-        // function only knows how to spawn one.
-        // Routed through the fallback runner, not the raw setting: a sweep is
-        // unattended background work, so a dead provider must not silently
-        // stop it for hours (it did — see providerHealth.ts's header).
-        run: (input) => runAgentHeadless(input),
-        parseJson: (raw) => JSON.parse(raw),
-      })
-      : null
+    // SESSION SUMMARIES REMOVED. A background sweep re-derived summaries for
+    // every session in a rolling 5-day window, on a 60s timer, by spawning one
+    // CLI per session. It invented its own workload: each spawn wrote a rollout
+    // file into ~/.codex/sessions, the scanner then found those files as new
+    // sessions to summarise, and failures never advanced a cursor so the same
+    // work retried forever. Measured on one machine: ~17,000 CLI launches and
+    // ~44,000 session files a day, spending the user's own CLI plan on work
+    // that produced nothing. The Agent now reads transcripts directly, exactly
+    // as a bare Claude Code session does.
     const constitutionPath = join(root, 'runtime', 'constitution.md')
     mkdirSync(dirname(constitutionPath), { recursive: true, mode: 0o700 })
     writeFileSync(constitutionPath, AGENT_CONSTITUTION, { encoding: 'utf8', mode: 0o600 })
@@ -1192,53 +1170,12 @@ async function initializeUnmuteAgent(): Promise<void> {
           return copyHistoryToClipboard(payload.text, payload.attachments)
         },
       }),
-      // What the user has been working on. Backed by the task manager, which
-      // already holds every session Unmute created — so v1 needs no filesystem
-      // scanner, and the Agent's OWN runs are excluded by construction because
-      // they are not tasks.
-      // EVERY session on this machine, not the ones Unmute happened to start.
-      // Backed by the on-disk index (agent/sessions/), so a session the user
-      // ran themselves in a terminal is as reachable as one from a card.
-      // ONE ADAPTER, because only resuming needs the app. Listing, searching
-      // and reading became the record file at sessions/recent-sessions.md,
-      // which the Agent opens with the Read and Grep it already holds — see
-      // D1 in the architecture decisions.
-      new SessionsCapability({
-        async resume(input) {
-          if (!manager) throw new Error('Unmute Remote is not initialized')
-          await sessionStore.load()
-          const record = sessionStore.find(input.sessionId)
-          if (!record) throw new Error('That session is not on this machine')
-
-          // An Unmute task already has a card and a runtime: wake that one
-          // rather than minting a second card for the same conversation.
-          if (record.unmuteTaskId && manager.get(record.unmuteTaskId)) {
-            await manager.resume(record.unmuteTaskId)
-            // The same path the router uses to land a follow-up in a live
-            // task, so a resumed session receives the request exactly as it
-            // would have by voice.
-            if (input.intent) manager.followUp(record.unmuteTaskId, input.intent)
-            return { taskId: record.unmuteTaskId }
-          }
-
-          // A session Unmute never started has no card. Forking it into a new
-          // task keeps the whole conversation and gives it one — the same
-          // dispatch the Remote key uses, so nothing here is a special case.
-          const taskId = await manager.dispatch(
-            input.intent ?? 'Continue from where we left off.',
-            {
-              kind: 'session',
-              agent: record.harness,
-              ...(record.sessionId ? { forkFromSessionId: record.sessionId } : {}),
-              ...(record.cwd ? { cwd: record.cwd } : {}),
-            },
-          )
-          log.event('agent-session-resumed', {
-            taskId, sessionId: record.sessionId, harness: record.harness,
-          })
-          return { taskId }
-        },
-      }),
+      // RESUMING A PAST SESSION REMOVED WITH THE SUMMARY SWEEP. Looking a
+      // session up by id was served by the sweep's on-disk index, which only
+      // existed because the sweep maintained it — see the note at its
+      // construction site above for why that machinery is gone. Resuming an
+      // Unmute task still works through the card; a session Unmute never
+      // started is reachable by reading its transcript.
       // What the user recorded. Optional: only present when the notetaker
       // feature wired its adapters in via RemoteInitDeps.notetaker — a build
       // without it simply never registers this capability, the same as any
@@ -1404,8 +1341,6 @@ async function initializeUnmuteAgent(): Promise<void> {
     unmuteAgentSupervisor = supervisor
     unmuteAgentController = controller
     unmuteAgentIndex = index
-    unmuteAgentSweeper = sessionSweeper
-    sessionSweeper?.start()
     pendingIndex = null
     pendingSupervisor = null
     pendingController = null

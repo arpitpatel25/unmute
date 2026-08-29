@@ -16,11 +16,14 @@ test('the raw-search fallback is named, not merely permitted', () => {
   assert.match(AGENT_PRINCIPLES, /~\/\.codex\/sessions/)
 })
 
-test('the ladder runs record, then older summaries, then the disk', () => {
-  const record = AGENT_PRINCIPLES.indexOf('READ THAT FILE FIRST')
-  const fallback = AGENT_PRINCIPLES.indexOf('WHEN THE RECORD DOES NOT HAVE IT')
-  assert.ok(record > 0 && fallback > record, 'the fallback follows the record')
-  assert.match(AGENT_PRINCIPLES, /shortcut, never the edge of what you can see/)
+test('there is one retrieval rule and it points at the transcripts', () => {
+  // The digest tier was removed with the summary sweep, so the ladder is flat:
+  // no record to read first, and nothing to fall back FROM. A lingering
+  // "read the record first" would send the Agent to a file nothing writes.
+  assert.doesNotMatch(AGENT_PRINCIPLES, /READ THAT FILE FIRST/)
+  assert.doesNotMatch(AGENT_PRINCIPLES, /recent-sessions\.md/)
+  assert.match(AGENT_PRINCIPLES, /\.claude\/projects/)
+  assert.match(AGENT_PRINCIPLES, /\.codex\/sessions/)
   assert.match(AGENT_PRINCIPLES, /only true once you have actually looked/)
 })
 
@@ -39,7 +42,9 @@ test('the ladder is sealed off from the memory-retrieval rule', () => {
 })
 
 test('the record is named by path, so there is one place to look', () => {
-  assert.match(AGENT_PRINCIPLES, /sessions\/recent-sessions\.md/)
+  // The pre-built digest was withdrawn with the summary sweep; the Agent is
+  // pointed at the transcripts on disk instead.
+  assert.match(AGENT_PRINCIPLES, /\.claude\/projects\//)
 })
 
 /**
