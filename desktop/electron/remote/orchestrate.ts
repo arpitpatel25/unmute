@@ -43,7 +43,10 @@ export function createOrchestrateWindow(): BrowserWindow {
     resizable: false,
     fullscreenable: false,
     roundedCorners: true,
-    backgroundColor: '#0d0f12', // Ops Console bg — no opaque flash before paint
+    // Matches the wall's own ground so there is no grey flash before React
+    // paints. This stayed #0d0f12 when the palette went black, which put a
+    // charcoal frame behind a black surface for the first frames of every open.
+    backgroundColor: '#000000',
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,

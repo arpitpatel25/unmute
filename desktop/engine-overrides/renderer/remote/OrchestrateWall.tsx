@@ -46,8 +46,12 @@ const C = {
   bg: '#000000',
   surface: '#000000',
   surfaceHi: '#000000',
-  border: '#1c1d20',
-  borderHi: '#2b2d31',
+  // PITCH BLACK MEANS THE EDGES TOO. #1c1d20 / #2b2d31 were chosen against the
+  // old grey ground; against #000 they are the brightest thing on the surface
+  // and the whole panel reads as charcoal because of them. Taken down to the
+  // faintest edge that still separates a card from the ground.
+  border: '#0f0f11',
+  borderHi: '#191a1c',
   nameText: '#e8eaed',
   midText: '#9aa0a8',
   dimText: '#5b616b',
@@ -625,6 +629,22 @@ function RailSection({ title, children }: { title: string; children: React.React
 type CapturePhase = 'listening' | 'transcribing' | 'routing' | 'idle'
 
 export default function OrchestrateWall() {
+  // PAINT THE DOCUMENT ITSELF, not just our root.
+  //
+  // The shared stylesheet gives `body` --color-cream, and the wall's root is an
+  // absolutely-positioned rect. Anything the rect does not cover — the window's
+  // rounded corners, a sub-pixel edge, the frame before React mounts — shows
+  // whatever is behind it, which is why the ground read as a shade of black
+  // rather than black even with every token at #000.
+  useEffect(() => {
+    const html = document.documentElement
+    const prevHtml = html.style.background
+    const prevBody = document.body.style.background
+    html.style.background = C.bg
+    document.body.style.background = C.bg
+    return () => { html.style.background = prevHtml; document.body.style.background = prevBody }
+  }, [])
+
   const { tasks, answer, kill, remove, resume, rerun } = useRemoteTasks()
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const [full, setFull] = useState(false)
@@ -1258,16 +1278,16 @@ export default function OrchestrateWall() {
         @keyframes wall-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }
         @keyframes ow-fade-in { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
         ::-webkit-scrollbar { width: 8px; height: 8px }
-        ::-webkit-scrollbar-thumb { background: #23272e; border-radius: 4px }
-        ::-webkit-scrollbar-thumb:hover { background: #323843 }
+        ::-webkit-scrollbar-thumb { background: #141416; border-radius: 4px }
+        ::-webkit-scrollbar-thumb:hover { background: #1f1f22 }
         ::-webkit-scrollbar-corner { background: transparent }
         .ow-card { transition: border-color 140ms ease, background 140ms ease, transform 140ms ease; animation: ow-fade-in 180ms ease }
-        .ow-card:hover { border-color: #3a4150 !important; background: #181c22 !important; transform: translateY(-1px) }
+        .ow-card:hover { border-color: #26272a !important; background: #0a0a0b !important; transform: translateY(-1px) }
         .ow-card:active { transform: none }
         .ow-key { transition: color 120ms ease, border-color 120ms ease, background 120ms ease }
-        .ow-key:hover { color: #e8eaed !important; border-color: #3a4150 !important; background: rgba(255,255,255,0.04) }
+        .ow-key:hover { color: #e8eaed !important; border-color: #26272a !important; background: rgba(255,255,255,0.03) }
         .ow-row { border-radius: 5px; transition: background 120ms ease }
-        .ow-row:hover { background: rgba(255,255,255,0.045) }
+        .ow-row:hover { background: rgba(255,255,255,0.035) }
         .ow-banner-btn { transition: filter 120ms ease }
         .ow-banner-btn:hover { filter: brightness(1.15) }
       `}</style>
