@@ -74,7 +74,7 @@ export interface DBMeeting {
  *  writes it anymore; it's never surfaced past getNotetakerSettings(). */
 export interface NotetakerSettingsRow {
   auto_pipeline_enabled: 0 | 1
-  provider: 'claude' | 'codex' | 'managed'
+  provider: 'claude' | 'codex'
   cleanup_prompt: string | null
   summary_prompt: string | null
 }

@@ -25,12 +25,12 @@
 
 import { useEffect, useState } from 'react'
 
-type Provider = 'claude' | 'codex' | 'managed'
+type Provider = 'claude' | 'codex'
 
 type PipelineSettings = {
   provider: Provider
   summary_prompt: string | null
-  availability: { claude: boolean; codex: boolean; managed: boolean }
+  availability: { claude: boolean; codex: boolean }
   default_summary_instructions: string
 }
 
@@ -47,7 +47,6 @@ function api(): API {
 const PROVIDER_LABEL: Record<Provider, string> = {
   claude: 'Claude Code CLI',
   codex: 'Codex CLI',
-  managed: 'Unmute Cloud',
 }
 
 export function NotetakerSettings() {
@@ -63,7 +62,7 @@ export function NotetakerSettings() {
     api().notetakerSavePipelineSettings?.(patch)
   }
 
-  const noProviderAvailable = !!settings && !settings.availability.claude && !settings.availability.codex && !settings.availability.managed
+  const noProviderAvailable = !!settings && !settings.availability.claude && !settings.availability.codex
 
   return (
     <div className="flex flex-col gap-6">
@@ -94,7 +93,7 @@ export function NotetakerSettings() {
           <div className="mt-3 flex flex-col gap-4">
             <div>
               <div className="text-[12px] font-medium text-ink mb-1.5">Provider</div>
-              {(['claude', 'codex', 'managed'] as const).map((id) => {
+              {(['claude', 'codex'] as const).map((id) => {
                 const available = settings.availability[id]
                 const selected = settings.provider === id
                 return (

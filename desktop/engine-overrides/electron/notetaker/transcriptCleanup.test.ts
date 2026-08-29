@@ -116,9 +116,9 @@ describe('cleanupTranscript', () => {
     if (result.ok) assert.equal(result.segments[0].text, 'hello')
   })
 
-  test('the managed connected agent follows the same text-only cleanup contract', async () => {
+  test('a Devanagari segment follows the same text-only cleanup contract', async () => {
     const runner = fakeRunner({ ok: true, output: JSON.stringify([{ id: 0, text: 'namaste' }]) })
-    const result = await cleanupTranscript([seg('नमस्ते')], 'managed', runner)
+    const result = await cleanupTranscript([seg('नमस्ते')], 'codex', runner)
     assert.equal(result.ok, true)
     if (result.ok) assert.equal(result.segments[0].text, 'namaste')
   })

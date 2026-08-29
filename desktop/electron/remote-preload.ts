@@ -189,10 +189,10 @@ export interface NotetakerTranscriptSegment {
 // because they cannot safely run a background one-shot note request.
 export interface NotetakerPipelineSettings {
   auto_pipeline_enabled: 0 | 1
-  provider: 'claude' | 'codex' | 'managed'
+  provider: 'claude' | 'codex'
   cleanup_prompt: string | null
   summary_prompt: string | null
-  availability: { claude: boolean; codex: boolean; managed: boolean }
+  availability: { claude: boolean; codex: boolean }
   default_summary_instructions: string
 }
 

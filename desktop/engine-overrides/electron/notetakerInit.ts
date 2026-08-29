@@ -49,7 +49,6 @@
 // Per docs/superpowers/specs/2026-08-23-meeting-notetaker-detection-capture.md.
 
 import { Notification, dialog, ipcMain, app } from 'electron'
-import { getPaywallAccessToken, getPaywallEngineMode } from './paywall/paywall-glue'
 import path from 'path'
 import fs from 'fs'
 import { keyboardManager } from './keyboard'
@@ -471,11 +470,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
   ipcMain.handle('notetaker:get-pipeline-settings', async () => {
     const settings = getNotetakerSettings()
-    const cliAvailability = (await hooks.getAgentAvailability?.()) ?? { claude: false, codex: false }
-    const availability = {
-      ...cliAvailability,
-      managed: !!getPaywallAccessToken() && getPaywallEngineMode() !== 'local',
-    }
+    const availability = (await hooks.getAgentAvailability?.()) ?? { claude: false, codex: false }
     // The renderer needs the real default EDITABLE summary instructions
     // text to SHOW (not just infer "using default" from a null override)
     // — see NotetakerSettings.tsx's InstructionsEditor, which seeds its
@@ -1636,9 +1631,11 @@ async function runSummaryStage(meetingId: string, segments: TranscriptSegment[],
 }
 
 /** Keep automatic processing on a provider that is actually connected. A
- * stale/default Claude selection should not fail a meeting when Codex (or
- * managed cloud) is the available agent. The chosen fallback is persisted so
- * Settings and subsequent meetings reflect the same decision. */
+ * stale/default Claude selection should not fail a meeting when Codex is the
+ * agent the user actually has signed in — an expired, rate-limited or
+ * uninstalled CLI has a real local alternative. Only the user's OWN agents
+ * are candidates; see the fallback list below. The chosen fallback is
+ * persisted so Settings and subsequent meetings reflect the same decision. */
 async function getAvailablePipelineSettings(): Promise<ReturnType<typeof getNotetakerSettings>> {
   const settings = getNotetakerSettings()
   let cli = { claude: false, codex: false }
@@ -1651,10 +1648,14 @@ async function getAvailablePipelineSettings(): Promise<ReturnType<typeof getNote
   const availability: Record<NoteProvider, boolean> = {
     claude: cli.claude,
     codex: cli.codex,
-    managed: !!getPaywallAccessToken() && getPaywallEngineMode() !== 'local',
   }
   if (availability[settings.provider]) return settings
-  const fallback = (['codex', 'claude', 'managed'] as NoteProvider[]).find((provider) => availability[provider])
+  // Fall back ONLY between the user's own CLI agents — the other one is
+  // already installed and signed in, so a expired/rate-limited/timed-out
+  // provider has a real local alternative. There is deliberately no cloud
+  // entry here: a meeting transcript must never be routed to a managed
+  // model on the user's behalf.
+  const fallback = (['codex', 'claude'] as NoteProvider[]).find((provider) => availability[provider])
   if (!fallback) return settings
   saveNotetakerSettings({ provider: fallback })
   log.event('pipeline-provider-fallback', { requested: settings.provider, selected: fallback })

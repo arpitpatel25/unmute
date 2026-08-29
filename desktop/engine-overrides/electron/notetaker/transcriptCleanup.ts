@@ -139,7 +139,10 @@ export type CleanupResult =
   | { ok: true; segments: TranscriptSegment[] }
   | { ok: false; error: string }
 
-export type CleanupProvider = HeadlessProvider | 'managed'
+/** Cleanup runs on the user's own connected CLI agent only — see
+ *  notesSummary.ts's NoteProvider for why a managed cloud model is not an
+ *  option here. */
+export type CleanupProvider = HeadlessProvider
 
 type CleanupRunner = (
   provider: CleanupProvider,
@@ -150,19 +153,7 @@ async function runCleanupAgent(
   provider: CleanupProvider,
   input: string,
 ): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
-  if (provider !== 'managed') return runHeadlessAgent(provider, input)
-  try {
-    const { tryManagedLLM } = await import('../paywall/paywall-route')
-    const result = await tryManagedLLM([
-      { role: 'system', content: 'Clean the transcript conservatively. Follow the requested JSON contract exactly.' },
-      { role: 'user', content: input },
-    ], { temperature: 0.1, maxTokens: 8000 })
-    return result?.text
-      ? { ok: true, output: result.text }
-      : { ok: false, error: 'Managed cloud agent is unavailable. Connect a supported note agent and retry.' }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
+  return runHeadlessAgent(provider, input)
 }
 
 /**
