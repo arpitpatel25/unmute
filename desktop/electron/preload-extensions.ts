@@ -326,6 +326,10 @@ export const paywallPreloadExtensions = {
   },
 
   /** Surface material: 'system' (default — follows Reduce Transparency) | 'glass' | 'solid'. */
+  getSurfaceTone: (): Promise<'spaceGray' | 'black'> =>
+    ipcRenderer.invoke('remote:get-surface-tone'),
+  setSurfaceTone: (v: string): Promise<'spaceGray' | 'black'> =>
+    ipcRenderer.invoke('remote:set-surface-tone', v),
   getSurfaceAppearance: (): Promise<'system' | 'glass' | 'solid'> =>
     ipcRenderer.invoke('remote:get-surface-appearance'),
   setSurfaceAppearance: (v: 'system' | 'glass' | 'solid'): Promise<'system' | 'glass' | 'solid'> =>

@@ -4613,6 +4613,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         bootstrap: () => ({
           type: 'bootstrap',
           appearance: settings.get('surfaceAppearance') || 'solid',
+          // Sent at bootstrap, not only on change: otherwise a black surface
+          // paints Space Gray for the first frames of every launch.
+          surfaceTone: settings.get('surfaceTone') || 'spaceGray',
           surfaceFill: settings.get('surfaceFill') ?? 0.8,
           showInScreenCapture: screenCaptureVisibility(settings.get('showInScreenCapture')).show,
           terminalAutoExpand: settings.get('notchTerminalAutoExpand') === true,
@@ -6076,6 +6079,19 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     settings.set('surfaceAppearance', value)
     notchClient?.send({ type: 'appearance', value } as never)
     log.event('surface-appearance-set', { value })
+    return value
+  })
+
+  // THE GROUND COLOUR, separate from the material above. Space Gray is what
+  // shipped before this was a choice and stays the default, so no existing
+  // surface changes under anyone; black matches the notch housing's own colour
+  // so an expanded surface reads as one object with the mass above it.
+  ipcMain.handle('remote:get-surface-tone', async () => settings.get('surfaceTone') || 'spaceGray')
+  ipcMain.handle('remote:set-surface-tone', async (_e, v: string) => {
+    const value = v === 'black' ? 'black' : 'spaceGray'
+    settings.set('surfaceTone', value)
+    notchClient?.send({ type: 'surfaceTone', value } as never)
+    log.event('surface-tone-set', { value })
     return value
   })
 

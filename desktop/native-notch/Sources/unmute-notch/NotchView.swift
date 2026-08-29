@@ -22,6 +22,11 @@ import SwiftUI
 // black against the housing and put back the join by another route.
 struct NotchView: View {
     @ObservedObject var model: NotchModel
+    /// OBSERVED, not merely read. Theme.plane and Theme.railBg follow
+    /// Appearance.tone, and a static computed colour changing does not by
+    /// itself invalidate a view — without this the tone setting would compile,
+    /// log, and repaint nothing until the next unrelated state change.
+    @ObservedObject private var appearance = Appearance.shared
     /// Content inset that clears the physical cutout / menu bar on the EXPANDED
     /// surfaces (display safety: no control ever renders under the housing).
     let topInset: CGFloat

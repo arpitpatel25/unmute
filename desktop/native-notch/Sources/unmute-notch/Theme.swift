@@ -100,10 +100,27 @@ enum Theme {
 
     // MARK: - Content layer (opaque; never glass)
 
-    /// The plane that sits inside the glass shell. Deliberately near-opaque:
-    /// body text has to stand on solid ground. All translucency is spent on the
-    /// shell around it.
-    static let plane        = Color(red: 0.086, green: 0.094, blue: 0.110).opacity(0.94)
+    /// The plane that sits inside the glass shell. Body text has to stand on
+    /// solid ground, so this is opaque; all translucency is spent on the shell
+    /// around it.
+    ///
+    /// BLACK, AND THE SAME BLACK AS THE MASS. This was a dark blue-grey —
+    /// rgb(22,24,28) at 94% — which is what made every expanded surface read as
+    /// grey against the housing's own pure black sitting directly above it. One
+    /// object should not be two colours depending on which part of it you are
+    /// looking at.
+    ///
+    /// Fully opaque in black rather than 0.94: at 94% a bright desktop behind
+    /// the surface lifted the black back towards grey, which is the exact thing
+    /// that treatment exists to avoid.
+    ///
+    /// A `var`, not a `let`, because it now follows Appearance.tone. Views
+    /// re-read it when that @Published value changes.
+    static var plane: Color {
+        Appearance.shared.tone == .black
+            ? Color.black
+            : Color(red: 0.086, green: 0.094, blue: 0.110).opacity(0.94)
+    }
     /// A raised element ON the plane — cards, buttons, fields.
     static let raised       = Color.white.opacity(0.055)
     static let raisedHover  = Color.white.opacity(0.085)
@@ -118,7 +135,14 @@ enum Theme {
     static let onBlackEdge  = Color.white.opacity(0.14)
     static let hairlineSoft = Color.white.opacity(0.06)
     /// The sidebar wash. Edge-to-edge per Golden Gate — no floating inset.
-    static let railBg       = Color.white.opacity(0.028)
+    ///
+    /// A 2.8% white lift is right on the blue-grey plane and reads as a
+    /// distinct grey column against black, where the hairline alone separates
+    /// the rail — the same reasoning that turned the dashboard's cards from
+    /// fills into edges.
+    static var railBg: Color {
+        Appearance.shared.tone == .black ? Color.clear : Color.white.opacity(0.028)
+    }
 
     // Legacy aliases, kept so call sites read naturally. Both now resolve to
     // the content-layer tokens above rather than their old hand-mixed values.
@@ -250,6 +274,18 @@ enum SurfaceAppearance: String, Codable {
     case system, glass, solid
 }
 
+/// THE GROUND EVERY SURFACE STANDS ON. Separate from `SurfaceAppearance`,
+/// which decides the MATERIAL (fixed vs live glass); this decides its COLOUR.
+///
+/// `spaceGray` is the original rgb(22,24,28) — a dark blue-grey. `black` is the
+/// same black the notch housing itself is, so an expanded surface reads as one
+/// object with the mass above it instead of a grey panel hanging off a black
+/// cutout. Which of those is "right" turned out to be taste, so it is a choice
+/// rather than a decision made here.
+enum SurfaceTone: String, Codable {
+    case spaceGray, black
+}
+
 /// Live material state, recomputed whenever the system preference changes.
 final class Appearance: ObservableObject {
     static let shared = Appearance()
@@ -266,6 +302,10 @@ final class Appearance: ObservableObject {
     @Published var preference: SurfaceAppearance = .solid {
         didSet { recompute() }
     }
+    /// The user's ground colour. Defaults to `.spaceGray` — what shipped
+    /// before this was a setting, so nobody's surface changes under them.
+    @Published var tone: SurfaceTone = .spaceGray
+
     /// Resolved: should this surface render translucent right now?
     @Published private(set) var translucent: Bool = true
 

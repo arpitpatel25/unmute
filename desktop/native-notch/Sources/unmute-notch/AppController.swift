@@ -400,6 +400,14 @@ final class AppController: NSObject, NotchResizing {
         case .notchGeometry:
             recomputeGeometry("explicit-push")
 
+        case let .surfaceTone(tone):
+            NotchLog.log("CMD surfaceTone \(tone.rawValue)")
+            // Setting the @Published value is the whole job: Theme.plane and
+            // Theme.railBg read Appearance.shared.tone, and every surface reads
+            // those, so SwiftUI repaints an already-open surface on its own.
+            // Same contract as `appearance` directly below.
+            Appearance.shared.tone = tone
+
         case let .appearance(pref):
             NotchLog.log("CMD appearance \(pref.rawValue)")
             // Reaches the expanded panel and the pill ONLY. The bar-level mass

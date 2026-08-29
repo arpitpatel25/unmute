@@ -84,6 +84,8 @@ interface TriggerState { enabled: boolean; locked: boolean }
 interface SettingsApi {
   getSurfaceAppearance?: () => Promise<string>
   setSurfaceAppearance?: (v: string) => Promise<string>
+  getSurfaceTone?: () => Promise<string>
+  setSurfaceTone?: (v: string) => Promise<string>
   getIphoneMicEnabled?: () => Promise<boolean>
   getPauseMediaWhileDictating?: () => Promise<boolean>
   setPauseMediaWhileDictating?: (on: boolean) => Promise<boolean>
@@ -282,6 +284,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // options exist because an older surface cannot follow the system slider, and
   // because an always-on-top panel is a reasonable thing to want solid.
   const [surfaceAppearance, setSurfaceAppearance] = useState<'system' | 'glass' | 'solid'>('system')
+  const [surfaceTone, setSurfaceTone] = useState<'spaceGray' | 'black'>('spaceGray')
   // DEFAULT ON, matching the setting it writes (remote/init.ts:198 —
   // `overlayAutoPresent: true`). A surface that never comes forward by itself is
   // a surface you have to remember to look at.
@@ -342,6 +345,9 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
       .catch(() => {})
     window.electronAPI.getWidgetPosition().then((v: string) => {
       if (v === 'center' || v === 'right') setWidgetPosition(v)
+    })
+    void api().getSurfaceTone?.().then((v) => {
+      if (v === 'black' || v === 'spaceGray') setSurfaceTone(v)
     })
     api().getSurfaceAppearance?.()
       .then((v) => { if (v === 'system' || v === 'glass' || v === 'solid') setSurfaceAppearance(v) })
@@ -444,6 +450,12 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
       'system' | 'glass' | 'solid'
     setSurfaceAppearance(v)
     void api().setSurfaceAppearance?.(v)
+  }
+
+  function handleSurfaceToneChange(value: string) {
+    const v = (value === 'black' ? 'black' : 'spaceGray') as 'spaceGray' | 'black'
+    setSurfaceTone(v)
+    void api().setSurfaceTone?.(v)
   }
 
   function handleVoiceFeedbackChange(next: boolean): void {
@@ -806,6 +818,62 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                 value={surfaceAppearance}
                 onChange={handleSurfaceAppearanceChange}
               />
+            </SettingRow>
+
+            {/* SURFACE TONE — the ground colour, not the material.
+                Shown WITH a preview because the difference is small in words
+                ("dark blue-grey" vs "black") and obvious on sight. The swatches
+                are the real values: Space Gray is rgb(22,24,28), black is the
+                same black the notch housing already is. */}
+            <SettingRow
+              label="Surface tone"
+              description="The colour every expanded surface stands on. Black matches the notch itself; Space Gray is a shade lighter."
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end' }}>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {([
+                    { v: 'spaceGray' as const, label: 'Space Gray', plane: 'rgb(22,24,28)', rail: 'rgba(255,255,255,0.028)' },
+                    { v: 'black' as const,     label: 'Black',      plane: '#000000',       rail: 'transparent' },
+                  ]).map((o) => (
+                    <button
+                      key={o.v}
+                      type="button"
+                      onClick={() => handleSurfaceToneChange(o.v)}
+                      aria-pressed={surfaceTone === o.v}
+                      style={{
+                        padding: 0, cursor: 'pointer', background: 'none',
+                        border: `2px solid ${surfaceTone === o.v ? '#3b82f6' : 'transparent'}`,
+                        borderRadius: 12, lineHeight: 0,
+                      }}
+                    >
+                      {/* A miniature of the real surface: black notch mass on
+                          top, the plane below it, a card and a rail on that
+                          plane. The whole point of the setting is how those
+                          two blacks sit together, so the mass must be here. */}
+                      <div style={{
+                        width: 132, height: 74, borderRadius: 10, overflow: 'hidden',
+                        background: o.plane, border: '1px solid rgba(255,255,255,0.10)',
+                        display: 'flex', flexDirection: 'column',
+                      }}>
+                        <div style={{ height: 13, background: '#000', flex: 'none' }} />
+                        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+                          <div style={{ width: 34, background: o.rail, borderRight: '1px solid rgba(255,255,255,0.06)' }} />
+                          <div style={{ flex: 1, padding: 7 }}>
+                            <div style={{ height: 9, borderRadius: 3, background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.10)', marginBottom: 5 }} />
+                            <div style={{ height: 9, borderRadius: 3, background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.10)', marginBottom: 5 }} />
+                            <div style={{ height: 5, width: '62%', borderRadius: 2, background: 'rgba(255,255,255,0.16)' }} />
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{
+                        fontSize: 11, lineHeight: '18px', textAlign: 'center',
+                        color: surfaceTone === o.v ? '#3b82f6' : 'var(--color-text-secondary, #8b8b8b)',
+                        fontWeight: surfaceTone === o.v ? 600 : 400,
+                      }}>{o.label}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </SettingRow>
           </Card>
 

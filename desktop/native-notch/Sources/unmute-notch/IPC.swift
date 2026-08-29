@@ -375,6 +375,9 @@ enum Command {
     /// honours System Settings → Accessibility → Reduce Transparency; "glass"
     /// and "solid" are explicit user overrides. See SurfaceAppearance.
     case appearance(SurfaceAppearance)
+    /// The ground colour — Space Gray or black. Separate from `appearance`,
+    /// which is the material.
+    case surfaceTone(SurfaceTone)
     /// May the surface present ITSELF when a task needs attention or finishes?
     /// From unmute Settings → Appearance & notch. DEFAULT ON, and absent means
     /// on — see AppController.presentableState.
@@ -476,6 +479,11 @@ enum Command {
             // ignoring the user's accessibility setting.
             let raw = obj["value"] as? String ?? "system"
             return .appearance(SurfaceAppearance(rawValue: raw) ?? .system)
+        case "surfaceTone":
+            // Unknown -> spaceGray, which is what shipped before this was a
+            // choice: a malformed value must never silently restyle the surface.
+            let raw = obj["value"] as? String ?? "spaceGray"
+            return .surfaceTone(SurfaceTone(rawValue: raw) ?? .spaceGray)
         case "terminalAutoExpand":
             return .terminalAutoExpand(obj["on"] as? Bool ?? false)
         case "surfaceFill":
