@@ -3114,7 +3114,22 @@ export class TaskManager extends EventEmitter {
         // navigate session holds NO glow, it just stays alive briefly (shorter
         // window, see navigateWarmMs) so a correction ("no, the other one")
         // continues the same session with full context instead of respawning.
-        if (task.category === 'consume' || task.category === 'watch') {
+        //
+        // KIND OUTRANKS CATEGORY. This checked category alone, so a persistent
+        // SESSION whose subject happened to be video was torn down as though
+        // the user had walked away from a clip. Field record 2026-08-29, task
+        // 254ba44a: 51 minutes of work that produced an artifact and a file on
+        // disk, ended with `/exit` and a tmux kill-session 1500ms later —
+        // while the same task had logged `parked-warm {persistent: true}`
+        // earlier in its life from the other mechanism.
+        //
+        // Two rules disagreeing about one task, and the one that knows nothing
+        // about lifetime was winning. `kind: session` means hours can pass
+        // between done and the next spoken follow-up; the subject cannot end
+        // that. `category` still decides teardown for everything the user
+        // genuinely walks away from, which is what it was written for.
+        const fireAndForget = task.category === 'consume' || task.category === 'watch'
+        if (fireAndForget && task.kind !== 'session') {
           this.detachAndKill(id)
         } else {
           this.parkWarm(id)
