@@ -6,6 +6,7 @@ import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste, 
 import { pauseForCapture, resumeAfterCapture } from './mediaController'
 import { saveAudioFile, saveAudioChunk } from './audio'
 import { initTelemetry, logTelemetry, DEV_BUILD, installMainConsoleTee, attachRendererConsoleTee } from './dictationTelemetry'
+import { graceVerdict, GRACE_WINDOW_MS, type GraceVerdict } from './graceWait'
 import { app } from 'electron'
 import path from 'path'
 import { getWidgetWindow, showHUD, hideHUD, cancelPendingHide } from './windowManager'
@@ -902,7 +903,10 @@ class SessionManager {
     }
     this.captureQuality = null
     if (this.isProcessing) {
-      console.log('[session] ⛔ BLOCKED — Fn pressed during processing — showing discard hint')
+      // Not Fn-specific: every lane (Fn, right-Option, right-Command) arrives
+      // through this one entry point, so naming one key here sent debugging
+      // down the wrong path.
+      console.log('[session] ⛔ BLOCKED — dictation key pressed during processing — showing discard hint')
       sendToWidget('processing:show-discard-hint')
       // Reset keyboard toggle state so dictationActive/instructionActive
       // don't get stuck as true (the session was rejected, not started)
@@ -1718,14 +1722,36 @@ class SessionManager {
       // the late audio gets dropped as stale (observed live). Mac audio still
       // lands in <100ms — the loop exits on arrival, so the widened cap costs
       // the fast path nothing.
-      console.log('[session] No audio yet — polling for IPC (up to 4000ms)...')
+      console.log(`[session] No audio yet — polling for IPC (up to ${GRACE_WINDOW_MS}ms)...`)
       const t0 = Date.now()
-      for (let i = 0; i < 400; i++) {
+      let verdict: GraceVerdict = 'keep-waiting'
+      while (verdict === 'keep-waiting') {
         await new Promise(resolve => setTimeout(resolve, 10))
-        if (session.dictationAudio || session.instructionAudio) break
+        verdict = graceVerdict({
+          hasAudio: !!(session.dictationAudio || session.instructionAudio),
+          // THE QUESTION THIS WAIT USED TO NOT ASK. The renderer owns the
+          // speech gate, so a silent recording is discarded THERE while we sit
+          // here — discardSession clears currentSession and shows the pill.
+          // Without this check we held the processing lock against a session
+          // nobody owned, refusing every keypress for the full window, and then
+          // announced a second "Didn't catch that" on its way out.
+          stillCurrent: this.currentSession === session,
+          elapsedMs: Date.now() - t0,
+          windowMs: GRACE_WINDOW_MS,
+        })
       }
 
-      if (!session.dictationAudio && !session.instructionAudio) {
+      if (verdict === 'abandoned') {
+        // discardSession/cancelSession already showed the user what happened
+        // and ended the session. Ours is only to stop holding the lock.
+        console.log('[session] ⏭️ grace wait abandoned — session ended while waiting (discarded/cancelled)')
+        this.isProcessing = false
+        this.expectingInstructionAudio = false
+        console.log('[session] 🔓 isProcessing = FALSE (session ended during grace)')
+        return
+      }
+
+      if (verdict === 'gave-up') {
         console.log('[session] No audio received after grace period — showing too-short feedback')
         this.currentSession = null
         this.isProcessing = false
@@ -2605,6 +2631,16 @@ class SessionManager {
 
     this.currentSession = null
     this.resetChunkState()
+    // RELEASE THE LOCK. processSession may already be inside its grace wait
+    // (stopRecording → processSession runs in parallel with the renderer's
+    // silence verdict), and this is a terminal path like every other one. It
+    // was the only terminal path that did not clear the flag: the lock stayed
+    // held for the whole grace window, so "Didn't catch that" was followed by
+    // ~5 seconds where every keypress was refused as "pressed during
+    // processing" — the dictation key looked dead, on every lane, not just Fn.
+    this.isProcessing = false
+    this.expectingInstructionAudio = false
+    console.log('[session] 🔓 isProcessing = FALSE (discarded)')
     setTrayIdle()
 
     // Show brief feedback then hide (cancellable if new session starts)
