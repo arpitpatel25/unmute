@@ -69,6 +69,16 @@ export interface AgentExecutor {
    * provider process running. Optional for executors without a detachable
    * runtime; callers must fall back to kill() there. */
   detach?(): void
+  /**
+   * Called when the underlying process exits, for any reason.
+   *
+   * Optional because a driver-transport backend has no process of its own. But
+   * for a PTY backend this is the ONLY prompt signal that the session is gone:
+   * `alive` has to be asked, and nothing was asking. A Codex CLI that quit half
+   * a second after dispatch left its card reading "Working" for nine minutes
+   * (2026-08-28), because the death was never observed — only pollable.
+   */
+  onExit?(cb: (e: { exitCode: number }) => void): void
   /** True while the PTY process is alive. */
   readonly alive: boolean
 }

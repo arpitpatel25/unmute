@@ -19,6 +19,7 @@ import {
   findIphoneMic,
   resolveCaptureDeviceId,
   effectiveSource,
+  AUTOMATIC_DEVICE_ID,
   type MicSource,
   type AudioInputDeviceInfo,
 } from './micSource'
@@ -498,6 +499,22 @@ function useMicSource() {
   preferenceRef.current = preference
   devicesRef.current = devices
 
+  // The Mac input chosen in Settings → Audio → Microphone. It lives in the
+  // main process because the choice is made in one window and used in this
+  // one; 'automatic' means "follow the macOS default", which is what every
+  // capture did unconditionally before this picker was wired up.
+  const macDeviceIdRef = useRef<string>(AUTOMATIC_DEVICE_ID)
+  useEffect(() => {
+    const api = window.electronAPI as unknown as {
+      getMicDeviceId?: () => Promise<string>
+      onMicDeviceChanged?: (cb: (id: string) => void) => void
+    }
+    api.getMicDeviceId?.()
+      .then((id) => { macDeviceIdRef.current = id || AUTOMATIC_DEVICE_ID })
+      .catch(() => { /* best-effort — absence just means automatic */ })
+    api.onMicDeviceChanged?.((id) => { macDeviceIdRef.current = id || AUTOMATIC_DEVICE_ID })
+  }, [])
+
   const refreshDevices = useCallback(() => {
     navigator.mediaDevices
       ?.enumerateDevices?.()
@@ -526,7 +543,7 @@ function useMicSource() {
 
   // Per-recording resolution — called at capture start by the hotkey path.
   const resolveDeviceId = useCallback(
-    () => resolveCaptureDeviceId(preferenceRef.current, devicesRef.current),
+    () => resolveCaptureDeviceId(preferenceRef.current, devicesRef.current, macDeviceIdRef.current),
     []
   )
 
@@ -567,8 +584,16 @@ function useMicSource() {
     }
   }, [preference, devices, featureEnabled])
 
+  // The iPhone feature gate hides the CONTINUITY path — not the Mac input
+  // choice. Forcing the preference to 'mac' keeps the gate exactly as strict
+  // (no phone capture until the user enables it) while still honoring a
+  // chosen USB mic; returning undefined outright would have dropped that
+  // choice for everyone who never turned the iPhone feature on, which is
+  // nearly all users.
   return { preference, devices, warm, featureEnabled, toggle, resolveDeviceId: useCallback(
-    () => (featureEnabledRef.current ? resolveDeviceId() : undefined),
+    () => (featureEnabledRef.current
+      ? resolveDeviceId()
+      : resolveCaptureDeviceId('mac', devicesRef.current, macDeviceIdRef.current)),
     [resolveDeviceId]
   ), refreshDevices }
 }

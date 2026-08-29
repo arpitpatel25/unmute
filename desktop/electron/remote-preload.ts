@@ -333,6 +333,15 @@ export const remotePreloadExtensions = {
   /** Set/clear the user's note on a task card (empty string clears). */
   remoteSetNote: (taskId: string, note: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-note', taskId, note),
+  /** The workspace streams the user has, newest-touched first. */
+  remoteGroupsList: (): Promise<Array<{ id: string; label: string; authored: boolean; tasks: number }>> =>
+    ipcRenderer.invoke('remote:groups-list'),
+  /** Name a stream yourself. Adopts a matching one rather than duplicating it. */
+  remoteGroupsCreate: (label: string): Promise<{ ok: boolean; reason?: string; adopted?: boolean; label?: string }> =>
+    ipcRenderer.invoke('remote:groups-create', label),
+  /** Rename a stream. Refused when the new name is already another stream. */
+  remoteGroupsRename: (id: string, label: string): Promise<{ ok: boolean; reason?: string; clashesWith?: string; label?: string; relabelled?: number }> =>
+    ipcRenderer.invoke('remote:groups-rename', id, label),
   remoteListProjects: (): Promise<Array<{ name: string; path: string }>> =>
     ipcRenderer.invoke('remote:list-projects'),
   /** Rename a task (names are voice addresses — fixable by the user). */

@@ -61,6 +61,7 @@ interface CodexReasoning {
   current: Partial<Record<CodexAxis, string>>
   options: Partial<Record<CodexAxis, string[]>>
 }
+interface GroupRow { id: string; label: string; authored: boolean; tasks: number }
 interface SetupStep { key: string; title: string; detail: string; command?: string; status: 'done' | 'todo' }
 
 type API = {
@@ -85,6 +86,9 @@ type API = {
   remoteSetForceRaw?: (on: boolean) => Promise<boolean>
   remoteSetAgentTasks?: (v: boolean) => Promise<boolean>
   remoteListProjects?: () => Promise<Array<{ name: string; path: string }>>
+  remoteGroupsList?: () => Promise<GroupRow[]>
+  remoteGroupsCreate?: (label: string) => Promise<{ ok: boolean; reason?: string; adopted?: boolean; label?: string }>
+  remoteGroupsRename?: (id: string, label: string) => Promise<{ ok: boolean; reason?: string; clashesWith?: string; label?: string }>
   remoteGetSetupStatus?: () => Promise<{ steps: SetupStep[]; complete: boolean }>
 }
 function api(): API {
@@ -140,6 +144,136 @@ function CopyButton({ text }: { text: string }) {
     >
       {copied ? 'copied' : 'copy'}
     </button>
+  )
+}
+
+
+/* --- Groups: the workspace streams ----------------------------------------
+ *
+ * Grouping is meant to be good enough that nobody opens this. It exists so the
+ * rare correction sticks - and because a stream the user names themselves
+ * carries more weight than one the router guessed: it is exempt from decay, and
+ * the router is told which is which.
+ *
+ * Add and edit only. Delete is absent on purpose: cards filed under an entry
+ * render its label, so removing one would leave them pointing at a stream that
+ * no longer exists. Machine-authored streams already expire on their own.
+ */
+function GroupsSection() {
+  const [rows, setRows] = useState<GroupRow[]>([])
+  const [adding, setAdding] = useState('')
+  const [editing, setEditing] = useState<{ id: string; value: string } | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
+
+  const reload = useCallback(async () => {
+    setRows((await api().remoteGroupsList?.()) ?? [])
+  }, [])
+  useEffect(() => { void reload() }, [reload])
+
+  const add = async () => {
+    const label = adding.trim()
+    if (!label) return
+    const out = await api().remoteGroupsCreate?.(label)
+    if (!out?.ok) {
+      setProblem(out?.reason === 'blank' ? 'Give the group a name.' : 'That name could not be saved.')
+      return
+    }
+    // `adopted` means the router had already minted this stream and naming it
+    // simply made it the user's. Saying so beats a screen that looks inert.
+    setProblem(out.adopted ? `"${out.label}" already existed - it is yours now.` : null)
+    setAdding('')
+    void reload()
+  }
+
+  const commitRename = async () => {
+    if (!editing) return
+    const out = await api().remoteGroupsRename?.(editing.id, editing.value.trim())
+    if (!out?.ok) {
+      setProblem(out?.reason === 'duplicate'
+        ? `"${out.clashesWith}" already uses that name.`
+        : 'That name could not be saved.')
+      return
+    }
+    setProblem(null)
+    setEditing(null)
+    void reload()
+  }
+
+  return (
+    <>
+      <SectionHeader icon={<GroupsIcon />} title="Groups" />
+      <Panel>
+        <div className="px-5 py-4">
+          <p className="text-[13px] font-medium text-ink mb-1">Your streams of work</p>
+          <p className="text-[12px] text-ink-50 mb-3">
+            Sessions are filed under these automatically. Name one yourself and Unmute keeps using it,
+            and never retires it.
+          </p>
+
+          <div className="space-y-1.5">
+            {rows.length === 0 && (
+              <p className="text-[12px] text-ink-35">No groups yet - they appear as you work.</p>
+            )}
+            {rows.map((g) => (
+              <div key={g.id} className="flex items-center gap-2">
+                {editing?.id === g.id ? (
+                  <input
+                    autoFocus
+                    className="flex-1 text-[13px] px-2 py-1 border border-border rounded-[8px] bg-white"
+                    value={editing.value}
+                    onChange={(e) => setEditing({ id: g.id, value: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void commitRename()
+                      if (e.key === 'Escape') { setEditing(null); setProblem(null) }
+                    }}
+                    onBlur={() => void commitRename()}
+                  />
+                ) : (
+                  <button
+                    className="flex-1 text-left text-[13px] text-ink hover:text-ink-70"
+                    onClick={() => { setProblem(null); setEditing({ id: g.id, value: g.label }) }}
+                  >
+                    {g.label}
+                    {g.authored && <span className="ml-1.5 text-[11px] text-ink-35">yours</span>}
+                  </button>
+                )}
+                <span className="text-[11px] text-ink-35 tabular-nums">
+                  {g.tasks === 1 ? '1 task' : `${g.tasks} tasks`}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 mt-3">
+            <input
+              className="flex-1 text-[13px] px-2 py-1 border border-border rounded-[8px] bg-white"
+              placeholder="Add a group"
+              value={adding}
+              onChange={(e) => { setAdding(e.target.value); setProblem(null) }}
+              onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
+            />
+            <button
+              className="text-[12px] font-medium text-ink-50 hover:text-ink disabled:opacity-40"
+              disabled={!adding.trim()}
+              onClick={() => void add()}
+            >
+              Add
+            </button>
+          </div>
+
+          {problem && <p className="text-[12px] text-ink-50 mt-2">{problem}</p>}
+        </div>
+      </Panel>
+    </>
+  )
+}
+
+function GroupsIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="5" height="5" rx="1.2" /><rect x="9" y="3" width="5" height="5" rx="1.2" />
+      <rect x="2" y="10" width="5" height="3.5" rx="1.2" /><rect x="9" y="10" width="5" height="3.5" rx="1.2" />
+    </svg>
   )
 }
 
@@ -686,6 +820,8 @@ export function RemoteSettings({ onOpenHowItWorks }: {
           onChange={(roots) => { update({ sandboxRoots: roots }); void api().remoteSetSandboxRoots?.(roots) }}
         />
       </Panel>
+
+      <GroupsSection />
 
       <SectionHeader icon={<LaneIcon />} title="What tasks can drive" />
       <Panel>

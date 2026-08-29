@@ -91,6 +91,16 @@ export interface ConfigKnobs {
   routerMaxSessionMs: number
   /** Curator: minimum gap between sweeps (the twice-daily ceiling). */
   curatorSweepIntervalMs: number
+  /**
+   * Router transport: 1 = headless (pipe + schema), 0 = the PTY REPL.
+   *
+   * A number because this tier is numeric-only, and worth the ugliness: it
+   * rides the same remote-config path as everything else here, so if headless
+   * ever stops being covered by the CLI subscription this reverts across the
+   * fleet WITHOUT shipping a build. The REPL path stays whole and tested for
+   * exactly that reason.
+   */
+  routerHeadless: number
 }
 
 export interface RuntimeConfigData {
@@ -118,6 +128,7 @@ const KNOB_SPEC: Record<keyof ConfigKnobs, KnobSpec> = {
   routerDecisionTimeoutMs: { def: 60_000,        min: 1_000,  max: 10 * 60_000 },
   routerMaxSessionMs:      { def: 2 * 60 * 60_000, min: 60_000, max: DAY },
   curatorSweepIntervalMs:  { def: 12 * 60 * 60_000, min: 60_000, max: 30 * DAY },
+  routerHeadless:          { def: 1,             min: 0,      max: 1 },
 }
 
 function knobDefaults(): ConfigKnobs {

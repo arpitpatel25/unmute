@@ -136,8 +136,22 @@ function isInjected(text: string): boolean {
 export function blocksFromRollout(text: string): RolloutBlocks {
   const blocks: Block[] = []
   /** Prompts from response_item records, used only if no events exist. */
-  const fallbackUserMessages: string[] = []
-  let sawUserEvent = false
+  // ONE PROMPT, TWO RECORDS, ONE BLOCK — deduped WITHIN A TURN.
+  //
+  // Codex writes a prompt as a `user_message` event AND as a `response_item`
+  // with role user, so emitting both showed every question twice. The previous
+  // cure held the response_items back and used them only when a thread had no
+  // events at all, then unshifted them to the front.
+  //
+  // That broke on current threads (observed 29 Aug): a live two-turn rollout
+  // carried NO user_message events, so the "old rollout" path fired on a brand
+  // new one and hoisted BOTH questions above BOTH answers.
+  //
+  // Turn-scoped instead of global, because asking the same thing twice in one
+  // conversation is ordinary and must render twice. The two records for a
+  // single prompt always land in the same turn; the same text in a later turn
+  // is a genuine repeat.
+  let userTextsThisTurn = new Set<string>()
   // call_id → index in `blocks`, so an output can complete the call that opened
   // several lines earlier without re-walking what we have already emitted.
   const pending = new Map<string, number>()
@@ -158,9 +172,10 @@ export function blocksFromRollout(text: string): RolloutBlocks {
     switch (t) {
       case 'user_message': {
         const message = str(p.message)
-        if (!message) break
-        sawUserEvent = true
-        if (!isInjected(message)) blocks.push({ kind: 'message', role: 'user', text: message })
+        if (!message || isInjected(message)) break
+        if (userTextsThisTurn.has(message)) break   // the response_item got here first
+        userTextsThisTurn.add(message)
+        blocks.push({ kind: 'message', role: 'user', text: message })
         break
       }
 
@@ -175,6 +190,9 @@ export function blocksFromRollout(text: string): RolloutBlocks {
       // THE TURN'S CLOCK — see the note in blocks-app-server.ts. Codex writes
       // these as epoch SECONDS here, unlike the wire.
       case 'task_started': {
+        // A new turn: the same wording from here on is a genuine repeat, not
+        // the second copy of the prompt that opened the previous turn.
+        userTextsThisTurn = new Set<string>()
         const s = num(p.started_at)
         blocks.push({ kind: 'turnStart', startedAt: s !== undefined ? (s < 1e12 ? s * 1000 : s) : 0 })
         break
@@ -337,26 +355,16 @@ export function blocksFromRollout(text: string): RolloutBlocks {
         // those threads showing no question.
         if (str(p.role) !== 'user') break
         const body = textOfContent(p.content)
-        if (body && !isInjected(body)) fallbackUserMessages.push(body)
+        if (!body || isInjected(body)) break
+        if (userTextsThisTurn.has(body)) break      // the event got here first
+        userTextsThisTurn.add(body)
+        blocks.push({ kind: 'message', role: 'user', text: body })
         break
       }
 
       default:
         break
     }
-  }
-
-  // No events in this thread — an older rollout. Its prompts live only in the
-  // response_items held back above, so use them rather than show no question.
-  if (!sawUserEvent && fallbackUserMessages.length) {
-    const seen = new Set<string>()
-    const restored: Block[] = []
-    for (const t of fallbackUserMessages) {
-      if (seen.has(t)) continue
-      seen.add(t)
-      restored.push({ kind: 'message', role: 'user', text: t })
-    }
-    blocks.unshift(...restored)
   }
 
   return {

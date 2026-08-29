@@ -112,6 +112,10 @@ let lastQuietHintAt = 0
 interface CaptureTelemetry {
   t0: number
   source: string
+  // The name of the mic that ACTUALLY opened, straight off the track. `source`
+  // is only iphone-or-not, which could not answer "MacBook or the USB mic?"
+  // when a field capture came back empty.
+  deviceLabel: string
   marks: Record<string, number>
   // audio-quality accumulators (fed by the existing 100ms VAD tick)
   frames: number
@@ -685,6 +689,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         zeroFramePct: tel.frames ? Math.round((tel.zeroFrames / tel.frames) * 100) : 0,
         frames: tel.frames,
         source: tel.source,
+        deviceLabel: tel.deviceLabel,
         via,
         durationMs,
         bytes,
@@ -711,7 +716,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
     requestTimeRef.current = Date.now()
     telemetryRef.current = {
-      t0: Date.now(), source: 'pending', marks: {}, frames: 0, zeroFrames: 0,
+      t0: Date.now(), source: 'pending', deviceLabel: 'pending', marks: {}, frames: 0, zeroFrames: 0,
       clippedSamples: 0, peak: 0, rmsSum: 0, rmsMax: 0, trackEvents: [], chunks: 0, chunkBytes: 0,
     }
     // Reset state for new recording
@@ -874,7 +879,14 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     if (!stream) {
       try {
         stream = await navigator.mediaDevices.getUserMedia(constraints)
-        phoneSourceRef.current = !!requestedDeviceId // requested device delivered
+        // Phone-ness is read off the TRACK WE GOT, never off "a device was
+        // requested". Settings can now pin a Mac input (USB, interface), so a
+        // requested id no longer implies Continuity — and this flag gates real
+        // behaviour downstream (tail grace, warm-stream teardown, the source
+        // announcement), not just a log line.
+        phoneSourceRef.current = /iphone|continuity/i.test(
+          stream.getAudioTracks()[0]?.label ?? ''
+        )
       } catch (err) {
         if (!requestedDeviceId) throw err
         console.log('[audio] Requested device unavailable, falling back to system default mic:', err)
@@ -892,6 +904,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       const track = stream.getAudioTracks()[0]
       if (tel && track) {
         tel.source = phoneSourceRef.current ? 'iphone' : 'default'
+        tel.deviceLabel = track.label || 'unknown'
         tel.marks.acquired = Date.now() - tel.t0
         // THE ground truth the guessing ends on: what the track is actually
         // running at (sampleRate honors/ignores our 16k request) and which

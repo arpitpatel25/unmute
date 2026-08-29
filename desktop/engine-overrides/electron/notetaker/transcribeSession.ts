@@ -106,8 +106,9 @@ export async function transcribeEncodedChunk(channel: 'mic' | 'system', encoded:
       undefined,
       // Whisper's prompt is decoder context, not an instruction channel. Both
       // imperative wording and a Hinglish example have leaked into output and
-      // displaced real speech. Decode without a prompt; Romanize any returned
-      // Devanagari locally below instead.
+      // displaced real speech. Decode without a prompt. Any optional transcript
+      // cleanup happens later on returned text only; it never chooses or forces
+      // Whisper's language.
       undefined,
       null,
       'audio/wav',

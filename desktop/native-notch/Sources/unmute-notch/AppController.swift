@@ -81,6 +81,8 @@ final class AppController: NSObject, NotchResizing {
         host.frame = container.bounds
         window.resizer = self
         model.hasNotch = geometry.hasNotch
+        model.pocketTopInset = geometry.pocketTopInset
+        model.pocketCutoutWidth = geometry.cutout?.width ?? 0
         model.emit = { [weak self] ev in
             NotchLog.log("EVENT out: \(ev.json)")
             IPC.emit(ev)
@@ -185,15 +187,16 @@ final class AppController: NSObject, NotchResizing {
 
     func handle(_ command: Command) {
         switch command {
-        case let .bootstrap(appearance, fill, show, terminalAutoExpand, present):
+        case let .bootstrap(appearance, tone, fill, show, terminalAutoExpand, present):
             Appearance.shared.preference = appearance
+            Appearance.shared.tone = tone
             NotchGeometry.SurfaceFill.user = min(max(fill, 0.5), 0.95)
             let sharing: NSWindow.SharingType = show ? .readOnly : .none
             window.sharingType = sharing
             pillWindow.sharingType = sharing
             model.terminalAutoExpand = terminalAutoExpand
             autoPresent = present
-            NotchLog.log("CMD bootstrap appearance=\(appearance.rawValue) fill=\(fill) capture=\(show) terminal=\(terminalAutoExpand) present=\(present)")
+            NotchLog.log("CMD bootstrap appearance=\(appearance.rawValue) tone=\(tone.rawValue) fill=\(fill) capture=\(show) terminal=\(terminalAutoExpand) present=\(present)")
 
         case .present:
             if !window.isVisible { window.present() }
@@ -398,6 +401,14 @@ final class AppController: NSObject, NotchResizing {
 
         case .notchGeometry:
             recomputeGeometry("explicit-push")
+
+        case let .surfaceTone(tone):
+            NotchLog.log("CMD surfaceTone \(tone.rawValue)")
+            // Setting the @Published value is the whole job: Theme.plane and
+            // Theme.railBg read Appearance.shared.tone, and every surface reads
+            // those, so SwiftUI repaints an already-open surface on its own.
+            // Same contract as `appearance` directly below.
+            Appearance.shared.tone = tone
 
         case let .appearance(pref):
             NotchLog.log("CMD appearance \(pref.rawValue)")
@@ -648,21 +659,13 @@ final class AppController: NSObject, NotchResizing {
             // whole ask. Anything bigger and we are back to a surface that is
             // in the way, which is the problem the pocket exists to solve.
             if model.pocket.isOpen {
-                // ON THE NOTCH'S OWN LINE. The mass is bar-height and its middle
-                // IS the cutout: the words sit on the shoulders either side, so
-                // nothing readable ever passes behind the camera and nothing has
-                // to be pushed below it. Same rules as the bar, measured the
-                // same way — see PocketRowMetrics.
-                if geometry.hasNotch {
-                    let m = PocketRowMetrics.make(for: model.pocket,
-                                                  listening: model.captureAimed,
-                                                  barHeight: geometry.barHeight)
-                    model.pocketCardHeight = m.cardHeight
-                    let mass = geometry.pocketMass(left: m.left, right: m.right)
-                    return (geometry.barFrame(mass), mass, BarContent())
-                }
-                // NO CUTOUT, NOTHING TO WORK AROUND. The card keeps its own
-                // shape and hangs from the top edge on the ordinary padding.
+                // ONE SHAPE ON EVERY DISPLAY. The notched case used to size a
+                // bar-height mass from PocketRowMetrics and render a row across
+                // the housing's shoulders. That is gone: the card is the only
+                // arrangement, and on a notched Mac it opens BELOW the cutout —
+                // `pocketTopInset` is the clearance, and pocketCardFrame adds it
+                // to the height so the window is tall enough to hold it.
+                //
                 // The card is shorter when the task is not asking anything —
                 // the middle row is dropped rather than filled with an echo of
                 // the footer, so the window must not reserve room for it.

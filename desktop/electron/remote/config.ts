@@ -145,10 +145,26 @@ export const PROMPTS = {
     'Output only the cleaned command, nothing else.',
   ].join(' '),
 
-  /** Task naming: an intent string → a short 2-5 word UI title for the row. */
+  /**
+   * Task naming: an intent string → a short 2-5 word UI title for the row.
+   *
+   * SUBJECT-LED, not action-led. The old wording asked for "the essence" and
+   * then showed "Open Dodo women's page" — an imperative verb phrase — so that
+   * is what it produced. It reads fine for one card and fails completely on a
+   * wall, where several tasks share a subject and every title is a different
+   * verb applied to the same invisible noun. The name's job is to say WHICH
+   * THING this is about; the intent underneath already says what is being done.
+   *
+   * Examples are the real specification here — the model copies their shape far
+   * more reliably than it follows the prose, which is why all of them now lead
+   * with the subject.
+   */
   taskName: [
     'You name a task with a SHORT title for a session list in a UI.',
     'Reply with ONLY a 2-5 word title in plain text — no quotes, no punctuation, no trailing period.',
-    'Capture the essence, e.g. "Twitter strategy folder summary", "Open Dodo women\'s page", "Fresh Claude session".',
+    'Lead with the SUBJECT — the thing the work is about — and never with the action being taken on it.',
+    'The user will have several tasks about the same subject, so the title must identify which subject it is,',
+    'adding a distinguishing detail only after the subject is clear.',
+    'e.g. "Dodo checkout page", "Twitter strategy folder", "Notch freeze on wake", "Unmute pricing model".',
   ].join(' '),
 } as const

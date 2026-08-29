@@ -28,7 +28,7 @@ export interface EnginePeekStatus {
   reason: OnDeviceReason | null
 }
 
-const settings = new Store<{ engineMode: EngineMode; iphoneMicEnabled?: boolean; pauseMediaWhileDictating?: boolean }>({ name: 'unmute-paywall-settings' })
+const settings = new Store<{ engineMode: EngineMode; iphoneMicEnabled?: boolean; pauseMediaWhileDictating?: boolean; micDeviceId?: string }>({ name: 'unmute-paywall-settings' })
 
 // The OSS engine provides these via its sessionManager. We accept them
 // as opaque interfaces so we don't entangle with the engine internals.
@@ -223,6 +223,23 @@ export function initPaywall(appHandle: App, oss: OSSAdapter): ProviderRouter {
     const { BrowserWindow } = require('electron') as typeof import('electron')
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) w.webContents.send('settings:iphone-mic-changed', !!on)
+    }
+    return true
+  })
+
+  // Which Mac input dictation captures from. Settings owns the choice; the
+  // WIDGET window is what actually opens the mic, so the value has to cross
+  // windows — the same broadcast shape as the iPhone toggle above. Stored,
+  // not session state: the picker used to keep its value in React and nothing
+  // ever read it, which is why choosing a mic did nothing at all.
+  // 'automatic' (the default) means "follow whatever macOS is set to".
+  ipcMain.handle('settings:get-mic-device', () => settings.get('micDeviceId', 'automatic'))
+  ipcMain.handle('settings:set-mic-device', (_e, id: string) => {
+    const value = typeof id === 'string' && id ? id : 'automatic'
+    settings.set('micDeviceId', value)
+    const { BrowserWindow } = require('electron') as typeof import('electron')
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('settings:mic-device-changed', value)
     }
     return true
   })

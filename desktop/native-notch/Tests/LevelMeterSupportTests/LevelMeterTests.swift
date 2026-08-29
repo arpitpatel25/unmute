@@ -47,8 +47,20 @@ final class LevelMeterTests: XCTestCase {
     // away, and the reason the old meter felt fabricated.
     func testTheSameLevelAlwaysDrawsTheSameHeight() {
         XCTAssertEqual(LevelMeter.target(for: 0.12), LevelMeter.target(for: 0.12))
-        // (0.12 - 0.03) / (0.40 - 0.03) = 0.243, and 0.243^0.75 = 0.346.
-        XCTAssertEqual(LevelMeter.target(for: 0.12), 0.3464, accuracy: 0.005)
+
+        // DERIVED, NOT PINNED. This used to hardcode 0.3464 — the arithmetic of
+        // one particular gate/ceiling/exponent — so retuning the meter for
+        // sensitivity failed a test whose stated property is DETERMINISM, not
+        // any specific height. Computing the expectation the same way the
+        // implementation does keeps the guarantee (same input, same output,
+        // no adaptive gain) while letting the curve be tuned.
+        let norm = (0.12 - LevelMeter.gate) / (LevelMeter.ceiling - LevelMeter.gate)
+        XCTAssertEqual(LevelMeter.target(for: 0.12), pow(norm, 0.62), accuracy: 0.005)
+
+        // The shape itself, which IS worth pinning: a mid level lands in the
+        // middle of the bar rather than hugging either end.
+        XCTAssertGreaterThan(LevelMeter.target(for: 0.12), 0.2)
+        XCTAssertLessThan(LevelMeter.target(for: 0.12), 0.8)
     }
 
     func testTheCeilingFillsTheBarAndClamps() {

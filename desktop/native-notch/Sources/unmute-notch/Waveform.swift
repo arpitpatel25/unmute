@@ -28,21 +28,58 @@ struct Waveform: View {
     var height: CGFloat = 16
     var barWidth: CGFloat = 2
     var spacing: CGFloat = 2
-    var color: Color = Theme.text
+    /// PURE WHITE, not Theme.text.
+    ///
+    /// Theme.text is white at 0.95 and the fill below multiplies it again, so a
+    /// shout peaked at 0.95 and an ordinary speaking level landed near 0.64 —
+    /// which is why the waveform never looked white. The capsule is pitch black
+    /// and the waveform is the only thing in it; it should be the brightest
+    /// thing on the surface.
+    var color: Color = .white
+
+    /// The shortest bar that still reads as a bar. Below about this a 2pt-wide
+    /// capsule is round, and a row of them is the dot problem again — so this
+    /// is the floor for AUDIBLE signal, not for silence, which draws nothing.
+    static let minAudible: CGFloat = 3
 
     @State private var history: [Double] = []
     /// The smoothed level the last frame settled on. See `push`.
     @State private var envelope: Double = 0
 
     var body: some View {
-        HStack(alignment: .center, spacing: spacing) {
-            ForEach(Array(padded.enumerated()), id: \.offset) { _, v in
-                Capsule()
-                    .fill(color.opacity(0.35 + 0.65 * v))
-                    // A FLOOR OF ONE PIXEL, so silence is a line and not a gap.
-                    // Zero-height capsules disappear, and a waveform with holes
-                    // in it reads as broken rather than quiet.
-                    .frame(width: barWidth, height: max(1, CGFloat(v) * height))
+        ZStack {
+            // SILENCE IS A LINE — and this is what that was supposed to mean.
+            //
+            // The bars used to carry a one-point floor so quiet never left a
+            // gap. But a 2pt-wide CAPSULE at 1pt tall is a circle, so the
+            // resting state rendered as a row of dots rather than the flat line
+            // the floor was written for. The floor is gone and the line is
+            // drawn once, properly, behind them.
+            Capsule()
+                .fill(color.opacity(0.18))
+                .frame(height: 1)
+
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(Array(padded.enumerated()), id: \.offset) { _, v in
+                    // ANY AUDIO AT ALL IS VISIBLE. The previous cut — draw
+                    // nothing below 2pt — is a threshold on HEIGHT, so at a
+                    // 16pt bar it silently swallowed every level under 0.125.
+                    // Quiet speech produced a flat line, which is the opposite
+                    // of what a meter is for.
+                    //
+                    // Silence is exactly zero, because LevelMeter.advance parks
+                    // there rather than approaching it forever. So zero draws
+                    // nothing and the hairline speaks; anything above it gets a
+                    // floor tall enough to read as a BAR rather than a dot.
+                    let raw = CGFloat(v) * height
+                    let h: CGFloat = v <= 0 ? 0 : max(Self.minAudible, raw)
+                    Capsule()
+                        // Brighter across the whole range, peaking at pure
+                        // white. The old ramp started at 0.35 of an already
+                        // dimmed colour.
+                        .fill(color.opacity(0.55 + 0.45 * v))
+                        .frame(width: barWidth, height: h)
+                }
             }
         }
         .frame(height: height)

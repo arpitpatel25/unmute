@@ -258,9 +258,40 @@ struct NotchGeometry: Equatable {
     /// shows, so the card said "Done" twice and spent a third of itself doing it.
     /// The arithmetic lives in SurfaceSizeSupport beside its tests, so the window
     /// frame and the view cannot drift apart.
+    /// How far the pocket card must start below the top edge.
+    ///
+    /// ONE NUMBER, TWO READERS. The window height below and `NotchView`'s
+    /// `pocketTopPad` both come from here, so the frame and the padding cannot
+    /// disagree — a card padded further down than its window is tall is
+    /// clipped, and the clipping is invisible in a screenshot until someone
+    /// notices the footer is missing.
+    ///
+    /// On a notched display this clears the housing: the card is one surface
+    /// now on every display, so it can no longer sit ON the notch line the way
+    /// the row did, and must open below it instead.
+    /// On a notched display this is EXACTLY the housing's height, because the
+    /// shoulder row fills it: identity on the left of the cutout, controls on
+    /// the right, nothing behind the camera. It stopped being dead clearance
+    /// the moment that row existed.
+    var pocketTopInset: CGFloat {
+        hasNotch ? cutoutHeight : Theme.panelPadding
+    }
+
+    /// WHAT THE WINDOW HAS TO HOLD, counted the way the view stacks it:
+    ///
+    ///     [shoulder row, notched only]  cutoutHeight
+    ///     [plane top pad]               panelPadding
+    ///     [the card]                    pocketCardHeight
+    ///     [plane bottom pad]            panelPadding
+    ///
+    /// Counted rather than reasoned about, because the previous version was
+    /// one panelPadding short the moment the shoulder row stopped being
+    /// padding and started being a view — and a card clipped by six points
+    /// looks completely fine in a screenshot until its footer is missing.
     func pocketCardFrame(hasAsk: Bool) -> NSRect {
-        topPinnedFrame(width: Self.pocketCardWidth,
-                       height: pocketCardHeight(hasAsk: hasAsk) + 2 * Theme.panelPadding)
+        let chrome = (hasNotch ? cutoutHeight : 0) + 2 * Theme.panelPadding
+        return topPinnedFrame(width: Self.pocketCardWidth,
+                              height: pocketCardHeight(hasAsk: hasAsk) + chrome)
     }
 
     /// The window frame for a bar-level mass.

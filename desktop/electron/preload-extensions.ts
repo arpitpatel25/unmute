@@ -300,6 +300,12 @@ export const paywallPreloadExtensions = {
   onIphoneMicChanged: (cb: (on: boolean) => void): void => {
     ipcRenderer.on('settings:iphone-mic-changed', (_e, on: boolean) => cb(on))
   },
+  /** Chosen Mac input for dictation; 'automatic' follows the macOS default. */
+  getMicDeviceId: (): Promise<string> => ipcRenderer.invoke('settings:get-mic-device'),
+  setMicDeviceId: (id: string): Promise<boolean> => ipcRenderer.invoke('settings:set-mic-device', id),
+  onMicDeviceChanged: (cb: (id: string) => void): void => {
+    ipcRenderer.on('settings:mic-device-changed', (_e, id: string) => cb(id))
+  },
   // HUD click-through toggle (renderer hit-test flips it while over the pill).
   hudSetInteractive: (on: boolean): void =>
     ipcRenderer.send('hud:set-interactive', on),
@@ -326,6 +332,14 @@ export const paywallPreloadExtensions = {
   },
 
   /** Surface material: 'system' (default — follows Reduce Transparency) | 'glass' | 'solid'. */
+  getNotetakerCaptureVisible: (): Promise<boolean> =>
+    ipcRenderer.invoke('remote:get-notetaker-capture-visible'),
+  setNotetakerCaptureVisible: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-notetaker-capture-visible', on),
+  getSurfaceTone: (): Promise<'spaceGray' | 'black'> =>
+    ipcRenderer.invoke('remote:get-surface-tone'),
+  setSurfaceTone: (v: string): Promise<'spaceGray' | 'black'> =>
+    ipcRenderer.invoke('remote:set-surface-tone', v),
   getSurfaceAppearance: (): Promise<'system' | 'glass' | 'solid'> =>
     ipcRenderer.invoke('remote:get-surface-appearance'),
   setSurfaceAppearance: (v: 'system' | 'glass' | 'solid'): Promise<'system' | 'glass' | 'solid'> =>

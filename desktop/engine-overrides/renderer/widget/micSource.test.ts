@@ -13,6 +13,8 @@ import {
   findIphoneMic,
   resolveCaptureDeviceId,
   effectiveSource,
+  selectableMacInputs,
+  AUTOMATIC_DEVICE_ID,
   type AudioInputDeviceInfo,
 } from './micSource'
 
@@ -95,5 +97,89 @@ describe('effectiveSource', () => {
 
   it('is mac when iphone is preferred but absent (glyph shows the truth)', () => {
     assert.equal(effectiveSource('iphone', [builtIn]), 'mac')
+  })
+})
+
+// ── Mac-side input choice (Settings → Audio → Microphone) ──────────────────
+// This picker used to be decorative: its value lived in React state and
+// nothing read it, so a USB mic could only be reached by changing the macOS
+// system default. These cover the semantics that make the choice real.
+const usb: AudioInputDeviceInfo = {
+  kind: 'audioinput',
+  label: 'Shure MV7 (USB Audio)',
+  deviceId: 'usb-id',
+}
+const defaultAlias: AudioInputDeviceInfo = {
+  kind: 'audioinput',
+  label: 'Default - MacBook Air Microphone',
+  deviceId: 'default',
+}
+const speakers: AudioInputDeviceInfo = {
+  kind: 'audiooutput',
+  label: 'MacBook Air Speakers',
+  deviceId: 'out-id',
+}
+
+describe('selectableMacInputs', () => {
+  it('offers a USB mic alongside the built-in — the bug this fixes', () => {
+    assert.deepEqual(
+      selectableMacInputs([builtIn, usb]).map((d) => d.deviceId),
+      ['built-in-id', 'usb-id']
+    )
+  })
+
+  it('excludes the iPhone — the widget glyph owns that choice, not this list', () => {
+    assert.deepEqual(
+      selectableMacInputs([builtIn, iphone]).map((d) => d.deviceId),
+      ['built-in-id']
+    )
+  })
+
+  it('excludes outputs and the synthetic "default" alias', () => {
+    assert.deepEqual(
+      selectableMacInputs([defaultAlias, builtIn, speakers]).map((d) => d.deviceId),
+      ['built-in-id']
+    )
+  })
+
+  it('drops entries with no deviceId (permission not yet granted)', () => {
+    const blank: AudioInputDeviceInfo = { kind: 'audioinput', label: '', deviceId: '' }
+    assert.deepEqual(selectableMacInputs([blank, builtIn]).map((d) => d.deviceId), ['built-in-id'])
+  })
+
+  it('de-duplicates repeated deviceIds', () => {
+    assert.equal(selectableMacInputs([builtIn, { ...builtIn }]).length, 1)
+  })
+})
+
+describe('resolveCaptureDeviceId with a chosen Mac input', () => {
+  it('captures from the chosen USB mic', () => {
+    assert.equal(resolveCaptureDeviceId('mac', [builtIn, usb], 'usb-id'), 'usb-id')
+  })
+
+  it('AUTOMATIC resolves to undefined — follow whatever macOS is set to', () => {
+    assert.equal(
+      resolveCaptureDeviceId('mac', [builtIn, usb], AUTOMATIC_DEVICE_ID),
+      undefined
+    )
+  })
+
+  it('a chosen device that is gone falls back to automatic, not a dead id', () => {
+    assert.equal(resolveCaptureDeviceId('mac', [builtIn], 'usb-id'), undefined)
+  })
+
+  it('the iPhone still wins when it is preferred and the phone is here', () => {
+    assert.equal(
+      resolveCaptureDeviceId('iphone', [builtIn, usb, iphone], 'usb-id'),
+      'iphone-id'
+    )
+  })
+
+  it('iPhone preferred but absent falls back to the chosen Mac input', () => {
+    assert.equal(resolveCaptureDeviceId('iphone', [builtIn, usb], 'usb-id'), 'usb-id')
+  })
+
+  it('no choice recorded behaves exactly as before (system default)', () => {
+    assert.equal(resolveCaptureDeviceId('mac', [builtIn, usb]), undefined)
   })
 })

@@ -32,11 +32,13 @@
 // "What this does" link to its page under ./help.
 
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import Permissions from './Permissions'
 import Language from './Language'
 import Privacy from './Privacy'
 import MemoryManager from '../remote/MemoryManager'
 import { HELP_PAGES, HelpPage, type HelpPageId } from './help'
+import { selectableMacInputs, AUTOMATIC_DEVICE_ID } from '../widget/micSource'
 // Pack A owns the onboarding gate and exports the reset. Importing it here is a
 // module cycle (App → Settings → App) that resolves under ESM because it is only
 // ever CALLED from a click handler, never read at module-evaluation time.
@@ -84,10 +86,16 @@ interface TriggerState { enabled: boolean; locked: boolean }
 interface SettingsApi {
   getSurfaceAppearance?: () => Promise<string>
   setSurfaceAppearance?: (v: string) => Promise<string>
+  getSurfaceTone?: () => Promise<string>
+  setSurfaceTone?: (v: string) => Promise<string>
+  getNotetakerCaptureVisible?: () => Promise<boolean>
+  setNotetakerCaptureVisible?: (on: boolean) => Promise<boolean>
   getIphoneMicEnabled?: () => Promise<boolean>
   getPauseMediaWhileDictating?: () => Promise<boolean>
   setPauseMediaWhileDictating?: (on: boolean) => Promise<boolean>
   setIphoneMicEnabled?: (v: boolean) => Promise<boolean>
+  getMicDeviceId?: () => Promise<string>
+  setMicDeviceId?: (id: string) => Promise<boolean>
   remoteGetScreenshotCapture?: () => Promise<boolean>
   remoteSetScreenshotCapture?: (v: boolean) => Promise<boolean>
   remoteGetScratchpadEnabled?: () => Promise<boolean>
@@ -191,7 +199,7 @@ const KILL_SWITCHES_WIRED = false
 
 export default function Settings({ onDictationKeyChange, section = 'triggers' }: SettingsProps = {}) {
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([])
-  const [selectedDevice, setSelectedDevice] = useState<string>('')
+  const [selectedDevice, setSelectedDevice] = useState<string>(AUTOMATIC_DEVICE_ID)
   const [outputMode, setOutputMode] = useState<'paste' | 'clipboard'>('paste')
   const [launchAtLogin, setLaunchAtLogin] = useState(false)
   const [soundFeedback, setSoundFeedback] = useState(true)
@@ -282,6 +290,8 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // options exist because an older surface cannot follow the system slider, and
   // because an always-on-top panel is a reasonable thing to want solid.
   const [surfaceAppearance, setSurfaceAppearance] = useState<'system' | 'glass' | 'solid'>('system')
+  const [surfaceTone, setSurfaceTone] = useState<'spaceGray' | 'black'>('spaceGray')
+  const [notetakerInCapture, setNotetakerInCapture] = useState(false)
   // DEFAULT ON, matching the setting it writes (remote/init.ts:198 —
   // `overlayAutoPresent: true`). A surface that never comes forward by itself is
   // a surface you have to remember to look at.
@@ -332,6 +342,22 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // the sidebar would show whatever help page was last open.
   useEffect(() => { setHelpPage(null); setMemoryManagerOpen(false) }, [section])
 
+  // Devices come and go while Settings is open — a USB mic plugged in now
+  // should appear in the list without reopening the window.
+  useEffect(() => {
+    const refresh = () => { void loadAudioDevices() }
+    navigator.mediaDevices?.addEventListener?.('devicechange', refresh)
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refresh)
+  }, [])
+
+  // The stored choice lives in main (Settings picks it, the widget window
+  // captures with it), so read it from there rather than local state.
+  useEffect(() => {
+    api().getMicDeviceId?.()
+      .then((id) => setSelectedDevice(id || AUTOMATIC_DEVICE_ID))
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     loadAudioDevices()
     // Build number — shown in Help & about so users know which version they're
@@ -342,6 +368,10 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
       .catch(() => {})
     window.electronAPI.getWidgetPosition().then((v: string) => {
       if (v === 'center' || v === 'right') setWidgetPosition(v)
+    })
+    void api().getNotetakerCaptureVisible?.().then((v) => setNotetakerInCapture(!!v))
+    void api().getSurfaceTone?.().then((v) => {
+      if (v === 'black' || v === 'spaceGray') setSurfaceTone(v)
     })
     api().getSurfaceAppearance?.()
       .then((v) => { if (v === 'system' || v === 'glass' || v === 'solid') setSurfaceAppearance(v) })
@@ -413,24 +443,46 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   async function loadAudioDevices() {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices()
-      // MacBook-only by design: the iPhone/Continuity mic is selected via the
-      // pill chip (Audio & behaviour → iPhone microphone), never from this list
-      // — a second selector showing the phone here misled users into thinking
-      // this picker routed capture. Built-in first; iPhone entries excluded.
-      const audioInputs = devices
-        .filter((d) => d.kind === 'audioinput' && !/iphone|continuity/i.test(d.label))
-        .filter((d, _i, all) => {
-          const builtIn = all.filter((x) => /built-in|macbook/i.test(x.label))
-          return builtIn.length ? /built-in|macbook/i.test(d.label) : true
-        })
-        .map((d) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${d.deviceId.slice(0, 8)}` }))
-      setAudioDevices(audioInputs)
-      if (audioInputs.length > 0 && !selectedDevice) {
-        setSelectedDevice(audioInputs[0].deviceId)
-      }
+      // Every real input is offered — built-in, USB, audio interface. This
+      // used to filter down to the built-in mic whenever one existed, so a USB
+      // mic was enumerated and then thrown away: the only way to reach it was
+      // to change the macOS system default. The iPhone stays out (the widget
+      // glyph owns that choice); `selectableMacInputs` is the tested rule.
+      const audioInputs = selectableMacInputs(
+        devices.map((d) => ({ kind: d.kind, label: d.label, deviceId: d.deviceId })),
+      ).map((d) => ({
+        deviceId: d.deviceId,
+        label: d.label || `Microphone ${d.deviceId.slice(0, 8)}`,
+      }))
+      // Automatic leads the list and is the default: it follows whatever macOS
+      // is set to, which is what capture did unconditionally before the picker
+      // was wired up — so plugging in a USB mic and making it the system
+      // default still Just Works without opening Settings at all.
+      setAudioDevices([{ deviceId: AUTOMATIC_DEVICE_ID, label: 'Automatic (system default)' }, ...audioInputs])
     } catch (err) {
       console.error('Failed to enumerate audio devices:', err)
     }
+  }
+
+  // A chosen mic that is currently unplugged stays chosen — capture falls back
+  // to the system default for now and returns to it when the device is back
+  // (resolveCaptureDeviceId owns that). Say so rather than dropping the value,
+  // which would render as the "No microphone found" placeholder on a machine
+  // that plainly has microphones.
+  const micOptions = audioDevices.map((d) => ({ value: d.deviceId, label: d.label }))
+  if (
+    audioDevices.length > 0 &&                                  // enumeration has run
+    selectedDevice !== AUTOMATIC_DEVICE_ID &&                   // a real device was chosen
+    !audioDevices.some((d) => d.deviceId === selectedDevice)    // and it is not here now
+  ) {
+    micOptions.push({ value: selectedDevice, label: 'Chosen mic — not connected' })
+  }
+
+  // Optimistic locally, authoritative in main — which also broadcasts the
+  // change to the widget window, the one that actually opens the mic.
+  function handleMicDeviceChange(value: string) {
+    setSelectedDevice(value)
+    void api().setMicDeviceId?.(value).catch(() => {})
   }
 
   function handleWidgetPositionChange(value: string) {
@@ -444,6 +496,17 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
       'system' | 'glass' | 'solid'
     setSurfaceAppearance(v)
     void api().setSurfaceAppearance?.(v)
+  }
+
+  function handleNotetakerCaptureChange(next: boolean): void {
+    setNotetakerInCapture(next)
+    void api().setNotetakerCaptureVisible?.(next)
+  }
+
+  function handleSurfaceToneChange(value: string) {
+    const v = (value === 'black' ? 'black' : 'spaceGray') as 'spaceGray' | 'black'
+    setSurfaceTone(v)
+    void api().setSurfaceTone?.(v)
   }
 
   function handleVoiceFeedbackChange(next: boolean): void {
@@ -659,9 +722,9 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
             <SettingRow label="Microphone" description="Which input device unmute listens to">
               <Picker
                 value={selectedDevice}
-                options={audioDevices.map((d) => ({ value: d.deviceId, label: d.label }))}
+                options={micOptions}
                 placeholder="No microphone found"
-                onChange={setSelectedDevice}
+                onChange={handleMicDeviceChange}
               />
             </SettingRow>
           </Card>
@@ -787,6 +850,19 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
             >
               <Toggle checked={showInScreenCapture} onChange={handleShowInScreenCaptureChange} />
             </SettingRow>
+
+            {/* THE NOTETAKER GETS ITS OWN, and defaults the other way.
+                The row above is about tidiness — a notch in a screenshot is
+                merely untidy. This one is about disclosure: a meeting recorder
+                visible in the meeting it is recording is a different question,
+                and the answer people want for it is not the answer they want
+                for the dictation surfaces. Hence a separate key, default off. */}
+            <SettingRow
+              label="Show the meeting notetaker in screen sharing"
+              description="Off by default. The notetaker widget is hidden from screen recordings, screen sharing and screenshots — the capture shows whatever is behind it."
+            >
+              <Toggle checked={notetakerInCapture} onChange={handleNotetakerCaptureChange} />
+            </SettingRow>
             {/* D5: this governs the expanded panel and the recording pill ONLY.
                 The bar-level mass is always opaque black, because it is
                 impersonating the physical notch and any translucency breaks the
@@ -806,6 +882,62 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                 value={surfaceAppearance}
                 onChange={handleSurfaceAppearanceChange}
               />
+            </SettingRow>
+
+            {/* SURFACE TONE — the ground colour, not the material.
+                Shown WITH a preview because the difference is small in words
+                ("dark blue-grey" vs "black") and obvious on sight. The swatches
+                are the real values: Space Gray is rgb(22,24,28), black is the
+                same black the notch housing already is. */}
+            <SettingRow
+              label="Surface tone"
+              description="The colour every expanded surface stands on. Black matches the notch itself; Space Gray is a shade lighter."
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end' }}>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {([
+                    { v: 'spaceGray' as const, label: 'Space Gray', plane: 'rgb(22,24,28)', rail: 'rgba(255,255,255,0.028)' },
+                    { v: 'black' as const,     label: 'Black',      plane: '#000000',       rail: 'transparent' },
+                  ]).map((o) => (
+                    <button
+                      key={o.v}
+                      type="button"
+                      onClick={() => handleSurfaceToneChange(o.v)}
+                      aria-pressed={surfaceTone === o.v}
+                      style={{
+                        padding: 0, cursor: 'pointer', background: 'none',
+                        border: `2px solid ${surfaceTone === o.v ? '#3b82f6' : 'transparent'}`,
+                        borderRadius: 12, lineHeight: 0,
+                      }}
+                    >
+                      {/* A miniature of the real surface: black notch mass on
+                          top, the plane below it, a card and a rail on that
+                          plane. The whole point of the setting is how those
+                          two blacks sit together, so the mass must be here. */}
+                      <div style={{
+                        width: 132, height: 74, borderRadius: 10, overflow: 'hidden',
+                        background: o.plane, border: '1px solid rgba(255,255,255,0.10)',
+                        display: 'flex', flexDirection: 'column',
+                      }}>
+                        <div style={{ height: 13, background: '#000', flex: 'none' }} />
+                        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+                          <div style={{ width: 34, background: o.rail, borderRight: '1px solid rgba(255,255,255,0.06)' }} />
+                          <div style={{ flex: 1, padding: 7 }}>
+                            <div style={{ height: 9, borderRadius: 3, background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.10)', marginBottom: 5 }} />
+                            <div style={{ height: 9, borderRadius: 3, background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.10)', marginBottom: 5 }} />
+                            <div style={{ height: 5, width: '62%', borderRadius: 2, background: 'rgba(255,255,255,0.16)' }} />
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{
+                        fontSize: 11, lineHeight: '18px', textAlign: 'center',
+                        color: surfaceTone === o.v ? '#3b82f6' : 'var(--color-text-secondary, #8b8b8b)',
+                        fontWeight: surfaceTone === o.v ? 600 : 400,
+                      }}>{o.label}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </SettingRow>
           </Card>
 
@@ -1042,36 +1174,81 @@ function Picker({ value, options, placeholder, onChange }: {
   onChange: (value: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState<DOMRect | null>(null)
   const ref = useRef<HTMLDivElement | null>(null)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      // The menu is portaled OUT of this subtree, so it is not inside `ref`.
+      // Without the second test, mousedown on an option closed the menu and
+      // unmounted the button before its click could fire — every selection
+      // would be silently dropped.
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    // A fixed-position menu cannot follow its trigger, so close rather than
+    // let it drift away from the row it belongs to.
+    const onMove = () => setOpen(false)
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onMove)
+    window.addEventListener('scroll', onMove, true)
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onMove)
+      window.removeEventListener('scroll', onMove, true)
     }
   }, [open])
 
   const current = options.find((o) => o.value === value)
 
+  function toggle() {
+    if (!open) setRect(btnRef.current?.getBoundingClientRect() ?? null)
+    setOpen((v) => !v)
+  }
+
+  // Menu geometry: right-aligned under the trigger, flipped above when the
+  // viewport has no room below, and never taller than the space it has.
+  const GAP = 4
+  const below = rect ? window.innerHeight - rect.bottom - GAP * 2 : 0
+  const above = rect ? rect.top - GAP * 2 : 0
+  const flip = rect ? below < 160 && above > below : false
+  const maxHeight = Math.max(120, Math.floor(flip ? above : below))
+
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen((v) => !v)}
+        ref={btnRef}
+        onClick={toggle}
         disabled={options.length === 0}
         className="flex items-center justify-between gap-2 bg-cream-mid border border-border-md rounded-full pl-3.5 pr-3 py-2 text-[12.5px] font-medium text-ink shadow-sm min-w-[180px] max-w-[220px] disabled:opacity-40"
       >
         <span className="truncate">{current?.label ?? placeholder}</span>
         <span className="text-[13px] text-ink-35 shrink-0">⌄</span>
       </button>
-      {open && options.length > 0 && (
-        <div className="absolute right-0 top-full mt-1 z-20 min-w-[180px] max-w-[260px] bg-surface-2 border border-border rounded-[12px] shadow-lg overflow-hidden py-1">
+      {/* PORTALED TO body ON PURPOSE: every Card wraps its rows in
+          `overflow-hidden` to keep them inside the rounded corners, which also
+          clipped this menu — it opened correctly and was sliced off at the card
+          edge, so the microphone list looked empty. z-index cannot escape a
+          clipping ancestor; leaving the DOM subtree can. */}
+      {open && rect && options.length > 0 && createPortal(
+        <div
+          ref={menuRef}
+          style={{
+            position: 'fixed',
+            top: flip ? undefined : rect.bottom + GAP,
+            bottom: flip ? window.innerHeight - rect.top + GAP : undefined,
+            right: Math.max(GAP, window.innerWidth - rect.right),
+            maxHeight,
+          }}
+          className="z-[9999] min-w-[180px] max-w-[280px] overflow-y-auto bg-surface-2 border border-border rounded-[12px] shadow-lg py-1"
+        >
           {options.map((opt) => (
             <button
               key={opt.value}
@@ -1083,7 +1260,8 @@ function Picker({ value, options, placeholder, onChange }: {
               {opt.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

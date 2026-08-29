@@ -25,6 +25,8 @@ import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { createLogger } from './log'
 import { SURFACES, normalizeSurface } from './surface'
+import { groupKey } from './group-key'
+import { MAX_GROUP_LABEL } from './group-registry'
 import type { AgentExecutor, ExecutorFactory } from './executor'
 import { devEvent } from './curator-devlog'
 
@@ -92,6 +94,26 @@ export interface AgentAvailability {
   codexProjects?: string[]
 }
 
+/**
+ * One workspace stream, as the router is allowed to see it.
+ *
+ * Comes from the group registry (group-registry.ts), which is deliberately
+ * BACKEND-AGNOSTIC — unlike every task list on this interface, which is scoped
+ * to one backend on purpose. A group is metadata and can never be dispatched
+ * into, so sharing the vocabulary across routers costs none of the separation
+ * that scoping buys; withholding it, on the other hand, is what made two
+ * routers mint two names for one stream.
+ */
+export interface GroupOption {
+  /** The stored display label — what the user already calls this stream. */
+  label: string
+  /** A couple of member task names, so belonging can be judged rather than
+   *  word-matched ("a group that swallows everything is no group"). */
+  examples?: string[]
+  /** The user authored this one, rather than the router guessing it. */
+  authored?: boolean
+}
+
 /** A known project a NEW session can be bound to (curated by projects.ts). */
 export interface RoutableProject {
   name: string
@@ -116,6 +138,25 @@ export interface RouteDecision {
    *  (a complaint/correction/suggestion) — nothing is spawned; the host records
    *  it against the named skill. */
   action: 'new' | 'continue' | 'resume' | 'speak' | 'curate' | 'skill_feedback'
+  /** THE LABEL, STILL IN FLIGHT. Present only on a `new` decision made with
+   *  `deferNaming`: the name and group were not on the critical path, so the
+   *  caller dispatches first and applies these when they land. Always resolves
+   *  — a failed enrichment yields {} and leaves the task running and unnamed,
+   *  which is strictly better than making the user wait for a label. */
+  enrich?: Promise<{ name?: string; group?: string }>
+  /**
+   * NOTHING CLASSIFIED THIS — it is the failsafe, not a decision.
+   *
+   * When the router times out or answers unusably, we still dispatch, because
+   * losing something the user said out loud is worse than dispatching it badly.
+   * But the result is a task carrying the RAW TRANSCRIPT as its title, with no
+   * name and no group: identical, on the wall, to naming and grouping having
+   * failed. Two 60s router timeouts on 2026-08-28 were each read as "the
+   * grouping feature is broken" for exactly this reason.
+   *
+   * The flag exists so the card can say which of the two actually happened.
+   */
+  unrouted?: boolean
   targetTaskId?: string
   /** cleaned intent (router folds in transcript cleanup). */
   intent: string
@@ -179,7 +220,11 @@ export function fmtAge(ageSec: number): string {
 
 /** The instruction we type into the warm REPL each call. Self-contained: the
  *  router relies on THIS snapshot, not on accumulated memory (keeps it thin). */
-export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string | null, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): string {
+export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string | null, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability, groups: GroupOption[] = [], opts: { defer?: boolean; tool?: string } = {}): string {
+  // GATING vs COSMETIC. With `defer`, the name and group rules are left out and
+  // asked for afterwards (buildEnrichPrompt) — see there for why. Everything
+  // that decides WHERE the utterance goes stays exactly as it was.
+  const defer = opts.defer === true
   const lines = tasks.map((t) =>
     `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — ${t.state}` +
     `${t.kind === 'session' ? ' · PERSISTENT SESSION' : ''}${t.project ? ` · project: ${t.project}` : ''}` +
@@ -193,6 +238,70 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
       ? `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — finished · ${fmtAge(t.ageSec)} · RESUMABLE`
       : `  ${t.name ? `"${t.name}" — ` : ''}"${t.intent}" — ${t.state} · ${fmtAge(t.ageSec)} (context only)`,
   )
+  // Built BEFORE the prompt array rather than as an IIFE inside it.
+  const streamSection = ((): string[] => {
+    // THE STREAMS the user actually has, from the group registry — not read
+    // off whatever happens to be on screen.
+    //
+    // This block used to derive its list from `tasks / coldSessions / wall`
+    // and then tell the model those were "the ONLY groups that exist right
+    // now". Both halves were problems. Those lists are filtered PER BACKEND
+    // before they ever reach here (init.ts's `mine`), so a Claude router
+    // structurally could not see a stream whose tasks live on Codex, and
+    // minted its own name for it. And a stream whose tasks had simply ended
+    // was invisible too, so the next mention re-minted it — which is how one
+    // stream became "unmute", "unmute cloud" and "unmute AI".
+    //
+    // The vocabulary is now passed in, backend-agnostic and durable. Task
+    // scoping is untouched: the router still cannot NAME another backend's
+    // task, it can only file work under a stream they share.
+    const derived = new Map<string, string[]>()
+    for (const t of [...tasks, ...coldSessions, ...wall]) {
+      const g = (t.group ?? '').trim()
+      if (!g) continue
+      const label = (t.name || t.intent).slice(0, 40)
+      const list = derived.get(g) ?? []
+      if (list.length < 2 && !list.includes(label)) list.push(label)
+      derived.set(g, list)
+    }
+    // NOT named `lines`: the enclosing function already has a `lines` (the
+    // task lines), this IIFE sits inside the array literal that reads it, and
+    // shadowing it there deadlocked the whole test file rather than failing
+    // loudly. Distinct names, deliberately.
+    const streamLines: string[] = []
+    const listed = new Set<string>()
+    // The registry vocabulary first — it is the durable list, and it includes
+    // streams whose tasks have all finished (and streams living on the OTHER
+    // backend, which this router's task lists can never show it).
+    for (const g of groups) {
+      const label = (g.label ?? '').trim()
+      if (!label || listed.has(label)) continue
+      listed.add(label)
+      const examples = (g.examples?.length ? g.examples : derived.get(label) ?? []).slice(0, 2)
+      streamLines.push(
+        `  • ${label}${g.authored ? ' (yours — the user named this one)' : ''}` +
+        (examples.length ? ` — e.g. ${examples.map((m) => `"${m}"`).join(', ')}` : ''),
+      )
+    }
+    // Anything on screen the vocabulary has not caught up with yet still gets
+    // offered: a missing stream is how a duplicate gets minted.
+    for (const [g, ms] of [...derived.entries()]) {
+      if (listed.has(g)) continue
+      streamLines.push(`  • ${g} — e.g. ${ms.map((m) => `"${m}"`).join(', ')}`)
+    }
+    if (!streamLines.length) return []
+    return [
+      ``,
+      `LIVE GROUPS — the workspace streams currently on the user's wall. These are`,
+      `the streams the user already has: a stream is REMEMBERED while it is quiet`,
+      `(it does not fade when its tasks end), so work returning to one JOINS it`,
+      `rather than starting a near-duplicate under a slightly different name.`,
+      `Each is "what the work is about", shown with example members. Create a new`,
+      `one only when the work genuinely belongs to none of them:`,
+      ...streamLines,
+    ]
+  })()
+
   return [
     // TWO WAYS TO ANSWER, one prompt.
     //
@@ -204,9 +313,19 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     // Everything BELOW this line — targeting rules, consent policy, kinds,
     // groups, skills, ops — is identical for both, and must stay that way: it
     // is how unmute thinks, not how a particular CLI talks.
-    decisionPath
-      ? `[Unmute router] You route a spoken command to where it belongs. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else — no tools, no browser, no research.`
-      : `[Unmute router] You route a spoken command to where it belongs. Reply with ONLY one line of JSON — no prose, no explanation, no code fence. Do nothing else — no tools, no browser, no research.`,
+    // THREE WAYS TO ANSWER, one prompt. The transport picks; the rules below
+    // are identical for all three and must stay that way.
+    //
+    // The `tool` form is NOT just a reworded "reply with JSON". A tool whose
+    // schema is deferred has to be LOADED before it can be called, and the
+    // other two forms end with "no tools" — which forbids exactly that, and
+    // makes the route silently never happen. Three spike runs died on it
+    // (28 Aug) before the cause was found, so the permission is explicit here.
+    opts.tool
+      ? `[Unmute router] You route a spoken command to where it belongs. Answer by calling the ${opts.tool} tool exactly once with your decision — load it with ToolSearch first if it is not already loaded. Beyond that do no work: no files, no browser, no research.`
+      : decisionPath
+        ? `[Unmute router] You route a spoken command to where it belongs. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else — no tools, no browser, no research.`
+        : `[Unmute router] You route a spoken command to where it belongs. Reply with ONLY one line of JSON — no prose, no explanation, no code fence. Do nothing else — no tools, no browser, no research.`,
     ``,
     `Spoken command: "${utterance}"`,
     ``,
@@ -310,26 +429,7 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `and set "contextTaskId" to that task's id: the new task receives that task's`,
     `actual record (status + transcript) to read before answering.`,
     ``,
-    ...((): string[] => {
-      const members = new Map<string, string[]>()
-      for (const t of [...tasks, ...coldSessions, ...wall]) {
-        const g = (t.group ?? '').trim()
-        if (!g) continue
-        const label = (t.name || t.intent).slice(0, 40)
-        const list = members.get(g) ?? []
-        if (list.length < 2 && !list.includes(label)) list.push(label)
-        members.set(g, list)
-      }
-      if (!members.size) return []
-      return [
-        ``,
-        `LIVE GROUPS — the workspace streams currently on the user's wall. These are`,
-        `the ONLY groups that exist right now: groups are creatures of the present`,
-        `(they fade when their tasks end; new ones are minted only by you or the`,
-        `user). Each is "what the work is about", shown with example members:`,
-        ...[...members.entries()].map(([g, ms]) => `  • ${g} — e.g. ${ms.map((m) => `"${m}"`).join(', ')}`),
-      ]
-    })(),
+    ...streamSection,
     ``,
     `CURATION (action "curate"): if the command organizes the wall ITSELF — "group`,
     `these two as X", "put the video tasks together", "rename group A to B" — do`,
@@ -363,8 +463,10 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
       `cleaned. Nothing is spawned.`,
     ] : []),
     ``,
-    `Write exactly: {"action":"new"|"continue"|"resume"|"speak"|"curate"${skillNames.length ? '|"skill_feedback"' : ''},"targetTaskId":"<id when continue/resume/speak>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>","contextTaskId":"<task id whose record a NEW task should read, or omit>","group":"<workspace group or omit>","ops":[<curate ops, action "curate" only>]${skillNames.length ? ',"skill":"<listed skill name or omit>"' : ''}}`,
-    `name (for action "new"): a 2-4 word title capturing the essence, for a session list in a UI — plain words, no quotes/punctuation (e.g. "Unmute pricing check", "WhatsApp message", "Gating feature work").`,
+    ...(opts.tool ? [] : [`Write exactly: {"action":"new"|"continue"|"resume"|"speak"|"curate"${skillNames.length ? '|"skill_feedback"' : ''},"targetTaskId":"<id when continue/resume/speak>","intent":"<cleaned one-line command>"${defer ? '' : ',"name":"<2-4 word title for a new task>"'},"surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>","contextTaskId":"<task id whose record a NEW task should read, or omit>"${defer ? '' : ',"group":"<workspace group or omit>"'},"ops":[<curate ops, action "curate" only>]${skillNames.length ? ',"skill":"<listed skill name or omit>"' : ''}}`]),
+    ...(defer ? [] : [
+    `name (for action "new"): a 2-4 word title for a session list in a UI — plain words, no quotes/punctuation. LEAD WITH THE SUBJECT, the thing the work is about, never with the action taken on it: the user will have more than one task about the same subject, so the title has to identify WHICH subject, with a distinguishing detail only after that is clear. The intent underneath already records what is being done. The group and the name answer DIFFERENT questions and you decide both in this turn: the group is the ongoing stream ("unmute"), the name is which piece of work inside it ("Notch freeze on wake") — so do not simply repeat the group, and do not make the name a verb phrase. e.g. "Unmute pricing model", "WhatsApp reply to Rishi", "Notch freeze on wake".`,
+    ]),
     `alternate (only with action "new", optional): if exactly one open task was a PLAUSIBLE alternative you seriously weighed before choosing NEW, give its id — the user gets a one-tap "or send it there?" offer. Omit it when nothing came close (most of the time).`,
     `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
     `mode: use "raw" for "open me a session to work in" / open-ended coding where injected memory hints would pollute long reasoning; use "managed" for short, surface-operating dictated tasks. If ambiguous, choose "raw".`,
@@ -375,7 +477,218 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
         `codexProject (only with agent "codex-desktop", optional): the Codex project to create it inside, EXACTLY one of: ${avail.codexProjects.join(', ')}. Omit when the user names none.`,
       ] : []),
     ] : []),
-    `group: the workspace group for the task this command creates or continues — the answer to "what is this work ABOUT" (a project, artifact, or stream: a repo name, "launch video", "on-call"), NEVER an activity type ("coding", "research", "media"). Every PERSISTENT SESSION deserves a group — being a session already proves the stream is ongoing. Decide DELIBERATELY, in this order: (1) if the user names a group in the command, use exactly their words; (2) check the LIVE GROUPS list above — JOIN one when this task belongs to that same stream of work (not merely when it mentions the same product/word: a group that swallows everything is no group); (3) otherwise CREATE one — 2-3 words, the subject in the user's own words ("videos", "launch video", "on-call") — this is the NORMAL case for a new session, not an exception; (4) omit ONLY when the work is genuinely subject-less, or for a one-off errand. A group is the stream, not the deliverable: name what the user will still call this work next week.`,
+    ...(defer ? [] : GROUP_RULE),
+  ].join('\n')
+}
+
+/** The group rule, shared by the full prompt and the enrichment follow-up. */
+const GROUP_RULE: string[] = [
+    `group: the workspace group for the task this command creates or continues — the answer to "what is this work ABOUT" (a project, artifact, or stream: a repo name, "launch video", "on-call"), NEVER an activity type ("coding", "research", "media"). EVERY task gets one where it has a subject — a ONE-OFF IS GROUPED TOO. The task's kind decides how long it lives, never whether the work is about something: an errand about a project belongs to that project's stream exactly as a session does.`,
+    // ALTITUDE, not word overlap. Both failure modes are the same mistake made
+    // at different levels, so the rule is stated once as a level test rather
+    // than as two competing warnings.
+    //
+    // The old text told the model to join "that same stream of work (not merely
+    // when it mentions the same product/word)". That parenthesis was aimed at
+    // one group swallowing the wall, but on 28 Aug it caused the opposite: the
+    // user said "Reddit marketing for Unmute" with "unmute marketing" already
+    // on the wall, and the model — reading "don't join on the product word" —
+    // minted "reddit marketing" beside it. A channel is a MEMBER of a stream.
+    `A group is a STREAM at the altitude the user thinks about their work — the shelf they would file this on, not the thing being produced. Getting the LEVEL right is the whole job, and it goes wrong in both directions:`,
+    `  • TOO NARROW (the common one): minting a stream for what is really one item inside an existing one. Channels, platforms, surfaces, audiences, individual deliverables and sub-topics are MEMBERS of a stream, not streams. Posting to Reddit and posting to Twitter are both the marketing stream; the pricing page and the docs page are both the website stream; this week's bug and last week's are both that project's stream.`,
+    `  • TOO BROAD: one stream that eats the wall because everything shares a product name. A product's marketing, its iOS app and its pricing are three streams, not one.`,
+    `The test, applied to each live group in turn: would the user expect to find this task sitting NEXT TO that group's existing work? If yes, JOIN it — even when this task's specific channel/page/deliverable is new, and even when the wording differs. Only when the answer is no for every one of them does a new stream exist. If the label you are about to create is an existing group plus a qualifier, it IS that group.`,
+    `Decide DELIBERATELY, in this order: (1) if the user names a group in the command, use exactly their words; (2) apply the test above to the LIVE GROUPS list and JOIN the one it matches; (3) otherwise CREATE one — 2-3 words, the subject in the user's own words ("videos", "launch video", "on-call"); (4) omit ONLY when the work is genuinely subject-less — not merely because it is small or quick. Name what the user will still call this work next week.`,
+]
+
+/**
+ * THE LABEL, ASKED FOR AFTER THE TASK IS ALREADY RUNNING.
+ *
+ * `name` and `group` decide what the card SAYS. The task runs identically
+ * whether they land now or five seconds from now — but they are the two
+ * largest rule blocks in the routing prompt and the most reasoning-heavy part
+ * of the answer, and they used to sit squarely on the user's critical path
+ * (15.9s and 24.0s to dispatch, measured 28 Aug).
+ *
+ * This runs in the SAME session immediately after the gating decision, so the
+ * utterance, the task list and the live groups are all still in context — the
+ * follow-up is a sentence rather than a second routing call. It is chained
+ * ahead of housekeeping's /clear, which is what makes that true.
+ */
+export function buildEnrichPrompt(decisionPath: string | null, groups: GroupOption[] = []): string {
+  const streams = groups.map((g) => g.label).filter(Boolean)
+  return [
+    decisionPath
+      ? `[Unmute router] Same command, one more question. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else.`
+      : `[Unmute router] Same command, one more question. Reply with ONLY one line of JSON — no prose, no code fence.`,
+    ``,
+    `Give the name and group for the task you just routed.`,
+    ``,
+    `Write exactly: {"name":"<2-4 words>","group":"<workspace group or omit>"}`,
+    ``,
+    ...(streams.length ? [`The user's existing streams: ${streams.join(', ')}.`, ``] : []),
+    `name: a 2-4 word title for a session list — plain words, no quotes/punctuation. LEAD WITH THE SUBJECT, the thing the work is about, never the action taken on it: the user will have more than one task about the same subject, so the title has to identify WHICH subject. Not a verb phrase, and not just a repeat of the group. e.g. "Unmute pricing model", "WhatsApp reply to Rishi", "Notch freeze on wake".`,
+    ...GROUP_RULE,
+  ].join('\n')
+}
+
+/**
+ * Fold a label the model wrote onto the stream the user already has.
+ *
+ * Returns the STORED label when they name the same stream, so the value that
+ * leaves the parser is always the canonical one — even for a caller that never
+ * consults the registry afterwards. Returns undefined when it names nothing we
+ * know, which is the create path, not an error.
+ */
+export function canonicalGroup(label: string | null | undefined, groups: GroupOption[]): string | undefined {
+  const key = groupKey(label)
+  if (!key) return undefined
+  const exact = groups.find((g) => groupKey(g.label) === key)?.label
+  if (exact) return exact
+
+  // CONTAINMENT: the new label is an existing one PLUS a qualifier.
+  //
+  // Sprawl has two causes. Whether "reddit marketing" belongs to "unmute
+  // marketing" is a judgement about altitude that no string rule can make
+  // safely — merge on shared words and two real products with similar names
+  // collapse into one. That half lives in the prompt.
+  //
+  // This half does not need judgement. When one label's words strictly contain
+  // the other's, the longer is the shorter with detail bolted on — they cannot
+  // be about different subjects. "unmute marketing plan" arriving next to
+  // "unmute marketing" is the same stream said longer, which is how "notch ui"
+  // became "notch ui redesign".
+  //
+  // Only ever folds the LONGER label onto the shorter stored one. Folding down
+  // would let a bare word ("marketing") capture every stream that mentions it,
+  // which is the swallow-everything failure in the other direction.
+  const words = new Set(key.split(' ').filter(Boolean))
+  let best: { label: string; len: number } | undefined
+  for (const g of groups) {
+    const gk = groupKey(g.label)
+    if (!gk) continue
+    const gw = gk.split(' ').filter(Boolean)
+    if (gw.length >= words.size) continue          // never fold onto something longer or equal
+    if (!gw.every((w) => words.has(w))) continue   // must be a strict subset
+    // Most specific stored stream wins, so a three-word label prefers a
+    // two-word parent over a one-word grandparent.
+    if (!best || gw.length > best.len) best = { label: g.label, len: gw.length }
+  }
+  return best?.label
+}
+
+/**
+ * STRUCTURED OUTPUT, IMPLEMENTED IN THE HARNESS.
+ *
+ * The router is a CLI session on the user's own subscription, not an API call —
+ * that is what makes routing free, and it is also why there is no
+ * `response_format` to lean on. So the guarantee an API would give us by
+ * construction is done here instead: check the reply against the schema, and
+ * when it does not fit, say exactly what is wrong and ask once more.
+ *
+ * WHY THIS EXISTS, from the field (2026-08-27 19:59). The model answered:
+ *
+ *   { "action": "new", "group": "twitter marketing",
+ *     "task": "Discuss an idea for Unmute's Twitter marketing…",
+ *     "reasoning": "No open tasks exist to continue…" }
+ *
+ * Well-formed JSON, entirely wrong keys. `intent` was missing so the card fell
+ * back to the raw transcript and showed "So there was this idea that came to my
+ * mind abo…"; `name` was missing so nothing ever named it; `kind` was missing so
+ * it defaulted to a one-off, and the group the model HAD chosen was dropped on
+ * the way in. Three visible faults, one malformed reply, and not a single line
+ * in the log saying so — every field failed soft and silently.
+ *
+ * Failing soft is right for a decision we cannot get again. It is wrong for one
+ * we can simply ask for a second time.
+ */
+export interface DecisionComplaint {
+  ok: boolean
+  /** What to tell the model, specific enough to act on. */
+  complaint?: string
+  /** False when re-asking cannot help — nothing came back to correct. */
+  retryable?: boolean
+}
+
+/** Keys the model has reached for instead of ours, mapped to what we meant.
+ *  Naming the wrong key back to it corrects far more reliably than reciting
+ *  the missing one, which it has already read once in the schema. */
+const CONFUSABLE: Record<string, string> = {
+  task: 'intent',
+  request: 'intent',
+  command: 'intent',
+  title: 'name',
+  label: 'name',
+  species: 'kind',
+  type: 'kind',
+}
+
+const KNOWN_ACTIONS = new Set(['new', 'continue', 'resume', 'speak', 'curate', 'skill_feedback'])
+
+/** Does this reply carry what the action it claims actually needs? */
+export function validateDecision(raw: string | null, opts: { defer?: boolean } = {}): DecisionComplaint {
+  // Nothing came back — a timeout or a dead session. Re-asking spends the
+  // budget twice for the same silence; the failsafe is the right answer.
+  if (!raw || !raw.trim()) return { ok: false, retryable: false }
+
+  let obj: Record<string, unknown>
+  try {
+    obj = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return { ok: false, retryable: true, complaint: 'your reply was not JSON — no prose, no code fence, just the object' }
+  }
+  if (!obj || typeof obj !== 'object') {
+    return { ok: false, retryable: true, complaint: 'your reply was not a JSON object' }
+  }
+
+  const missing: string[] = []
+  const has = (k: string): boolean => typeof obj[k] === 'string' && !!(obj[k] as string).trim()
+  const action = typeof obj.action === 'string' ? obj.action : ''
+  if (!KNOWN_ACTIONS.has(action)) {
+    return {
+      ok: false,
+      retryable: true,
+      complaint: `"action" must be one of ${[...KNOWN_ACTIONS].map((a) => `"${a}"`).join(', ')}${action ? `, not "${action}"` : ' and was missing'}`,
+    }
+  }
+
+  if (action !== 'curate' && !has('intent')) missing.push('intent')
+  if (action === 'new') {
+    // `name` is only required when the gating prompt actually asked for it.
+    // Under deferNaming it is fetched afterwards, so demanding it here would
+    // spend a correction round-trip on the user's critical path to re-ask for
+    // a key the prompt deliberately left out — the exact cost this change set
+    // out to remove.
+    if (!opts.defer && !has('name')) missing.push('name')
+    if (!has('kind')) missing.push('kind')
+  }
+  if ((action === 'continue' || action === 'resume') && !has('targetTaskId')) missing.push('targetTaskId')
+  if (action === 'curate' && !Array.isArray(obj.ops)) missing.push('ops')
+  if (action === 'skill_feedback' && !has('skill')) missing.push('skill')
+
+  if (!missing.length) return { ok: true }
+
+  // Point at the key it used instead, where we can see one.
+  const wrong = Object.keys(CONFUSABLE).filter((k) => k in obj && missing.includes(CONFUSABLE[k]))
+  const usedInstead = wrong.length
+    ? ` You sent ${wrong.map((k) => `"${k}"`).join(' and ')} — ${wrong.length > 1 ? 'those are not keys' : 'that is not a key'} in this schema.`
+    : ''
+  return {
+    ok: false,
+    retryable: true,
+    complaint: `missing required key${missing.length > 1 ? 's' : ''} ${missing.map((k) => `"${k}"`).join(', ')} for action "${action}".${usedInstead}`,
+  }
+}
+
+/** The second ask. Short on purpose: the schema was in the first prompt and is
+ *  still in its context — repeating it invites a fresh improvisation, whereas a
+ *  single specific correction is a thing it can act on. */
+export function correctionPrompt(complaint: string, decisionPath: string | null): string {
+  return [
+    `[Unmute router] That reply could not be used: ${complaint}`,
+    decisionPath
+      ? `Write the corrected JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). ONLY the object, exactly the keys described above.`
+      : `Reply again with ONLY that one line of JSON — exactly the keys described above, no prose, no code fence.`,
   ].join('\n')
 }
 
@@ -392,15 +705,15 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
 export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSec = 180): RouteDecision {
   const clean = (intent || '').trim()
   if (tasks.length === 1 && tasks[0].ageSec <= maxAgeSec && tasks[0].state !== 'processing') {
-    return { action: 'continue', targetTaskId: tasks[0].id, intent: clean, mode: 'managed' }
+    return { action: 'continue', targetTaskId: tasks[0].id, intent: clean, mode: 'managed', unrouted: true }
   }
-  return { action: 'new', intent: clean, mode: 'managed' }
+  return { action: 'new', intent: clean, mode: 'managed', unrouted: true }
 }
 
 /** Parse the decision file. EXPLICIT router decisions (new, or continue→known id)
  *  are honored. Everything else — null/malformed/unknown-action/unknown-id —
  *  routes through failsafeDecision (continue-latest-if-single). */
-export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = [], coldSessions: RoutableTask[] = [], finished: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): RouteDecision {
+export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = [], coldSessions: RoutableTask[] = [], finished: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability, groups: GroupOption[] = []): RouteDecision {
   // CONSENT ENFORCEMENT (layer 2): continue-targets are ONLY the targetable
   // tasks; a cold session id in targetTaskId is rejected here no matter what
   // the model wrote (falls through to a safe NEW). Cold ids ARE valid for
@@ -429,8 +742,16 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   const surface = normalizeSurface(obj.surface)
   // workspace group: trimmed, de-quoted, bounded — junk becomes undefined.
   // Grouping is metadata, never a gate: a bad group must never break routing.
+  //
+  // CANONICALIZED against the registry vocabulary, the same way `dir` is pinned
+  // to a known project path and `surface` to the canonical enum. A label that
+  // names a stream the user already has resolves to THAT stream's stored label,
+  // so "Unmute" / "unmute-cloud" / "unmute cloud" can never become three
+  // groups. A label matching nothing survives as written — that is the create
+  // path, and it is the normal case for genuinely new work.
   const rawGroup = (obj.group ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
-  const group = rawGroup && rawGroup.length <= 32 ? rawGroup : undefined
+  const bounded = rawGroup && rawGroup.length <= 32 ? rawGroup : undefined
+  const group = bounded ? (canonicalGroup(bounded, groups) ?? bounded) : undefined
   if (obj.action === 'continue' && obj.targetTaskId && validIds.has(obj.targetTaskId)) {
     return { action: 'continue', targetTaskId: obj.targetTaskId, intent, mode, surface, ...(group ? { group } : {}), ...(skill ? { skill } : {}) }
   }
@@ -453,7 +774,14 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
     // for completeness. Wall ids are curation-only: they are NOT added to
     // continue/resume/alternate validation — the consent guards stand.
     const curatableIds = new Set([...alternateIds, ...wall.map((t) => t.id)])
-    const liveGroups = new Set([...tasks, ...coldSessions, ...wall].map((t) => t.group).filter((g): g is string => !!g))
+    // Rename sources are every stream the user HAS, not merely the ones with a
+    // card on screen. Validating against the visible tasks meant a stream you
+    // had parked for a week could not be renamed by voice at all — the command
+    // was silently dropped as naming a group that "did not exist".
+    const knownGroups = new Set([
+      ...groups.map((g) => g.label),
+      ...[...tasks, ...coldSessions, ...wall].map((t) => t.group).filter((g): g is string => !!g),
+    ])
     const sane = (v: unknown): string => typeof v === 'string' ? v.trim().replace(/^["'`]+|["'`.]+$/g, '').trim().slice(0, 32) : ''
     const ops: CurateOp[] = []
     for (const rawOp of Array.isArray(obj.ops) ? obj.ops : []) {
@@ -463,9 +791,12 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
         const ids = (Array.isArray(o.taskIds) ? o.taskIds : []).filter((i): i is string => typeof i === 'string' && curatableIds.has(i))
         if (g && ids.length) ops.push({ op: 'set_group', taskIds: ids, group: g })
       } else if (o?.op === 'rename_group') {
-        const from = typeof o.from === 'string' ? o.from.trim() : ''
+        const spoken = typeof o.from === 'string' ? o.from.trim() : ''
+        // Resolve the source through the same key folding as everything else,
+        // so "rename Unmute to X" finds the stream stored as "unmute".
+        const from = canonicalGroup(spoken, groups) ?? (knownGroups.has(spoken) ? spoken : '')
         const to = sane(o.to)
-        if (from && to && liveGroups.has(from)) ops.push({ op: 'rename_group', from, to })
+        if (from && to) ops.push({ op: 'rename_group', from, to })
       }
     }
     if (ops.length) return { action: 'curate', intent, ops }
@@ -521,7 +852,18 @@ export interface RouterOpts {
    * (file vs direct reply). See codex-router-engine.ts for why this is not an
    * AgentExecutor.
    */
-  engine?: { warm(): Promise<void>; decide(prompt: string, timeoutMs?: number): Promise<string | null>; dispose(): void }
+  engine?: {
+    warm(): Promise<void>
+    decide(prompt: string, timeoutMs?: number): Promise<string | null>
+    dispose(): void
+    /** Name for the logs. Both lanes run through this branch now, so a
+     *  hardcoded "codex" here would mislabel every Claude route. */
+    label?: string
+    /** Set when the engine answers by CALLING A TOOL rather than emitting JSON.
+     *  The prompt's opening instruction changes with it — and, critically, stops
+     *  saying "no tools", which would forbid loading this very tool. */
+    answerTool?: string
+  }
   /**
    * Distinguishes this router's working directory from the other one's.
    *
@@ -542,6 +884,10 @@ export interface RouterOpts {
    *  confirm-Enters for). Without this the prompt sits unsubmitted as a paste. */
   submitConfirmMs?: number
   pollMs?: number
+  /** Ask for name+group AFTER returning the gating decision, in the same warm
+   *  session, so dispatch is not held up by the two heaviest rule blocks in
+   *  the prompt. On by default. */
+  deferNaming?: boolean
   /** Recycle (full respawn) the resident session after this many decisions. */
   recycleEvery?: number
   /** Recycle the resident session once it is older than this (ms). */
@@ -567,6 +913,7 @@ export class Router {
       readyGraceMs: opts.readyGraceMs ?? 1500,
       submitConfirmMs: opts.submitConfirmMs ?? 450,
       pollMs: opts.pollMs ?? 150,
+      deferNaming: opts.deferNaming ?? true,
       recycleEvery: opts.recycleEvery ?? 50,
       maxSessionMs: opts.maxSessionMs ?? 2 * 60 * 60_000,
       now: opts.now,
@@ -578,38 +925,116 @@ export class Router {
 
   /** Classify one utterance against the current task snapshot. Single-flighted;
    *  always resolves (fail-safe to a new task). */
-  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): Promise<RouteDecision> {
-    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects, finished, coldSessions, wall, skillNames, avail))
+  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability, groups: GroupOption[] = []): Promise<RouteDecision> {
+    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects, finished, coldSessions, wall, skillNames, avail, groups))
     // After the decision resolves to the caller, keep the chain alive with
     // housekeeping (/clear + maybe-recycle) — off the hot path, but serialized
     // so it can never overlap the next route.
-    this.chain = run.then(() => this.housekeep(), () => this.housekeep())
+    // ENRICHMENT SITS BETWEEN THE DECISION AND THE /clear, and that ordering is
+    // the whole trick: the follow-up can be one sentence only because the
+    // session still holds the routing prompt it is following up on. Wiping the
+    // context first would turn it into a second full routing call.
+    this.chain = run
+      .then((d) => this.maybeEnrich(d, groups), () => undefined)
+      .then(() => this.housekeep(), () => this.housekeep())
     return run
+  }
+
+  /** Attach the deferred label fetch to a `new` decision, and hand the caller a
+   *  promise it can apply whenever it lands. Never rejects: a task that came up
+   *  unnamed is a cosmetic loss, and blocking on it would undo the point. */
+  private maybeEnrich(d: RouteDecision, groups: GroupOption[]): Promise<unknown> {
+    // Only a new task has a card to label. continue/resume adopt the target's
+    // existing name, and speak/curate/skill_feedback spawn nothing at all.
+    if (!this.o.deferNaming || d.action !== 'new' || this.engine) return Promise.resolve()
+    let settle: (v: { name?: string; group?: string }) => void = () => {}
+    d.enrich = new Promise((res) => { settle = res })
+    return this.enrichOnce(groups).then((v) => settle(v), () => settle({}))
+  }
+
+  /** One short follow-up in the still-warm session, read back through the same
+   *  decision file. This runs after the user already has their task, so it must
+   *  never hold the session open for long. */
+  private async enrichOnce(groups: GroupOption[]): Promise<{ name?: string; group?: string }> {
+    if (!this.ex?.alive) return {}
+    await fs.rm(this.decisionPath, { force: true }).catch(() => {})
+    const prompt = buildEnrichPrompt(this.decisionPath, groups)
+    this.ex.writeStdin(prompt)
+    await this.sleep(this.o.submitConfirmMs)
+    if (this.ex?.alive) this.ex.write('\r')
+    const raw = await this.waitForDecision()
+    if (!raw) { log.event('router-enrich', { got: false }); return {} }
+    try {
+      const j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { name?: unknown; group?: unknown }
+      const name = typeof j.name === 'string' && j.name.trim() ? j.name.trim().slice(0, 60) : undefined
+      const rawGroup = typeof j.group === 'string' && j.group.trim() ? j.group.trim().slice(0, MAX_GROUP_LABEL) : undefined
+      // The same folding the inline path gets — a deferred label must not be
+      // the one that reintroduces a duplicate stream.
+      const group = rawGroup ? (canonicalGroup(rawGroup, groups) ?? rawGroup) : undefined
+      log.event('router-enrich', { got: true, name: name ?? null, group: group ?? null })
+      return { name, group }
+    } catch {
+      log.event('router-enrich', { got: false, reason: 'unparseable' })
+      return {}
+    }
   }
 
   /** Bring the session up (or respawn it if it died) BEFORE it is needed, so a
    *  real utterance never pays cold-start. Idempotent and single-flighted: safe
    *  to call at app init and again on every Remote key-down. */
   warm(): Promise<void> {
-    const run = this.chain.then(() => this.ensureSession())
+    // WARM WHAT ACTUALLY ROUTES. routeOnce() checks `this.engine` first and
+    // returns before ever touching the PTY, so warming a session here for an
+    // engine-backed router spawned a REPL that would never be used AND left
+    // the engine cold — the first utterance then paid cold start plus, on the
+    // headless lane, the deferred-tool ToolSearch hop.
+    //
+    // Observed in the installed 1.5.7-dev.17: two stray `claude` PTYs at
+    // startup, one per router slot, and no engine warm at all. The Codex
+    // router has been doing this for as long as it has existed.
+    const run = this.chain.then(() => this.engine ? this.engine.warm() : this.ensureSession())
     this.chain = run.catch(() => undefined)
     return run
   }
 
-  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): Promise<RouteDecision> {
+  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability, groups: GroupOption[] = []): Promise<RouteDecision> {
     const fallback = (utterance || '').trim()
     // THE CODEX PATH IS NOT A SESSION AND NOT A FILE. It answers directly, so
     // none of the REPL choreography below (ready grace, paste-confirm Enter,
     // re-inject-on-stall) applies — every one of those exists for Claude's TUI.
     if (this.engine) {
+      const eng = this.engine.label ?? 'engine'
+      const t0 = this.clock()
       try {
-        const prompt = buildRoutingPrompt(utterance, tasks, null, projects, finished, coldSessions, wall, skillNames, avail)
-        const raw = await this.engine.decide(prompt, this.o.decisionTimeoutMs)
-        const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail)
-        log.event('route-decision', { engine: 'codex', action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length })
+        const prompt = buildRoutingPrompt(utterance, tasks, null, projects, finished, coldSessions, wall, skillNames, avail, groups, { tool: this.engine.answerTool })
+        log.event('router-engine-start', {
+          engine: eng, answerTool: this.engine.answerTool ?? null,
+          promptBytes: prompt.length, tasks: tasks.length, groups: groups.length,
+          utterance: utterance.slice(0, 120),
+        })
+        let raw = await this.engine.decide(prompt, this.o.decisionTimeoutMs)
+        // ONE correction, then the failsafe. See validateDecision.
+        const check = validateDecision(raw, { defer: this.o.deferNaming })
+        if (!check.ok && check.retryable) {
+          log.warn('router reply off-schema — asking once more', { engine: eng, complaint: check.complaint })
+          raw = await this.engine.decide(correctionPrompt(check.complaint!, null), this.o.decisionTimeoutMs)
+          log.event('router-retry', { engine: eng, fixed: validateDecision(raw, { defer: this.o.deferNaming }).ok })
+        }
+        const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail, groups)
+        // EVERYTHING THE CARD WILL SHOW, in one line. `unrouted` is the field
+        // that separates "the router never answered" from "naming and grouping
+        // did not work" — they look identical on the wall otherwise.
+        log.event('route-decision', {
+          engine: eng, ms: this.clock() - t0,
+          action: decision.action, targetTaskId: decision.targetTaskId ?? null,
+          name: decision.name ?? null, group: decision.group ?? null,
+          kind: decision.kind ?? null, mode: decision.mode ?? null,
+          dir: decision.dir ?? null, surface: decision.surface ?? null,
+          unrouted: decision.unrouted ?? false, tasks: tasks.length,
+        })
         return decision
       } catch (e) {
-        log.warn('codex route failed — using failsafe', { error: (e as Error).message })
+        log.warn('engine route failed — using failsafe', { engine: eng, ms: this.clock() - t0, error: (e as Error).message })
         return failsafeDecision(tasks, fallback)
       }
     }
@@ -617,7 +1042,7 @@ export class Router {
       await this.ensureSession()
       await fs.mkdir(this.dir, { recursive: true })
       await fs.rm(this.decisionPath, { force: true }).catch(() => {})
-      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished, coldSessions, wall, skillNames, avail)
+      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished, coldSessions, wall, skillNames, avail, groups, { defer: this.o.deferNaming })
       this.ex!.writeStdin(prompt)
       // The multi-line prompt is captured by Claude's TUI as a paste that lands
       // one Enter short of submitting — so it sits as "[Pasted text]" and the
@@ -625,8 +1050,22 @@ export class Router {
       // explicit confirm Enter to actually submit it. (Proven on the task lane.)
       await this.sleep(this.o.submitConfirmMs)
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
-      const raw = await this.waitForDecision(prompt)
-      const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail)
+      let raw = await this.waitForDecision(prompt)
+      // ONE correction, then the failsafe. The schema is still in the session's
+      // context, so the correction is a sentence rather than the whole prompt -
+      // and being short, it needs no staging of its own.
+      const check = validateDecision(raw)
+      if (!check.ok && check.retryable && this.ex?.alive) {
+        log.warn('router reply off-schema — asking once more', { complaint: check.complaint })
+        await fs.rm(this.decisionPath, { force: true }).catch(() => {})
+        const fix = correctionPrompt(check.complaint!, this.decisionPath)
+        this.ex.writeStdin(fix)
+        await this.sleep(this.o.submitConfirmMs)
+        if (this.ex?.alive) this.ex.write('\r')
+        raw = await this.waitForDecision(fix)
+        log.event('router-retry', { engine: 'claude', fixed: validateDecision(raw).ok })
+      }
+      const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail, groups)
       devEvent(log, 'route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, group: decision.group ?? null, ops: decision.ops?.length ?? 0 })
       return decision
     } catch (e) {
@@ -674,7 +1113,19 @@ export class Router {
   private async housekeep(): Promise<void> {
     this.decisionCount++
     if (this.ex?.alive) {
-      try { this.ex.writeStdin('/clear') } catch { /* best-effort */ }
+      // AND SUBMIT IT. Claude's TUI captures written text as a paste that sits
+      // one Enter short of running — the dispatch path above has always known
+      // this. Housekeeping did not, so for the life of this file `/clear` was
+      // typed into the input line and left there: the context was never wiped,
+      // and the stale command was still in the buffer when the next routing
+      // prompt was pasted in behind it. Measured in the field 28 Aug: routing
+      // took 15.9s on a session's first decision and 24.0s on its second, on
+      // near-identical prompts, because every turn kept every turn before it.
+      try {
+        this.ex.writeStdin('/clear')
+        await this.sleep(this.o.submitConfirmMs)
+        if (this.ex?.alive) this.ex.write('\r')
+      } catch { /* best-effort */ }
     }
     const aged = this.spawnedAt > 0 && this.clock() - this.spawnedAt > this.o.maxSessionMs
     if (this.decisionCount >= this.o.recycleEvery || aged) {
@@ -721,6 +1172,9 @@ export class Router {
         log.warn('router slow — clearing input and re-injecting prompt once', { elapsedMs: elapsed })
         this.ex.write('\x15')
         await this.sleep(200)
+        // `prompt` here is whatever the caller TYPED — the pointer, not the
+        // staged payload — so the re-inject repeats the same short line rather
+        // than pushing 8,500 characters down the channel that just failed.
         this.ex.writeStdin(prompt)
         await this.sleep(this.o.submitConfirmMs)
         if (this.ex?.alive) this.ex.write('\r')
@@ -738,6 +1192,9 @@ export class Router {
   dispose(): void {
     if (this.ex?.alive) { try { this.ex.kill() } catch { /* best-effort */ } }
     this.ex = null
+    // The engine owns a resident process on the headless lane; without this it
+    // outlives the app.
+    try { this.engine?.dispose() } catch { /* best-effort */ }
   }
 
   private clock(): number { return this.o.now ? this.o.now() : Date.now() }

@@ -70,6 +70,7 @@ import {
 } from './status-file'
 import { buildDispatch } from './dispatch-prompt'
 import { detectSurface } from './surface'
+import type { GroupRegistry } from './group-registry'
 import { deriveStatus, isAnswerable, selfContinuationDelaySeconds, type HookEvent, type AskQuestion } from './observer'
 import { readTranscript, hadSideEffects, readLatestExchange, parseTurns } from './transcript'
 import type { Block } from './blocks'
@@ -286,12 +287,51 @@ export interface Task {
   blocks?: Block[]
   /** Token usage for the panel footer, when the provider reports it. */
   usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number }
-  /** Workspace group — "what is this work about" ("unmute", "launch video",
-   *  "on-call"). Assigned ONCE by the router (user's own words win), mutated
-   *  only by user curation. Live groups = distinct values across live tasks;
-   *  no registry, no history — the screen is the entire state (spec
-   *  2026-07-16-cockpit-grouping). */
+  /**
+   * The agent has POSITIVELY been seen to receive the intent - a rollout turn,
+   * a prompt-submitted hook, or a transcript turn.
+   *
+   * `task-dispatched` only ever meant "we typed it". Whether it ARRIVED was
+   * never checked, and on 2026-08-28 the difference mattered: the words were
+   * typed, Codex ran `npm install -g @openai/codex` instead, and exited twelve
+   * seconds later having never shown them to a model.
+   *
+   * This flag is what makes retrying safe. Re-sending something the agent
+   * already acted on could repeat a side effect; re-sending something it
+   * provably never saw cannot.
+   */
+  deliveryProven?: boolean
+  /** How many times the intent has been sent again after a proven non-delivery. */
+  redeliveries?: number
+  /**
+   * The router never classified this task — it is the failsafe's output.
+   *
+   * The title is the raw transcript and there is no group, because no decision
+   * was ever made about it. Surfacing that is the difference between "routing
+   * failed" and "grouping is broken", which are indistinguishable on a card and
+   * have been confused twice.
+   */
+  unrouted?: boolean
+  /** Workspace group LABEL — "what is this work about" ("unmute", "launch
+   *  video", "on-call"). What every surface renders. Derived from `groupId`;
+   *  never the identity. */
   group?: string
+  /**
+   * The group registry entry this task is filed under — the identity.
+   *
+   * Spec 2026-07-16 §2 made the screen the entire state: live groups were the
+   * distinct label strings across live tasks, with no registry and no history.
+   * That is what re-minted a stream's name every time it went quiet, and what
+   * let one stream become "unmute", "unmute cloud" and "unmute AI".
+   *
+   * Assign-once still holds (§5): the router files a task at dispatch or at the
+   * follow-up that graduates it, and after that only the user moves it. What
+   * changed is only the vocabulary underneath — it now persists.
+   *
+   * Absent on tasks written before the registry; `rehydrate` resolves their
+   * label into an entry on first load.
+   */
+  groupId?: string
   state: UiTaskState
   createdAt: number
   updatedAt: number
@@ -387,6 +427,10 @@ export interface Task {
 export interface TaskManagerOpts {
   /** Creates a fresh executor per task (default: ClaudeCodeExecutor). */
   executorFactory: ExecutorFactory
+  /** The durable vocabulary of workspace streams (group-registry.ts). Absent ⇒
+   *  grouping degrades to bare labels, exactly as it behaved before the
+   *  registry existed — metadata, never a gate. */
+  groupRegistry?: GroupRegistry
   /** The user's path fence, as the Remote screen holds it. Read per dispatch so
    *  a task started after the setting changed honours the new value. Absent ⇒
    *  unfenced. */
@@ -554,6 +598,11 @@ export class TaskManager extends EventEmitter {
   // Idle-kill timers for WARM sessions (kept alive after done for follow-ups).
   private warmTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Background auto-purge sweep (null until startMaintenance()).
+  /** Set once shutdown() begins. Every PTY we then kill emits an exit, and
+   *  without this each one would look like a delivery failure worth retrying —
+   *  so quitting the app would spawn a fresh CLI per live session on the way
+   *  out. Shutting down is not a delivery failure. */
+  private shuttingDown = false
   private purgeTimer: ReturnType<typeof setInterval> | null = null
   // Codex approval inbox sweep (null until startMaintenance()).
   private approvalTimer: ReturnType<typeof setInterval> | null = null
@@ -614,8 +663,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -625,6 +674,7 @@ export class TaskManager extends EventEmitter {
       sandboxRoots: opts.sandboxRoots,
       codexFullAccess: opts.codexFullAccess,
       codexCliChoice: opts.codexCliChoice,
+      groupRegistry: opts.groupRegistry,
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       pollMs: opts.pollMs ?? 1000,
       activeReconcileMs: opts.activeReconcileMs ?? (opts.pollMs !== undefined ? opts.pollMs : 30_000),
@@ -674,6 +724,162 @@ export class TaskManager extends EventEmitter {
     this.scheduler = new ReconcileScheduler({
       tickMs: Math.min(this.opts.pollMs, 1_000),
       onError: (id, error) => this.handlePollError(id, error),
+    })
+  }
+
+  /**
+   * The session's process went away.
+   *
+   * TERMINAL STATES ARE FINAL. A normal task ends with the agent reporting done
+   * and the REPL being torn down a moment later, so treating every exit as a
+   * failure would turn every success into one at shutdown. Only a task still
+   * mid-flight - nothing reported, no result - is failed here.
+   *
+   * The exit code travels into `detail` because 0 and non-zero mean genuinely
+   * different things: 0 is the CLI choosing to quit (a menu selection, an
+   * update chooser), non-zero is it falling over. Both look identical on a card
+   * that only says "failed".
+   */
+  /** The session was seen to receive the intent. Public so the proof can also
+   *  arrive from the hook/observer side, not only from the poller. */
+  noteDeliveryProven(id: string, via: string): void {
+    const task = this.tasks.get(id)
+    if (!task || task.deliveryProven) return
+    task.deliveryProven = true
+    log.child({ taskId: id }).event('delivery-proven', { via })
+    this.mergeMeta(task, { deliveryProven: true }, 'noteDeliveryProven')
+  }
+
+  /**
+   * Watch for evidence that the turn actually started.
+   *
+   * Non-blocking on purpose: dispatch must stay fast, and this is only ever
+   * used to decide whether a LATER death is recoverable. Both backends already
+   * write the proof for their own reasons - Codex a rollout turn, Claude a
+   * transcript turn plus the prompt-submitted hook - so nothing is being asked
+   * of the agent that it was not already doing.
+   */
+  private proveDelivery(id: string): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    void (async () => {
+      // MEASURED, NOT GUESSED. A field dispatch (2026-08-28 08:18) pinned its
+      // rollout at t+11s - one second after this window originally closed. A
+      // prover that gives up just before the evidence lands is worse than no
+      // prover at all: every task reads "unproven", so a later death re-sends
+      // work that had in fact started. The window is now generous and the loop
+      // also stops the moment the task reaches a terminal state, so a long
+      // window costs nothing on the happy path.
+      const deadline = Date.now() + Math.max(this.opts.verifyAfterMs, 120_000)
+      const rolloutBefore = task.agent === 'codex' ? await this.codexUserTurns(task).catch(() => 0) : null
+      const claudeBefore = rolloutBefore === null ? await this.claudeUserTurns(task).catch(() => 0) : null
+      const submittedBefore = task.promptSubmittedAt ?? 0
+      while (Date.now() < deadline) {
+        const live = this.tasks.get(id)
+        if (!live || live.deliveryProven || TERMINAL.includes(live.state)) return
+        if (rolloutBefore !== null) {
+          if ((await this.codexUserTurns(live).catch(() => 0)) > rolloutBefore) {
+            return this.noteDeliveryProven(id, 'codex-rollout')
+          }
+        } else {
+          if ((live.promptSubmittedAt ?? 0) > submittedBefore) return this.noteDeliveryProven(id, 'prompt-submitted-hook')
+          if (claudeBefore !== null && (await this.claudeUserTurns(live).catch(() => 0)) > claudeBefore) {
+            return this.noteDeliveryProven(id, 'claude-transcript')
+          }
+        }
+        // UNREF'D: a prover must never be the reason the process stays alive.
+        // It is bookkeeping about a task, not work the user is waiting on.
+        await new Promise((r) => { const t = setTimeout(r, 300); (t as { unref?: () => void }).unref?.() })
+      }
+    })()
+  }
+
+  /** How many times an unproven intent may be sent again before we admit defeat.
+   *  Small: a CLI that dies three times is broken, not unlucky. */
+  private static readonly MAX_REDELIVERIES = 2
+
+  /**
+   * Send the user's words again, into a fresh session, keeping the same card.
+   *
+   * The intent has been on disk since task-created - this has never been a
+   * data-loss problem, only a delivery one. All that was missing was something
+   * to notice the delivery failed and try again.
+   */
+  private redeliver(id: string): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    const tlog = log.child({ taskId: id })
+    const attempt = (task.redeliveries ?? 0) + 1
+    task.redeliveries = attempt
+    tlog.warn('intent never reached the agent - sending it again', { attempt })
+    void (async () => {
+      try {
+        const ex = this.opts.executorFactory(false, task.agent ?? 'claude')
+        this.executors.set(id, ex)
+        this.outputBuffers.set(id, '')
+        ex.onData((chunk) => guardPtyCallback(id, () => {
+          const prev = this.outputBuffers.get(id) ?? ''
+          this.outputBuffers.set(id, (prev + chunk).slice(-TaskManager.OUTPUT_CAP))
+          this.emit('output', id, chunk)
+        }))
+        ex.onExit?.(({ exitCode }) => this.onSessionExit(id, exitCode))
+        await ex.spawn({ cwd: task.cwd, env: process.env, taskId: id, sessionId: task.sessionId })
+        await ex.isReady()
+        if (this.opts.trustAcceptMs > 0) {
+          await settleRepl({
+            agent: task.agent ?? 'claude',
+            getOutput: () => this.outputBuffers.get(id) ?? '',
+            isAlive: () => ex.alive,
+            sendEnter: () => ex.write('\r'),
+            sendRaw: (input) => ex.write(input),
+            onEvent: (event, fields) => tlog.event(event, fields),
+          })
+        }
+        if (!ex.alive) throw new Error('CLI exited again before the intent could be sent')
+        ex.writeStdin(buildDispatch({ intent: task.intent }))
+        tlog.event('intent-redelivered', { attempt })
+        this.proveDelivery(id)
+        this.startPolling(id)
+      } catch (e) {
+        tlog.warn('re-delivery failed', { attempt, error: (e as Error).message })
+        this.transition(id, 'failed', {
+          state: 'failed',
+          error: {
+            reason: 'The agent never received the request',
+            detail: `The session ended before your words reached it, and ${attempt} attempt(s) to send them again also failed.`,
+          },
+        })
+      }
+    })()
+  }
+
+  private onSessionExit(id: string, exitCode: number): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    if (TERMINAL.includes(task.state)) return
+    // Quitting kills every live PTY. None of those deaths is a delivery
+    // failure, and re-delivering during teardown would start processes as the
+    // app is trying to stop.
+    if (this.shuttingDown) return
+    // NEVER SEEN THE WORDS? THEN SENDING THEM AGAIN IS SAFE.
+    //
+    // The asymmetry is the whole design: a duplicated side effect is far worse
+    // than a task you have to re-say, so retrying requires POSITIVE evidence
+    // that nothing landed. With that evidence, the death is recoverable and the
+    // user should never even know it happened.
+    if (!task.deliveryProven && (task.redeliveries ?? 0) < TaskManager.MAX_REDELIVERIES) {
+      log.child({ taskId: id }).warn('session exited before delivery was proven', { exitCode })
+      return this.redeliver(id)
+    }
+    log.child({ taskId: id }).warn('session exited mid-task', { exitCode, state: task.state })
+    this.transition(id, 'failed', {
+      state: 'failed',
+      error: {
+        reason: exitCode === 0
+          ? 'The agent exited before finishing'
+          : 'The agent crashed before finishing',
+        detail: `The CLI process ended (exit code ${exitCode}) while the task was still ${task.state}.`,
+      },
     })
   }
 
@@ -780,7 +986,7 @@ export class TaskManager extends EventEmitter {
     }
   }
 
-  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[] } = {}): Promise<string> {
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[]; unrouted?: boolean } = {}): Promise<string> {
     // Provider-native routes own dispatch acknowledgement. Codex must not fall
     // through to Claude's PTY submit-and-verify path, which can resend prompts.
     const route = this.dispatchRoute(opts.agent)
@@ -839,6 +1045,8 @@ export class TaskManager extends EventEmitter {
     // field ABSENT, never present-and-empty (D6, §3).
     const task: Task = {
       id, intent, sessionId, kind, runtimePinned: kind === 'session', state: 'processing', createdAt: now, updatedAt: now,
+      // Nothing classified this one — see Task.unrouted.
+      ...(opts.unrouted ? { unrouted: true } : {}),
       cwd: runCwd, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
       surface, mode, injectedRecipes: [], lastUserInputAt: now,
       spawnedBy: opts.spawnedBy, agent,
@@ -908,6 +1116,13 @@ export class TaskManager extends EventEmitter {
         extraEnv: opts.extraEnv,
         forkFromSessionId: opts.forkFromSessionId,
       })
+      // A DEAD SESSION IS NOT A WORKING ONE. Watch the process itself rather
+      // than waiting for a poller to notice: the status file only ever tells us
+      // what the agent WROTE, so a CLI that quits before writing anything is
+      // invisible to it forever. That is exactly what happened on 2026-08-28 —
+      // Codex exited 0 half a second after dispatch and the card read
+      // "Working 9m" over a terminal that had been gone the whole time.
+      ex.onExit?.(({ exitCode }) => this.onSessionExit(id, exitCode))
       await ex.isReady()
       if (!ex.alive) throw new Error(`${agent} CLI exited before task dispatch`)
 
@@ -925,7 +1140,7 @@ export class TaskManager extends EventEmitter {
       // Gated on trustAcceptMs>0 so tests (which pass 0 with a no-output fake
       // executor) dispatch instantly; production keeps the default (>0).
       if (this.opts.trustAcceptMs > 0) {
-        await settleRepl({
+        const settled = await settleRepl({
           agent,
           getOutput: () => this.outputBuffers.get(id) ?? '',
           isAlive: () => ex.alive,
@@ -933,9 +1148,22 @@ export class TaskManager extends EventEmitter {
           sendRaw: (input) => ex.write(input),
           onEvent: (event, fields) => tlog.event(event, fields),
         })
+        // NEVER TYPE INTO A MENU. If a startup dialog we RECOGNISE is still
+        // holding the screen, the payload would be keystrokes inside it — which
+        // is precisely how a dispatch became "2. No, quit" and the session
+        // exited 0 while the card read "Working" for nine minutes (2026-08-28).
+        //
+        // Deliberately narrow: only a POSITIVELY IDENTIFIED dialog refuses. An
+        // un-confirmed screen still dispatches exactly as before, because that
+        // permissiveness is load-bearing for startup shapes nobody has
+        // enumerated, and turning "unconfirmed" into a hard failure would break
+        // working tasks to fix a rare one.
+        if (!settled.settled && settled.dialog) {
+          throw new Error(`${agent} CLI stopped at its ${settled.dialog} dialog and never reached its prompt`)
+        }
+        tlog.event('repl-settle-outcome', { settled: settled.settled, reason: settled.reason, dialog: settled.dialog ?? null })
       }
       if (!ex.alive) throw new Error(`${agent} CLI exited before task dispatch`)
-      tlog.event('folder-trust-accepted', {})
 
       if (opts.attachments?.length) {
         task.conversation = [{ role: 'user', text: intent }]
@@ -952,6 +1180,9 @@ export class TaskManager extends EventEmitter {
       const dispatchedAt = Date.now()
       ex.writeStdin(payload)
       tlog.event('task-dispatched', { bytes: payload.length })
+      // "Dispatched" means TYPED. Start watching for evidence it was actually
+      // received - see proveDelivery.
+      this.proveDelivery(id)
       // Show what was asked IMMEDIATELY, before any reply exists. The transcript
       // is the source of truth and replaces this the moment the turn ends — but
       // a card that is blank for the first thirty seconds of every task reads as
@@ -2243,6 +2474,11 @@ export class TaskManager extends EventEmitter {
       if (!task.sessionId || task.sessionId === id) task.sessionId = found
       tlog.event('codex-cli-session-pinned', { sessionId: found })
       void this.persistState(task).catch(() => {})
+      // A ROLLOUT EXISTS, SO CODEX TOOK THE TURN. The prover polls for this
+      // independently, but the poller is the component that actually discovers
+      // it - saying so here removes the race between the two entirely, rather
+      // than relying on the prover's window being long enough.
+      this.noteDeliveryProven(task.id, 'codex-rollout-discovered')
     }
 
     const path = await findRollout(task.codexRolloutId)
@@ -2878,7 +3114,22 @@ export class TaskManager extends EventEmitter {
         // navigate session holds NO glow, it just stays alive briefly (shorter
         // window, see navigateWarmMs) so a correction ("no, the other one")
         // continues the same session with full context instead of respawning.
-        if (task.category === 'consume' || task.category === 'watch') {
+        //
+        // KIND OUTRANKS CATEGORY. This checked category alone, so a persistent
+        // SESSION whose subject happened to be video was torn down as though
+        // the user had walked away from a clip. Field record 2026-08-29, task
+        // 254ba44a: 51 minutes of work that produced an artifact and a file on
+        // disk, ended with `/exit` and a tmux kill-session 1500ms later —
+        // while the same task had logged `parked-warm {persistent: true}`
+        // earlier in its life from the other mechanism.
+        //
+        // Two rules disagreeing about one task, and the one that knows nothing
+        // about lifetime was winning. `kind: session` means hours can pass
+        // between done and the next spoken follow-up; the subject cannot end
+        // that. `category` still decides teardown for everything the user
+        // genuinely walks away from, which is what it was written for.
+        const fireAndForget = task.category === 'consume' || task.category === 'watch'
+        if (fireAndForget && task.kind !== 'session') {
           this.detachAndKill(id)
         } else {
           this.parkWarm(id)
@@ -3283,7 +3534,7 @@ export class TaskManager extends EventEmitter {
           result: meta.result,
           shelved: meta.shelved || undefined,
           note: meta.note || undefined,
-          group: meta.group || undefined,
+          ...this.groupFromMeta(meta),
         }
         this.tasks.set(id, task)
         this.emit('created', task)
@@ -3333,7 +3584,7 @@ export class TaskManager extends EventEmitter {
           mode: meta.mode ?? 'managed',
           ...(meta.shelved ? { shelved: true } : {}),
           ...(meta.note ? { note: meta.note } : {}),
-          ...(meta.group ? { group: meta.group } : {}),
+          ...this.groupFromMeta(meta),
         } as Task
         this.tasks.set(id, ctask)
         restored++
@@ -3371,7 +3622,7 @@ export class TaskManager extends EventEmitter {
           shelved: meta.shelved || undefined,
           note: meta.note || undefined,
           spawnedBy: meta.spawnedBy || undefined,
-          group: meta.group || undefined,
+          ...this.groupFromMeta(meta),
         } as Task
         this.tasks.set(id, ctask)
         this.emit('created', ctask)
@@ -3447,7 +3698,7 @@ export class TaskManager extends EventEmitter {
         shelved: meta.shelved || undefined,
         note: meta.note || undefined,
         spawnedBy: meta.spawnedBy || undefined,
-        group: meta.group || undefined,
+        ...this.groupFromMeta(meta),
       }
       this.tasks.set(id, task)
       this.emit('created', task)
@@ -3892,6 +4143,7 @@ export class TaskManager extends EventEmitter {
   /** App shutdown is not the UI's destructive Kill All. Every live terminal
    * runtime detaches and continues; `kind` only controls its later retention. */
   shutdown(): void {
+    this.shuttingDown = true
     this.stopMaintenance()
     const ids = [...new Set([...this.tasks.keys(), ...this.executors.keys(), ...this.scheduler.keys()])]
     let detached = 0
@@ -4115,7 +4367,11 @@ export class TaskManager extends EventEmitter {
       // idle-killed, never auto-purged.
       kind: 'session' as const,
       state: 'done' as const,
-      ...(input.group ? { group: input.group } : {}),
+      // Filed through the registry at adoption, not left as a bare label for
+      // the next rehydrate to resolve: the wall groups it correctly the moment
+      // it appears, and the cwd basename folds onto an existing stream instead
+      // of sitting beside it under a second spelling.
+      ...this.groupFromMeta({ group: input.group }),
       // The REAL last interaction, not now. Stamping `now` would shove every
       // import to the top of the wall and into Today, which is the same
       // "reading rewrote its history" fault the open path just had.
@@ -4212,30 +4468,108 @@ export class TaskManager extends EventEmitter {
   /** Assign/clear a task's workspace group. Groups are minted lazily by the
    *  router or by user curation — this just records the word. Empty clears.
    *  Persists to meta.json; emits 'updated' for the wall. */
+  /**
+   * File a task under a stream.
+   *
+   * The task stores the registry ENTRY ID; `group` is the entry's label, kept
+   * alongside because every outward surface — the notch payload, the renderer,
+   * the router snapshot — renders a name and has no way to resolve an id.
+   *
+   * Going through the registry is what stops "unmute" and "Unmute" from being
+   * two streams: the label is folded to a key and joins whatever entry already
+   * holds it. Without a registry (older callers, tests) it degrades to the
+   * previous label-only behaviour rather than refusing to group.
+   */
   setGroup(id: string, group: string | null): void {
     const task = this.tasks.get(id)
     if (!task) return
-    const g = (group || '').trim().slice(0, 32)
-    if ((task.group ?? '') === g) return
+    const registry = this.opts.groupRegistry
+    const entry = group ? registry?.resolve(group) : undefined
+    const g = entry ? entry.label : (group || '').trim().slice(0, 32)
+    const gid = entry?.id
+    if ((task.group ?? '') === g && (task.groupId ?? '') === (gid ?? '')) return
     task.group = g || undefined
+    task.groupId = g ? gid : undefined
     task.updatedAt = this.clock()
     this.emit('updated', task)
-    log.child({ taskId: id }).event('group-changed', { group: g || null })
-    this.mergeMeta(task, { group: g }, 'setGroup')
+    log.child({ taskId: id }).event('group-changed', { group: g || null, groupId: task.groupId ?? null })
+    this.mergeMeta(task, { group: g, groupId: task.groupId ?? '' }, 'setGroup')
   }
 
-  /** Rename a live group: every task currently carrying `from` moves to `to`.
-   *  Returns how many tasks moved (0 = the group didn't exist). */
+  /**
+   * Rename a stream. Returns how many tasks now show the new name.
+   *
+   * This USED to walk every task and rewrite the string, which worked only
+   * because groups were live-only — nothing outlived the rename. With a
+   * persisted registry that would orphan every task not currently loaded, and
+   * the next time one was rehydrated its stale label would mint a second
+   * stream. So the rename is now a one-field write on the ENTRY, and the loop
+   * below only refreshes the labels already in memory.
+   *
+   * A name that collides with another stream is REFUSED (0), not merged: two
+   * streams the user kept apart are not ours to join.
+   */
   renameGroup(from: string, to: string): number {
     const f = (from || '').trim()
     const t = (to || '').trim().slice(0, 32)
-    if (!f || !t || f === t) return 0
+    if (!f || !t) return 0
+    const registry = this.opts.groupRegistry
+    if (registry) {
+      const entry = registry.find(f)
+      if (!entry) return 0
+      const out = registry.rename(entry.id, t)
+      if (!out.ok) {
+        log.warn('group rename refused', { from: f, to: t, reason: out.reason, clashesWith: out.entry?.label ?? null })
+        return 0
+      }
+      let relabelled = 0
+      for (const task of this.tasks.values()) {
+        if (task.groupId !== entry.id) continue
+        task.group = out.entry!.label
+        task.updatedAt = this.clock()
+        this.emit('updated', task)
+        this.mergeMeta(task, { group: task.group, groupId: entry.id }, 'renameGroup')
+        relabelled++
+      }
+      log.event('group-renamed', { from: f, to: out.entry!.label, relabelled })
+      return relabelled
+    }
+    if (f === t) return 0
     let moved = 0
     for (const task of this.tasks.values()) {
       if (task.group === f) { this.setGroup(task.id, t); moved++ }
     }
     if (moved) log.event('group-renamed', { from: f, to: t, moved })
     return moved
+  }
+
+  /**
+   * Rehydrate a task's stream from its meta.json — and MIGRATE it if needed.
+   *
+   * Every task written before the registry carries a bare label and no id. The
+   * first load resolves that label into an entry, which is also the first
+   * deduplication the user ever sees: "unmute" and "Unmute" collapse here, with
+   * no model involved and nothing to configure.
+   *
+   * Prefers the stored id when there is one, so a stream renamed while this
+   * task was unloaded comes back under its CURRENT name rather than the name it
+   * had when the task was last written.
+   */
+  private groupFromMeta(meta: { group?: string; groupId?: string }): { group?: string; groupId?: string } {
+    const registry = this.opts.groupRegistry
+    const label = (meta.group || '').trim()
+    if (!registry) return label ? { group: label } : {}
+    const byId = meta.groupId ? registry.get(meta.groupId) : undefined
+    const entry = byId ?? (label ? registry.resolve(label) : undefined)
+    if (!entry) return label ? { group: label } : {}
+    return { group: entry.label, groupId: entry.id }
+  }
+
+  /** Registry ids currently held by a task — what `prune` must never drop. */
+  liveGroupIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const t of this.tasks.values()) if (t.groupId) ids.add(t.groupId)
+    return ids
   }
 
   followUp(id: string, text: string): boolean {
@@ -4790,11 +5124,39 @@ export class TaskManager extends EventEmitter {
     if (this.resuming.has(id) || this.opening.has(id)) return
     this.opening.add(id)
     const tlog = log.child({ taskId: id })
-    tlog.event('auto-resume-on-open', {})
-    void this.resume(id, { touchActivity: false })
-      .then((ok) => { if (!ok) tlog.warn('auto-resume on open did not take', {}) })
-      .catch((e) => tlog.error('auto-resume on open threw', { error: (e as Error).message }))
-      .finally(() => this.opening.delete(id))
+
+    void (async () => {
+      try {
+        // ASK TMUX, NOT JUST OURSELVES.
+        //
+        // The guard above — "do I have a live executor?" — is an IN-PROCESS
+        // question, and for the first seconds after launch the honest answer is
+        // always no: reattachPersistent() has not run yet. So opening a card in
+        // that window resumed a session whose runtime was alive the whole time.
+        //
+        // Measured 2026-08-29: card opened at 05:02:17, the discovery sweep ran
+        // at 05:02:22. Five seconds. Every other task got tmux-attach-existing
+        // and came straight up; the one touched inside the gap got a fresh
+        // `claude --resume` instead.
+        const live = await this.opts.listLiveRuntimeIds?.().catch(() => undefined)
+        if (live?.has(id)) {
+          // The runtime is there. Run the sweep NOW rather than waiting out its
+          // schedule — it owns the attach path, and duplicating that here is
+          // how the two would drift.
+          tlog.event('open-found-live-runtime', { via: 'tmux' })
+          await this.reattachPersistent()
+          return
+        }
+
+        tlog.event('auto-resume-on-open', {})
+        const ok = await this.resume(id, { touchActivity: false })
+        if (!ok) tlog.warn('auto-resume on open did not take', {})
+      } catch (e) {
+        tlog.error('auto-resume on open threw', { error: (e as Error).message })
+      } finally {
+        this.opening.delete(id)
+      }
+    })()
   }
 
   /** Tasks currently BLOCKED on a needs-user question, newest first. The router

@@ -355,7 +355,8 @@ struct ProposalDetail: Codable {
 enum Command {
     /// Complete preferences applied atomically before the helper presents any
     /// window. Also replayed after a supervised restart.
-    case bootstrap(appearance: SurfaceAppearance, surfaceFill: CGFloat,
+    case bootstrap(appearance: SurfaceAppearance, surfaceTone: SurfaceTone,
+                   surfaceFill: CGFloat,
                    screenCaptureVisibility: Bool, terminalAutoExpand: Bool,
                    autoPresent: Bool)
     /// Sent after bootstrap plus replay so no stale/default frame flashes.
@@ -375,6 +376,9 @@ enum Command {
     /// honours System Settings → Accessibility → Reduce Transparency; "glass"
     /// and "solid" are explicit user overrides. See SurfaceAppearance.
     case appearance(SurfaceAppearance)
+    /// The ground colour — Space Gray or black. Separate from `appearance`,
+    /// which is the material.
+    case surfaceTone(SurfaceTone)
     /// May the surface present ITSELF when a task needs attention or finishes?
     /// From unmute Settings → Appearance & notch. DEFAULT ON, and absent means
     /// on — see AppController.presentableState.
@@ -424,8 +428,14 @@ enum Command {
         switch type {
         case "bootstrap":
             let appearance = SurfaceAppearance(rawValue: obj["appearance"] as? String ?? "system") ?? .system
+            // READ AT BOOTSTRAP, not only on change. The host has always sent
+            // this field; dropping it here meant the tone applied live and then
+            // reverted to Space Gray on the next launch — a setting that
+            // forgets itself every restart.
+            let tone = SurfaceTone(rawValue: obj["surfaceTone"] as? String ?? "spaceGray") ?? .spaceGray
             return .bootstrap(
                 appearance: appearance,
+                surfaceTone: tone,
                 surfaceFill: CGFloat(obj["surfaceFill"] as? Double ?? 0.8),
                 screenCaptureVisibility: obj["showInScreenCapture"] as? Bool ?? true,
                 terminalAutoExpand: obj["terminalAutoExpand"] as? Bool ?? false,
@@ -476,6 +486,11 @@ enum Command {
             // ignoring the user's accessibility setting.
             let raw = obj["value"] as? String ?? "system"
             return .appearance(SurfaceAppearance(rawValue: raw) ?? .system)
+        case "surfaceTone":
+            // Unknown -> spaceGray, which is what shipped before this was a
+            // choice: a malformed value must never silently restyle the surface.
+            let raw = obj["value"] as? String ?? "spaceGray"
+            return .surfaceTone(SurfaceTone(rawValue: raw) ?? .spaceGray)
         case "terminalAutoExpand":
             return .terminalAutoExpand(obj["on"] as? Bool ?? false)
         case "surfaceFill":

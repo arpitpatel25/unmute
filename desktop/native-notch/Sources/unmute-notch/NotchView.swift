@@ -22,6 +22,11 @@ import SwiftUI
 // black against the housing and put back the join by another route.
 struct NotchView: View {
     @ObservedObject var model: NotchModel
+    /// OBSERVED, not merely read. Theme.plane and Theme.railBg follow
+    /// Appearance.tone, and a static computed colour changing does not by
+    /// itself invalidate a view — without this the tone setting would compile,
+    /// log, and repaint nothing until the next unrelated state change.
+    @ObservedObject private var appearance = Appearance.shared
     /// Content inset that clears the physical cutout / menu bar on the EXPANDED
     /// surfaces (display safety: no control ever renders under the housing).
     let topInset: CGFloat
@@ -211,10 +216,10 @@ struct NotchView: View {
         Group {
             if expanded {
                 ZStack {
-                    if let pocket = model.transitionPocket, !model.hasNotch {
-                        // The hand-off snapshot only exists for the card. The
-                        // notched row is bar-height and shares the expanded
-                        // panel's top edge, so there is nothing to cross-fade.
+                    if let pocket = model.transitionPocket {
+                        // The hand-off snapshot is the card, on every display —
+                        // there is only one arrangement now, so the notched case
+                        // cross-fades exactly like the notchless one.
                         pocketPlane { PocketCard(model: model, pocketOverride: pocket, listening: model.captureAimed) }
                             .allowsHitTesting(false)
                             .transition(.opacity)
@@ -230,13 +235,30 @@ struct NotchView: View {
             // looking at one address, and a card naming a second would be two
             // answers to the same question.
             else if model.pocket.isOpen {
-                // TWO ARRANGEMENTS OF ONE STATE. On a notched display the pocket
-                // is a row on the housing's own line, drawn straight onto the
-                // black mass — no plane, because a second material is exactly
-                // what cannot pass behind the camera. Anywhere else there is
-                // nothing to work around and it stays a card.
+                // ONE ARRANGEMENT, EVERY DISPLAY. This used to split: a notched
+                // display got a row on the housing's own line, everything else
+                // got a card. The reasoning was sound in isolation — a card
+                // behind the cutout loses its corners and hairline — but it
+                // meant the pocket looked like a different product depending on
+                // which screen you had docked to, which is the thing the user
+                // actually noticed.
+                //
+                // The card clears the housing instead of working around it: see
+                // `pocketTopPad` and `NotchGeometry.pocketTopInset`, which are
+                // the same number so the window and the padding cannot disagree.
                 if model.hasNotch {
-                    PocketRow(model: model, listening: model.captureAimed)
+                    // SHOULDERS, THEN THE BODY. The row fills the housing's own
+                    // line — identity left of the camera, controls right of it —
+                    // and everything you read hangs below. Off-notch the same
+                    // three slots sit in one unsplit header, which is the whole
+                    // point: one layout, not two.
+                    VStack(spacing: 0) {
+                        PocketShoulderRow(model: model, listening: model.captureAimed)
+                        pocketPlane {
+                            PocketCard(model: model, listening: model.captureAimed,
+                                       headerInShoulders: true)
+                        }
+                    }
                 } else {
                     pocketPlane { PocketCard(model: model, listening: model.captureAimed) }
                 }
@@ -389,10 +411,17 @@ struct NotchView: View {
     /// corners included, fell outside the window and was clipped, and its top
     /// no longer nested in the shape's concave flare. A notch fix that broke
     /// every machine without one.
-    /// OFF-NOTCH ONLY, so there is no housing to clear and this is the ordinary
-    /// panel padding. It used to be `topInset` on a notched display, which is
-    /// what pushed the whole card below the camera; that case is now the row,
-    /// which does not use a plane at all.
+    /// Clears the housing on a notched display, ordinary panel padding
+    /// elsewhere. The card is the only arrangement now, so on a notched Mac it
+    /// DOES have to open below the camera — the row that used to avoid that
+    /// question is gone.
+    ///
+    /// Mirrors `NotchGeometry.pocketTopInset`, which sizes the window. If these
+    /// two ever disagree the card is clipped, and a clipped card looks fine in
+    /// a screenshot right up until the footer is missing.
+    /// Ordinary panel padding on BOTH displays now. The housing clearance is no
+    /// longer padding — `PocketShoulderRow` occupies it and draws in it, which
+    /// is why `NotchGeometry.pocketTopInset` is exactly the cutout height.
     private var pocketTopPad: CGFloat { Theme.panelPadding }
 
     @ViewBuilder private func pocketPlane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {

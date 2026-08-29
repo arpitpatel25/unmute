@@ -47,6 +47,8 @@ interface Pending { resolve: (v: unknown) => void; reject: (e: Error) => void }
  * faking a terminal; the honest boundary is "give me a prompt, I return text".
  */
 export class CodexRouterEngine {
+  /** Name for the router's logs. */
+  readonly label = 'codex-appserver'
   private proc: ReturnType<typeof spawn> | null = null
   private buf = ''
   private nextId = 0
