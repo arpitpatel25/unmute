@@ -95,6 +95,11 @@ struct ConversationPanel: View {
 
 private struct UserBubble: View {
     let text: String
+    /// Theme.userBubble follows Appearance.tone, and a static computed colour
+    /// changing does not invalidate a view on its own. NotchView observes this
+    /// too, so this is belt-and-braces — but a bubble that silently keeps the
+    /// old tone is exactly the bug that shipped once already.
+    @ObservedObject private var appearance = Appearance.shared
 
     var body: some View {
         HStack(spacing: 0) {
@@ -107,9 +112,9 @@ private struct UserBubble: View {
                     .textSelection(.enabled)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
-                    .background(RoundedRectangle(cornerRadius: 16).fill(Theme.raised))
+                    .background(RoundedRectangle(cornerRadius: 16).fill(Theme.userBubble))
                     .overlay(RoundedRectangle(cornerRadius: 16)
-                        .stroke(Theme.hairline, lineWidth: 0.5))
+                        .stroke(Theme.userBubbleEdge, lineWidth: 0.5))
             }
             // A BUBBLE HAS TO BE NARROWER THAN THE COLUMN or it stops reading as
             // one. Codex caps its own at roughly two-thirds; capping by MEASURE

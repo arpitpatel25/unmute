@@ -123,6 +123,29 @@ enum Theme {
     }
     /// A raised element ON the plane — cards, buttons, fields.
     static let raised       = Color.white.opacity(0.055)
+
+    /// THE USER'S OWN MESSAGE, which has to be findable at a glance.
+    ///
+    /// This was `raised` — white at 5.5%, tuned against the Space Gray plane.
+    /// On black that resolves to rgb(14,14,14) and the bubble all but
+    /// disappears, so a conversation reads as one undifferentiated column and
+    /// you cannot tell your question from the answer.
+    ///
+    /// The lift is therefore tone-aware: unchanged on Space Gray, roughly
+    /// doubled on black, which is the same proportion Codex gives its own user
+    /// bubble against its dark ground. The ANSWER is deliberately left flat in
+    /// both — only one side of the exchange needs marking, and marking both is
+    /// how a transcript turns into a ladder of boxes.
+    static var userBubble: Color {
+        Appearance.shared.tone == .black
+            ? Color.white.opacity(0.11)
+            : Color.white.opacity(0.055)
+    }
+    static var userBubbleEdge: Color {
+        Appearance.shared.tone == .black
+            ? Color.white.opacity(0.16)
+            : Color.white.opacity(0.10)
+    }
     static let raisedHover  = Color.white.opacity(0.085)
     /// A recessed element — text fields, the terminal well.
     static let sunken       = Color.black.opacity(0.30)
