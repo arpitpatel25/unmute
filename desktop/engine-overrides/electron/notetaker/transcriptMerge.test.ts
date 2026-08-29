@@ -1,6 +1,6 @@
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { mergeTranscripts, generateTitle, mergeChannelChunks, attributeSpeakers, type SpeakerSample } from './transcriptMerge'
+import { mergeTranscripts, generateTitle, mergeChannelChunks, mergeAdjacentSpeakerTurns, attributeSpeakers, type SpeakerSample } from './transcriptMerge'
 
 describe('mergeTranscripts', () => {
   test('mic-only transcript produces one mic segment', () => {
@@ -80,6 +80,134 @@ describe('mergeChannelChunks', () => {
     )
     assert.equal(segments.length, 2)
     assert.notEqual(segments[0].channel, segments[1].channel)
+  })
+
+  test('uses deterministic chronological tie-breakers instead of promise or array order', () => {
+    const segments = mergeChannelChunks(
+      [{ channel: 'mic', text: 'you spoke first', startMs: 1000, endMs: 1800 }],
+      [{ channel: 'system', text: 'later ending overlap', startMs: 1000, endMs: 2200 }]
+    )
+    assert.deepEqual(segments.map((segment) => segment.text), ['you spoke first', 'later ending overlap'])
+  })
+
+  test('prefers the direct system lane over a long overlapping microphone echo', () => {
+    const segments = mergeChannelChunks(
+      [{
+        channel: 'mic',
+        text: "It was like two years ago I was there and you were here and now I'm here and you are",
+        startMs: 11367,
+        endMs: 20327,
+      }],
+      [{
+        channel: 'system',
+        text: "So good. It was like two years ago I was there. And you were here. And now I'm here. And you are still here.",
+        startMs: 11385,
+        endMs: 20825,
+      }]
+    )
+    assert.deepEqual(segments.map((segment) => segment.channel), ['system'])
+  })
+
+  test('removes a short microphone tail duplicated in an overlapping system utterance', () => {
+    const segments = mergeChannelChunks(
+      [{ channel: 'mic', text: "I'm still here.", startMs: 20241, endMs: 25105 }],
+      [{ channel: 'system', text: "And now I'm here. And you are still here.", startMs: 11385, endMs: 20825 }]
+    )
+    assert.deepEqual(segments.map((segment) => segment.channel), ['system'])
+  })
+
+  test('keeps repeated text when it is outside the echo timing window', () => {
+    const segments = mergeChannelChunks(
+      [{ channel: 'mic', text: 'the project is still here', startMs: 10000, endMs: 12000 }],
+      [{ channel: 'system', text: 'the project is still here', startMs: 0, endMs: 2000 }]
+    )
+    assert.equal(segments.length, 2)
+  })
+
+  test('keeps genuinely different simultaneous speech', () => {
+    const segments = mergeChannelChunks(
+      [{ channel: 'mic', text: 'we should ship the project on Tuesday', startMs: 1000, endMs: 3000 }],
+      [{ channel: 'system', text: 'we should review the proposal on Friday', startMs: 900, endMs: 4200 }]
+    )
+    assert.equal(segments.length, 2)
+  })
+
+  test('uses matching acoustic boundaries when STT renders the two echo copies differently', () => {
+    const segments = mergeChannelChunks(
+      [{ channel: 'mic', text: 'Then he sat down and I saw the camera. He was sitting on the top.', startMs: 7554, endMs: 15234 }],
+      [{ channel: 'system', text: 'Then I sat down and sat down and sat down. There was a bus in the sun.', startMs: 7510, endMs: 15105 }]
+    )
+    assert.deepEqual(segments.map((segment) => segment.channel), ['system'])
+  })
+
+  test('does not delete an unrelated mic transcript just because full-channel retry files share boundaries', () => {
+    const segments = mergeChannelChunks(
+      [{
+        channel: 'mic',
+        text: 'He is giving lessons around forests, jungles, tigers, and British rule in India.',
+        startMs: 1000,
+        endMs: 31000,
+      }],
+      [{ channel: 'system', text: 'foreign Thank you.', startMs: 1000, endMs: 31000 }]
+    )
+
+    assert.deepEqual(segments.map((segment) => segment.channel), ['mic', 'system'])
+  })
+
+  test('keeps ambiguous one-word overlap instead of deleting a real acknowledgement', () => {
+    const segments = mergeChannelChunks(
+      [{ channel: 'mic', text: 'yes', startMs: 1000, endMs: 1300 }],
+      [{ channel: 'system', text: 'yes that is correct', startMs: 900, endMs: 2000 }]
+    )
+    assert.equal(segments.length, 2)
+  })
+})
+
+describe('mergeAdjacentSpeakerTurns', () => {
+  test('joins consecutive STT chunks from the same speaker into one readable turn', () => {
+    const turns = mergeAdjacentSpeakerTurns([
+      { channel: 'mic', text: 'This thought started here.', startMs: 0, endMs: 2000 },
+      { channel: 'mic', text: 'And continued after the chunk flush.', startMs: 2500, endMs: 5000 },
+    ])
+
+    assert.deepEqual(turns, [{
+      channel: 'mic',
+      text: 'This thought started here. And continued after the chunk flush.',
+      startMs: 0,
+      endMs: 5000,
+    }])
+  })
+
+  test('speaker interruption starts a new turn and prevents cross-interruption joining', () => {
+    const turns = mergeAdjacentSpeakerTurns([
+      { channel: 'mic', text: 'First from you.', startMs: 0, endMs: 1000 },
+      { channel: 'system', text: 'Then from them.', startMs: 1200, endMs: 2200 },
+      { channel: 'mic', text: 'Back to you.', startMs: 2400, endMs: 3400 },
+    ])
+
+    assert.deepEqual(turns.map((turn) => turn.text), [
+      'First from you.',
+      'Then from them.',
+      'Back to you.',
+    ])
+  })
+
+  test('keeps different attributed remote speakers as separate turns', () => {
+    const turns = mergeAdjacentSpeakerTurns([
+      { channel: 'system', speakerName: 'Alice', text: 'Alice speaking.', startMs: 0, endMs: 1000 },
+      { channel: 'system', speakerName: 'Bob', text: 'Bob interrupts.', startMs: 1200, endMs: 2200 },
+    ])
+
+    assert.equal(turns.length, 2)
+  })
+
+  test('does not mutate the source segments', () => {
+    const source = [
+      { channel: 'mic' as const, text: 'one', startMs: 0, endMs: 1000 },
+      { channel: 'mic' as const, text: 'two', startMs: 1200, endMs: 2000 },
+    ]
+    mergeAdjacentSpeakerTurns(source)
+    assert.deepEqual(source.map((segment) => segment.text), ['one', 'two'])
   })
 })
 

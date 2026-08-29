@@ -139,6 +139,32 @@ export type CleanupResult =
   | { ok: true; segments: TranscriptSegment[] }
   | { ok: false; error: string }
 
+export type CleanupProvider = HeadlessProvider | 'managed'
+
+type CleanupRunner = (
+  provider: CleanupProvider,
+  input: string,
+) => Promise<{ ok: true; output: string } | { ok: false; error: string }>
+
+async function runCleanupAgent(
+  provider: CleanupProvider,
+  input: string,
+): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
+  if (provider !== 'managed') return runHeadlessAgent(provider, input)
+  try {
+    const { tryManagedLLM } = await import('../paywall/paywall-route')
+    const result = await tryManagedLLM([
+      { role: 'system', content: 'Clean the transcript conservatively. Follow the requested JSON contract exactly.' },
+      { role: 'user', content: input },
+    ], { temperature: 0.1, maxTokens: 8000 })
+    return result?.text
+      ? { ok: true, output: result.text }
+      : { ok: false, error: 'Managed cloud agent is unavailable. Connect a supported note agent and retry.' }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 /**
  * Orchestrates the cleanup call. `ok: false` only when the headless call
  * itself failed, or the response wasn't parseable as JSON AT ALL (spec §4:
@@ -149,11 +175,11 @@ export type CleanupResult =
  */
 export async function cleanupTranscript(
   segments: TranscriptSegment[],
-  provider: HeadlessProvider,
+  provider: CleanupProvider,
   // Injected for testability — defaults to the real headless CLI call.
   // Same shape as NotetakerController's own injected-deps pattern rather
   // than mocking the module graph.
-  runAgent: typeof runHeadlessAgent = runHeadlessAgent,
+  runAgent: CleanupRunner = runCleanupAgent,
 ): Promise<CleanupResult> {
   const input = buildCleanupInput(segments)
   const result = await runAgent(provider, input)

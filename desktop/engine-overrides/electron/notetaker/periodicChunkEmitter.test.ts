@@ -115,4 +115,43 @@ describe('PeriodicChunkEmitter', () => {
     emitter.feed(silentSamples(2), 16000, 1, clock)
     assert.equal(segments[0].startTimestampMs, 12345)
   })
+
+  test('timestamps a transcript at its first audible frame, not leading silence', () => {
+    const segments: FinalizedSegment[] = []
+    const emitter = new PeriodicChunkEmitter((s) => segments.push(s), { minChunkMs: 100, silenceDurationMs: 50 })
+    emitter.feed(silentSamples(2), 16000, 1, 1000)
+    emitter.feed(loudSamples(2), 16000, 1, 1250)
+    emitter.flush()
+    assert.equal(segments[0].startTimestampMs, 1250)
+    assert.ok(segments[0].endTimestampMs >= 1250)
+  })
+
+  test('does not let a cold adaptive noise floor move a realistic speech onset later', () => {
+    const segments: FinalizedSegment[] = []
+    const emitter = new PeriodicChunkEmitter((segment) => segments.push(segment))
+    const realisticSpeech = new Float32Array(160)
+    realisticSpeech.fill(0.02)
+    // On the first frame p20 is also 0.02, which makes the adaptive cut
+    // threshold 0.032. Ordering must still use the stable configured floor.
+    emitter.feed(realisticSpeech, 16000, 1, 1000)
+    emitter.flush()
+    assert.equal(segments[0].startTimestampMs, 1000)
+  })
+
+  test('reports audible duration separately from a long silent tail', () => {
+    const segments: FinalizedSegment[] = []
+    const emitter = new PeriodicChunkEmitter((segment) => segments.push(segment))
+    emitter.feed(loudSamples(1600), 16000, 1, 0) // 100ms audible
+    emitter.feed(silentSamples(16000), 16000, 1, 100) // 1s silence
+    emitter.flush()
+    assert.equal(Math.round(segments[0].audibleDurationMs), 100)
+  })
+
+  test('reports zero audible duration for a completely silent stop tail', () => {
+    const segments: FinalizedSegment[] = []
+    const emitter = new PeriodicChunkEmitter((segment) => segments.push(segment))
+    emitter.feed(silentSamples(8000), 16000, 1, 0)
+    emitter.flush()
+    assert.equal(segments[0].audibleDurationMs, 0)
+  })
 })

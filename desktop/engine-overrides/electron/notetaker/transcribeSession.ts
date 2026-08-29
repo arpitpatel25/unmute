@@ -8,6 +8,7 @@ import { downmixAndResample } from './resample'
 import { mergeChannelChunks, generateTitle, attributeSpeakers, type TranscriptSegment, type TimedChunkText, type SpeakerSample } from './transcriptMerge'
 import { insertMeeting, type DBMeeting } from '../db'
 import { createNotetakerLogger } from './notetakerLog'
+import { isReliableWhisperSegment, type WhisperConfidenceSegment } from './whisperConfidence'
 
 const log = createNotetakerLogger('transcribe')
 
@@ -18,6 +19,16 @@ const log = createNotetakerLogger('transcribe')
 export type ChunkTranscriptionResult = {
   text: string
   failed: boolean
+  /** Speech-to-text timestamps relative to the encoded chunk. They are used
+   * to order mic and system utterances precisely, not by upload completion
+   * order or a guessed whole-channel duration. */
+  segments: Array<{ startSeconds: number; endSeconds: number; text: string }>
+}
+
+type WhisperSegment = WhisperConfidenceSegment & {
+  start: number
+  end: number
+  text: string
 }
 
 /** One chunk's audio, already reduced to mono/target-rate and WAV-encoded — the input `transcribeEncodedChunk` needs, and the payload `notetakerInit.ts` streams to disk. */
@@ -85,7 +96,22 @@ export async function transcribeEncodedChunk(channel: 'mic' | 'system', encoded:
   const startedAt = Date.now()
   const clog = log.child({ channel })
   try {
-    const result = await tryManagedSTT(encoded.wav, encoded.durationSeconds, 'dictation')
+    // The null language override makes this request truly auto-detecting on
+    // the dedicated notetaker backend branch. Ordinary dictation continues to
+    // use its existing configured language behavior unchanged.
+    const result = await tryManagedSTT(
+      encoded.wav,
+      encoded.durationSeconds,
+      'notetaker',
+      undefined,
+      // Whisper's prompt is decoder context, not an instruction channel. Both
+      // imperative wording and a Hinglish example have leaked into output and
+      // displaced real speech. Decode without a prompt; Romanize any returned
+      // Devanagari locally below instead.
+      undefined,
+      null,
+      'audio/wav',
+    )
     const latencyMs = Date.now() - startedAt
     // A NULL result is a FAILURE here, not an empty transcript — same
     // Finding-3 reasoning as the old whole-session flow: tryManagedSTT
@@ -105,23 +131,42 @@ export async function transcribeEncodedChunk(channel: 'mic' | 'system', encoded:
         wavBytes: encoded.wav.length,
         latencyMs,
       })
-      return { text: '', failed: true }
+      return { text: '', failed: true, segments: [] }
     }
+    const hasTimestampedSegments = Array.isArray(result.segments)
+    const receivedSegments = (result.segments ?? []) as WhisperSegment[]
+    const reliableSegments = receivedSegments.filter(isReliableWhisperSegment)
+    const droppedSegmentCount = receivedSegments.length - reliableSegments.length
+    // When confidence metadata is available, the accepted segments are the
+    // source of truth for both text and timing. If every segment looks like
+    // noise, return empty rather than keeping Groq's unfiltered top-level
+    // hallucination. Old worker responses have no segment array and retain
+    // their existing top-level-text behavior.
+    const reliableText = hasTimestampedSegments
+      ? reliableSegments.map((segment) => segment.text.trim()).filter(Boolean).join(' ')
+      : (result.text ?? '')
     clog.event('chunk-transcribed', {
       durationSeconds: encoded.durationSeconds,
       sampleRate: encoded.sampleRate,
       latencyMs,
-      textLength: (result.text ?? '').length,
-      textPreview: result.text ?? '',
+      textLength: reliableText.length,
+      textPreview: reliableText,
+      droppedSegmentCount,
     })
-    return { text: result.text ?? '', failed: false }
+    return {
+      text: reliableText,
+      failed: false,
+      segments: reliableSegments
+        .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end >= segment.start)
+        .map((segment) => ({ startSeconds: segment.start, endSeconds: segment.end, text: segment.text ?? '' })),
+    }
   } catch (err) {
     clog.error(`${channel} chunk transcription failed`, {
       durationSeconds: encoded.durationSeconds,
       latencyMs: Date.now() - startedAt,
       error: err instanceof Error ? err.message : String(err),
     })
-    return { text: '', failed: true }
+    return { text: '', failed: true, segments: [] }
   }
 }
 
@@ -205,13 +250,12 @@ export async function persistSession(
     transcript_path: transcriptPath,
     audio_mic_path: audioMicPath,
     audio_system_path: audioSystemPath,
-    // Seeded 'disabled' regardless of the real setting — this function has
-    // no reason to know about the cleanup/summary pipeline at all.
-    // notetakerInit.ts's runNotetakerPipeline() runs AFTER this and stamps
-    // the real enabled/pending/success/failed state via
-    // updateMeetingPipelineStatus(), never through a second insertMeeting().
-    cleanup_status: 'disabled',
-    summary_status: 'disabled',
+    // Capture stop has already exposed this meeting as "Preparing notes".
+    // Preserve that pending state through this INSERT OR REPLACE so the
+    // detail view never flashes "no notes" between persistence and the
+    // direct note-generation stage starting.
+    cleanup_status: 'pending',
+    summary_status: 'pending',
     cleaned_transcript_path: null,
     notes_path: null,
   })

@@ -16,12 +16,22 @@ export const CEREBRAS_CHAT_URL = 'https://api.cerebras.ai/v1/chat/completions'
 // ─── Models (server-side defaults — change here to roll out across all users) ─
 
 export const STT_MODEL = 'whisper-large-v3-turbo' // $0.04 / hour (Groq)
+// Note-taking is accuracy-sensitive and routinely multilingual. Keep fast,
+// low-cost Turbo for existing dictation, but use the full model for the
+// note-taker branch only. Groq explicitly recommends large-v3 when errors and
+// multilingual accuracy matter more than the small latency/cost difference.
+export const NOTETAKER_STT_MODEL = 'whisper-large-v3' // $0.111 / hour (Groq)
 export const LLM_MODEL = 'gpt-oss-120b' // Cerebras — ~0.6s round-trip, strong quality
 
 // ─── Pricing (USD) ──────────────────────────────────────────────
 
 /** STT cost per second of audio (USD). */
 const STT_COST_PER_SECOND = 0.04 / 3600 // $0.04/hr → $0.0000111/s
+const NOTETAKER_STT_COST_PER_SECOND = 0.111 / 3600
+
+function sttPricePerSecond(model = STT_MODEL): number {
+  return model === NOTETAKER_STT_MODEL ? NOTETAKER_STT_COST_PER_SECOND : STT_COST_PER_SECOND
+}
 
 /** LLM cost per token (USD). Cerebras gpt-oss-120b. */
 const LLM_INPUT_PRICE = 0.35 / 1_000_000 // $0.35 per million input tokens
@@ -50,8 +60,8 @@ export function estimateMaxCostCents(durationSeconds: number): number {
 }
 
 /** Compute the actual STT cost AFTER the call (integer cents with markup). */
-export function sttCostCents(durationSeconds: number): number {
-  const rawUsd = STT_COST_PER_SECOND * durationSeconds
+export function sttCostCents(durationSeconds: number, model = STT_MODEL): number {
+  const rawUsd = sttPricePerSecond(model) * durationSeconds
   return Math.ceil(rawUsd * MARKUP_MULTIPLIER * 100)
 }
 
@@ -64,9 +74,9 @@ export function llmCostCents(promptTokens: number, completionTokens: number): nu
 /** Raw Groq cost (no markup) — used in usage_logs for accounting. */
 export function rawGroqCostUsd(
   call: 'stt' | 'llm',
-  params: { durationSeconds?: number; promptTokens?: number; completionTokens?: number }
+  params: { durationSeconds?: number; promptTokens?: number; completionTokens?: number; model?: string }
 ): number {
-  if (call === 'stt') return STT_COST_PER_SECOND * (params.durationSeconds ?? 0)
+  if (call === 'stt') return sttPricePerSecond(params.model) * (params.durationSeconds ?? 0)
   return (
     LLM_INPUT_PRICE * (params.promptTokens ?? 0) +
     LLM_OUTPUT_PRICE * (params.completionTokens ?? 0)

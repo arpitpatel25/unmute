@@ -17,41 +17,60 @@
 // all — see that file's own header for why.
 
 import { runHeadlessAgent, type HeadlessProvider } from './headlessAgent'
-import type { TranscriptSegment } from './transcriptMerge'
+import { mergeAdjacentSpeakerTurns, type TranscriptSegment } from './transcriptMerge'
 import { createNotetakerLogger } from './notetakerLog'
 import { extractJson } from './extractJson'
 
 const log = createNotetakerLogger('notes-summary')
 
-const FIXED_SUMMARY_PREAMBLE = 'You are producing meeting notes from a cleaned meeting transcript.'
+/** A note can be generated either by a connected local CLI agent or the
+ * managed cloud agent. Desktop-driver agents remain deliberately excluded:
+ * they have no safe, non-interactive background execution API yet. */
+export type NoteProvider = HeadlessProvider | 'managed'
+
+const FIXED_SUMMARY_PREAMBLE = 'You are producing meeting notes from a recorded meeting transcript.'
 
 export const DEFAULT_SUMMARY_INSTRUCTIONS =
-  'Produce: a short, specific title (a few descriptive words — not one word, not a full sentence); a ' +
-  'plain-language summary of what the meeting was about and what happened; a list of key points discussed; a ' +
-  'list of any decisions that were made; a list of any action items, naming who owns each one if that\'s clear ' +
-  'from the transcript. Only include items in a list if the transcript actually contains that kind of content ' +
-  '— never invent items to fill a section.'
+  'Produce a short, specific title (a few descriptive words — not one word, not a full sentence) and put the ' +
+  'complete note in summary as clean Markdown. Use 2–5 specific ## headings and bullet lists under every heading, ' +
+  'in the style of a meeting document. Use topical headings such as ## Status, ## Decisions, ## Blockers, and ' +
+  '## Next steps only when supported; never use a bare paragraph recap. Do not write a conclusion or third-person ' +
+  'recap. Leave keyPoints, decisions, actionItems, and ' +
+  'openQuestions as empty arrays. Only include content the transcript actually supports — never invent items.'
 
 const FIXED_SUMMARY_CONTRACT =
   'LANGUAGE\n\n' +
-  'The transcript may contain multiple languages, including romanized speech from code-switching. Write the ' +
-  'entire output in the single dominant language of the transcript. Translate mixed-language content into that ' +
-  'language rather than reproducing it as spoken. Do not translate product names, feature names, tool names, or ' +
-  'technical terms — keep those exactly as they appear in the transcript.\n\n' +
+  'The transcript may contain English, Hindi, Hinglish, Devanagari, and code-switched speech. Understand all ' +
+  'of it and incorporate every clear, meaningful point. Write the entire output in clear English. Translate the ' +
+  'meaning of Hindi/Hinglish into English, but keep product names, feature names, tool names, and technical terms ' +
+  'exactly as they appear in the transcript.\n\n' +
 
   'GARBLED CONTENT\n\n' +
   'Some segments may be garbled or unintelligible. Ignore them. Base every point only on content you can clearly ' +
   'understand. Never reconstruct meaning from noise.\n\n' +
 
+  'NOTES STYLE\n\n' +
+  'Write a self-contained Markdown note, not a recap. Every non-empty section must use concise bullet lists below ' +
+  'a specific ## heading; do not write unstructured body paragraphs. Use direct, neutral statements. Do not narrate ' +
+  'the conversation or write phrases such as "You said", "they said", "the speaker ' +
+  'discussed", or a concluding assessment. Do not mention transcript labels. Put all rendered content in `summary`.\n\n' +
+
   'DECISIONS AND ACTION ITEMS\n\n' +
   'A decision is something the speakers explicitly settled on — leave it out of `decisions` if the transcript ' +
-  'shows it was still being discussed or left open. For an action item\'s owner, use only the literal speaker ' +
-  'label shown in the transcript — never guess or invent an owner; omit it if it isn\'t clear.\n\n' +
+  'shows it was still being discussed or left open. For an action item\'s owner, use only an explicit person name ' +
+  'from the transcript — never guess or invent an owner; omit it if it isn\'t clear.\n\n' +
 
   'OPEN QUESTIONS\n\n' +
   'List, in `openQuestions`, anything the meeting raised but did not resolve — a question left unanswered, or a ' +
   'choice the speakers explicitly disagreed on or never settled. Do not duplicate an item that is already in ' +
   '`decisions`.\n\n' +
+
+  'INSUFFICIENT SIGNAL\n\n' +
+  'A short, casual, or test conversation is still valid source material: produce useful notes whenever any clear, ' +
+  'meaningful speech is present, even if there are no decisions or action items. Only if the transcript contains no ' +
+  'semantically understandable speech at all, return an empty `summary` rather than a generic statement that the ' +
+  'recording was unclear.\n\n' +
+
 
   'Return this as JSON: {title, summary, keyPoints: string[], decisions: string[], actionItems: string[], ' +
   'openQuestions: string[]}. ' +
@@ -76,8 +95,8 @@ export type MeetingNotes = {
  *  middle third; the fixed preamble and contract always bookend it,
  *  whatever it says. */
 export function buildSummaryInput(segments: TranscriptSegment[], instructions: string): string {
-  const transcript = segments
-    .map((s) => `${s.channel === 'mic' ? 'You' : (s.speakerName || 'Them')}: ${s.text}`)
+  const transcript = mergeAdjacentSpeakerTurns(segments)
+    .map((s) => `${s.channel === 'mic' ? 'Microphone' : (s.speakerName || 'System audio')}: ${s.text}`)
     .join('\n')
   return `${FIXED_SUMMARY_PREAMBLE}\n\n${instructions}\n\n${FIXED_SUMMARY_CONTRACT}\n\n${transcript}`
 }
@@ -104,7 +123,7 @@ export function parseSummaryOutput(raw: string): MeetingNotes | null {
   const title = obj.title
   const summary = obj.summary
   if (typeof title !== 'string' || title.length === 0) return null
-  if (typeof summary !== 'string' || summary.length === 0) return null
+  if (typeof summary !== 'string' || summary.trim().length === 0) return null
   return {
     title,
     summary,
@@ -125,41 +144,104 @@ export function parseSummaryOutput(raw: string): MeetingNotes | null {
 export function buildDegradedNotes(raw: string): MeetingNotes | null {
   const trimmed = raw.trim()
   if (!trimmed) return null
+  // A malformed structured response must not be rendered as a JSON blob in
+  // the Notes UI. This is the exact failure that produced a literal
+  // {"title":"", ...} card: the model returned a notes-shaped object whose
+  // fields were empty or double-encoded. Preserve genuine prose fallback,
+  // but treat JSON-shaped output as a failed structured response.
+  if (extractJson(trimmed, 'object')) return null
   return { title: '', summary: trimmed, keyPoints: [], decisions: [], actionItems: [], openQuestions: [] }
+}
+
+/** A model sometimes turns a failed recording into a polished-looking but
+ * useless “most of the recording was unclear” note. That is status text, not
+ * meeting content, and must never occupy the Notes document. */
+function isNoSignalNote(notes: MeetingNotes): boolean {
+  if (notes.keyPoints.length || notes.decisions.length || notes.actionItems.length || notes.openQuestions.length) return false
+  const normalized = notes.summary
+    .replace(/^\s*#{1,6}\s*(?:notes?|summary)\s*$/gim, '')
+    .replace(/^\s*[-*]\s*/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return /^(?:large portions? of (?:the )?recording (?:were|was) unclear and could not be used|the recording (?:was|is) (?:mostly )?unclear|not enough clear speech(?: to generate notes)?)\.?$/.test(normalized)
 }
 
 export type SummaryResult =
   | { ok: true; notes: MeetingNotes; degraded?: boolean }
   | { ok: false; error: string }
 
+type NotesRunner = (provider: NoteProvider, input: string) => Promise<{ ok: true; output: string } | { ok: false; error: string }>
+
+async function runNotesAgent(provider: NoteProvider, input: string): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
+  if (provider !== 'managed') return runHeadlessAgent(provider, input)
+  try {
+    // Keep the local CLI path dependency-light. paywall-route reaches app
+    // window/balance infrastructure, which is needed only for the managed
+    // provider and would otherwise make pure note-generation tests require a
+    // fully booted Electron app.
+    const { tryManagedLLM } = await import('../paywall/paywall-route')
+    const result = await tryManagedLLM([
+      { role: 'system', content: 'Generate the requested meeting notes. Follow the requested JSON contract exactly.' },
+      { role: 'user', content: input },
+    ], { temperature: 0.2, maxTokens: 4000 })
+    return result?.text
+      ? { ok: true, output: result.text }
+      : { ok: false, error: 'Managed cloud agent is unavailable. Connect a supported note agent and retry.' }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 export async function generateNotes(
   segments: TranscriptSegment[],
-  provider: HeadlessProvider,
+  provider: NoteProvider,
   instructionsOverride?: string | null,
-  runAgent: typeof runHeadlessAgent = runHeadlessAgent,
+  runAgent: NotesRunner = runNotesAgent,
 ): Promise<SummaryResult> {
   const instructions = instructionsOverride ?? DEFAULT_SUMMARY_INSTRUCTIONS
   const input = buildSummaryInput(segments, instructions)
-  const result = await runAgent(provider, input)
-  if (!result.ok) {
-    log.error('summary call failed', { provider, error: result.error })
-    return { ok: false, error: result.error }
+  let nextInput = input
+  let lastFailure = 'response missing title/summary or unparseable'
+  let lastOutput = ''
+
+  // A connected agent occasionally returns the requested JSON shape with
+  // every field empty even though the transcript contains clear speech. One
+  // corrective retry is cheaper and much less confusing than leaving the
+  // meeting permanently at "Notes failed". It is used only for a successful
+  // agent call whose output is unusable; transport/auth failures are not
+  // repeated. The agent still receives transcript text only, never audio.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await runAgent(provider, nextInput)
+    if (!result.ok) {
+      log.error('summary call failed', { provider, error: result.error, attempt: attempt + 1 })
+      return { ok: false, error: result.error }
+    }
+    lastOutput = result.output
+    const notes = parseSummaryOutput(result.output)
+    if (notes && !isNoSignalNote(notes)) {
+      log.debug('summary completed', { provider, title: notes.title, keyPointCount: notes.keyPoints.length, decisionCount: notes.decisions.length, actionItemCount: notes.actionItems.length, openQuestionCount: notes.openQuestions.length, attempt: attempt + 1 })
+      return { ok: true, notes }
+    }
+    if (notes && isNoSignalNote(notes)) {
+      lastFailure = 'Not enough clear speech was captured to generate meeting notes.'
+    } else {
+      // The call succeeded and produced real prose but not the requested
+      // JSON shape. Keep that paid-for generation rather than throwing it
+      // away; JSON-shaped empty/malformed output is retried instead.
+      const degradedNotes = buildDegradedNotes(result.output)
+      if (degradedNotes && !isNoSignalNote(degradedNotes)) {
+        log.warn('summary response was not structured JSON — falling back to the raw output as an unstructured summary', { provider, outputPreview: result.output.slice(0, 200) })
+        return { ok: true, notes: degradedNotes, degraded: true }
+      }
+    }
+
+    if (attempt === 0) {
+      log.warn('summary response was empty or unusable — retrying once with a corrective instruction', { provider, outputPreview: result.output.slice(0, 300) })
+      nextInput = `${input}\n\nCORRECTION FOR THIS RETRY\n\nThe previous response was empty or unusable. The transcript contains source speech. Produce the requested specific Markdown notes from every clear point, even if this is only a short or casual test recording. Do not return empty title or summary fields.`
+    }
   }
-  const notes = parseSummaryOutput(result.output)
-  if (notes) {
-    log.debug('summary completed', { provider, title: notes.title, keyPointCount: notes.keyPoints.length, decisionCount: notes.decisions.length, actionItemCount: notes.actionItems.length, openQuestionCount: notes.openQuestions.length })
-    return { ok: true, notes }
-  }
-  // The call succeeded and produced real text, it just didn't come back as
-  // the JSON shape we asked for — that's still a real generation the
-  // user's own usage paid for, not nothing. Surface it as a degraded
-  // success (unstructured summary, no sections) rather than discarding it
-  // and asking for a retry.
-  const degradedNotes = buildDegradedNotes(result.output)
-  if (!degradedNotes) {
-    log.error('summary response was not usable (empty output)', { provider })
-    return { ok: false, error: 'response missing title/summary or unparseable' }
-  }
-  log.warn('summary response was not structured JSON — falling back to the raw output as an unstructured summary', { provider, outputPreview: result.output.slice(0, 200) })
-  return { ok: true, notes: degradedNotes, degraded: true }
+
+  log.error('summary response was not usable after corrective retry', { provider, outputPreview: lastOutput.slice(0, 300) })
+  return { ok: false, error: lastFailure }
 }

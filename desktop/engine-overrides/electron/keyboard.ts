@@ -588,7 +588,7 @@ export class KeyboardManager extends EventEmitter {
     // Escape, never on release. (Mirrors dictation tap-toggle.)
   }
 
-  // ─── Meeting Notetaker — left-Control, double-tap start / single-tap stop ───
+  // ─── Meeting Notetaker — left-Control, double-tap start / double-tap end ───
   //
   // Fed by left-control-down/up and notes-chord-spoil (an event pressed
   // while Control is held — see listener.mm). recogniseTap does the actual
@@ -597,13 +597,9 @@ export class KeyboardManager extends EventEmitter {
   // meeting is running spoil the gesture instead of stopping it the instant
   // Control goes down (see the class-level comment on `notesGesture`).
   //
-  // ASYMMETRIC ON PURPOSE, same shape as feedAgentGesture: every single
-  // clean tap while a meeting is already running is emitted here, still
-  // undebounced — but what a given tap actually DOES (arm an undo window,
-  // cancel one, or nothing) is the controller's own state machine, not this
-  // key's (see NotetakerController.onNotesStopRequested). Starting a
-  // meeting is the bigger commitment — it turns on system-audio capture and
-  // raises its own TCC prompt — so that still needs two taps to even begin.
+  // The gesture is symmetric: double-tap starts when idle and ends when
+  // recording. A single tap is harmless; it only records the first half of
+  // a possible pair.
   //
   // NO EXCLUSION CHECK, ON PURPOSE (spec §5): dictationActive/
   // instructionActive/agentActive/remoteActive are never read here, and
@@ -632,18 +628,21 @@ export class KeyboardManager extends EventEmitter {
 
     const now = Date.now()
 
-    // STOP FIRST — every single clean tap while active is emitted, never
-    // debounced (a tap must always go through, whether it is arming an undo
-    // window or cancelling one — see the controller's own
-    // onNotesStopRequested for what each tap actually does). `notesActive`
-    // stays true for the controller's whole undo window on purpose: it only
-    // goes back to false via confirmNotesStop(), called once the stop is
-    // actually finalized, mirroring the widget's own direct-cancel path.
+    // End also requires a pair. This avoids a single Control press ending a
+    // meeting while preserving the same muscle-memory gesture for both
+    // transitions.
     if (this.notesActive) {
+      const paired = this.lastNotesTapAt > 0 && now - this.lastNotesTapAt <= DOUBLE_TAP_WINDOW_MS
+      if (!paired) {
+        this.lastNotesTapAt = now
+        notesLog.event('tap-1-of-2-end-recorded', { at: now })
+        return
+      }
+      const msBetweenTaps = now - this.lastNotesTapAt
       this.lastNotesToggleTime = now
       this.lastNotesTapAt = 0
-      console.log('[keyboard] Notes STOP (single tap)')
-      notesLog.event('tap-stop-emitted', { at: now })
+      console.log('[keyboard] Notes STOP (double tap)')
+      notesLog.event('tap-stop-emitted', { at: now, msBetweenTaps })
       this.emit('notes-stop-requested')
       return
     }

@@ -74,7 +74,7 @@ export interface DBMeeting {
  *  writes it anymore; it's never surfaced past getNotetakerSettings(). */
 export interface NotetakerSettingsRow {
   auto_pipeline_enabled: 0 | 1
-  provider: 'claude' | 'codex'
+  provider: 'claude' | 'codex' | 'managed'
   cleanup_prompt: string | null
   summary_prompt: string | null
 }
@@ -377,6 +377,23 @@ export function updateMeetingTitle(id: string, title: string): void {
   db.prepare('UPDATE meetings SET title = ? WHERE id = ?').run(title, id)
 }
 
+/** Mark the start-time placeholder as a saved meeting that is still being
+ * processed. This runs synchronously when capture stops, before the final
+ * transcription promises settle, so the renderer can immediately show a
+ * durable "Preparing notes" entry instead of an empty meetings list. */
+export function markMeetingProcessing(id: string, endedAt: number): void {
+  const meeting = getMeeting(id)
+  if (!meeting) return
+  const durationMs = Math.max(0, endedAt - meeting.started_at)
+  db.prepare(`
+    UPDATE meetings
+    SET title = ?, ended_at = ?, duration_ms = ?, status = ?,
+        cleanup_status = ?, summary_status = ?
+    WHERE id = ?
+  `).run('Preparing notes…', endedAt, durationMs, 'transcribing', 'disabled', 'pending', id)
+  notetakerLog.child({ meetingId: id }).event('meeting-marked-processing', { durationMs })
+}
+
 /** Narrow, partial update for the cleanup/summarization pipeline's own
  *  status fields — deliberately NOT routed through insertMeeting()'s
  *  full-row INSERT OR REPLACE, which would require re-supplying every
@@ -462,7 +479,7 @@ function sweepExpiredMeetingAudio(): void {
   for (const row of expired) {
     const meetingDir = path.join(app.getPath('userData'), 'meetings', row.id)
     const candidates = new Set(
-      [row.audio_mic_path, row.audio_system_path, 'audio-mic.wav', 'audio-system.wav'].filter(
+      [row.audio_mic_path, row.audio_system_path, 'audio-mic.wav', 'audio-mic-clean.wav', 'audio-system.wav', 'audio-meeting.wav'].filter(
         (p): p is string => !!p
       )
     )

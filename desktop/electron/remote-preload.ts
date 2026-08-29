@@ -183,19 +183,16 @@ export interface NotetakerTranscriptSegment {
 }
 
 // Mirrors db.ts's NotetakerSettingsRow, same cross-tree-duplication reason
-// as NotetakerMeetingSnapshot above. cleanup_prompt is a legacy DB column,
-// still spread through by the IPC handler but never read or written by the
-// renderer — cleanup has no user-editable seam (see transcriptCleanup.ts's
-// header). summary_prompt is the EDITABLE instructions override for
-// summary only (null = using the built-in default) — the fixed preamble/
-// contract that always bookends it at call time is never sent to the
-// renderer, see notesSummary.ts.
+// as NotetakerMeetingSnapshot above. summary_prompt is the editable guidance
+// for direct note generation (null = built-in default). managed means the
+// user's signed-in Unmute Cloud agent; desktop-driver agents are not exposed
+// because they cannot safely run a background one-shot note request.
 export interface NotetakerPipelineSettings {
   auto_pipeline_enabled: 0 | 1
-  provider: 'claude' | 'codex'
+  provider: 'claude' | 'codex' | 'managed'
   cleanup_prompt: string | null
   summary_prompt: string | null
-  availability: { claude: boolean; codex: boolean }
+  availability: { claude: boolean; codex: boolean; managed: boolean }
   default_summary_instructions: string
 }
 
@@ -655,9 +652,11 @@ export const remotePreloadExtensions = {
   },
 
   // ── Meeting Notetaker floating widget (bottom-left) ──
-  /** User clicked the widget, then confirmed Cancel — tells main to stop the
-   *  note-taking session (spec §6: stop is never a single, direct action;
-   *  the confirm already happened in the renderer by the time this fires). */
+  /** User chose the normal, save-and-generate-notes completion path from the
+   *  floating widget. */
+  notetakerEndRequested: (): void => ipcRenderer.send('notetaker:end-requested'),
+  /** User chose Discard from the floating widget. Main still asks for the
+   *  destructive confirmation before deleting the in-progress meeting. */
   notetakerCancelRequested: (): void => ipcRenderer.send('notetaker:cancel-requested'),
   /** Main tells the widget whether a REAL capture is running right now.
    *  The widget window is REUSED across sessions (hidden, never closed), so
@@ -681,6 +680,13 @@ export const remotePreloadExtensions = {
     const handler = (_e: unknown, pending: boolean) => cb(!!pending)
     ipcRenderer.on('notetaker:stop-pending', handler)
     return () => ipcRenderer.removeListener('notetaker:stop-pending', handler)
+  },
+  /** Main gives the just-finished widget a momentary completion state before
+   *  hiding it. */
+  notetakerOnCompleted: (cb: () => void): (() => void) => {
+    const handler = () => cb()
+    ipcRenderer.on('notetaker:completed', handler)
+    return () => ipcRenderer.removeListener('notetaker:completed', handler)
   },
   /** Tells main the widget's IPC listeners (capture-active, stop-pending)
    *  are actually mounted and ready to receive — sent once, right after the
@@ -728,9 +734,9 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('notetaker:rename-meeting', id, title),
   /** Delete a meeting's row, transcript, and any remaining audio. */
   notetakerDeleteMeeting: (id: string): Promise<void> => ipcRenderer.invoke('notetaker:delete-meeting', id),
-  /** A `file://` URL for an `<audio>` element, or null if that channel was
-   *  never recorded or its audio has already been swept (24h retention). */
-  notetakerGetAudioUrl: (id: string, channel: 'mic' | 'system'): Promise<string | null> =>
+  /** A URL for the user-facing mixed meeting recording (or an internal
+   *  channel for compatibility), null after 24h audio retention. */
+  notetakerGetAudioUrl: (id: string, channel: 'mic' | 'system' | 'mixed'): Promise<string | null> =>
     ipcRenderer.invoke('notetaker:get-audio-url', id, channel),
   /** Relays a widget-renderer diagnostic (getUserMedia result, device label,
    *  AudioWorklet-vs-ScriptProcessor fallback, tap teardown, etc.) into
@@ -760,6 +766,9 @@ export const remotePreloadExtensions = {
   /** Re-runs whichever pipeline stage(s) haven't succeeded yet for this
    *  meeting (spec §6) — never redoes a stage that already succeeded. */
   notetakerRetryPipeline: (id: string): Promise<void> => ipcRenderer.invoke('notetaker:retry-pipeline', id),
+  /** Re-transcribes retained meeting audio, replaces the transcript, and
+   * regenerates notes. It is deliberately isolated to the note-taker. */
+  notetakerRetryTranscription: (id: string): Promise<void> => ipcRenderer.invoke('notetaker:retry-transcription', id),
   /** Just the two status fields — a lightweight poll target while a stage
    *  is 'pending', instead of re-fetching the whole meeting list. */
   notetakerGetPipelineStatus: (id: string): Promise<{ cleanup_status: NotetakerPipelineStatus; summary_status: NotetakerPipelineStatus } | null> =>

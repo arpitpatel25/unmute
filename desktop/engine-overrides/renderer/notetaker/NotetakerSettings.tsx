@@ -1,7 +1,7 @@
 // Notetaker settings.
 //
 // Trigger section: reference display of the current hotkey (left Control,
-// double-tap to start, single tap to stop — see keyboard.ts's
+// double-tap to start and double-tap to stop — see keyboard.ts's
 // feedNotesGesture; this copy previously described an older Control+Option
 // chord design that shipped, then changed, without this text catching up).
 //
@@ -25,17 +25,16 @@
 
 import { useEffect, useState } from 'react'
 
-type Provider = 'claude' | 'codex'
+type Provider = 'claude' | 'codex' | 'managed'
 
 type PipelineSettings = {
-  auto_pipeline_enabled: 0 | 1
   provider: Provider
   summary_prompt: string | null
-  availability: { claude: boolean; codex: boolean }
+  availability: { claude: boolean; codex: boolean; managed: boolean }
   default_summary_instructions: string
 }
 
-type SettingsPatch = Partial<Pick<PipelineSettings, 'auto_pipeline_enabled' | 'provider' | 'summary_prompt'>>
+type SettingsPatch = Partial<Pick<PipelineSettings, 'provider' | 'summary_prompt'>>
 
 type API = {
   notetakerGetPipelineSettings?: () => Promise<PipelineSettings>
@@ -45,30 +44,10 @@ function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
 }
 
-const PROVIDER_LABEL: Record<Provider, string> = { claude: 'Claude Code CLI', codex: 'Codex CLI' }
-
-/** Small pill toggle — no existing Switch component in this codebase to
- *  reuse (checked; Settings.tsx's own toggles are click-to-cycle buttons,
- *  not a shared primitive), so this is self-contained rather than reaching
- *  for a raw unstyled checkbox in an otherwise visually considered app. */
-function Toggle({ on, onClick, disabled }: { on: boolean; onClick: () => void; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      disabled={disabled}
-      onClick={onClick}
-      className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${
-        disabled ? 'bg-black/10 cursor-not-allowed' : on ? 'bg-green-700' : 'bg-black/20'
-      }`}
-    >
-      <span
-        className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform"
-        style={{ transform: on ? 'translateX(16px)' : 'translateX(0)' }}
-      />
-    </button>
-  )
+const PROVIDER_LABEL: Record<Provider, string> = {
+  claude: 'Claude Code CLI',
+  codex: 'Codex CLI',
+  managed: 'Unmute Cloud',
 }
 
 export function NotetakerSettings() {
@@ -84,50 +63,38 @@ export function NotetakerSettings() {
     api().notetakerSavePipelineSettings?.(patch)
   }
 
-  const noProviderAvailable = !!settings && !settings.availability.claude && !settings.availability.codex
+  const noProviderAvailable = !!settings && !settings.availability.claude && !settings.availability.codex && !settings.availability.managed
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h3 className="text-[13px] font-semibold text-ink mb-1">Trigger</h3>
         <p className="text-[12px] text-ink-60 leading-relaxed">
-          Double-tap left Control to start recording a meeting; a single tap stops it (with a
-          few seconds to tap again and keep recording if that was a mistake). Manual capture
-          always works, whether or not a call is detected.
+          Double-tap left Control to start recording a meeting, and double-tap it again to end
+          the meeting. Manual capture always works, whether or not a call is detected.
         </p>
       </div>
 
       <div>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h3 className="text-[13px] font-semibold text-ink mb-1">Transcript cleanup &amp; notes</h3>
-            <p className="text-[12px] text-ink-60 leading-relaxed max-w-md">
-              Automatically corrects speech-to-text errors and generates a title, summary, key
-              points, decisions, and action items for every meeting — using your own local
-              Claude Code or Codex CLI, on your own usage, not Unmute&apos;s.
-            </p>
-          </div>
-          {settings && (
-            <Toggle
-              on={!!settings.auto_pipeline_enabled}
-              disabled={noProviderAvailable && !settings.auto_pipeline_enabled}
-              onClick={() => save({ auto_pipeline_enabled: settings.auto_pipeline_enabled ? 0 : 1 })}
-            />
-          )}
+        <div>
+          <h3 className="text-[13px] font-semibold text-ink mb-1">Meeting notes</h3>
+          <p className="text-[12px] text-ink-60 leading-relaxed max-w-md">
+            When you end a recording, Unmute sends the transcript directly to your selected
+            agent and opens the finished English notes when they are ready.
+          </p>
         </div>
 
         {noProviderAvailable && (
           <p className="text-[11px] text-ink/50 mt-2">
-            Neither Claude Code CLI nor Codex CLI is set up yet — install and sign in to one on
-            the Orchestrator&apos;s Agents checklist to turn this on.
+            Connect Claude Code, Codex, or Unmute Cloud to generate meeting notes.
           </p>
         )}
 
-        {settings && !!settings.auto_pipeline_enabled && (
+        {settings && (
           <div className="mt-3 flex flex-col gap-4">
             <div>
               <div className="text-[12px] font-medium text-ink mb-1.5">Provider</div>
-              {(['claude', 'codex'] as const).map((id) => {
+              {(['claude', 'codex', 'managed'] as const).map((id) => {
                 const available = settings.availability[id]
                 const selected = settings.provider === id
                 return (
@@ -149,8 +116,8 @@ export function NotetakerSettings() {
             </div>
 
             <p className="text-[11px] text-ink/50 leading-relaxed">
-              Transcript cleanup — including recovering misheard or code-switched speech — runs the
-              same way for every meeting and isn&apos;t user-editable.
+              Meeting transcription supports mixed English and Hindi/Hinglish; the generated notes
+              are always written in English.
             </p>
 
             <InstructionsRow

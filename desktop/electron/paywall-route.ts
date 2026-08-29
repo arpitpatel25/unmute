@@ -18,6 +18,17 @@ let fellBackThisSession = false
 
 export interface ManagedSTTResult {
   text: string
+  /** Present only for note-taker calls, where source timings determine the
+   * displayed cross-channel speaker order. Existing dictation calls retain
+   * their compact text-only response. */
+  segments?: Array<{
+    start: number
+    end: number
+    text: string
+    avg_logprob?: number
+    no_speech_prob?: number
+    compression_ratio?: number
+  }>
   durationSeconds: number
   costCents: number
   engine: 'managed'
@@ -104,9 +115,16 @@ function fallbackReasonFor(status: number, code?: string): 'subscription_inactiv
 export async function tryManagedSTT(
   audio: Buffer,
   durationSeconds: number,
-  flowType: 'dictation' | 'transform' | 'quote' | 'context' | 'instruction' = 'dictation',
+  flowType: 'dictation' | 'transform' | 'quote' | 'context' | 'instruction' | 'notetaker' = 'dictation',
   signal?: AbortSignal,
   prompt?: string,
+  /** Undefined preserves the existing shared language setting. Null is a
+   *  deliberate "omit language" request for the note-taker's mixed-language
+   *  mode, which the worker handles only for flow_type=notetaker. */
+  languageOverride?: string | null,
+  /** Note-taker chunks are PCM WAV; every existing live-dictation caller
+   * continues using its WebM default. */
+  audioMime = 'audio/webm',
 ): Promise<ManagedSTTResult | null> {
   if (!shouldTryManaged()) return null
 
@@ -120,26 +138,26 @@ export async function tryManagedSTT(
   try {
     const tFormStart = Date.now()
     const form = new FormData()
-    form.append('file', new Blob([audio], { type: 'audio/webm' }), 'audio.webm')
+    const audioFilename = audioMime === 'audio/wav' ? 'audio.wav' : 'audio.webm'
+    form.append('file', new Blob([audio], { type: audioMime }), audioFilename)
     form.append('duration_seconds', String(durationSeconds))
     // Language is read from settings. null = auto-detect (no field sent —
     // Whisper detects across all 99 supported languages on its own).
-    const lang = getSTTLanguageForRequest()
+    const lang = languageOverride === undefined ? getSTTLanguageForRequest() : languageOverride
     if (lang) form.append('language', lang)
     form.append('flow_type', flowType)
     if (prompt) form.append('prompt', prompt)
     const tFormEnd = Date.now()
 
-    // DIAG (offline-fallback hunt): is the audio we're uploading a VALID webm?
-    // A Groq 400 usually means the file couldn't be decoded. webm/Matroska starts
-    // with the EBML magic 1A 45 DF A3. Log the first bytes + mime so we can tell a
-    // good recording from a malformed/empty one across machines.
+    // DIAG (offline-fallback hunt): identify the actual encoded container.
     const head = Array.from(audio.subarray(0, 8)).map((b) => b.toString(16).padStart(2, '0')).join(' ')
-    const isWebm = audio.length >= 4 && audio[0] === 0x1a && audio[1] === 0x45 && audio[2] === 0xdf && audio[3] === 0xa3
+    const isExpectedContainer = audioMime === 'audio/wav'
+      ? audio.length >= 4 && audio.subarray(0, 4).toString('ascii') === 'RIFF'
+      : audio.length >= 4 && audio[0] === 0x1a && audio[1] === 0x45 && audio[2] === 0xdf && audio[3] === 0xa3
     console.log(
       `[paywall-route] STT request — audio ${audio.length}B (${(audio.length / 1024).toFixed(1)}KB) for ${durationSeconds}s, ` +
-      `mime=audio/webm, lang=${lang ?? 'auto'}, flow=${flowType}, FormData built in ${tFormEnd - tFormStart}ms\n` +
-      `  audio head bytes: [${head}] → ${isWebm ? 'valid webm EBML header ✓' : 'NOT a webm EBML header ✗ (Groq will 400)'}`
+      `mime=${audioMime}, lang=${lang ?? 'auto'}, flow=${flowType}, FormData built in ${tFormEnd - tFormStart}ms\n` +
+      `  audio head bytes: [${head}] → ${isExpectedContainer ? `valid ${audioMime} header ✓` : `unexpected ${audioMime} header ✗`}`
     )
 
     const tFetchStart = Date.now()
@@ -160,7 +178,7 @@ export async function tryManagedSTT(
           currentToken = fresh
           // FormData can't be re-used after consumption; rebuild it
           const retryForm = new FormData()
-          retryForm.append('file', new Blob([audio], { type: 'audio/webm' }), 'audio.webm')
+          retryForm.append('file', new Blob([audio], { type: audioMime }), audioFilename)
           retryForm.append('duration_seconds', String(durationSeconds))
           if (lang) retryForm.append('language', lang)
           retryForm.append('flow_type', flowType)
@@ -181,7 +199,7 @@ export async function tryManagedSTT(
 
     type Envelope = {
       ok: boolean
-      data?: { text: string; duration_seconds: number; model: string }
+      data?: { text: string; segments?: ManagedSTTResult['segments']; duration_seconds: number; model: string }
       balance_cents?: number
       cost_cents?: number
       code?: string
@@ -241,6 +259,7 @@ export async function tryManagedSTT(
 
     return {
       text: body.data!.text,
+      segments: body.data!.segments,
       durationSeconds: body.data!.duration_seconds,
       costCents: body.cost_cents ?? 0,
       engine: 'managed',

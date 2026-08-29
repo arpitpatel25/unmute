@@ -37,6 +37,7 @@ import { createLogger } from './log'
 const log = createLogger('notetaker-widget')
 
 let widgetWindow: BrowserWindow | null = null
+let hideTimer: ReturnType<typeof setTimeout> | null = null
 /** When the CURRENT widgetWindow was created — null until createNotetakerWidget()
  *  first runs. Every broadcast/did-finish-load log below reports its elapsed
  *  time against this, since "the widget window hadn't finished loading yet"
@@ -152,16 +153,15 @@ ipcMain.on('notetaker:widget-ready', () => {
 function widgetBounds(): { x: number; y: number; width: number; height: number } {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const wa = display.workArea
-  const pillHeight = 26 // matches NotetakerWidget.tsx's own PILL_HEIGHT
-  const width = 260
+  const width = 44
+  const height = 116
   const xMargin = 16
   const baseline = 30 // matches the dictation pill's own clearance from the bottom
-  const windowHeight = pillHeight
   return {
     width,
-    height: windowHeight,
+    height,
     x: wa.x + xMargin,
-    y: wa.y + wa.height - baseline - windowHeight,
+    y: wa.y + wa.height - baseline - height,
   }
 }
 
@@ -267,6 +267,10 @@ function reassertOmnipresence(win: BrowserWindow): void {
  *  for its own presentations). Called from NotetakerSession start, per the
  *  plan: the widget's visibility must always match actual capture state. */
 export function showNotetakerWidget(): void {
+  if (hideTimer) {
+    clearTimeout(hideTimer)
+    hideTimer = null
+  }
   const alreadyExisted = !!widgetWindow && !widgetWindow.isDestroyed()
   const wasVisibleBefore = alreadyExisted && !!widgetWindow?.isVisible()
   const win = createNotetakerWidget()
@@ -300,7 +304,13 @@ export function hideNotetakerWidget(): void {
   // never open already tinted from a stale pending-stop that never resolved.
   broadcastStopPending(false)
   if (widgetWindow && !widgetWindow.isDestroyed() && widgetWindow.isVisible()) {
-    widgetWindow.hide()
+    // Keep a small completion check on-screen briefly, then get out of the
+    // way while notes run.
+    widgetWindow.webContents.send('notetaker:completed')
+    hideTimer = setTimeout(() => {
+      if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.hide()
+      hideTimer = null
+    }, 900)
   }
   log.event('notetaker-widget-hidden', { wasVisible })
 }
@@ -313,6 +323,10 @@ function closeWindow(win: BrowserWindow): void {
 
 /** Tear the window down entirely (app quit / feature teardown). */
 export function destroyNotetakerWidget(): void {
+  if (hideTimer) {
+    clearTimeout(hideTimer)
+    hideTimer = null
+  }
   broadcastCaptureActive(false)
   broadcastStopPending(false)
   if (widgetWindow && !widgetWindow.isDestroyed()) {
