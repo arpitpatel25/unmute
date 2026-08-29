@@ -326,6 +326,10 @@ export const paywallPreloadExtensions = {
   },
 
   /** Surface material: 'system' (default — follows Reduce Transparency) | 'glass' | 'solid'. */
+  getNotetakerCaptureVisible: (): Promise<boolean> =>
+    ipcRenderer.invoke('remote:get-notetaker-capture-visible'),
+  setNotetakerCaptureVisible: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-notetaker-capture-visible', on),
   getSurfaceTone: (): Promise<'spaceGray' | 'black'> =>
     ipcRenderer.invoke('remote:get-surface-tone'),
   setSurfaceTone: (v: string): Promise<'spaceGray' | 'black'> =>

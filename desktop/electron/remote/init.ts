@@ -57,6 +57,7 @@ import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrat
 import { Router, type RoutableTask, type AgentAvailability } from './router'
 import { CodexRouterEngine } from './codex-router-engine'
 import { prefersCodexRouter, routerScopeMatches } from './router-select'
+import { WIDGET_CAPTURE_KEY, setWidgetCaptureReader, refreshWidgetCapturePolicy } from './notetakerWidget'
 import { HeadlessRouterEngine } from './headless-router-engine'
 import { CodexExecRouterEngine } from './codex-exec-router-engine'
 import { knownProjects, projectSlug } from './projects'
@@ -6073,6 +6074,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // exist because a hand-built pre-26 surface cannot follow the system slider
   // at all, and because a persistent always-on-top panel over someone else's
   // work is a reasonable thing to want solid regardless.
+  // The widget module owns the window; the settings store lives here. One
+  // injection rather than an import cycle.
+  setWidgetCaptureReader(() => settings.get(WIDGET_CAPTURE_KEY) === true)
+
   ipcMain.handle('remote:get-surface-appearance', async () => settings.get('surfaceAppearance') || 'solid')
   ipcMain.handle('remote:set-surface-appearance', async (_e, v: string) => {
     const value = v === 'glass' || v === 'solid' ? v : 'system'
@@ -6086,6 +6091,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // shipped before this was a choice and stays the default, so no existing
   // surface changes under anyone; black matches the notch housing's own colour
   // so an expanded surface reads as one object with the mass above it.
+  // THE NOTETAKER'S OWN capture visibility — see notetakerWidget.ts for why it
+  // is not `showInScreenCapture`. Default false: hidden from recordings.
+  ipcMain.handle('remote:get-notetaker-capture-visible', async () => settings.get(WIDGET_CAPTURE_KEY) === true)
+  ipcMain.handle('remote:set-notetaker-capture-visible', async (_e, on: boolean) => {
+    settings.set(WIDGET_CAPTURE_KEY, !!on)
+    // Re-apply to a widget that is already up, so the change is immediate
+    // rather than waiting for the next meeting.
+    refreshWidgetCapturePolicy()
+    log.event('notetaker-capture-visible-set', { on: !!on })
+    return !!on
+  })
+
   ipcMain.handle('remote:get-surface-tone', async () => settings.get('surfaceTone') || 'spaceGray')
   ipcMain.handle('remote:set-surface-tone', async (_e, v: string) => {
     const value = v === 'black' ? 'black' : 'spaceGray'

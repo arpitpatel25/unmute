@@ -86,6 +86,8 @@ interface SettingsApi {
   setSurfaceAppearance?: (v: string) => Promise<string>
   getSurfaceTone?: () => Promise<string>
   setSurfaceTone?: (v: string) => Promise<string>
+  getNotetakerCaptureVisible?: () => Promise<boolean>
+  setNotetakerCaptureVisible?: (on: boolean) => Promise<boolean>
   getIphoneMicEnabled?: () => Promise<boolean>
   getPauseMediaWhileDictating?: () => Promise<boolean>
   setPauseMediaWhileDictating?: (on: boolean) => Promise<boolean>
@@ -285,6 +287,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // because an always-on-top panel is a reasonable thing to want solid.
   const [surfaceAppearance, setSurfaceAppearance] = useState<'system' | 'glass' | 'solid'>('system')
   const [surfaceTone, setSurfaceTone] = useState<'spaceGray' | 'black'>('spaceGray')
+  const [notetakerInCapture, setNotetakerInCapture] = useState(false)
   // DEFAULT ON, matching the setting it writes (remote/init.ts:198 —
   // `overlayAutoPresent: true`). A surface that never comes forward by itself is
   // a surface you have to remember to look at.
@@ -346,6 +349,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
     window.electronAPI.getWidgetPosition().then((v: string) => {
       if (v === 'center' || v === 'right') setWidgetPosition(v)
     })
+    void api().getNotetakerCaptureVisible?.().then((v) => setNotetakerInCapture(!!v))
     void api().getSurfaceTone?.().then((v) => {
       if (v === 'black' || v === 'spaceGray') setSurfaceTone(v)
     })
@@ -450,6 +454,11 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
       'system' | 'glass' | 'solid'
     setSurfaceAppearance(v)
     void api().setSurfaceAppearance?.(v)
+  }
+
+  function handleNotetakerCaptureChange(next: boolean): void {
+    setNotetakerInCapture(next)
+    void api().setNotetakerCaptureVisible?.(next)
   }
 
   function handleSurfaceToneChange(value: string) {
@@ -798,6 +807,19 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
               description="Include the notch and recording pill when you share or capture your screen. Turn this off to keep them private."
             >
               <Toggle checked={showInScreenCapture} onChange={handleShowInScreenCaptureChange} />
+            </SettingRow>
+
+            {/* THE NOTETAKER GETS ITS OWN, and defaults the other way.
+                The row above is about tidiness — a notch in a screenshot is
+                merely untidy. This one is about disclosure: a meeting recorder
+                visible in the meeting it is recording is a different question,
+                and the answer people want for it is not the answer they want
+                for the dictation surfaces. Hence a separate key, default off. */}
+            <SettingRow
+              label="Show the meeting notetaker in screen sharing"
+              description="Off by default. The notetaker widget is hidden from screen recordings, screen sharing and screenshots — the capture shows whatever is behind it."
+            >
+              <Toggle checked={notetakerInCapture} onChange={handleNotetakerCaptureChange} />
             </SettingRow>
             {/* D5: this governs the expanded panel and the recording pill ONLY.
                 The bar-level mass is always opaque black, because it is

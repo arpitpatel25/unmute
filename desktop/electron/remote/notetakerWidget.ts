@@ -36,6 +36,36 @@ import { createLogger } from './log'
 
 const log = createLogger('notetaker-widget')
 
+/** Settings key for the notetaker widget's own screen-capture visibility.
+ *  Deliberately NOT `showInScreenCapture`, which governs the notch and pill. */
+export const WIDGET_CAPTURE_KEY = 'notetakerVisibleInScreenCapture'
+
+/** Read once, injected, so this module stays testable without electron-store. */
+let readVisible: () => boolean = () => false
+
+export function setWidgetCaptureReader(fn: () => boolean): void { readVisible = fn }
+
+/**
+ * Hide the widget from screen capture unless the user has asked otherwise.
+ *
+ * DEFAULT HIDDEN. Every other surface defaults to visible because being in a
+ * recording is merely untidy for them. This one is a meeting recorder, and
+ * appearing in the meeting it is recording is a disclosure, not an aesthetic.
+ */
+export function refreshWidgetCapturePolicy(): void {
+  if (widgetWindow && !widgetWindow.isDestroyed()) applyWidgetCapturePolicy(widgetWindow)
+}
+
+export function applyWidgetCapturePolicy(win: BrowserWindow): void {
+  const visible = readVisible()
+  try {
+    win.setContentProtection(!visible)
+    log.event('widget-capture-policy', { visibleInCapture: visible, contentProtection: !visible })
+  } catch (e) {
+    log.warn('setContentProtection failed', { error: (e as Error).message })
+  }
+}
+
 let widgetWindow: BrowserWindow | null = null
 /** When the CURRENT widgetWindow was created — null until createNotetakerWidget()
  *  first runs. Every broadcast/did-finish-load log below reports its elapsed
@@ -207,6 +237,19 @@ export function createNotetakerWidget(): BrowserWindow {
   // 'screen-saver' level + visibleOnFullScreen: stays pinned over everything,
   // including full-screen Spaces (a meeting is very likely to BE a full-screen
   // Space) — identical reasoning and recipe as overlay.ts.
+  // HIDDEN FROM SCREEN CAPTURE BY DEFAULT, and on its own preference.
+  //
+  // setContentProtection maps to NSWindow.sharingType = .none: the window is
+  // omitted from screen recording, screen sharing and screenshots at the window
+  // server, so a capture shows what is behind it rather than a black box.
+  //
+  // A SEPARATE SETTING from `showInScreenCapture`, which governs the notch and
+  // pill. Those are cosmetic in a recording; a MEETING RECORDER visible in the
+  // meeting it is recording is a different question entirely, and the answer
+  // people want for it is not the answer they want for the dictation surfaces.
+  // Hence its own key, defaulting to hidden.
+  applyWidgetCapturePolicy(widgetWindow)
+
   widgetWindow.setAlwaysOnTop(true, 'screen-saver')
   widgetWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
   widgetWindow.setFullScreenable(false)
