@@ -404,6 +404,7 @@ patch_engine_sources() {
 
   # 1) main.ts: init paywall after windows are ready
   local main_ts="$engine/electron/main.ts"
+
   if ! grep -q 'initPaywall' "$main_ts"; then
     # Insert import near the top imports block
     sed -i.bak "/^import { setupAutoUpdater/a\\
@@ -512,7 +513,7 @@ import { runHeadlessAgent } from './notetaker/headlessAgent'
   if ! grep -q 'initNotetaker' "$main_ts"; then
     sed -i.bak "/^import { initRemote } from '\.\/paywall\/remote\/init'/a\\
 import { initNotetaker } from './notetakerInit'\\
-import { showNotetakerWidget, hideNotetakerWidget, broadcastStopPending } from './paywall/remote/notetakerWidget'\\
+import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notetakerWidget'\\
 import { getAgentAvailability } from './paywall/remote/init'
 " "$main_ts"
     rm -f "$main_ts.bak"
@@ -531,11 +532,6 @@ import { getAgentAvailability } from './paywall/remote/init'
           '  initNotetaker({\n' +
           '    onSessionStart: showNotetakerWidget,\n' +
           '    onSessionStop: hideNotetakerWidget,\n' +
-          '    // The key\\'s own single-tap stop arms a short undo window before it\n' +
-          '    // actually stops (NotetakerController.onNotesStopRequested) — this tints\n' +
-          '    // the widget for exactly that window, same cross-tree reason as the two\n' +
-          '    // hooks above.\n' +
-          '    onStopPendingChanged: broadcastStopPending,\n' +
           '    // getMainWindow/createMainWindow/showMainWindow are already imported\n' +
           '    // above (this file creates its own main window) — the notetaker tree\n' +
           '    // cannot import windowManager.ts directly (see NotetakerInitHooks\\'s\n' +
@@ -558,6 +554,15 @@ import { getAgentAvailability } from './paywall/remote/init'
       log "WARN: initNotetaker call injection did not land in main.ts"
     fi
   fi
+  # Keep the generated engine's widget import canonical across repeated wires.
+  node -e "
+    const fs = require('fs'); const p = '$main_ts'; let s = fs.readFileSync(p, 'utf-8')
+    s = s.replace(
+      /import \\{[^}]*\\} from '\\.\\/paywall\\/remote\\/notetakerWidget'/,
+      \"import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notetakerWidget'\",
+    )
+    fs.writeFileSync(p, s)
+  "
 
   # 2) preload.ts: merge paywall API into electronAPI
   local preload="$engine/electron/preload.ts"

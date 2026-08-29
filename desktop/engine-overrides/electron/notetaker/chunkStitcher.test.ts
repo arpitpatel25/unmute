@@ -58,10 +58,36 @@ describe('stitchChannelChunks', () => {
 })
 
 describe('cleanChunkText', () => {
+  test('drops punctuation-only silence hallucinations', () => {
+    assert.equal(cleanChunkText('.'), '')
+    assert.equal(cleanChunkText('...'), '')
+  })
+
+  test('drops bare non-speech event labels, not only bracketed sentinels', () => {
+    assert.equal(cleanChunkText('LAUGHTER'), '')
+    assert.equal(cleanChunkText('(applause)'), '')
+    assert.equal(cleanChunkText('Noise.'), '')
+  })
+
+  test('keeps real speech that happens to mention a non-speech word', () => {
+    assert.equal(cleanChunkText('There was a lot of laughter in the room.'), 'There was a lot of laughter in the room.')
+  })
+
   test('an entire chunk of pure hallucination cleans to empty', () => {
     assert.equal(cleanChunkText('Thank you.'), '')
     assert.equal(cleanChunkText('Thanks for watching!'), '')
     assert.equal(cleanChunkText('  bye. '), '')
+  })
+
+  test('drops Whisper\'s multilingual-silence "foreign Thank you" combination', () => {
+    assert.equal(cleanChunkText('foreign Thank you.'), '')
+    assert.equal(cleanChunkText('Foreign: Thanks for watching!'), '')
+    assert.equal(cleanChunkText('Foreign investment increased.'), 'Foreign investment increased.')
+  })
+
+  test('drops exact fragments leaked by the retired imperative STT prompt', () => {
+    assert.equal(cleanChunkText('Do not add, omit, or correct speech.'), '')
+    assert.equal(cleanChunkText('Keep already-spoken English unchanged.'), '')
   })
 
   test('leaves real speech that happens to end similarly alone', () => {

@@ -14,15 +14,6 @@ function fakeSession(isActive = false) {
   return { session, startCalls, stopCalls }
 }
 
-/** Spread into every controller construction that isn't itself testing the
- *  key's undo-window behavior — those three deps are only exercised by the
- *  tests further down, and every other test just needs them to be no-ops. */
-const noopStopDeps = {
-  stopGraceMs: 10_000, // long enough that no timer in an unrelated test could ever fire
-  onStopPendingChanged: () => {},
-  onStopFinalized: () => {},
-}
-
 describe('NotetakerController', () => {
   test('a detected meeting start surfaces a notification, does not auto-start capture', () => {
     const { session, startCalls } = fakeSession()
@@ -32,7 +23,6 @@ describe('NotetakerController', () => {
       resolveTargetPid: () => 4242,
       showNotification: (opts) => notifications.push(opts.title),
       confirm: async () => true,
-      ...noopStopDeps,
     })
     controller.onMeetingDetected()
     assert.deepEqual(notifications, ["Looks like you're in a meeting"])
@@ -49,7 +39,6 @@ describe('NotetakerController', () => {
       resolveTargetPid: () => 4242,
       showNotification: () => {},
       confirm: async () => true,
-      ...noopStopDeps,
     })
     await controller.onNotesStartRequested()
     assert.deepEqual(startCalls, [4242])
@@ -65,7 +54,6 @@ describe('NotetakerController', () => {
       },
       showNotification: () => {},
       confirm: async () => true,
-      ...noopStopDeps,
     })
     await controller.onNotesStartRequested()
     assert.deepEqual(startCalls, [777])
@@ -79,7 +67,6 @@ describe('NotetakerController', () => {
       resolveTargetPid: () => null,
       showNotification: (opts) => notifications.push(opts.title),
       confirm: async () => true,
-      ...noopStopDeps,
     })
     await controller.onNotesStartRequested()
     assert.equal(startCalls.length, 0)
@@ -97,7 +84,6 @@ describe('NotetakerController', () => {
         confirmCalls++
         return true
       },
-      ...noopStopDeps,
     })
     await controller.onNotesStopConfirmRequested()
     assert.equal(confirmCalls, 1)
@@ -111,7 +97,6 @@ describe('NotetakerController', () => {
       resolveTargetPid: () => 4242,
       showNotification: () => {},
       confirm: async () => false,
-      ...noopStopDeps,
     })
     await controller.onNotesStopConfirmRequested()
     assert.equal(stopCalls.length, 0)
@@ -128,7 +113,6 @@ describe('NotetakerController', () => {
         confirmCalls++
         return true
       },
-      ...noopStopDeps,
     })
     await controller.onMeetingEnded()
     assert.equal(confirmCalls, 0)
@@ -146,160 +130,10 @@ describe('NotetakerController', () => {
         confirmCalls++
         return true
       },
-      ...noopStopDeps,
     })
     await controller.onMeetingEnded()
     assert.equal(confirmCalls, 1)
     assert.deepEqual(stopCalls, [1])
   })
 
-  // ─── The key's own single-tap stop: undo-window arm/cancel/finalize ───
-
-  test('a single tap while active arms the undo window instead of stopping immediately', () => {
-    const { session, stopCalls } = fakeSession(true)
-    const pendingChanges: boolean[] = []
-    const controller = new NotetakerController({
-      session,
-      resolveTargetPid: () => 4242,
-      showNotification: () => {},
-      confirm: async () => true,
-      stopGraceMs: 10_000,
-      onStopPendingChanged: (pending) => pendingChanges.push(pending),
-      onStopFinalized: () => {},
-    })
-    controller.onNotesStopRequested()
-    assert.deepEqual(pendingChanges, [true])
-    assert.equal(stopCalls.length, 0) // not stopped yet — still inside the window
-    assert.equal(controller.isStopPending, true)
-  })
-
-  test('a second tap before the window elapses cancels the pending stop — session keeps running', () => {
-    const { session, stopCalls } = fakeSession(true)
-    const pendingChanges: boolean[] = []
-    let finalizedCalls = 0
-    const controller = new NotetakerController({
-      session,
-      resolveTargetPid: () => 4242,
-      showNotification: () => {},
-      confirm: async () => true,
-      stopGraceMs: 10_000,
-      onStopPendingChanged: (pending) => pendingChanges.push(pending),
-      onStopFinalized: () => { finalizedCalls++ },
-    })
-    controller.onNotesStopRequested() // arm
-    controller.onNotesStopRequested() // cancel
-    assert.deepEqual(pendingChanges, [true, false])
-    assert.equal(stopCalls.length, 0)
-    assert.equal(finalizedCalls, 0)
-    assert.equal(controller.isStopPending, false)
-  })
-
-  test('letting the window elapse with no second tap finalizes the stop', async () => {
-    const { session, stopCalls } = fakeSession(true)
-    const pendingChanges: boolean[] = []
-    let finalizedCalls = 0
-    const controller = new NotetakerController({
-      session,
-      resolveTargetPid: () => 4242,
-      showNotification: () => {},
-      confirm: async () => true,
-      stopGraceMs: 15,
-      onStopPendingChanged: (pending) => pendingChanges.push(pending),
-      onStopFinalized: () => { finalizedCalls++ },
-    })
-    controller.onNotesStopRequested()
-    assert.equal(controller.isStopPending, true)
-    await new Promise((r) => setTimeout(r, 40))
-    assert.deepEqual(pendingChanges, [true, false])
-    assert.deepEqual(stopCalls, [1])
-    assert.equal(finalizedCalls, 1)
-    assert.equal(controller.isStopPending, false)
-  })
-
-  test('a tap while no session is active does nothing (no timer, no callback)', () => {
-    const { session, stopCalls } = fakeSession(false)
-    const pendingChanges: boolean[] = []
-    const controller = new NotetakerController({
-      session,
-      resolveTargetPid: () => 4242,
-      showNotification: () => {},
-      confirm: async () => true,
-      stopGraceMs: 10_000,
-      onStopPendingChanged: (pending) => pendingChanges.push(pending),
-      onStopFinalized: () => {},
-    })
-    controller.onNotesStopRequested()
-    assert.deepEqual(pendingChanges, [])
-    assert.equal(stopCalls.length, 0)
-    assert.equal(controller.isStopPending, false)
-  })
-
-  test('cancelPendingStop() is a no-op when nothing is armed', () => {
-    const { session } = fakeSession(true)
-    const pendingChanges: boolean[] = []
-    const controller = new NotetakerController({
-      session,
-      resolveTargetPid: () => 4242,
-      showNotification: () => {},
-      confirm: async () => true,
-      stopGraceMs: 10_000,
-      onStopPendingChanged: (pending) => pendingChanges.push(pending),
-      onStopFinalized: () => {},
-    })
-    controller.cancelPendingStop()
-    assert.deepEqual(pendingChanges, [])
-    assert.equal(controller.isStopPending, false)
-  })
-
-  test('cancelPendingStop() clears an armed window without stopping, e.g. before a defensive external stop', () => {
-    const { session, stopCalls } = fakeSession(true)
-    const pendingChanges: boolean[] = []
-    let finalizedCalls = 0
-    const controller = new NotetakerController({
-      session,
-      resolveTargetPid: () => 4242,
-      showNotification: () => {},
-      confirm: async () => true,
-      stopGraceMs: 15,
-      onStopPendingChanged: (pending) => pendingChanges.push(pending),
-      onStopFinalized: () => { finalizedCalls++ },
-    })
-    controller.onNotesStopRequested() // arm
-    controller.cancelPendingStop() // e.g. the widget's own Cancel fired mid-window
-    assert.deepEqual(pendingChanges, [true, false])
-    assert.equal(controller.isStopPending, false)
-    // The cleared timer must never fire later.
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        assert.equal(stopCalls.length, 0)
-        assert.equal(finalizedCalls, 0)
-        resolve(undefined)
-      }, 40)
-    })
-  })
-
-  test('a detected meeting-ended clears any armed undo window before running its own confirm-to-stop', async () => {
-    const { session, stopCalls } = fakeSession(true)
-    const pendingChanges: boolean[] = []
-    let confirmCalls = 0
-    const controller = new NotetakerController({
-      session,
-      resolveTargetPid: () => 4242,
-      showNotification: () => {},
-      confirm: async () => {
-        confirmCalls++
-        return true
-      },
-      stopGraceMs: 10_000,
-      onStopPendingChanged: (pending) => pendingChanges.push(pending),
-      onStopFinalized: () => {},
-    })
-    controller.onNotesStopRequested() // key arms the undo window
-    assert.equal(controller.isStopPending, true)
-    await controller.onMeetingEnded() // detection fires before the window elapses
-    assert.deepEqual(pendingChanges, [true, false]) // cleared, not left dangling
-    assert.equal(confirmCalls, 1)
-    assert.deepEqual(stopCalls, [1]) // stopped via the confirm path, exactly once
-    assert.equal(controller.isStopPending, false)
-  })
 })

@@ -42,9 +42,9 @@
 // dedicated grep checks in wire-into-engine.sh:
 //
 //   import { initNotetaker } from './notetakerInit'
-//   import { showNotetakerWidget, hideNotetakerWidget, broadcastStopPending } from './paywall/remote/notetakerWidget'
+//   import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notetakerWidget'
 //   import { getAgentAvailability } from './paywall/remote/init'
-//   initNotetaker({ onSessionStart: showNotetakerWidget, onSessionStop: hideNotetakerWidget, onStopPendingChanged: broadcastStopPending, getAgentAvailability })
+//   initNotetaker({ onSessionStart: showNotetakerWidget, onSessionStop: hideNotetakerWidget, getAgentAvailability })
 //
 // Per docs/superpowers/specs/2026-08-23-meeting-notetaker-detection-capture.md.
 
@@ -60,19 +60,27 @@ import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowse
 import { PeriodicChunkEmitter, type FinalizedSegment } from './notetaker/periodicChunkEmitter'
 import { encodeChunk, transcribeEncodedChunk, persistSession, newMeetingId } from './notetaker/transcribeSession'
 import { cleanChunkText } from './notetaker/chunkStitcher'
-import type { TimedChunkText, SpeakerSample, TranscriptSegment } from './notetaker/transcriptMerge'
+import { mergeChannelChunks, mergeAdjacentSpeakerTurns, removeMicEchoDuplicates, type TimedChunkText, type SpeakerSample, type TranscriptSegment } from './notetaker/transcriptMerge'
 import { WavAppender } from './notetaker/wavAppender'
+import { createMeetingRecording } from './notetaker/wavMixer'
+import { readRetryWavChunks } from './notetaker/wavRetry'
 import { pollZoomSpeaker } from './notetaker/zoomSpeaker'
 import { ZOOM_BUNDLE_ID } from './meetingApps'
 import {
   getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting, type DBMeeting,
-  getNotetakerSettings, saveNotetakerSettings, updateMeetingPipelineStatus,
+  getNotetakerSettings, saveNotetakerSettings, updateMeetingPipelineStatus, markMeetingProcessing, markMeetingFailed, markMeetingReady,
 } from './db'
 import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
+import { generateNotes, DEFAULT_SUMMARY_INSTRUCTIONS, type MeetingNotes, type NoteProvider } from './notetaker/notesSummary'
 import { cleanupTranscript } from './notetaker/transcriptCleanup'
-import { generateNotes, DEFAULT_SUMMARY_INSTRUCTIONS, type MeetingNotes } from './notetaker/notesSummary'
 
 const log = createNotetakerLogger('init')
+// The repository's deliberately small Electron test declaration omits the
+// protocol surface, while production Electron provides it. Keep the local
+// shape narrow instead of weakening the rest of this module to `any`.
+const electronProtocol = (require('electron') as {
+  protocol: { handle: (scheme: string, handler: (request: Request) => Promise<Response>) => void }
+}).protocol
 
 export type NotetakerInitHooks = {
   /** Called exactly when REAL capture starts/stops — from
@@ -80,7 +88,9 @@ export type NotetakerInitHooks = {
    *  logic — so the floating widget's visibility always matches actual
    *  capture state, per the plan. */
   onSessionStart?: () => void
-  onSessionStop?: () => void
+  /** `saved` is false only for Discard, so the widget can hide immediately
+   * instead of showing the saved-meeting completion checkmark. */
+  onSessionStop?: (saved: boolean) => void
   /** Show/focus the main window and land its renderer on this meeting.
    *  Injected exactly like onSessionStart/onSessionStop above, and for the
    *  same reason: showing/focusing the main window needs windowManager.ts,
@@ -90,11 +100,6 @@ export type NotetakerInitHooks = {
    *  Called by openMeetingInApp(), the Agent's notetaker_open tool's
    *  eventual destination. */
   onOpenMeeting?: (meetingId: string) => void
-  /** The key's single-tap stop just armed or cleared its undo window (see
-   *  NotetakerController.onNotesStopRequested) — tint/untint the floating
-   *  widget. Same cross-tree reason as onSessionStart/onSessionStop: the
-   *  widget lives in the closed-source paywall tree. */
-  onStopPendingChanged?: (pending: boolean) => void
   /** Whether Claude Code CLI / Codex CLI is actually usable right now — the
    *  transcript cleanup + auto-summarization pipeline's (2026-08-25 spec)
    *  one piece that genuinely needs the closed-source tree: reuses
@@ -106,11 +111,6 @@ export type NotetakerInitHooks = {
    *  is purely for the Settings UI's provider picker. */
   getAgentAvailability?: () => Promise<{ claude: boolean; codex: boolean }>
 }
-
-/** How long the key's own single-tap stop waits, undone, before it actually
- *  stops the session — long enough to notice and react to, short enough
- *  that a deliberate stop doesn't feel delayed. */
-const NOTES_STOP_GRACE_MS = 3000
 
 /**
  * The slice of the native-ax addon's surface this file actually needs.
@@ -170,11 +170,11 @@ function loadNativeAx(): NativeAx | null {
   }
 }
 
-/** frontmostApp() gives a name; listApps() is the only call that pairs a
- *  name with a pid — so resolving "the app to target" is: get the frontmost
- *  name, then look it up in listApps(). Spec §9: manual trigger capture
- *  "never needs to know it's looking at a meeting, only which app is
- *  currently frontmost" — this is exactly that, unconditionally.
+/** frontmostApp() gives a name; listApps() pairs that name with a pid when it
+ *  can. The pid is useful only as optional metadata (notably for Zoom speaker
+ *  attribution): the native audio tap is global-exclude-self and explicitly
+ *  ignores this argument when building its tap. A failed lookup must therefore
+ *  never reject a recording.
  *
  *  ONE CASE THIS LOOKUP CANNOT PAIR ON ITS OWN: Unmute itself. listApps()
  *  (native-ax/src/ax.mm's ListApps()) only returns apps with
@@ -192,12 +192,12 @@ function loadNativeAx(): NativeAx | null {
  *  (global-exclude-self architecture, see notetakerSession.ts's own header
  *  comment), so this just means the meeting is unlabeled by app name
  *  instead of silently refusing to start. */
-function resolveTargetPid(ax: NativeAx): number | null {
+function resolveTargetPid(ax: NativeAx): number {
   try {
     const frontName = ax.frontmostApp()
     if (!frontName) {
-      log.warn('resolveTargetPid: frontmostApp() returned nothing — no target to capture')
-      return null
+      log.warn('resolveTargetPid: frontmostApp() returned nothing — starting global capture without app attribution')
+      return process.pid
     }
     const match = ax.listApps().find((a) => a.name === frontName)
     if (match) {
@@ -208,11 +208,17 @@ function resolveTargetPid(ax: NativeAx): number | null {
       log.event('target-app-resolved', { appName: frontName, pid: process.pid, selfTargeted: true })
       return process.pid
     }
-    log.warn('resolveTargetPid: frontmost app has no matching entry in listApps() — cannot resolve a pid', { frontName })
-    return null
+    // Development builds commonly report their own frontmost window as
+    // "Electron" while app.getName() is "unmute", so the self-name special
+    // case above cannot recognize it. This used to make a second meeting
+    // appear blocked while the first meeting's processing UI was frontmost.
+    // The tap does not use the target pid; fall back to our own valid pid and
+    // keep the new recording independent from the old meeting's pipeline.
+    log.warn('resolveTargetPid: frontmost app has no matching entry in listApps() — starting global capture without app attribution', { frontName })
+    return process.pid
   } catch (e) {
-    log.error('resolveTargetPid failed', { error: (e as Error).message })
-    return null
+    log.error('resolveTargetPid failed — starting global capture without app attribution', { error: (e as Error).message })
+    return process.pid
   }
 }
 
@@ -271,35 +277,76 @@ async function confirmNotetakerDialog(message: string): Promise<boolean> {
   }
 }
 
-/** A second, dedicated confirm dialog for the widget's "Discard meeting" —
- *  deliberately not a reuse of confirmNotetakerDialog above (different
- *  wording, different button order/default). "Discard" is now a genuinely
- *  destructive action (session.discard() deletes the audio + transcript +
- *  DB row, no undo), so the SAFE choice (Cancel) is both the default and
- *  what Return/Escape trigger — a stray keypress must never destroy a
- *  meeting. `type: 'warning'` + macOS's own destructive-button styling on
- *  'Discard Meeting' (button index 1, the non-default one) is the standard
- *  system look for "this can't be undone." */
-async function confirmDiscardDialog(): Promise<boolean> {
-  try {
-    const result = await dialog.showMessageBox({
-      type: 'warning',
-      buttons: ['Cancel', 'Discard Meeting'],
-      defaultId: 0,
-      cancelId: 0,
-      message: 'Discard this meeting?',
-      detail: 'The recording will stop and nothing will be saved. This can\'t be undone.',
-    })
-    const confirmed = result.response === 1
-    log.event('discard-confirm-dialog-answered', { confirmed })
-    return confirmed
-  } catch (e) {
-    log.error('discard confirm dialog failed', { error: (e as Error).message })
-    return false // fail closed — never discard a running capture on a broken dialog
-  }
-}
-
 let initialized = false
+let audioProtocolInstalled = false
+let agentAvailabilityHook: (() => Promise<{ claude: boolean; codex: boolean }>) | null = null
+
+/** Serve retained WAV files through Electron instead of handing an http(S)
+ * renderer a raw file:// URL. Chromium loads file URLs differently from the
+ * dev renderer and exposed this as valid recordings whose media element was
+ * stuck at 0:00. Keeping the lookup in main also prevents arbitrary local
+ * file access: only a meeting id and one of its known recording variants resolve. */
+function installNotetakerAudioProtocol(): void {
+  if (audioProtocolInstalled) return
+  electronProtocol.handle('unmute-audio', async (request) => {
+    const url = new URL(request.url)
+    const [, meetingId, channel] = url.pathname.split('/')
+    if (url.hostname !== 'meeting' || !/^[0-9a-f-]{36}$/i.test(meetingId) || (channel !== 'mic' && channel !== 'system' && channel !== 'mixed')) {
+      return new Response('Not found', { status: 404 })
+    }
+    const meeting = getMeeting(meetingId)
+    const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
+    const relPath = channel === 'mixed'
+      ? (fs.existsSync(path.join(meetingDir, 'audio-meeting.wav'))
+          ? 'audio-meeting.wav'
+          : (meeting?.audio_mic_path ?? meeting?.audio_system_path))
+      : channel === 'mic' ? meeting?.audio_mic_path : meeting?.audio_system_path
+    if (!relPath || path.basename(relPath) !== relPath || !relPath.endsWith('.wav')) {
+      return new Response('Not found', { status: 404 })
+    }
+    const filePath = path.join(meetingDir, relPath)
+    try {
+      const stat = await fs.promises.stat(filePath)
+      const range = request.headers.get('range')
+      if (range) {
+        const match = /^bytes=(\d+)-(\d*)$/i.exec(range)
+        const start = match ? Number(match[1]) : Number.NaN
+        const requestedEnd = match?.[2] ? Number(match[2]) : stat.size - 1
+        const end = Math.min(requestedEnd, stat.size - 1)
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= stat.size) {
+          return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${stat.size}` } })
+        }
+        const handle = await fs.promises.open(filePath, 'r')
+        try {
+          const bytes = Buffer.alloc(end - start + 1)
+          const { bytesRead } = await handle.read(bytes, 0, bytes.length, start)
+          return new Response(bytes.subarray(0, bytesRead), {
+            status: 206,
+            headers: {
+              'Content-Type': 'audio/wav',
+              'Content-Length': String(bytesRead),
+              'Content-Range': `bytes ${start}-${start + bytesRead - 1}/${stat.size}`,
+              'Accept-Ranges': 'bytes',
+            },
+          })
+        } finally {
+          await handle.close()
+        }
+      }
+      const bytes = await fs.promises.readFile(filePath)
+      return new Response(bytes, {
+        headers: {
+          'Content-Type': 'audio/wav',
+          'Content-Length': String(bytes.byteLength),
+          'Accept-Ranges': 'bytes',
+        },
+      })
+    } catch {
+      return new Response('Not found', { status: 404 })
+    }
+  })
+  audioProtocolInstalled = true
+}
 /** Set from NotetakerInitHooks.onOpenMeeting when initNotetaker() runs — see
  *  that field's own comment. Read by openMeetingInApp() near the end of this
  *  file, which is why it is declared at module scope rather than local to
@@ -328,6 +375,8 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // whether new capture works, same reasoning as the five IPC handlers
   // registered just below, before that guard.
   openMeetingHook = hooks.onOpenMeeting ?? null
+  agentAvailabilityHook = hooks.getAgentAvailability ?? null
+  installNotetakerAudioProtocol()
 
   // ── Meeting list/detail surface for the Notetaker tab (Tasks 8-10) ──
   //
@@ -347,7 +396,8 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   })
 
   ipcMain.handle('notetaker:get-transcript', (_event, id: string) => {
-    const segments = readTranscriptSegments(id)
+    const meeting = getMeeting(id)
+    const segments = meeting ? transcriptForMeeting(meeting) : []
     log.child({ meetingId: id }).debug('get-transcript: loaded', { segmentCount: segments.length })
     return segments
   })
@@ -361,14 +411,21 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     deleteMeeting(id)
   })
 
-  ipcMain.handle('notetaker:get-audio-url', (_event, id: string, channel: 'mic' | 'system') => {
+  ipcMain.handle('notetaker:get-audio-url', (_event, id: string, channel: 'mic' | 'system' | 'mixed') => {
     const mlog = log.child({ meetingId: id })
     const meeting = getMeeting(id)
     if (!meeting) {
       mlog.debug('get-audio-url: no meeting row found', { channel })
       return null
     }
-    const relPath = channel === 'mic' ? meeting.audio_mic_path : meeting.audio_system_path
+    // `mixed` is the sole user-facing recording. For legacy meetings that
+    // predate the mixer, serve whichever captured channel exists instead of
+    // showing a broken player.
+    const relPath = channel === 'mixed'
+      ? (fs.existsSync(path.join(app.getPath('userData'), 'meetings', id, 'audio-meeting.wav'))
+          ? 'audio-meeting.wav'
+          : (meeting.audio_mic_path ?? meeting.audio_system_path))
+      : channel === 'mic' ? meeting.audio_mic_path : meeting.audio_system_path
     if (!relPath) {
       mlog.debug('get-audio-url: channel has no recorded/still-retained audio path', { channel })
       return null
@@ -379,7 +436,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       return null
     }
     mlog.debug('get-audio-url: resolved', { channel })
-    return `file://${fullPath}`
+    return `unmute-audio://meeting/${id}/${channel}`
   })
 
   // ── Transcript cleanup + auto-summarization (2026-08-25 spec) ──
@@ -444,11 +501,27 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     return { cleanup_status: meeting.cleanup_status, summary_status: meeting.summary_status }
   })
 
-  ipcMain.handle('notetaker:retry-pipeline', (_event, id: string) => {
+  ipcMain.handle('notetaker:retry-pipeline', async (_event, id: string) => {
     log.child({ meetingId: id }).event('pipeline-retry-requested')
-    retryNotetakerPipeline(id).catch((e) => {
-      log.child({ meetingId: id }).error('pipeline retry threw unexpectedly', { error: (e as Error).message })
-    })
+    try {
+      await retryNotetakerPipeline(id)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      log.child({ meetingId: id }).error('pipeline retry failed', { error: message })
+      throw new Error(message)
+    }
+  })
+
+  ipcMain.handle('notetaker:retry-transcription', async (_event, id: string) => {
+    const mlog = log.child({ meetingId: id })
+    mlog.event('transcription-retry-requested')
+    try {
+      await retryMeetingTranscription(id)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      mlog.error('transcription retry failed', { error: message })
+      throw new Error(message)
+    }
   })
 
   let nativeAudioTap: NativeAudioTap | null = null
@@ -526,7 +599,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // session's tracker/emitter into local consts before doing any awaiting,
   // for the same reason `meetingId`/`startedAt` already were.
   type ChannelTracker = {
-    promises: Promise<TimedChunkText>[]
+    promises: Promise<TimedChunkText[]>[]
     /** Chunks that had real (non-silent) audio and were actually sent to
      *  STT — excludes chunks encodeChunk() judged empty/silent. */
     attempted: number
@@ -539,6 +612,9 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
      *  chunk — the relative filename persistSession() should record in the
      *  DB row, or null if this channel never produced any real audio. */
     audioFileName: string | null
+    /** Audio-clock time of sample zero in the on-disk WAV. Unlike a UI/IPC
+     * callback time, this can be compared directly with the other lane. */
+    audioStartTimestampMs: number | null
     /** Log-only running counter — how many times this channel's emitter has
      *  called onSegment at all (including empty/silent cuts), so a log line
      *  can say "chunk 7 of the system channel" rather than just "a chunk". */
@@ -546,21 +622,36 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   }
 
   function freshTracker(): ChannelTracker {
-    return { promises: [], attempted: 0, succeeded: 0, writer: null, audioFileName: null, chunkIndex: 0 }
+    return { promises: [], attempted: 0, succeeded: 0, writer: null, audioFileName: null, audioStartTimestampMs: null, chunkIndex: 0 }
   }
+
+  // Note-taker-specific utterance boundaries. Very short 2.5-second chunks
+  // made multilingual auto-detection unstable (live failure: a Hindi system
+  // lane became repeated "Thank you" segments). Give Whisper enough context
+  // to detect English/Hindi code-switching; verbose STT segment timestamps
+  // still provide the fine-grained cross-channel ordering inside each chunk.
+  // Ordinary dictation's chunk policy remains untouched.
+  const notetakerUtteranceConfig = {
+    minChunkMs: 10_000,
+    silenceDurationMs: 800,
+    hardCapMs: 30_000,
+    softCapWindowMs: 5_000,
+  } as const
 
   function makeChunkHandler(channel: 'mic' | 'system', tracker: ChannelTracker, meetingDir: string, mlog: ReturnType<typeof log.child>): (segment: FinalizedSegment) => void {
     return (segment: FinalizedSegment) => {
       const chunkIndex = tracker.chunkIndex++
       const clog = mlog.child({ channel, chunkIndex })
       const startMs = segment.startTimestampMs
+      const captureStartMs = segment.captureStartTimestampMs
       const durationMs =
         segment.sampleRate > 0 && segment.channels > 0
           ? (segment.samples.length / segment.channels / segment.sampleRate) * 1000
           : 0
-      const endMs = startMs + durationMs
+      const endMs = segment.endTimestampMs
       clog.event('chunk-cut', {
         durationMs: Math.round(durationMs),
+        audibleDurationMs: Math.round(segment.audibleDurationMs),
         sampleCount: segment.samples.length,
         sourceSampleRate: segment.sampleRate,
         sourceChannels: segment.channels,
@@ -575,7 +666,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         // placeholder for this chunkIndex; not counted toward `attempted`,
         // so it can never make a channel look "failed."
         clog.event('chunk-empty-skipped')
-        tracker.promises.push(Promise.resolve({ channel, text: '', startMs, endMs } as TimedChunkText))
+        tracker.promises.push(Promise.resolve([]))
         return
       }
 
@@ -589,7 +680,8 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
           const fileName = `audio-${channel}.wav`
           tracker.writer = new WavAppender(path.join(meetingDir, fileName), encoded.sampleRate)
           tracker.audioFileName = fileName
-          clog.event('audio-file-opened', { fileName, sampleRate: encoded.sampleRate })
+          tracker.audioStartTimestampMs = captureStartMs
+          clog.event('audio-file-opened', { fileName, sampleRate: encoded.sampleRate, captureStartMs })
         } catch (e) {
           clog.error('could not open the audio file for writing', { error: (e as Error).message })
         }
@@ -614,6 +706,18 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         }
       }
 
+      // Keep the PCM in the retained recording above, but do not ask Whisper
+      // to decode silence or a click-sized stop tail. The decoder otherwise
+      // fills that vacuum with its prompt or common closing phrases.
+      if (segment.audibleDurationMs < 500) {
+        clog.event('chunk-stt-skipped', {
+          reason: 'insufficient-speech-energy',
+          audibleDurationMs: Math.round(segment.audibleDurationMs),
+        })
+        tracker.promises.push(Promise.resolve([]))
+        return
+      }
+
       tracker.attempted++
       // Fired and tracked, NOT awaited here — feeding further chunks (and
       // the session generally) must never block on one chunk's network
@@ -629,7 +733,25 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         // rather than sitting unused in chunkStitcher.ts. A chunk that comes
         // back as pure hallucination cleans to '', which mergeChannelChunks
         // already filters out below.
-        return { channel, text: cleanChunkText(result.text), startMs, endMs } as TimedChunkText
+        // Groq's segment timestamps are relative to this exact WAV buffer.
+        // Convert them to wall-clock capture time before merging the two
+        // channels. This is the ordering authority: never completion order,
+        // never "mic first", and never one guessed span per channel.
+        const timestamped = result.segments
+          .map((timing) => ({
+            channel,
+            text: cleanChunkText(timing.text),
+            startMs: captureStartMs + Math.round(timing.startSeconds * 1000),
+            endMs: captureStartMs + Math.round(timing.endSeconds * 1000),
+          } as TimedChunkText))
+          .filter((timing) => timing.text.length > 0 && timing.endMs >= timing.startMs)
+        if (timestamped.length > 0) return timestamped
+
+        // A managed/local fallback can legitimately return text without
+        // timings. Keep it, but only as one clearly bounded chunk rather
+        // than inventing a whole-meeting position.
+        const text = cleanChunkText(result.text)
+        return text ? [{ channel, text, startMs, endMs } as TimedChunkText] : []
       })
       tracker.promises.push(p)
     }
@@ -693,8 +815,8 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       }
       micTracker = freshTracker()
       systemTracker = freshTracker()
-      micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker, meetingDir, mlog))
-      systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker, meetingDir, mlog))
+      micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker, meetingDir, mlog), notetakerUtteranceConfig)
+      systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker, meetingDir, mlog), notetakerUtteranceConfig)
       let tapResult: AudioTapStartResult | undefined
       const nativeStartCalledAt = Date.now()
       try {
@@ -847,7 +969,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
           // OR REPLACE, same id) overwrites this row at the end of the
           // meeting; runNotetakerPipeline() then stamps the real enabled/
           // pending state on top of that via updateMeetingPipelineStatus().
-          cleanup_status: 'disabled',
+          cleanup_status: 'pending',
           summary_status: 'disabled',
           cleaned_transcript_path: null,
           notes_path: null,
@@ -889,8 +1011,12 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       super.stop()
       mlog.debug('native audio tap stopCapture() returned', { callDurationMs: Date.now() - nativeStopCalledAt, wasActive })
       if (wasActive) {
-        hooks.onSessionStop?.()
+        hooks.onSessionStop?.(true)
         const endedAt = Date.now()
+        // Surface a durable processing entry before any in-flight STT request
+        // resolves. The app deliberately stays out of the way here: it opens
+        // this meeting only once its notes are ready.
+        markMeetingProcessing(meetingId, endedAt)
         mlog.event('capture-stopped', {
           durationMs: endedAt - startedAt,
           micChunksReceivedTotal: micChunksReceived,
@@ -903,23 +1029,46 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         // chunk since those closures captured these exact tracker objects.
         micEm.flush()
         systemEm.flush()
+        // Appends happen synchronously inside each emitter callback; only the
+        // network transcription remains pending. Close now so a quit during
+        // STT still leaves valid WAV headers on disk.
+        try {
+          mic.writer?.close()
+        } catch (e) {
+          mlog.error('failed to close the mic audio file', { error: (e as Error).message })
+        }
+        try {
+          system.writer?.close()
+        } catch (e) {
+          mlog.error('failed to close the system audio file', { error: (e as Error).message })
+        }
+        // The recording is independent of STT. Publish it as soon as both
+        // WAVs are valid so processing failures or slow network requests do
+        // not leave a captured meeting without playable audio.
+        const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
+        const micPath = mic.audioFileName ? path.join(meetingDir, mic.audioFileName) : null
+        const systemPath = system.audioFileName ? path.join(meetingDir, system.audioFileName) : null
+        const recordingStarts = { micStartMs: mic.audioStartTimestampMs, systemStartMs: system.audioStartTimestampMs }
+        try {
+          writeMeetingJsonFile(meetingId, 'audio-timing.json', recordingStarts)
+        } catch (e) {
+          mlog.warn('could not persist audio lane timing metadata', { error: (e as Error).message })
+        }
+        const hasMeetingRecording = createMeetingRecording(
+          micPath,
+          systemPath,
+          path.join(meetingDir, 'audio-meeting.wav'),
+          recordingStarts,
+        )
+        mlog.event('meeting-recording-created', {
+          hasMeetingRecording,
+          sourceCount: Number(!!micPath) + Number(!!systemPath),
+          ...recordingStarts,
+        })
         Promise.all([Promise.all(mic.promises), Promise.all(system.promises)])
-          .then(([micChunks, systemChunks]) => {
-            // Close both writers now that no more append() calls can
-            // happen (flush() already fired, and every promise above has
-            // settled) — this patches each file's WAV header with its
-            // final byte count. A channel that never opened a writer (zero
-            // real chunks) has nothing to close.
-            try {
-              mic.writer?.close()
-            } catch (e) {
-              mlog.error('failed to close the mic audio file', { error: (e as Error).message })
-            }
-            try {
-              system.writer?.close()
-            } catch (e) {
-              mlog.error('failed to close the system audio file', { error: (e as Error).message })
-            }
+          .then(([micChunkGroups, systemChunkGroups]) => {
+            const micChunks = micChunkGroups.flat()
+            const systemChunks = systemChunkGroups.flat()
             // Partial-failure semantics: a channel is 'failed' only if it
             // was attempted at all AND every single attempt failed — one
             // transient STT blip in an hour-long meeting should not throw
@@ -954,19 +1103,15 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
               wasZoomSession,
             )
           })
-          .then((segments) => {
-            // Fire-and-forget, same posture as the rest of this async tail:
-            // never blocks or throws into the existing persist flow. Its own
-            // failures are fully handled internally (stamped as
-            // cleanup_status/summary_status = 'failed', logged) — nothing
-            // for this .catch to do beyond a last-resort log line for
-            // something truly unexpected slipping past that.
-            runNotetakerPipeline(meetingId, segments).catch((e) => {
-              mlog.error('notetaker pipeline threw unexpectedly', { error: (e as Error).message })
-            })
-          })
+          // Initial capture already has VAD chunks and their real timings.
+          // Re-transcribing each entire channel here used to discard that
+          // information and create one giant "You" plus one giant "Them"
+          // block, making speaker order fundamentally unfixable. Persist the
+          // timestamped chunks and generate notes from them directly.
+          .then((segments) => runNotetakerPipeline(meetingId, segments))
           .catch((e) => {
             mlog.error('failed to transcribe/persist session', { error: (e as Error).message })
+            markMeetingFailed(meetingId)
           })
       }
     }
@@ -980,10 +1125,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
      *  partial audio, appended incrementally during capture, not just at
      *  the end — closing it here rather than leaving the fd open for
      *  deleteMeeting() to orphan), then deletes the meeting's entire
-     *  directory and its placeholder DB row (start() already wrote one).
-     *  Caller is responsible for confirming with the user FIRST — see
-     *  confirmDiscardDialog() at the 'notetaker:cancel-requested' handler
-     *  below; this method itself never asks. */
+     *  directory and its placeholder DB row (start() already wrote one). */
     discard(): void {
       const wasActive = this.isActive
       const meetingId = sessionMeetingId
@@ -997,7 +1139,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       mlog.event('capture-discard-requested', { wasActive })
       super.stop()
       if (!wasActive) return
-      hooks.onSessionStop?.()
+      hooks.onSessionStop?.(false)
       try {
         mic.writer?.close()
       } catch (e) {
@@ -1078,9 +1220,6 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     resolveTargetPid: () => resolveTargetPid(ax),
     showNotification: showNotetakerNotification,
     confirm: confirmNotetakerDialog,
-    stopGraceMs: NOTES_STOP_GRACE_MS,
-    onStopPendingChanged: (pending) => hooks.onStopPendingChanged?.(pending),
-    onStopFinalized: () => keyboardManager.confirmNotesStop(),
   })
 
   // ── Manual chord trigger (Task 7's KeyboardManager events) ──
@@ -1112,60 +1251,33 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         if (!session.isActive) keyboardManager.confirmNotesStop()
       })
   })
-  // ── Single-tap stop (the key's own gesture, spec §6 twice-revised) ──
-  // Routed through the controller's own arm/cancel/finalize state machine
-  // (NotetakerController.onNotesStopRequested) instead of stopping directly:
-  // the FIRST tap while a meeting is running arms a short on-screen undo
-  // window rather than stopping immediately, and a SECOND tap before it
-  // elapses cancels the pending stop. keyboardManager.confirmNotesStop() is
-  // called from the controller's onStopFinalized callback (wired above)
-  // once the window actually elapses, NOT here — notesActive must stay true
-  // for the whole undo window, or a stray double-tap mid-window would read
-  // as a fresh session start. The confirm-dialog flow
-  // (controller.onNotesStopConfirmRequested) is unrelated and unchanged —
-  // it is onMeetingEnded's path, for the case where Unmute itself detected
-  // the meeting ending and needs to ask, not the case where the user just
-  // told it to stop directly.
+  // ── Double-tap stop ──
+  // keyboard.ts emits this only after the second left-Control tap. Ending a
+  // meeting is therefore deliberate and finishes immediately.
   keyboardManager.on('notes-stop-requested', () => {
-    log.event('chord-stop-requested', { wasAlreadyPending: controller.isStopPending })
-    controller.onNotesStopRequested()
+    if (!session.isActive) return
+    log.event('chord-stop-requested')
+    session.stop()
+    keyboardManager.confirmNotesStop()
   })
 
-  // ── Widget's own two-click Cancel (spec §6/§7) ──
-  // Wired DIRECTLY to session.stop(), same shape as the key's own single-tap
-  // stop above: the widget already collected its own confirmation (click to
-  // reveal Cancel, click Cancel to fire) — see
-  // desktop/electron/remote-preload.ts's notetakerCancelRequested comment
-  // ("the confirm already happened in the renderer by the time this
-  // fires").
+  // ── Widget actions: End saves, Discard destroys ──
+  // Both are explicit, immediate actions; the expanded widget is already
+  // the user's choice surface, so neither opens another native dialog.
+  ipcMain.on('notetaker:end-requested', () => {
+    if (!session.isActive) return
+    log.event('widget-end-clicked')
+    session.stop()
+    keyboardManager.confirmNotesStop()
+  })
+
+  // The widget makes Discard a distinct deliberate action. Do it directly:
+  // a second native confirmation makes “Discard” feel broken.
   ipcMain.on('notetaker:cancel-requested', () => {
     if (!session.isActive) return
     log.event('widget-cancel-clicked')
-    // Defensive: if the key's own undo window happened to be armed when the
-    // click landed, clear it now — otherwise its timer would still be live
-    // and fire session.stop() again later, possibly against a NEW meeting
-    // the user has since started (see NotetakerController.cancelPendingStop).
-    // Unaffected by the confirm dialog below — this is just timer hygiene,
-    // not part of the user's actual discard decision.
-    controller.cancelPendingStop()
-    void (async () => {
-      // Genuinely destructive now (session.discard() deletes the audio,
-      // transcript, and DB row — no undo), so it gets a real "are you
-      // sure" instead of trusting the widget's own two-tap zone alone.
-      const confirmed = await confirmDiscardDialog()
-      if (!confirmed) {
-        log.event('widget-discard-not-confirmed')
-        return
-      }
-      // The session may have already ended (or a new one started) while
-      // the native dialog was open — never discard against stale intent.
-      if (!session.isActive) {
-        log.event('widget-discard-confirmed-but-session-no-longer-active')
-        return
-      }
-      session.discard()
-      keyboardManager.confirmNotesStop()
-    })()
+    session.discard()
+    keyboardManager.confirmNotesStop()
   })
 
   // ── App quit while a meeting is being recorded ──
@@ -1178,7 +1290,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // trailing partial) have settled. What this DOES buy: the tap is closed
   // cleanly, and the meeting's
   // placeholder row (written at start(), above) is already on disk, so the
-  // interrupted meeting is visible in the Notetaker list as 'recording'
+  // interrupted meeting is visible in the Notetaker list as 'transcribing'
   // instead of vanishing without a trace. Anything more (a synchronous
   // flush-audio-to-disk-then-transcribe-on-next-launch path) is a real design
   // change, deliberately out of scope for this fix.
@@ -1186,10 +1298,6 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     if (!session.isActive) return
     log.child({ meetingId: sessionMeetingId }).event('quit-during-capture', { note: 'stopping the session — save is best-effort' })
     try {
-      // Defensive, same reasoning as the widget-cancel handler above: quit
-      // can land mid-undo-window, and a stray armed timer has nothing left
-      // to fire against once the process is going down anyway.
-      controller.cancelPendingStop()
       session.stop()
       keyboardManager.confirmNotesStop()
     } catch (e) {
@@ -1400,7 +1508,20 @@ function readTranscriptSegments(meetingId: string): TranscriptSegment[] {
   try {
     const raw = fs.readFileSync(path.join(meetingDir, meeting.transcript_path), 'utf8')
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed as TranscriptSegment[] : []
+    if (!Array.isArray(parsed)) return []
+    // Apply the same conservative post-capture cleanup when reading older
+    // meetings. This immediately fixes already-recorded transcripts (and a
+    // summary-only Retry) without another STT call or rewriting retained
+    // source data; Re-transcribe can still replace the file explicitly.
+    const cleaned = (parsed as TranscriptSegment[])
+      .map((segment) => ({ ...segment, text: cleanChunkText(segment.text) }))
+      .filter((segment) => segment.text.length > 0)
+    const ordered = removeMicEchoDuplicates(cleaned).sort((a, b) =>
+      a.startMs - b.startMs ||
+      a.endMs - b.endMs ||
+      (a.channel === b.channel ? 0 : a.channel === 'mic' ? -1 : 1)
+    )
+    return mergeAdjacentSpeakerTurns(ordered)
   } catch (e) {
     log.child({ meetingId }).warn('readTranscriptSegments: failed to read/parse transcript file', { error: (e as Error).message })
     return []
@@ -1440,107 +1561,285 @@ function writeMeetingJsonFile(meetingId: string, fileName: string, data: unknown
 const CLEANED_TRANSCRIPT_FILENAME = 'cleaned-transcript.json'
 const NOTES_FILENAME = 'notes.json'
 
-/** The cleanup stage alone — segments in, cleaned segments written + status
- *  stamped. Returns whether it succeeded, so callers (the auto pipeline and
- *  the retry path) can decide whether to proceed to the summary stage. */
-async function runCleanupStage(meetingId: string, segments: TranscriptSegment[], provider: 'claude' | 'codex'): Promise<TranscriptSegment[] | null> {
+/** The connected agent may correct segment text, but it never receives or
+ * returns timestamps, channels, or speakers. Those fields remain copied from
+ * our own segment objects by transcriptCleanup.ts. */
+async function runCleanupStage(meetingId: string, segments: TranscriptSegment[], provider: NoteProvider): Promise<TranscriptSegment[] | null> {
   const mlog = log.child({ meetingId })
   updateMeetingPipelineStatus(meetingId, { cleanup_status: 'pending' })
   mlog.event('pipeline-cleanup-started', { provider, segmentCount: segments.length })
-  const result = await cleanupTranscript(segments, provider)
-  if (!result.ok) {
-    mlog.error('pipeline-cleanup-failed', { error: result.error })
+  try {
+    const result = await cleanupTranscript(segments, provider)
+    if (!result.ok) {
+      mlog.error('pipeline-cleanup-failed', { error: result.error })
+      updateMeetingPipelineStatus(meetingId, { cleanup_status: 'failed' })
+      return null
+    }
+    writeMeetingJsonFile(meetingId, CLEANED_TRANSCRIPT_FILENAME, result.segments)
+    updateMeetingPipelineStatus(meetingId, {
+      cleanup_status: 'success',
+      cleaned_transcript_path: CLEANED_TRANSCRIPT_FILENAME,
+    })
+    mlog.event('pipeline-cleanup-succeeded', { segmentCount: result.segments.length })
+    return result.segments
+  } catch (error) {
+    mlog.error('pipeline-cleanup-threw', { error: error instanceof Error ? error.message : String(error) })
     updateMeetingPipelineStatus(meetingId, { cleanup_status: 'failed' })
     return null
   }
-  writeMeetingJsonFile(meetingId, CLEANED_TRANSCRIPT_FILENAME, result.segments)
-  updateMeetingPipelineStatus(meetingId, { cleanup_status: 'success', cleaned_transcript_path: CLEANED_TRANSCRIPT_FILENAME })
-  mlog.event('pipeline-cleanup-succeeded', { segmentCount: result.segments.length })
-  return result.segments
 }
 
-/** The summary stage alone — only ever called with an already-cleaned
- *  transcript (spec §5: summarization never runs against raw text). */
-async function runSummaryStage(meetingId: string, cleanedSegments: TranscriptSegment[], provider: 'claude' | 'codex', promptOverride: string | null): Promise<void> {
+/** Generate notes from the cleaned transcript when available, or from raw
+ * Whisper text when cleanup failed. Cleanup must never prevent useful notes. */
+async function runSummaryStage(meetingId: string, segments: TranscriptSegment[], provider: NoteProvider, promptOverride: string | null): Promise<void> {
   const mlog = log.child({ meetingId })
-  updateMeetingPipelineStatus(meetingId, { summary_status: 'pending' })
-  mlog.event('pipeline-summary-started', { provider })
-  const result = await generateNotes(cleanedSegments, provider, promptOverride)
-  if (!result.ok) {
-    mlog.error('pipeline-summary-failed', { error: result.error })
-    updateMeetingPipelineStatus(meetingId, { summary_status: 'failed' })
+  if (segments.length === 0) {
+    updateMeetingPipelineStatus(meetingId, { summary_status: 'disabled', notes_path: null })
+    mlog.event('pipeline-summary-skipped', { reason: 'empty-transcript-after-cleanup' })
     return
   }
-  writeMeetingJsonFile(meetingId, NOTES_FILENAME, result.notes)
-  updateMeetingPipelineStatus(meetingId, { summary_status: 'success', notes_path: NOTES_FILENAME })
-  let finalTitle: string
-  if (result.degraded) {
-    // The model's response didn't come back as the JSON shape we asked
-    // for, so notes.title is deliberately blank (generateNotes never
-    // fabricates one) — leave the meeting's existing title (persistSession
-    // always sets one) alone rather than overwrite it with nothing.
-    mlog.event('pipeline-summary-succeeded-degraded', { summaryLength: result.notes.summary.length })
-    finalTitle = getMeeting(meetingId)?.title ?? 'Meeting'
-  } else {
-    // notes.json's title supersedes generateTitle()'s first-line heuristic
-    // for this meeting once summarization succeeds (spec §5) — the row
-    // already has SOME title (persistSession always sets one), this just
-    // replaces it with the real one.
-    updateMeetingTitle(meetingId, result.notes.title)
-    mlog.event('pipeline-summary-succeeded', { title: result.notes.title })
-    finalTitle = result.notes.title
+  updateMeetingPipelineStatus(meetingId, { summary_status: 'pending' })
+  mlog.event('pipeline-summary-started', { provider })
+  try {
+    const result = await generateNotes(segments, provider, promptOverride)
+    if (!result.ok) {
+      mlog.error('pipeline-summary-failed', { error: result.error })
+      updateMeetingPipelineStatus(meetingId, { summary_status: 'failed' })
+      return
+    }
+    writeMeetingJsonFile(meetingId, NOTES_FILENAME, result.notes)
+    updateMeetingPipelineStatus(meetingId, { summary_status: 'success', notes_path: NOTES_FILENAME })
+    let finalTitle: string
+    if (result.degraded) {
+      mlog.event('pipeline-summary-succeeded-degraded', { summaryLength: result.notes.summary.length })
+      finalTitle = getMeeting(meetingId)?.title ?? 'Meeting'
+    } else {
+      updateMeetingTitle(meetingId, result.notes.title)
+      mlog.event('pipeline-summary-succeeded', { title: result.notes.title })
+      finalTitle = result.notes.title
+    }
+    const opened = openMeetingInApp(meetingId)
+    showNotetakerNotification({
+      title: 'Meeting notes ready',
+      body: finalTitle,
+      onClick: opened ? undefined : () => openMeetingInApp(meetingId),
+    })
+  } catch (error) {
+    mlog.error('pipeline-summary-threw', { error: error instanceof Error ? error.message : String(error) })
+    updateMeetingPipelineStatus(meetingId, { summary_status: 'failed' })
   }
-  // The notes are the last stage a meeting goes through — this is the one
-  // moment worth interrupting the user for, since by now cleanup AND
-  // summary have both actually finished and there's something real to
-  // look at. Clicking the notification opens straight to the meeting via
-  // the same openMeetingInApp() the Agent's notetaker_open tool uses.
-  showNotetakerNotification({
-    title: 'Meeting notes ready',
-    body: finalTitle,
-    onClick: () => openMeetingInApp(meetingId),
-  })
 }
 
-/** Runs the full cleanup → summary pipeline for a freshly-persisted
- *  meeting, or does nothing (stamping both stages 'disabled') if the
- *  toggle is off or there's nothing worth processing. Called fire-and-
- *  forget right after persistSession() resolves — never blocks or throws
- *  into the existing persist flow. */
-async function runNotetakerPipeline(meetingId: string, segments: TranscriptSegment[]): Promise<void> {
+/** Keep automatic processing on a provider that is actually connected. A
+ * stale/default Claude selection should not fail a meeting when Codex is the
+ * agent the user actually has signed in — an expired, rate-limited or
+ * uninstalled CLI has a real local alternative. Only the user's OWN agents
+ * are candidates; see the fallback list below. The chosen fallback is
+ * persisted so Settings and subsequent meetings reflect the same decision. */
+async function getAvailablePipelineSettings(): Promise<ReturnType<typeof getNotetakerSettings>> {
   const settings = getNotetakerSettings()
+  let cli = { claude: false, codex: false }
+  try {
+    cli = (await agentAvailabilityHook?.()) ?? cli
+  } catch (error) {
+    log.warn('could not probe note-agent availability', { error: error instanceof Error ? error.message : String(error) })
+    return settings
+  }
+  const availability: Record<NoteProvider, boolean> = {
+    claude: cli.claude,
+    codex: cli.codex,
+  }
+  if (availability[settings.provider]) return settings
+  // Fall back ONLY between the user's own CLI agents — the other one is
+  // already installed and signed in, so a expired/rate-limited/timed-out
+  // provider has a real local alternative. There is deliberately no cloud
+  // entry here: a meeting transcript must never be routed to a managed
+  // model on the user's behalf.
+  const fallback = (['codex', 'claude'] as NoteProvider[]).find((provider) => availability[provider])
+  if (!fallback) return settings
+  saveNotetakerSettings({ provider: fallback })
+  log.event('pipeline-provider-fallback', { requested: settings.provider, selected: fallback })
+  return { ...settings, provider: fallback }
+}
+
+/** Runs text-only cleanup and then note generation. Neither agent call ever
+ * receives audio. If cleanup fails, notes still run against the raw text. */
+async function runNotetakerPipeline(meetingId: string, segments: TranscriptSegment[]): Promise<void> {
+  const settings = await getAvailablePipelineSettings()
   const mlog = log.child({ meetingId })
   // Empty transcript (both channels silent/failed) is not a pipeline
   // failure — mirrors this file's own "empty channel is not a failure"
   // convention elsewhere — there is simply nothing to clean or summarize.
-  if (!settings.auto_pipeline_enabled || segments.length === 0) {
-    mlog.event('pipeline-skipped', { reason: !settings.auto_pipeline_enabled ? 'disabled' : 'empty-transcript' })
+  if (segments.length === 0) {
+    mlog.event('pipeline-skipped', { reason: 'empty-transcript' })
     updateMeetingPipelineStatus(meetingId, { cleanup_status: 'disabled', summary_status: 'disabled' })
     return
   }
   const cleaned = await runCleanupStage(meetingId, segments, settings.provider)
-  if (!cleaned) return
-  await runSummaryStage(meetingId, cleaned, settings.provider, settings.summary_prompt)
+  await runSummaryStage(meetingId, cleaned ?? segments, settings.provider, settings.summary_prompt)
 }
 
-/** Retry: re-inspects the meeting's CURRENT status and does the minimum
- *  needed to move forward (spec §6) — never redoes a stage that already
- *  succeeded. */
+/** Retry whichever text stage did not succeed, without redoing successful
+ * cleanup. A cleanup retry may improve the transcript even when raw-text
+ * notes were already able to complete. */
 async function retryNotetakerPipeline(meetingId: string): Promise<void> {
   const meeting = getMeeting(meetingId)
   if (!meeting) return
-  const settings = getNotetakerSettings()
+  const settings = await getAvailablePipelineSettings()
   if (meeting.cleanup_status !== 'success') {
     const raw = readTranscriptSegments(meetingId)
+    if (raw.length === 0) {
+      updateMeetingPipelineStatus(meetingId, {
+        cleanup_status: 'disabled',
+        summary_status: 'disabled',
+        cleaned_transcript_path: null,
+        notes_path: null,
+      })
+      return
+    }
     const cleaned = await runCleanupStage(meetingId, raw, settings.provider)
-    if (!cleaned) return
-    await runSummaryStage(meetingId, cleaned, settings.provider, settings.summary_prompt)
+    // A newly cleaned transcript is new source material. Regenerate notes
+    // even when an earlier raw-transcript summary happened to succeed.
+    if (cleaned || meeting.summary_status !== 'success') {
+      await runSummaryStage(meetingId, cleaned ?? raw, settings.provider, settings.summary_prompt)
+    }
     return
   }
   if (meeting.summary_status !== 'success') {
-    const cleaned = readCleanedTranscriptSegments(meetingId)
-    await runSummaryStage(meetingId, cleaned, settings.provider, settings.summary_prompt)
+    await runSummaryStage(meetingId, readCleanedTranscriptSegments(meetingId), settings.provider, settings.summary_prompt)
   }
+}
+
+function readRecordingStartTimes(meetingDir: string): { micStartMs?: number | null; systemStartMs?: number | null } {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(meetingDir, 'audio-timing.json'), 'utf8')) as Record<string, unknown>
+    return {
+      micStartMs: typeof parsed.micStartMs === 'number' && Number.isFinite(parsed.micStartMs) ? parsed.micStartMs : null,
+      systemStartMs: typeof parsed.systemStartMs === 'number' && Number.isFinite(parsed.systemStartMs) ? parsed.systemStartMs : null,
+    }
+  } catch {
+    return {}
+  }
+}
+
+type RetriedChannel = {
+  channel: 'mic' | 'system'
+  retried: boolean
+  text: string
+  durationMs: number
+  /** Relative STT timings from the regenerated full-channel audio. */
+  segments: Array<{ startMs: number; endMs: number; text: string }>
+}
+
+/** Re-runs STT from the retained source recordings, replaces the raw
+ * transcript, and then regenerates notes. This is note-taker-only. A
+ * missing/failed channel keeps its previous text; a successful silent retry
+ * clears old hallucinated text from that channel. */
+async function retryMeetingTranscription(meetingId: string): Promise<void> {
+  const meeting = getMeeting(meetingId)
+  if (!meeting) throw new Error('Meeting not found.')
+  const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
+  const previous = readTranscriptSegments(meetingId)
+  const rawMicPath = meeting.audio_mic_path ? path.join(meetingDir, meeting.audio_mic_path) : null
+  const rawSystemPath = meeting.audio_system_path ? path.join(meetingDir, meeting.audio_system_path) : null
+  const recordingStarts = readRecordingStartTimes(meetingDir)
+  // Rebuild the user-facing mix for older recordings. STT deliberately uses
+  // the two raw source lanes: muting mic whenever system audio is active can
+  // erase genuine local speech during overlap and corrupt speaker ownership.
+  createMeetingRecording(rawMicPath, rawSystemPath, path.join(meetingDir, 'audio-meeting.wav'), recordingStarts)
+  const inputs: Array<{ channel: 'mic' | 'system'; relPath: string | null }> = [
+    { channel: 'mic', relPath: meeting.audio_mic_path },
+    { channel: 'system', relPath: meeting.audio_system_path },
+  ]
+  const retried = await Promise.all(inputs.map(async ({ channel, relPath }): Promise<RetriedChannel> => {
+    if (!relPath) return { channel, retried: false, text: '', durationMs: 0, segments: [] }
+    const recordingPath = path.join(meetingDir, relPath)
+    let validChunks = 0
+    let successfulChunks = 0
+    let durationMs = 0
+    const texts: string[] = []
+    const segments: RetriedChannel['segments'] = []
+    for (const chunk of readRetryWavChunks(recordingPath)) {
+      validChunks++
+      durationMs = Math.max(durationMs, Math.round((chunk.offsetSeconds + chunk.encoded.durationSeconds) * 1000))
+      if (!chunk.hasEnoughSpeech) {
+        successfulChunks++
+        continue
+      }
+      const result = await transcribeEncodedChunk(channel, chunk.encoded)
+      if (result.failed) continue
+      successfulChunks++
+      const text = cleanChunkText(result.text)
+      if (text) texts.push(text)
+      segments.push(...result.segments
+        .map((segment) => ({
+          startMs: Math.round((chunk.offsetSeconds + segment.startSeconds) * 1000),
+          endMs: Math.round((chunk.offsetSeconds + segment.endSeconds) * 1000),
+          text: cleanChunkText(segment.text),
+        }))
+        .filter((segment) => segment.text.length > 0 && segment.endMs >= segment.startMs))
+    }
+    return {
+      channel,
+      retried: validChunks > 0 && successfulChunks > 0,
+      text: texts.join(' '),
+      durationMs,
+      segments,
+    }
+  }))
+  if (!retried.some((channel) => channel.retried)) {
+    throw new Error('The retained recording is unavailable or could not be transcribed.')
+  }
+
+  const unmergedSegments: TranscriptSegment[] = []
+  for (const channel of retried) {
+    const prior = previous.filter((segment) => segment.channel === channel.channel)
+    if (!channel.retried) {
+      unmergedSegments.push(...prior)
+      continue
+    }
+    // Audio files begin at each lane's first captured chunk. Retain that
+    // channel-specific wall-clock origin, then apply fresh STT timings. This
+    // keeps a retry's mic/system turns in chronological order instead of
+    // collapsing each whole lane into a single block.
+    const recordedOrigin = channel.channel === 'mic' ? recordingStarts.micStartMs : recordingStarts.systemStartMs
+    const originMs = recordedOrigin ?? prior[0]?.startMs ?? meeting.started_at
+    if (channel.segments.length > 0) {
+      unmergedSegments.push(...channel.segments.map((segment) => ({
+        channel: channel.channel,
+        text: segment.text,
+        startMs: originMs + segment.startMs,
+        endMs: originMs + segment.endMs,
+      })))
+      continue
+    }
+    if (channel.text) {
+      unmergedSegments.push({ channel: channel.channel, text: channel.text, startMs: originMs, endMs: originMs + channel.durationMs })
+    }
+  }
+  // Retry must use the same chronological merge and cross-lane echo
+  // suppression as a fresh recording. Sorting the two regenerated lanes
+  // directly reintroduced the leaked system copy as a second "You" turn.
+  const segments = mergeChannelChunks(
+    unmergedSegments.filter((segment) => segment.channel === 'mic'),
+    unmergedSegments.filter((segment) => segment.channel === 'system'),
+  )
+  writeMeetingJsonFile(meetingId, 'transcript.json', segments)
+  markMeetingReady(meetingId)
+  // Do not hide the last good notes until replacement STT has succeeded.
+  // Once transcript.json is durable, both downstream artifacts are stale
+  // and the normal pipeline owns their pending/success/failed lifecycle.
+  updateMeetingPipelineStatus(meetingId, {
+    cleanup_status: 'pending',
+    summary_status: 'pending',
+    cleaned_transcript_path: null,
+    notes_path: null,
+  })
+  log.child({ meetingId }).event('transcription-retry-succeeded', {
+    retriedChannels: retried.filter((channel) => channel.retried).map((channel) => channel.channel),
+    segmentCount: segments.length,
+  })
+  await runNotetakerPipeline(meetingId, segments)
 }
 
 /** A short excerpt of `text` centred on the first place `needle` (already

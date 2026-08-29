@@ -4,13 +4,9 @@
 //
 // A small pill, bottom-left, showing a live waveform while a note-taking
 // session is active — spec §7: "not buried, more like a floating thing."
-// (2026-08-26: was a circle; redesigned to a pill sharing the dictation
-// pill's own PillGlass material, so the two overlays read as one visual
-// language.) Hovering (or focusing) reveals a separate white Cancel chip
-// above it — the pill itself is not clickable (spec §6: stop is NEVER a
-// single, direct action; hover-then-click-a-distinct-control satisfies
-// that as well as the old same-spot double-click did). No timer anywhere
-// in this file — the waveform redraws itself off the AnalyserNode via
+// Clicking the pill reveals explicit End, Discard, and close actions in
+// place, in that SAME pill — never a second element. No timer in this file — the
+// waveform redraws itself off the AnalyserNode via
 // requestAnimationFrame, matching this codebase's existing precedent in
 // widget/useAudioRecorder.ts + widget/Widget.tsx (WidgetApp owns the
 // getUserMedia capture and analyser; Widget is the prop-driven presentational
@@ -37,9 +33,10 @@ const NT_ATTACK = 0.28    // rises in ~4 frames, so speech still reads as speech
 const NT_RELEASE = 0.07   // falls over ~15, so it settles instead of flickering
 
 type API = {
+  notetakerEndRequested?: () => void
   notetakerCancelRequested?: () => void
   notetakerOnCaptureActive?: (cb: (active: boolean) => void) => () => void
-  notetakerOnStopPending?: (cb: (pending: boolean) => void) => () => void
+  notetakerOnCompleted?: (cb: () => void) => () => void
   notetakerWidgetReady?: () => void
   notetakerMicChunk?: (samples: ArrayBuffer, sampleRate: number, timestampMs: number) => void
   notetakerWidgetLog?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>) => void
@@ -97,15 +94,17 @@ class NotetakerMicProcessor extends AudioWorkletProcessor {
     this._size = opts.chunkSamples > 0 ? opts.chunkSamples : 4096
     this._buf = new Float32Array(this._size)
     this._n = 0
+    this._chunkStartTime = 0
   }
   process(inputs) {
     const channel = inputs[0] && inputs[0][0]
     if (channel) {
       for (let i = 0; i < channel.length; i++) {
+        if (this._n === 0) this._chunkStartTime = currentTime
         this._buf[this._n++] = channel[i]
         if (this._n === this._size) {
           const out = new Float32Array(this._buf)
-          this.port.postMessage(out.buffer, [out.buffer])
+          this.port.postMessage({ samples: out.buffer, contextTime: this._chunkStartTime }, [out.buffer])
           this._n = 0
         }
       }
@@ -205,6 +204,41 @@ export function playNotetakerChime(ctx: AudioContext, direction: 'start' | 'stop
   playTone(ctx, second, now + NOTE_GAP, NOTE_DURATION, 0.11)
 }
 
+async function requestNotetakerMicrophone(): Promise<MediaStream> {
+  const common = {
+    channelCount: 1,
+    noiseSuppression: true,
+    autoGainControl: true,
+  }
+  try {
+    // `true` lets Chromium choose an AEC mode and can select the
+    // peer-connection-only canceller, which has no reference for audio being
+    // played by another app such as Chrome/YouTube. The newer `all` mode asks
+    // specifically for system-wide playback cancellation. Chromium only
+    // accepts it when its platform/loopback AEC is actually available.
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        ...common,
+        echoCancellation: { exact: 'all' } as unknown as ConstrainBoolean,
+      },
+    })
+  } catch (error) {
+    const name = error instanceof DOMException ? error.name : error instanceof TypeError ? 'TypeError' : ''
+    if (name !== 'OverconstrainedError' && name !== 'TypeError') throw error
+    // Older macOS/Chromium combinations expose only the boolean mode. Keep
+    // capture working there, but make the downgrade visible in diagnostics.
+    wlog('warn', 'system-wide echo cancellation mode unavailable — falling back to browser-selected AEC', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        ...common,
+        echoCancellation: true,
+      },
+    })
+  }
+}
+
 /**
  * Attaches a PCM tap to an ALREADY-OPEN capture graph and streams its samples
  * to the main process. Returns a disposer, or null if no tap could be
@@ -224,20 +258,33 @@ async function attachMicChunkTap(
   workletRegistered: boolean,
 ): Promise<(() => void) | null> {
   const chunkDurationMs = Math.round((MIC_CHUNK_SAMPLES / ctx.sampleRate) * 1000)
+  // `Date.now()` in a port-message handler measures IPC scheduling, not when
+  // the microphone samples existed. Map the AudioContext's sample clock to
+  // wall time once, then timestamp every chunk from its real audio frame.
+  // The native Core Audio tap already reports host-time timestamps; using
+  // audio clocks on both paths is what makes transcript and playback order
+  // comparable.
+  const outputTimestamp = ctx.getOutputTimestamp?.()
+  const outputContextTime = outputTimestamp?.contextTime
+  const outputPerformanceTime = outputTimestamp?.performanceTime
+  const contextToWallMs = typeof outputContextTime === 'number' && typeof outputPerformanceTime === 'number'
+    && Number.isFinite(outputContextTime) && Number.isFinite(outputPerformanceTime)
+    ? performance.timeOrigin + outputPerformanceTime - outputContextTime * 1000
+    : Date.now() - ctx.currentTime * 1000
   // Renderer-side proof the audio graph is actually PRODUCING samples, distinct
   // from main's own 'mic-chunk heartbeat' (which only proves the IPC message
   // arrived) — logging both sides of the same handoff is what makes "the tap
   // attached but nothing ever flowed" distinguishable from "IPC dropped it".
   let chunksSent = 0
-  const send = (samples: ArrayBuffer) => {
+  const send = (samples: ArrayBuffer, contextTime?: number) => {
     chunksSent++
     if (chunksSent === 1) {
       wlog('debug', 'first mic chunk sent to main over IPC', { sampleBytes: samples.byteLength })
     }
-    // Timestamp the START of the chunk, not the moment it finished filling —
-    // the main process aligns the two channels' transcripts by first
-    // timestamp, so a systematic one-chunk lag would skew the merge.
-    api().notetakerMicChunk?.(samples, ctx.sampleRate, Date.now() - chunkDurationMs)
+    const timestampMs = typeof contextTime === 'number'
+      ? contextToWallMs + contextTime * 1000
+      : Date.now() - chunkDurationMs
+    api().notetakerMicChunk?.(samples, ctx.sampleRate, timestampMs)
   }
 
   // A node only actually runs when the graph pulls it, so the tap needs a
@@ -276,7 +323,7 @@ async function attachMicChunkTap(
         numberOfOutputs: 1,
         processorOptions: { chunkSamples: MIC_CHUNK_SAMPLES },
       })
-      node.port.onmessage = (e: MessageEvent) => send(e.data as ArrayBuffer)
+      node.port.onmessage = (e: MessageEvent<{ samples: ArrayBuffer; contextTime: number }>) => send(e.data.samples, e.data.contextTime)
       source.connect(node)
       node.connect(sink)
       wlog('info', 'mic tap attached via AudioWorklet', { chunkDurationMs, contextSampleRate: ctx.sampleRate, contextState: ctx.state })
@@ -297,7 +344,7 @@ async function attachMicChunkTap(
     processor.onaudioprocess = (e: AudioProcessingEvent) => {
       // getChannelData hands back a view the engine reuses — copy before it
       // crosses the IPC boundary.
-      send(new Float32Array(e.inputBuffer.getChannelData(0)).buffer)
+      send(new Float32Array(e.inputBuffer.getChannelData(0)).buffer, e.playbackTime)
     }
     source.connect(processor)
     processor.connect(sink)
@@ -341,8 +388,9 @@ async function attachMicChunkTap(
 export function NotetakerWidget({
   analyser,
   sessionId = 0,
-  stopPending = false,
-  onCancelConfirmed,
+  completed = false,
+  onEndRequested,
+  onDiscardRequested,
 }: {
   analyser: AnalyserNode | null
   /** Bumped by the route on every new capture session. The widget WINDOW is
@@ -350,23 +398,19 @@ export function NotetakerWidget({
    *  remounts — without this, the discard option left open in one session
    *  would still be showing when the next session opened the widget. */
   sessionId?: number
-  /** True while the KEYBOARD's own single-tap stop is in its undo window
-   *  (main → notetaker:stop-pending, see notetakerWidget.ts's
-   *  broadcastStopPending). Recording is still running — this is a separate
-   *  signal from `analyser` going null, which only happens once a stop is
-   *  actually finalized. The pill's own content swaps to a short message
-   *  for this state (see below) — the discard box never shows here, since
-   *  the only way to resolve it is another tap on the key. */
-  stopPending?: boolean
-  onCancelConfirmed: () => void
+  /** Brief post-stop acknowledgement shown before the window hides. */
+  completed?: boolean
+  onEndRequested: () => void
+  onDiscardRequested: () => void
 }) {
   const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0))
   const [showDiscard, setShowDiscard] = useState(false)
   const rafRef = useRef<number | undefined>(undefined)
 
-  const openDiscard = () => { if (!stopPending) setShowDiscard(true) }
+  const openDiscard = () => setShowDiscard(true)
   const dismissDiscard = () => setShowDiscard(false)
-  const confirmDiscard = () => { setShowDiscard(false); onCancelConfirmed() }
+  const requestEnd = () => { setShowDiscard(false); onEndRequested() }
+  const confirmDiscard = () => { setShowDiscard(false); onDiscardRequested() }
 
   // A new session always starts on the waveform face, never a stale
   // discard state (or a frozen last frame of bars) left over from the
@@ -375,13 +419,6 @@ export function NotetakerWidget({
     setShowDiscard(false)
     setLevels(new Array(BAR_COUNT).fill(0))
   }, [sessionId])
-
-  // The discard option only ever makes sense while actually recording —
-  // never while the undo window (stopPending) is counting down, since the
-  // only affordance that resolves that state is another tap on the key.
-  useEffect(() => {
-    if (stopPending) setShowDiscard(false)
-  }, [stopPending])
 
   // Live waveform: reads the analyser every animation frame. No setInterval —
   // requestAnimationFrame both matches the display refresh and stops for free
@@ -433,12 +470,12 @@ export function NotetakerWidget({
   const NOTETAKER_GREEN = '#6fbf9a'
   const NOTETAKER_RED = '#c4482e'
   // "Recording" is its own look (dark PillGlass, matching the dictation
-  // pill); every other state — discard confirmation, the undo-window
-  // countdown — turns this SAME pill white in place, per feedback that a
-  // second, differently-sized element floating above it read as
-  // disproportionate no matter how either one was sized on its own. A
-  // small static 3-bar glyph (waveGlyph below) stays in every white state
-  // so it's still visibly "the recording thing," just not live-updating.
+  // pill); every other state — the action row, the saved acknowledgement —
+  // renders in this SAME pill in place, per feedback that a second,
+  // differently-sized element floating above it read as disproportionate no
+  // matter how either one was sized on its own. A small static 3-bar glyph
+  // (waveGlyph below) stays in every other state so it's still visibly "the
+  // recording thing," just not live-updating.
   // THE DICTATION PILL, NOT A SECOND DESIGN.
   //
   // This was rgba(14,15,19,0.42) over a blur(14px) backdrop — a translucent
@@ -447,9 +484,10 @@ export function NotetakerWidget({
   // the dictation capsule and its comment says why: pure black with a rim reads
   // as "a hole punched in the screen", identical on every wallpaper, every
   // Space and every Mac. One instrument, not one that changes colour with the
-  // desktop behind it.
+  // desktop behind it — which is also why `completed` below changes the RIM
+  // and the contents, never the fill.
   const glassBackground = '#000'
-  const glassBorder = stopPending
+  const glassBorder = completed
     ? '1.5px solid rgba(111,191,154,0.45)'
     : '1px solid rgba(255,255,255,0.30)'
   // Pill height is fixed across every state (no resize-on-state-change
@@ -459,6 +497,7 @@ export function NotetakerWidget({
   // PillMetrics.height. The widget is the dictation pill carrying less, so it
   // is the same height and only the WAVEFORM is shorter — 30% off the length,
   // which is the one deliberate difference between the two.
+  // MUST MATCH notetakerWidget.ts's widgetBounds() pillHeight.
   const PILL_HEIGHT = 36
   const WAVE_WIDTH = 55        // the dictation waveform is 78
 
@@ -470,6 +509,8 @@ export function NotetakerWidget({
     </span>
   )
 
+  const idle = !completed && !showDiscard
+
   return (
     <div
       className="w-full h-full flex flex-col-reverse items-start"
@@ -478,28 +519,28 @@ export function NotetakerWidget({
         WebkitAppRegion: 'no-drag',
       }}
     >
-      {/* ONE pill, always. Tapping it while recording opens the discard
-       *  option in place; the undo-window countdown also renders in
-       *  place. Never a second element. */}
+      {/* ONE pill, always. Tapping it while recording opens End/Discard in
+       *  place; the saved acknowledgement also renders in place. Never a
+       *  second element. */}
       <div
-        role={!stopPending && !showDiscard ? 'button' : undefined}
-        tabIndex={!stopPending && !showDiscard ? 0 : undefined}
-        title={!stopPending && !showDiscard ? 'Note taker' : undefined}
+        role={idle ? 'button' : undefined}
+        tabIndex={idle ? 0 : undefined}
+        title={idle ? 'Note taker — click for meeting actions' : undefined}
         aria-label={
-          stopPending
-            ? 'Stopping note-taking — press left Control again to keep recording'
+          completed
+            ? 'Meeting saved — preparing notes'
             : showDiscard ? undefined : 'Note-taking in progress — tap for options'
         }
-        onClick={!stopPending && !showDiscard ? openDiscard : undefined}
+        onClick={idle ? openDiscard : undefined}
         onKeyDown={
-          !stopPending && !showDiscard
+          idle
             ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDiscard() } }
             : undefined
         }
-        className={`rounded-full flex items-center select-none overflow-hidden ${!stopPending && !showDiscard ? 'cursor-pointer' : ''}`}
+        className={`rounded-full flex items-center select-none overflow-hidden ${idle ? 'cursor-pointer' : ''}`}
         style={{
           height: PILL_HEIGHT,
-          padding: showDiscard ? 0 : stopPending ? '0 12px' : '0 13px',
+          padding: showDiscard ? 0 : completed ? '0 12px' : '0 13px',
           background: glassBackground,
           // NO BACKDROP SAMPLING and no shadow. The fill is opaque black, so a
           // blur behind it is invisible work; and PillView drops the shadow for
@@ -510,15 +551,17 @@ export function NotetakerWidget({
           transition: 'background 180ms ease, border-color 180ms ease, padding 180ms ease, box-shadow 180ms ease',
         }}
       >
-        {stopPending ? (
+        {completed ? (
+          /* The momentary post-stop acknowledgement (notetaker:completed),
+             shown for the ~900ms before main hides the window. Same pill,
+             same black: only the rim and the contents say "saved". */
           <span className="flex items-center whitespace-nowrap" style={{ gap: 7 }}>
             {waveGlyph(NOTETAKER_GREEN)}
-            <span
-              className="rounded-full flex-none"
-              style={{ width: 6, height: 6, background: NOTETAKER_GREEN, animation: 'notetaker-dot-pulse 1.1s ease-in-out infinite' }}
-            />
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="flex-none" style={{ color: NOTETAKER_GREEN }}>
+              <path d="M5 12.5l4.2 4.1L19.5 6.8" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
             <span className="text-[13px] font-medium" style={{ color: 'rgba(255,255,255,0.92)' }}>
-              Press ⌃ again to keep recording
+              Saved — preparing notes
             </span>
           </span>
         ) : showDiscard ? (
@@ -526,7 +569,8 @@ export function NotetakerWidget({
             <button
               type="button"
               onClick={dismissDiscard}
-              title="Never mind — keep recording"
+              title="Keep recording"
+              aria-label="Keep recording"
               className="flex items-center justify-center flex-none"
               // Was black-on-white; the pill is black now.
               style={{ width: 30, height: PILL_HEIGHT, color: 'rgba(255,255,255,0.55)' }}
@@ -535,20 +579,40 @@ export function NotetakerWidget({
                 <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
               </svg>
             </button>
+            {/* END — the ordinary, non-destructive completion. Neutral white,
+                because the pill reserves colour for the one action that
+                destroys something. */}
+            <button
+              type="button"
+              onClick={requestEnd}
+              title="End meeting"
+              aria-label="End meeting"
+              className="flex items-center flex-none whitespace-nowrap"
+              style={{ gap: 6, height: PILL_HEIGHT, paddingRight: 12 }}
+            >
+              <span
+                className="block rounded-[2px] flex-none"
+                style={{ width: 9, height: 9, background: NOTETAKER_GREEN, boxShadow: '0 0 0 1px rgba(255,255,255,0.18)' }}
+                aria-hidden="true"
+              />
+              <span className="text-[13px] font-medium" style={{ color: 'rgba(255,255,255,0.92)' }}>End</span>
+            </button>
+            <span className="flex-none" aria-hidden="true" style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.16)' }} />
             <button
               type="button"
               onClick={confirmDiscard}
+              title="Discard recording"
+              aria-label="Discard recording"
               className="flex items-center flex-1 whitespace-nowrap"
-              style={{ gap: 6, height: PILL_HEIGHT, paddingRight: 13 }}
+              style={{ gap: 6, height: PILL_HEIGHT, paddingLeft: 12, paddingRight: 13 }}
             >
-              {waveGlyph(NOTETAKER_RED)}
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="flex-none" style={{ color: NOTETAKER_RED }}>
                 <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-12" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" />
               </svg>
               {/* The red survives HERE and nowhere else — on the one label
                   that means destructive. A black capsule with a red word in it
                   reads as a warning; a red capsule reads as another product. */}
-              <span className="text-[13px] font-medium" style={{ color: NOTETAKER_RED }}>Discard meeting</span>
+              <span className="text-[13px] font-medium" style={{ color: NOTETAKER_RED }}>Discard</span>
             </button>
           </>
         ) : (
@@ -559,35 +623,41 @@ export function NotetakerWidget({
              same fix: no floor, a hairline behind, and nothing drawn below 2px
              because a sub-2px rounded div is that dot again by another name.
              Bars are 2px on a 2px gap, matching Waveform.swift exactly. */
-          <span
-            className="relative flex items-center justify-center flex-none"
-            style={{ width: WAVE_WIDTH, height: 20 }}
-          >
+          <span className="flex items-center" style={{ gap: 7 }}>
             <span
-              className="absolute rounded-full"
-              style={{ left: 0, right: 0, height: 1, background: 'rgba(255,255,255,0.18)' }}
+              className="rounded-full flex-none"
+              style={{ width: 6, height: 6, background: NOTETAKER_RED, animation: 'notetaker-dot-pulse 1.1s ease-in-out infinite' }}
             />
-            <span className="relative flex items-center" style={{ gap: 2 }}>
-              {levels.map((level, i) => {
-                const h = Math.round(level * 20)
-                return (
-                  <div
-                    key={i}
-                    className="w-[2px] rounded-full bg-white"
-                    style={{
-                      height: h < 2 ? 0 : h,
-                      opacity: 0.55 + 0.45 * level,
-                      transition: 'height 60ms linear',
-                    }}
-                  />
-                )
-              })}
+            <span
+              className="relative flex items-center justify-center flex-none"
+              style={{ width: WAVE_WIDTH, height: 20 }}
+            >
+              <span
+                className="absolute rounded-full"
+                style={{ left: 0, right: 0, height: 1, background: 'rgba(255,255,255,0.18)' }}
+              />
+              <span className="relative flex items-center" style={{ gap: 2 }}>
+                {levels.map((level, i) => {
+                  const h = Math.round(level * 20)
+                  return (
+                    <div
+                      key={i}
+                      className="w-[2px] rounded-full bg-white"
+                      style={{
+                        height: h < 2 ? 0 : h,
+                        opacity: 0.55 + 0.45 * level,
+                        transition: 'height 60ms linear',
+                      }}
+                    />
+                  )
+                })}
+              </span>
             </span>
           </span>
         )}
       </div>
 
-      {/* @keyframes for the stopPending dot — inlined (no stylesheet in
+      {/* @keyframes for the recording dot — inlined (no stylesheet in
        *  this window), same reasoning as the waveform preferring CSS
        *  transitions over extra rAF work. */}
       <style>{`
@@ -661,7 +731,7 @@ export function NotetakerWidgetRoute() {
 
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
   const [captureActive, setCaptureActive] = useState(false)
-  const [stopPending, setStopPending] = useState(false)
+  const [completed, setCompleted] = useState(false)
   /** Increments on every false→true transition: one "session" of the widget. */
   const [sessionId, setSessionId] = useState(0)
   // Read in the IPC handler to detect the transition. A ref, not the state
@@ -715,28 +785,21 @@ export function NotetakerWidgetRoute() {
       }
       captureActiveRef.current = active
       setCaptureActive(active)
+      if (active) setCompleted(false)
     })
     return () => unsubscribe?.()
   }, [])
 
-  // Separate from captureActive on purpose — see NotetakerWidget's
-  // `stopPending` prop comment: capture keeps running through this window,
-  // it is only about to stop unless the user taps left Control again.
   useEffect(() => {
-    const registeredAt = Date.now()
-    wlog('debug', 'stop-pending listener mounted', { msSinceMount: registeredAt - mountedAtRef.current })
-    const unsubscribe = api().notetakerOnStopPending?.((pending) => {
-      wlog('debug', 'stop-pending signal received from main', { pending, msSinceListenerMounted: Date.now() - registeredAt })
-      setStopPending(pending)
-    })
+    const unsubscribe = api().notetakerOnCompleted?.(() => setCompleted(true))
     return () => unsubscribe?.()
   }, [])
 
-  // Fires once both listener-registering effects above have actually run —
+  // Fires once the listener-registering effects above have actually run —
   // React commits effects with empty deps in declaration order on mount, so
   // by the time THIS effect body runs, both subscriptions are guaranteed
   // live. Tells main it can safely resend the current capture-active/
-  // stop-pending state and have it actually arrive — see
+  // capture state and have it actually arrive — see
   // notetakerWidget.ts's 'notetaker:widget-ready' handler for why this
   // exists (a real dropped-signal bug on the widget's first-ever load that
   // neither the immediate send nor the 'did-finish-load' resend closed).
@@ -760,8 +823,13 @@ export function NotetakerWidgetRoute() {
 
     const requestedAt = Date.now()
     wlog('info', 'requesting mic capture for a new session', { contextStateAtRequest: ctx.state })
-    navigator.mediaDevices
-      .getUserMedia({ audio: true })
+    // The system tap deliberately captures everything playing on the Mac;
+    // the mic lane must therefore ask WebRTC for its echo canceller instead
+    // of relying on browser defaults. With MacBook speakers, a bare
+    // `audio: true` can feed the remote participant back into the mic lane
+    // and create duplicate/misattributed transcript lines. This applies only
+    // to note-taking; ordinary dictation keeps its existing raw constraints.
+    requestNotetakerMicrophone()
       .then(async (s) => {
         // Silent before this fix: if the session was stopped WHILE
         // getUserMedia was still pending (a real observed shape — a session
@@ -789,6 +857,10 @@ export function NotetakerWidgetRoute() {
           trackReadyState: track?.readyState,
           trackMuted: track?.muted,
           trackEnabled: track?.enabled,
+          echoCancellation: track?.getSettings?.().echoCancellation,
+          echoCancellationCapabilities: track?.getCapabilities?.().echoCancellation,
+          noiseSuppression: track?.getSettings?.().noiseSuppression,
+          autoGainControl: track?.getSettings?.().autoGainControl,
           contextStateAtGrant: ctx.state,
           msFromRequestToGrant: Date.now() - requestedAt,
         })
@@ -925,8 +997,9 @@ export function NotetakerWidgetRoute() {
     <NotetakerWidget
       analyser={analyser}
       sessionId={sessionId}
-      stopPending={stopPending}
-      onCancelConfirmed={() => api().notetakerCancelRequested?.()}
+      completed={completed}
+      onEndRequested={() => api().notetakerEndRequested?.()}
+      onDiscardRequested={() => api().notetakerCancelRequested?.()}
     />
   )
 }

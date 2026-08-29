@@ -30,7 +30,15 @@ export type FinalizedSegment = {
   samples: Float32Array
   sampleRate: number
   channels: number
+  /** First frame in the captured audio buffer. STT timestamps are relative
+   * to this value, whereas startTimestampMs is the first audible frame. */
+  captureStartTimestampMs: number
   startTimestampMs: number
+  endTimestampMs: number
+  /** Total duration of frames that cleared the stable speech-energy floor.
+   * Used to keep silent stop-tail buffers out of STT without discarding them
+   * from the retained recording. */
+  audibleDurationMs: number
 }
 
 export type PeriodicChunkEmitterConfig = {
@@ -66,7 +74,12 @@ export class PeriodicChunkEmitter {
   private parts: Float32Array[] = []
   private sampleRate = 0
   private channels = 0
-  private segmentStartMs = 0
+  /** Capture timing includes leading silence and drives VAD cut durations. */
+  private captureStartMs = 0
+  /** Transcript timing begins at the first audible frame in a capture chunk. */
+  private contentStartMs: number | null = null
+  private audibleDurationMs = 0
+  private lastFrameEndMs = 0
   private silenceStartMs: number | null = null
   private chunkIndex = 0
 
@@ -83,14 +96,25 @@ export class PeriodicChunkEmitter {
 
   feed(samples: Float32Array, sampleRate: number, channels: number, timestampMs: number): void {
     const rms = computeRms(samples)
+    const frameDurationMs = (samples.length / channels / sampleRate) * 1000
+    const frameEndMs = timestampMs + frameDurationMs
     this.noiseFloor.feed(rms, timestampMs)
     const threshold = effectiveSilenceThreshold(this.config.silenceThreshold, this.noiseFloor.floor)
+    // Do not use the adaptive noise threshold for the first-speech clock.
+    // During a cold start the tracker initially contains only speech, so its
+    // p20 can briefly rise above that same speech and incorrectly timestamp a
+    // lane several seconds late. The configured floor is stable and is used
+    // only for ordering; adaptive VAD still controls where chunks are cut.
+    const audibleForOrdering = rms >= this.config.silenceThreshold
 
     if (this.parts.length === 0) {
       // First sample of a brand new segment: nothing to compare against yet
       // (chunkElapsedMs is 0, so decideCut could never fire), so just seed
       // state and accumulate.
-      this.segmentStartMs = timestampMs
+      this.captureStartMs = timestampMs
+      this.contentStartMs = audibleForOrdering ? timestampMs : null
+      this.audibleDurationMs = audibleForOrdering ? frameDurationMs : 0
+      this.lastFrameEndMs = frameEndMs
       this.sampleRate = sampleRate
       this.channels = channels
       this.silenceStartMs = rms < threshold ? timestampMs : null
@@ -104,7 +128,7 @@ export class PeriodicChunkEmitter {
       this.silenceStartMs = null
     }
 
-    const chunkElapsedMs = timestampMs - this.segmentStartMs
+    const chunkElapsedMs = timestampMs - this.captureStartMs
     const decision = decideCut({
       rms,
       chunkElapsedMs,
@@ -124,12 +148,18 @@ export class PeriodicChunkEmitter {
       // already under way (e.g. the sample that tipped a 'silence' decision)
       // keeps counting in the new segment instead of restarting from null.
       this.finalizeSegment()
-      this.segmentStartMs = timestampMs
+      this.captureStartMs = timestampMs
+      this.contentStartMs = audibleForOrdering ? timestampMs : null
+      this.audibleDurationMs = audibleForOrdering ? frameDurationMs : 0
+      this.lastFrameEndMs = frameEndMs
       this.sampleRate = sampleRate
       this.channels = channels
       this.silenceStartMs = rms < threshold ? timestampMs : null
       this.parts.push(samples)
     } else {
+      if (this.contentStartMs === null && audibleForOrdering) this.contentStartMs = timestampMs
+      if (audibleForOrdering) this.audibleDurationMs += frameDurationMs
+      this.lastFrameEndMs = frameEndMs
       this.parts.push(samples)
     }
   }
@@ -155,11 +185,18 @@ export class PeriodicChunkEmitter {
       samples: merged,
       sampleRate: this.sampleRate,
       channels: this.channels,
-      startTimestampMs: this.segmentStartMs,
+      captureStartTimestampMs: this.captureStartMs,
+      // Sort transcript segments by when speech begins, not the first silent
+      // capture frame that happened to arrive on a channel.
+      startTimestampMs: this.contentStartMs ?? this.captureStartMs,
+      endTimestampMs: this.lastFrameEndMs,
+      audibleDurationMs: this.audibleDurationMs,
     })
 
     this.chunkIndex++
     this.parts = []
+    this.contentStartMs = null
+    this.audibleDurationMs = 0
     this.silenceStartMs = null
   }
 }

@@ -34,6 +34,7 @@ import {
   GROQ_STT_URL,
   CEREBRAS_CHAT_URL,
   STT_MODEL,
+  NOTETAKER_STT_MODEL,
   LLM_MODEL,
   sttCostCents,
   llmCostCents,
@@ -207,8 +208,12 @@ async function handleSTT(
 
   // Optional client-side metadata
   const duration = parseFloat((form.get('duration_seconds') as string) || '0') || estimateDurationFromBytes(file.size)
-  const language = (form.get('language') as string) || 'en'
   const flowType = (form.get('flow_type') as string) || 'dictation'
+  // Preserve every existing transcription mode exactly as-is. Only the
+  // note-taker may omit a language so Whisper can auto-detect multilingual,
+  // code-switched meetings; dictation without a language remains English.
+  const requestedLanguage = (form.get('language') as string) || ''
+  const language = flowType === 'notetaker' ? requestedLanguage : (requestedLanguage || 'en')
 
   // Optional decoder-context prompt (Whisper biasing: previous chunk's tail
   // or caller-supplied vocabulary). Style/spelling guidance only — Groq caps
@@ -225,14 +230,18 @@ async function handleSTT(
   }
 
   // ─── Forward to Groq ──────────────────────────────────────────
-  // response_format: 'json' (vs verbose_json) — smaller response body,
-  // ~20-30ms faster to stream back. We don't need the verbose fields.
+  // The note-taker must retain source timings so mic/system utterances can
+  // be globally ordered by when they were actually spoken. Dictation keeps
+  // its compact text-only response unchanged; it never needs timings.
+  const includeTimestamps = flowType === 'notetaker'
+  const sttModel = includeTimestamps ? NOTETAKER_STT_MODEL : STT_MODEL
   const groqForm = new FormData()
   groqForm.append('file', file, (file as File).name || 'audio.webm')
-  groqForm.append('model', STT_MODEL)
-  groqForm.append('response_format', 'json')
+  groqForm.append('model', sttModel)
+  groqForm.append('response_format', includeTimestamps ? 'verbose_json' : 'json')
+  if (includeTimestamps) groqForm.append('timestamp_granularities[]', 'segment')
   groqForm.append('temperature', '0')
-  groqForm.append('language', language)
+  if (language) groqForm.append('language', language)
   if (prompt) groqForm.append('prompt', prompt)
 
   const tGroqStart = Date.now()
@@ -254,9 +263,18 @@ async function handleSTT(
     )
   }
 
-  // With response_format=json the body is just { text }. Use the client-
-  // provided duration (we receive it in the form's duration_seconds field).
-  type GroqSTTResult = { text: string }
+  type GroqTimestampSegment = {
+    start?: number
+    end?: number
+    text?: string
+    avg_logprob?: number
+    no_speech_prob?: number
+    compression_ratio?: number
+  }
+  // `verbose_json` adds these segments only for note-taker requests. Keep
+  // them deliberately optional so the dictation contract remains byte-for-
+  // byte compatible with its existing text-only path.
+  type GroqSTTResult = { text: string; segments?: GroqTimestampSegment[] }
   const groqJson = (await groqRes.json()) as GroqSTTResult
   const tGroqBody = Date.now()           // full body received + parsed
   const groqBodyMs = tGroqBody - tGroqHeaders
@@ -264,11 +282,11 @@ async function handleSTT(
   const actualDuration = duration
 
   // ─── Cost calculation (usage logging only — no per-call charge) ──
-  const costCents = sttCostCents(actualDuration)
+  const costCents = sttCostCents(actualDuration, sttModel)
   console.log('[billing]', JSON.stringify({
-    user: userId, call: 'stt', flow: flowType, model: STT_MODEL,
+    user: userId, call: 'stt', flow: flowType, model: sttModel,
     duration_s: actualDuration,
-    raw_cost_usd: rawGroqCostUsd('stt', { durationSeconds: actualDuration }),
+    raw_cost_usd: rawGroqCostUsd('stt', { durationSeconds: actualDuration, model: sttModel }),
     cost_cents: costCents,
   }))
 
@@ -283,11 +301,11 @@ async function handleSTT(
         p_call_type: 'stt',
         p_flow_type: flowType,
         p_provider: 'groq',
-        p_model: STT_MODEL,
+        p_model: sttModel,
         p_prompt_tokens: 0,
         p_completion_tokens: 0,
         p_audio_duration_seconds: actualDuration,
-        p_estimated_cost: rawGroqCostUsd('stt', { durationSeconds: actualDuration }),
+        p_estimated_cost: rawGroqCostUsd('stt', { durationSeconds: actualDuration, model: sttModel }),
         p_latency_ms: latencyMs,
       })
     })().catch((e) => console.error('[pipeline] log_usage FAILED (bill at risk until retry/reconcile):', e))
@@ -301,8 +319,20 @@ async function handleSTT(
     ok: true,
     data: {
       text: groqJson.text,
+      ...(includeTimestamps && Array.isArray(groqJson.segments) ? {
+        segments: groqJson.segments
+          .filter((segment) => typeof segment.start === 'number' && typeof segment.end === 'number' && typeof segment.text === 'string')
+          .map((segment) => ({
+            start: segment.start as number,
+            end: segment.end as number,
+            text: segment.text as string,
+            ...(typeof segment.avg_logprob === 'number' ? { avg_logprob: segment.avg_logprob } : {}),
+            ...(typeof segment.no_speech_prob === 'number' ? { no_speech_prob: segment.no_speech_prob } : {}),
+            ...(typeof segment.compression_ratio === 'number' ? { compression_ratio: segment.compression_ratio } : {}),
+          })),
+      } : {}),
       duration_seconds: actualDuration,
-      model: STT_MODEL,
+      model: sttModel,
     },
     balance_cents: 0, // subscriptions: flat-rate, no per-call balance
     cost_cents: costCents,

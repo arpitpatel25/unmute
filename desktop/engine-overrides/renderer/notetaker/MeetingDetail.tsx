@@ -1,20 +1,16 @@
-// Meeting detail — two top-level tabs (Notes / Transcript, 2026-08-25 spec
+// Meeting detail. Notes are the only artifact shown; the Notes/Transcript
+// tab bar and the transcript body are behind SHOW_TRANSCRIPT_UI (see
+// notetakerUi.ts) — still generated and still stored, just not on screen.
+//
+// Historically — two top-level tabs (Notes / Transcript, 2026-08-25 spec
 // §9), replacing the previous single flat transcript view.
 //
-// Transcript tab: Cleaned/Raw sub-tabs, Cleaned selected by default once
-// cleanup has succeeded (else Raw, since Cleaned has nothing to show yet).
-// Raw is always available regardless of cleanup status — unchanged from
-// before this feature existed. Audio playback (mic segments "You"; system
-// segments show a real attributed speaker name when known — Zoom calls
-// only, read from Zoom's own accessibility tree, see zoomSpeaker.ts —
-// falling back to generic "Them" otherwise) lives here too, for whichever
-// channel(s) still have audio (hidden once the 24h sweep has removed a
-// channel's file).
+// Transcript tab: the chronological raw STT transcript plus one normal
+// meeting recording. Capture's mic/system source files stay internal.
 //
-// Notes tab: title/date/time, then Summary/Key Points/Decisions/Action
-// Items as native <details> disclosures — real collapsible/expandable
-// sections, not a scrolling block of markdown. A section is omitted
-// entirely (not shown collapsed-empty) if notes.json returned it empty.
+// Notes tab: title/date/time followed by a deliberately document-like Markdown
+// view. It is not a stack of collapsible AI "key point" cards: the summary is
+// a readable meeting note with clear sections and lists, like Granola's notes.
 //
 // Both tabs show a disabled/pending/failed-with-retry state instead of
 // content when their stage hasn't succeeded — spec §6's failure/retry
@@ -27,6 +23,9 @@
 // user-triggered retry).
 
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { SHOW_TRANSCRIPT_UI } from './notetakerUi'
 
 // Field-for-field mirrors of the preload-facing types (electron/remote-
 // preload.ts) — not imported directly, same cross-tree precedent every
@@ -58,12 +57,12 @@ type NotetakerMeetingNotes = {
 
 type API = {
   notetakerGetTranscript?: (id: string) => Promise<NotetakerTranscriptSegment[]>
-  notetakerGetCleanedTranscript?: (id: string) => Promise<NotetakerTranscriptSegment[]>
   notetakerGetNotes?: (id: string) => Promise<NotetakerMeetingNotes | null>
-  notetakerGetAudioUrl?: (id: string, channel: 'mic' | 'system') => Promise<string | null>
+  notetakerGetAudioUrl?: (id: string, channel: 'mic' | 'system' | 'mixed') => Promise<string | null>
   notetakerRenameMeeting?: (id: string, title: string) => Promise<void>
   notetakerDeleteMeeting?: (id: string) => Promise<void>
   notetakerRetryPipeline?: (id: string) => Promise<void>
+  notetakerRetryTranscription?: (id: string) => Promise<void>
   notetakerGetPipelineStatus?: (id: string) => Promise<{ cleanup_status: NotetakerPipelineStatus; summary_status: NotetakerPipelineStatus } | null>
 }
 function api(): API {
@@ -97,7 +96,7 @@ function TranscriptSegments({ segments, emptyLabel }: { segments: NotetakerTrans
       {segments.map((seg, i) => (
         <div key={i} className="text-[13px] leading-relaxed">
           <span className="font-semibold text-ink">
-            {seg.channel === 'mic' ? 'You' : (seg.speakerName || 'Them')}:{' '}
+            {seg.channel === 'mic' ? 'You' : 'Them'}:{' '}
           </span>
           <span className="text-ink">{seg.text}</span>
           {seg.alt && (
@@ -111,6 +110,13 @@ function TranscriptSegments({ segments, emptyLabel }: { segments: NotetakerTrans
   )
 }
 
+function transcriptAsPlainText(segments: NotetakerTranscriptSegment[]): string {
+  return segments.map((seg) => {
+    const speaker = seg.channel === 'mic' ? 'You' : 'Them'
+    return `${speaker}: ${seg.text}`
+  }).join('\n\n')
+}
+
 /** disabled/pending/failed-with-retry — the one state view shared by both
  *  the Transcript tab's Cleaned sub-tab and the whole Notes tab (spec §6). */
 function PipelineStatusNotice({ status, onRetry, retrying, kind }: {
@@ -120,14 +126,36 @@ function PipelineStatusNotice({ status, onRetry, retrying, kind }: {
   kind: 'cleanup' | 'summary'
 }) {
   if (status === 'disabled') {
-    return <p className="text-ink-60 text-sm">Automatic {kind === 'cleanup' ? 'cleanup' : 'notes'} wasn&apos;t turned on for this meeting.</p>
+    return <p className="text-ink-60 text-sm">{kind === 'cleanup' ? 'No cleaned transcript is available.' : 'No notes could be generated because the recording contained no transcript.'}</p>
   }
   if (status === 'pending') {
-    return <p className="text-ink-60 text-sm">{kind === 'cleanup' ? 'Cleaning up the transcript…' : 'Generating notes…'}</p>
+    // With the transcript hidden there is nothing else on this screen while a
+    // meeting processes, so say plainly that work is happening, that it takes
+    // a moment, and that leaving is safe — the run continues in the main
+    // process either way.
+    return (
+      <div className="flex flex-col gap-2 rounded-lg bg-accent/[0.04] border border-accent/15 p-4">
+        <div className="flex items-center gap-2">
+          <span className="flex items-center gap-1" aria-hidden="true">
+            <span className="w-[5px] h-[5px] rounded-full bg-accent animate-dot-bounce" />
+            <span className="w-[5px] h-[5px] rounded-full bg-accent animate-dot-bounce" style={{ animationDelay: '0.15s' }} />
+            <span className="w-[5px] h-[5px] rounded-full bg-accent animate-dot-bounce" style={{ animationDelay: '0.3s' }} />
+          </span>
+          <p className="text-[13px] font-medium text-ink">
+            {kind === 'cleanup' ? 'Cleaning up the transcript…' : 'Writing your notes…'}
+          </p>
+        </div>
+        <p className="text-[11.5px] text-ink-60 leading-relaxed">
+          {kind === 'cleanup'
+            ? 'This runs on your connected agent and usually takes under a minute.'
+            : 'Your recording is being cleaned up and summarised on your connected agent. This usually takes under a minute — you can close this and come back, it keeps running.'}
+        </p>
+      </div>
+    )
   }
   return (
     <div className="flex items-center gap-2">
-      <p className="text-error text-sm">{kind === 'cleanup' ? 'Cleanup failed.' : 'Summary failed.'}</p>
+      <p className="text-error text-sm">{kind === 'cleanup' ? 'Cleanup failed.' : 'Notes could not be generated from clear speech.'}</p>
       <button
         onClick={onRetry}
         disabled={retrying}
@@ -139,17 +167,174 @@ function PipelineStatusNotice({ status, onRetry, retrying, kind }: {
   )
 }
 
-function NotesSection({ title, items }: { title: string; items: string[] }) {
-  if (items.length === 0) return null
+function legacyNotesAsMarkdown(notes: NotetakerMeetingNotes): string {
+  const sections = [
+    notes.summary,
+    notes.keyPoints.length ? `## Key points\n${notes.keyPoints.map((item) => `- ${item}`).join('\n')}` : '',
+    notes.decisions.length ? `## Decisions\n${notes.decisions.map((item) => `- ${item}`).join('\n')}` : '',
+    notes.actionItems.length ? `## Action items\n${notes.actionItems.map((item) => `- ${item}`).join('\n')}` : '',
+    notes.openQuestions.length ? `## Open questions\n${notes.openQuestions.map((item) => `- ${item}`).join('\n')}` : '',
+  ].filter(Boolean)
+  return sections.join('\n\n')
+}
+
+/**
+ * Notes have to remain legible even when an agent returns only very simple
+ * Markdown. Do not rely on Tailwind Typography's optional `prose` plugin for
+ * this: this renderer supplies the hierarchy, list rhythm and visual grouping
+ * itself, while ReactMarkdown continues to safely parse the agent output.
+ */
+type NotesRevealPhase = 'idle' | 'preparing' | 'animating'
+
+function NotesDocument({ markdown, revealPhase }: { markdown: string; revealPhase: NotesRevealPhase }) {
+  const revealClass = revealPhase === 'preparing'
+    ? 'notetaker-notes-preparing'
+    : revealPhase === 'animating'
+      ? 'notetaker-notes-revealing'
+      : ''
+
   return (
-    <details open className="rounded border border-black/10 p-2.5">
-      <summary className="text-[12.5px] font-semibold text-ink cursor-pointer select-none">{title}</summary>
-      <ul className="mt-2 flex flex-col gap-1.5 list-disc pl-4">
-        {items.map((item, i) => (
-          <li key={i} className="text-[13px] leading-relaxed text-ink">{item}</li>
-        ))}
-      </ul>
-    </details>
+    <article className={`notetaker-notes-document ${revealClass}`}>
+      <div className="notetaker-notes-kicker">Meeting notes</div>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => <h1 className="notetaker-note-title">{children}</h1>,
+          h2: ({ children }) => <h2 className="notetaker-note-heading">{children}</h2>,
+          h3: ({ children }) => <h3 className="notetaker-note-subheading">{children}</h3>,
+          p: ({ children }) => <p className="notetaker-note-paragraph">{children}</p>,
+          ul: ({ children }) => <ul className="notetaker-note-list">{children}</ul>,
+          ol: ({ children }) => <ol className="notetaker-note-list notetaker-note-ordered-list">{children}</ol>,
+          li: ({ children }) => <li className="notetaker-note-list-item">{children}</li>,
+          blockquote: ({ children }) => <blockquote className="notetaker-note-quote">{children}</blockquote>,
+          strong: ({ children }) => <strong className="notetaker-note-strong">{children}</strong>,
+          a: ({ children, href }) => <a className="notetaker-note-link" href={href} target="_blank" rel="noreferrer">{children}</a>,
+        }}
+      >
+        {markdown}
+      </ReactMarkdown>
+      <style>{`
+        @keyframes notetaker-note-reveal {
+          from { opacity: 0; transform: translateY(12px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .notetaker-notes-document {
+          --note-ink: #24211f;
+          --note-muted: #746f69;
+          --note-line: rgba(36, 33, 31, 0.11);
+          --note-accent: #ed3937;
+          background: #fcfbf8;
+          border: 1px solid var(--note-line);
+          border-radius: 18px;
+          box-shadow: 0 1px 2px rgba(33, 28, 24, 0.03), 0 10px 30px rgba(33, 28, 24, 0.035);
+          color: var(--note-ink);
+          padding: 27px 30px 30px;
+        }
+        .notetaker-notes-kicker {
+          color: var(--note-muted);
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.11em;
+          line-height: 1;
+          margin-bottom: 23px;
+          text-transform: uppercase;
+        }
+        .notetaker-note-title {
+          font-size: 26px;
+          font-weight: 700;
+          letter-spacing: -0.035em;
+          line-height: 1.18;
+          margin: 0 0 24px;
+        }
+        .notetaker-note-heading {
+          border-top: 1px solid var(--note-line);
+          font-size: 17px;
+          font-weight: 700;
+          letter-spacing: -0.018em;
+          line-height: 1.3;
+          margin: 27px 0 13px;
+          padding-top: 23px;
+        }
+        .notetaker-note-heading:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+        .notetaker-note-subheading {
+          font-size: 14px;
+          font-weight: 700;
+          line-height: 1.4;
+          margin: 20px 0 8px;
+        }
+        .notetaker-note-paragraph {
+          font-size: 14px;
+          line-height: 1.68;
+          margin: 0 0 12px;
+        }
+        .notetaker-note-list {
+          display: grid;
+          gap: 9px;
+          list-style: none;
+          margin: 0;
+          padding: 0;
+        }
+        .notetaker-note-list-item {
+          font-size: 14px;
+          line-height: 1.58;
+          padding-left: 19px;
+          position: relative;
+        }
+        .notetaker-note-list-item::before {
+          background: var(--note-accent);
+          border-radius: 999px;
+          content: '';
+          height: 5px;
+          left: 1px;
+          position: absolute;
+          top: 0.62em;
+          width: 5px;
+        }
+        .notetaker-note-ordered-list { counter-reset: meeting-note; }
+        .notetaker-note-ordered-list .notetaker-note-list-item { counter-increment: meeting-note; }
+        .notetaker-note-ordered-list .notetaker-note-list-item::before {
+          background: transparent;
+          color: var(--note-accent);
+          content: counter(meeting-note) '.';
+          font-size: 12px;
+          font-weight: 700;
+          height: auto;
+          top: 0.14em;
+          width: auto;
+        }
+        .notetaker-note-quote {
+          border-left: 2px solid var(--note-accent);
+          color: var(--note-muted);
+          font-size: 14px;
+          line-height: 1.6;
+          margin: 16px 0;
+          padding: 1px 0 1px 14px;
+        }
+        .notetaker-note-strong { font-weight: 700; }
+        .notetaker-note-link { color: #b92b2b; text-decoration: underline; text-underline-offset: 2px; }
+        .notetaker-notes-preparing > :not(style) {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        .notetaker-notes-revealing > :not(style) {
+          animation: notetaker-note-reveal 500ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+        .notetaker-notes-revealing > :nth-child(2) { animation-delay: 35ms; }
+        .notetaker-notes-revealing > :nth-child(3) { animation-delay: 115ms; }
+        .notetaker-notes-revealing > :nth-child(4) { animation-delay: 190ms; }
+        .notetaker-notes-revealing > :nth-child(5) { animation-delay: 265ms; }
+        .notetaker-notes-revealing > :nth-child(6) { animation-delay: 340ms; }
+        .notetaker-notes-revealing > :nth-child(n+7) { animation-delay: 415ms; }
+        @media (prefers-reduced-motion: reduce) {
+          .notetaker-notes-preparing > :not(style) { opacity: 1; transform: none; }
+          .notetaker-notes-revealing > :not(style) { animation: none; }
+        }
+        @media (max-width: 520px) {
+          .notetaker-notes-document { border-radius: 14px; padding: 22px 20px 24px; }
+          .notetaker-note-title { font-size: 23px; }
+        }
+      `}</style>
+    </article>
   )
 }
 
@@ -158,7 +343,6 @@ export function MeetingDetail({
   initialTitle,
   startedAt,
   durationMs,
-  initialCleanupStatus,
   initialSummaryStatus,
   onBack,
 }: {
@@ -166,123 +350,166 @@ export function MeetingDetail({
   initialTitle: string
   startedAt: number
   durationMs: number
-  initialCleanupStatus: NotetakerPipelineStatus
   initialSummaryStatus: NotetakerPipelineStatus
   onBack: () => void
 }) {
   const [tab, setTab] = useState<'notes' | 'transcript'>('notes')
-  const [transcriptSubTab, setTranscriptSubTab] = useState<'cleaned' | 'raw'>(
-    initialCleanupStatus === 'success' ? 'cleaned' : 'raw',
-  )
-  // Whether the user has EXPLICITLY clicked a sub-tab this mount, as opposed
-  // to just seeing whatever default we picked. Cleanup routinely finishes
-  // AFTER this view is first opened (the pipeline runs in the background,
-  // and a failed run can succeed on a later retry) — when that happens we
-  // want to swap the view onto the now-ready Cleaned tab, but only if the
-  // user hasn't deliberately chosen Raw for themselves.
-  const manualSubTabRef = useRef(false)
-
+  // With the transcript UI withdrawn there is only one tab, so the stored tab
+  // is pinned to it. Flipping SHOW_TRANSCRIPT_UI restores the real selection.
+  const activeTab = SHOW_TRANSCRIPT_UI ? tab : 'notes'
   const [rawSegments, setRawSegments] = useState<NotetakerTranscriptSegment[] | null>(null)
-  const [cleanedSegments, setCleanedSegments] = useState<NotetakerTranscriptSegment[] | null>(null)
   const [notes, setNotes] = useState<NotetakerMeetingNotes | null>(null)
-  const [cleanupStatus, setCleanupStatus] = useState(initialCleanupStatus)
   const [summaryStatus, setSummaryStatus] = useState(initialSummaryStatus)
   const [retrying, setRetrying] = useState(false)
+  const [retranscribing, setRetranscribing] = useState(false)
 
-  const [micAudioUrl, setMicAudioUrl] = useState<string | null>(null)
-  const [systemAudioUrl, setSystemAudioUrl] = useState<string | null>(null)
+  const [meetingAudioUrl, setMeetingAudioUrl] = useState<string | null>(null)
   const [title, setTitle] = useState(initialTitle)
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState(initialTitle)
   const [deleting, setDeleting] = useState(false)
+  const [notesRevealPhase, setNotesRevealPhase] = useState<NotesRevealPhase>('preparing')
+  const revealedNotesKeyRef = useRef<string | null>(null)
+  const [notesCopied, setNotesCopied] = useState(false)
+  const [transcriptCopied, setTranscriptCopied] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     setTab('notes')
-    setTranscriptSubTab(initialCleanupStatus === 'success' ? 'cleaned' : 'raw')
-    manualSubTabRef.current = false
     setRawSegments(null)
-    setCleanedSegments(null)
     setNotes(null)
-    setCleanupStatus(initialCleanupStatus)
     setSummaryStatus(initialSummaryStatus)
     setTitle(initialTitle)
     setDraftTitle(initialTitle)
+    setNotesRevealPhase('preparing')
+    setMeetingAudioUrl(null)
+    setNotesCopied(false)
+    setTranscriptCopied(false)
 
     api().notetakerGetTranscript?.(id)
       .then((data) => { if (!cancelled) setRawSegments(data ?? []) })
       .catch((err) => { console.error('Failed to load raw transcript:', err); if (!cancelled) setRawSegments([]) })
 
-    api().notetakerGetCleanedTranscript?.(id)
-      .then((data) => { if (!cancelled) setCleanedSegments(data ?? []) })
-      .catch((err) => { console.error('Failed to load cleaned transcript:', err); if (!cancelled) setCleanedSegments([]) })
-
     api().notetakerGetNotes?.(id)
       .then((data) => { if (!cancelled) setNotes(data) })
       .catch((err) => { console.error('Failed to load notes:', err); if (!cancelled) setNotes(null) })
 
-    api().notetakerGetAudioUrl?.(id, 'mic')
-      .then((url) => { if (!cancelled) setMicAudioUrl(url) })
-      .catch(() => { if (!cancelled) setMicAudioUrl(null) })
-
-    api().notetakerGetAudioUrl?.(id, 'system')
-      .then((url) => { if (!cancelled) setSystemAudioUrl(url) })
-      .catch(() => { if (!cancelled) setSystemAudioUrl(null) })
+    api().notetakerGetAudioUrl?.(id, 'mixed')
+      .then((url) => { if (!cancelled) setMeetingAudioUrl(url) })
+      .catch(() => { if (!cancelled) setMeetingAudioUrl(null) })
 
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  // Poll the two status fields while either is still 'pending' — an
-  // in-flight auto pipeline (or a retry just kicked off below) needs
+  const notesMarkdown = notes ? legacyNotesAsMarkdown(notes) : ''
+  const notesKey = notes ? `${id}\u0000${notes.title}\u0000${notesMarkdown}` : null
+
+  // Reveal each actual notes document once. Polling can replace `notes` with a
+  // fresh object containing identical text, and tab changes remount this view;
+  // neither should restart the animation. The animation class is also removed
+  // after the stagger finishes so scrolling uses ordinary, static layers.
+  useEffect(() => {
+    if (activeTab !== 'notes' || summaryStatus !== 'success' || !notesKey) return
+    if (revealedNotesKeyRef.current === notesKey) return
+    revealedNotesKeyRef.current = notesKey
+    setNotesRevealPhase('preparing')
+
+    let revealFrame = 0
+    let finishTimer = 0
+    const prepareFrame = requestAnimationFrame(() => {
+      revealFrame = requestAnimationFrame(() => {
+        setNotesRevealPhase('animating')
+        finishTimer = window.setTimeout(() => setNotesRevealPhase('idle'), 1000)
+      })
+    })
+
+    return () => {
+      cancelAnimationFrame(prepareFrame)
+      cancelAnimationFrame(revealFrame)
+      clearTimeout(finishTimer)
+      setNotesRevealPhase('idle')
+    }
+  }, [activeTab, summaryStatus, notesKey])
+
+  // Poll the note-generation status while it is pending — an in-flight run
+  // (or a retry just kicked off below) needs
   // SOMETHING to notice when it settles, since nothing pushes that update
   // to an already-open detail view. Stops itself once both are settled.
-  const pendingRef = useRef(false)
-  pendingRef.current = cleanupStatus === 'pending' || summaryStatus === 'pending'
   useEffect(() => {
-    if (!pendingRef.current) return
+    if (summaryStatus !== 'pending') return
     let cancelled = false
-    const interval = setInterval(() => {
-      if (!pendingRef.current) { clearInterval(interval); return }
-      api().notetakerGetPipelineStatus?.(id).then((result) => {
+    const poll = () => {
+      api().notetakerGetPipelineStatus?.(id).then(async (result) => {
         if (cancelled || !result) return
-        setCleanupStatus((prev) => {
-          if (prev === 'pending' && result.cleanup_status !== 'pending' && result.cleanup_status === 'success') {
-            // Cleanup just finished — the cleaned transcript file now
-            // exists where it didn't a moment ago.
-            api().notetakerGetCleanedTranscript?.(id).then((data) => { if (!cancelled) setCleanedSegments(data ?? []) })
-            // Move the view onto it, unless the user deliberately chose Raw
-            // themselves — this is what was making a just-succeeded cleanup
-            // look like "there is no cleaned transcript": the view had
-            // defaulted to Raw while cleanup was still pending/failed and
-            // never re-considered that default once it settled.
-            if (!manualSubTabRef.current) setTranscriptSubTab('cleaned')
-          }
-          return result.cleanup_status
-        })
-        setSummaryStatus((prev) => {
-          if (prev === 'pending' && result.summary_status === 'success') {
-            api().notetakerGetNotes?.(id).then((data) => { if (!cancelled) setNotes(data) })
-          }
-          return result.summary_status
-        })
+        if (result.summary_status === 'success') {
+          const data = await api().notetakerGetNotes?.(id)
+          if (!cancelled) setNotes(data ?? null)
+        }
+        if (!cancelled) setSummaryStatus(result.summary_status)
       })
-    }, STATUS_POLL_MS)
+    }
+    void poll()
+    const interval = window.setInterval(poll, STATUS_POLL_MS)
     return () => { cancelled = true; clearInterval(interval) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, cleanupStatus === 'pending', summaryStatus === 'pending'])
+  }, [id, summaryStatus])
 
   async function handleRetry() {
     if (retrying) return
     setRetrying(true)
-    if (cleanupStatus !== 'success') setCleanupStatus('pending')
-    else setSummaryStatus('pending')
+    revealedNotesKeyRef.current = null
+    setNotesRevealPhase('preparing')
+    setSummaryStatus('pending')
     try {
       await api().notetakerRetryPipeline?.(id)
+      const [nextNotes, status] = await Promise.all([
+        api().notetakerGetNotes?.(id),
+        api().notetakerGetPipelineStatus?.(id),
+      ])
+      setNotes(nextNotes ?? null)
+      setSummaryStatus(status?.summary_status ?? 'failed')
     } catch (err) {
       console.error('Failed to retry pipeline:', err)
+      const status = await api().notetakerGetPipelineStatus?.(id).catch(() => null)
+      setSummaryStatus(status?.summary_status ?? 'failed')
     } finally {
       setRetrying(false)
+    }
+  }
+
+  async function handleRetranscribe() {
+    if (retranscribing) return
+    setRetranscribing(true)
+    revealedNotesKeyRef.current = null
+    setNotesRevealPhase('preparing')
+    setSummaryStatus('pending')
+    setNotes(null)
+    try {
+      await api().notetakerRetryTranscription?.(id)
+      const [segments, nextNotes, status, audioUrl] = await Promise.all([
+        api().notetakerGetTranscript?.(id),
+        api().notetakerGetNotes?.(id),
+        api().notetakerGetPipelineStatus?.(id),
+        api().notetakerGetAudioUrl?.(id, 'mixed'),
+      ])
+      setRawSegments(segments ?? [])
+      setNotes(nextNotes ?? null)
+      setSummaryStatus(status?.summary_status ?? 'failed')
+      setMeetingAudioUrl(audioUrl ? `${audioUrl}?v=${Date.now()}` : null)
+    } catch (err) {
+      console.error('Failed to re-transcribe meeting:', err)
+      const [segments, previousNotes, status, audioUrl] = await Promise.all([
+        api().notetakerGetTranscript?.(id).catch(() => undefined),
+        api().notetakerGetNotes?.(id).catch(() => null),
+        api().notetakerGetPipelineStatus?.(id).catch(() => null),
+        api().notetakerGetAudioUrl?.(id, 'mixed').catch(() => null),
+      ])
+      setRawSegments(segments ?? [])
+      setNotes(previousNotes ?? null)
+      setSummaryStatus(status?.summary_status ?? 'failed')
+      setMeetingAudioUrl(audioUrl ?? null)
+    } finally {
+      setRetranscribing(false)
     }
   }
 
@@ -310,6 +537,28 @@ export function MeetingDetail({
     } catch (err) {
       console.error('Failed to delete meeting:', err)
       setDeleting(false)
+    }
+  }
+
+  async function copyTranscript() {
+    if (!rawSegments?.length) return
+    try {
+      await navigator.clipboard.writeText(transcriptAsPlainText(rawSegments))
+      setTranscriptCopied(true)
+      window.setTimeout(() => setTranscriptCopied(false), 1800)
+    } catch (err) {
+      console.error('Failed to copy transcript:', err)
+    }
+  }
+
+  async function copyNotes() {
+    if (!notes) return
+    try {
+      await navigator.clipboard.writeText(legacyNotesAsMarkdown(notes))
+      setNotesCopied(true)
+      window.setTimeout(() => setNotesCopied(false), 1800)
+    } catch (err) {
+      console.error('Failed to copy notes:', err)
     }
   }
 
@@ -345,6 +594,7 @@ export function MeetingDetail({
 
       <div className="text-[12px] text-ink-60">{formatDateTime(startedAt)} · {formatDuration(durationMs)}</div>
 
+      {SHOW_TRANSCRIPT_UI && (
       <div className="flex gap-1 border-b border-black/10">
         {(['notes', 'transcript'] as const).map((t) => (
           <button
@@ -358,67 +608,72 @@ export function MeetingDetail({
           </button>
         ))}
       </div>
+      )}
 
-      {tab === 'notes' && (
+      {activeTab === 'notes' && (
         summaryStatus === 'success' && notes ? (
-          <div className="flex flex-col gap-2.5">
-            <p className="text-[13px] leading-relaxed text-ink">{notes.summary}</p>
-            <NotesSection title="Key Points" items={notes.keyPoints} />
-            <NotesSection title="Decisions" items={notes.decisions} />
-            <NotesSection title="Action Items" items={notes.actionItems} />
-            <NotesSection title="Open Questions" items={notes.openQuestions} />
+          <div className="flex flex-col gap-2">
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void copyNotes()}
+                className="text-[12px] px-2.5 py-1.5 rounded-md border border-black/10 text-ink-60 hover:text-ink hover:bg-black/[0.04] transition-colors"
+              >
+                {notesCopied ? 'Copied' : 'Copy notes'}
+              </button>
+            </div>
+            <NotesDocument markdown={notesMarkdown} revealPhase={notesRevealPhase} />
           </div>
         ) : (
           <PipelineStatusNotice status={summaryStatus} onRetry={() => void handleRetry()} retrying={retrying} kind="summary" />
         )
       )}
 
-      {tab === 'transcript' && (
+      {/* The transcript itself — the segment list and its copy action. This is
+       *  the only part the user was ever given to READ, so this is the part
+       *  SHOW_TRANSCRIPT_UI withdraws. */}
+      {SHOW_TRANSCRIPT_UI && activeTab === 'transcript' && (
         <div className="flex flex-col gap-3">
-          {(micAudioUrl || systemAudioUrl) && (
-            <div className="flex flex-col gap-2">
-              {micAudioUrl && (
-                <div>
-                  <div className="text-[11px] text-ink-60 mb-1">You</div>
-                  {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                  <audio controls src={micAudioUrl} className="w-full" />
-                </div>
-              )}
-              {systemAudioUrl && (
-                <div>
-                  <div className="text-[11px] text-ink-60 mb-1">Them</div>
-                  {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                  <audio controls src={systemAudioUrl} className="w-full" />
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="flex gap-1">
-            {(['cleaned', 'raw'] as const).map((t) => (
-              <button
-                key={t}
-                onClick={() => { manualSubTabRef.current = true; setTranscriptSubTab(t) }}
-                className={`text-[11.5px] px-2.5 py-1 rounded-full border transition-colors ${
-                  transcriptSubTab === t
-                    ? 'border-accent text-ink bg-accent/10 font-medium'
-                    : 'border-black/10 text-ink-60 hover:text-ink'
-                }`}
-              >
-                {t === 'cleaned' ? 'Cleaned' : 'Raw'}
-              </button>
-            ))}
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => void copyTranscript()}
+              disabled={!rawSegments?.length}
+              className="text-[12px] px-2.5 py-1.5 rounded-md border border-black/10 text-ink-60 hover:text-ink hover:bg-black/[0.04] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {transcriptCopied ? 'Copied' : 'Copy transcript'}
+            </button>
           </div>
 
-          {transcriptSubTab === 'cleaned' ? (
-            cleanupStatus === 'success'
-              ? <TranscriptSegments segments={cleanedSegments} emptyLabel="No cleaned transcript available." />
-              : <PipelineStatusNotice status={cleanupStatus} onRetry={() => void handleRetry()} retrying={retrying} kind="cleanup" />
-          ) : (
-            <TranscriptSegments segments={rawSegments} emptyLabel="No transcript available." />
-          )}
+          <TranscriptSegments segments={rawSegments} emptyLabel="No transcript available." />
         </div>
       )}
+
+      {/* Deliberately OUTSIDE the flag. Neither of these shows a transcript:
+       *  the recording is the meeting itself, and Re-transcribe re-runs STT
+       *  and regenerates the notes — with the transcript hidden it is the only
+       *  way to recover notes that were poor because the speech-to-text was.
+       *  Hidden while notes are still pending, so it cannot race its own run. */}
+      <div className="flex flex-col gap-2 rounded-lg bg-ink-07 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[12px] font-semibold text-ink">Meeting recording</div>
+          <button
+            type="button"
+            onClick={() => void handleRetranscribe()}
+            disabled={retranscribing || !meetingAudioUrl || summaryStatus === 'pending'}
+            className="text-[12px] px-2.5 py-1.5 rounded-md border border-black/10 text-ink-60 hover:text-ink hover:bg-black/[0.04] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            title="Re-transcribe from the retained audio and regenerate these notes"
+          >
+            {retranscribing ? 'Re-transcribing…' : 'Regenerate from audio'}
+          </button>
+        </div>
+        {meetingAudioUrl ? (
+          <div>
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+            <audio controls src={meetingAudioUrl} className="w-full" />
+          </div>
+        ) : <p className="text-[11px] text-ink-60">The recording is unavailable. Audio is retained for 24 hours.</p>}
+      </div>
 
       <button
         onClick={() => void handleDelete()}

@@ -172,6 +172,15 @@ export function initDB(): void {
   `)
   db.prepare('INSERT OR IGNORE INTO notetaker_settings (id) VALUES (1)').run()
 
+  // No capture or note pipeline survives an Electron process restart. Turn
+  // abandoned in-flight rows into explicit retryable failures instead of
+  // leaving the UI spinning forever after a crash or quit during processing.
+  db.prepare(`
+    UPDATE meetings
+    SET status = 'failed', cleanup_status = 'failed', summary_status = 'failed'
+    WHERE status IN ('recording', 'transcribing')
+  `).run()
+
   cleanupSessions()
   sweepExpiredMeetingAudio()
   // A write-triggered cleanup is not a hard retention guarantee for someone
@@ -377,6 +386,40 @@ export function updateMeetingTitle(id: string, title: string): void {
   db.prepare('UPDATE meetings SET title = ? WHERE id = ?').run(title, id)
 }
 
+/** Mark the start-time placeholder as a saved meeting that is still being
+ * processed. This runs synchronously when capture stops, before the final
+ * transcription promises settle, so the renderer can immediately show a
+ * durable "Preparing notes" entry instead of an empty meetings list. */
+export function markMeetingProcessing(id: string, endedAt: number): void {
+  const meeting = getMeeting(id)
+  if (!meeting) return
+  const durationMs = Math.max(0, endedAt - meeting.started_at)
+  db.prepare(`
+    UPDATE meetings
+    SET title = ?, ended_at = ?, duration_ms = ?, status = ?,
+        cleanup_status = ?, summary_status = ?
+    WHERE id = ?
+  `).run('Preparing notes…', endedAt, durationMs, 'transcribing', 'pending', 'pending', id)
+  notetakerLog.child({ meetingId: id }).event('meeting-marked-processing', { durationMs })
+}
+
+/** Ensure an unexpected persistence/transcription exception cannot leave a
+ * meeting permanently showing as in progress. Retained audio remains on disk
+ * so the user can retry transcription from the detail view. */
+export function markMeetingFailed(id: string): void {
+  db.prepare(`
+    UPDATE meetings
+    SET status = ?, cleanup_status = ?, summary_status = ?
+    WHERE id = ?
+  `).run('failed', 'failed', 'failed', id)
+  notetakerLog.child({ meetingId: id }).event('meeting-marked-failed')
+}
+
+export function markMeetingReady(id: string): void {
+  db.prepare('UPDATE meetings SET status = ? WHERE id = ?').run('ready', id)
+  notetakerLog.child({ meetingId: id }).event('meeting-marked-ready')
+}
+
 /** Narrow, partial update for the cleanup/summarization pipeline's own
  *  status fields — deliberately NOT routed through insertMeeting()'s
  *  full-row INSERT OR REPLACE, which would require re-supplying every
@@ -462,7 +505,7 @@ function sweepExpiredMeetingAudio(): void {
   for (const row of expired) {
     const meetingDir = path.join(app.getPath('userData'), 'meetings', row.id)
     const candidates = new Set(
-      [row.audio_mic_path, row.audio_system_path, 'audio-mic.wav', 'audio-system.wav'].filter(
+      [row.audio_mic_path, row.audio_system_path, 'audio-mic.wav', 'audio-mic-clean.wav', 'audio-system.wav', 'audio-meeting.wav'].filter(
         (p): p is string => !!p
       )
     )

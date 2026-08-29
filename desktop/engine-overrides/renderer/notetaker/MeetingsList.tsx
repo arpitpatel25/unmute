@@ -5,6 +5,7 @@
 // feels native rather than introducing a new visual language.
 
 import { useEffect, useState } from 'react'
+import { SHOW_TRANSCRIPT_UI } from './notetakerUi'
 import { MeetingDetail } from './MeetingDetail'
 
 // Field-for-field mirror of NotetakerMeetingSnapshot (electron/remote-preload.ts).
@@ -39,6 +40,13 @@ const STATUS_LABEL: Record<NotetakerMeeting['status'], string> = {
   failed: 'Failed',
 }
 
+function progressLabel(meeting: NotetakerMeeting): string | null {
+  if (meeting.summary_status === 'pending') return 'Writing notes'
+  if (meeting.summary_status === 'failed') return 'Notes failed'
+  if (meeting.summary_status === 'disabled' && meeting.status === 'ready') return 'No notes'
+  return meeting.status === 'ready' ? null : STATUS_LABEL[meeting.status]
+}
+
 type API = {
   notetakerListMeetings?: () => Promise<NotetakerMeeting[]>
 }
@@ -51,6 +59,20 @@ function formatDuration(durationMs: number): string {
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
+function formatMeetingTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
+function MeetingWaveform() {
+  return (
+    <div className="flex items-center gap-[2px] h-[28px] opacity-[0.07] shrink-0 mr-1" aria-hidden="true">
+      {[6, 14, 10, 18, 8, 16, 12, 20].map((height, index) => (
+        <div key={index} className="w-[2.5px] rounded-sm bg-ink" style={{ height: `${height}px` }} />
+      ))}
+    </div>
+  )
 }
 
 /** Calendar-day key in the viewer's own local timezone — two meetings late
@@ -100,22 +122,38 @@ export function MeetingsList({
 
   useEffect(() => {
     let cancelled = false
-    api().notetakerListMeetings?.()
+    const load = () => api().notetakerListMeetings?.()
       .then((data) => { if (!cancelled) setMeetings(data ?? []) })
       .catch((err) => {
         console.error('Failed to load meetings:', err)
-        if (!cancelled) setMeetings([])
+        if (!cancelled) setMeetings((current) => current ?? [])
       })
-    return () => { cancelled = true }
+    void load()
+    // Capture and note generation happen in the main process. Polling the
+    // local SQLite-backed list keeps an already-open Meetings page current,
+    // including the durable "Preparing notes…" row created at stop time.
+    const interval = window.setInterval(() => { void load() }, 2000)
+    return () => { cancelled = true; window.clearInterval(interval) }
   }, [])
 
-  // Consume once: select it now (resolves once `meetings` has loaded, same
-  // as any other selection) and tell App.tsx it's been picked up so the same
-  // id doesn't re-select after the user navigates away and back.
+  // A meeting can finish while this list is already mounted. Refresh before
+  // selecting it: otherwise the old in-memory list has no new row to find,
+  // making a real "Preparing notes" meeting look like nothing happened.
   useEffect(() => {
     if (!pendingMeetingId) return
-    setSelectedId(pendingMeetingId)
-    onConsumedPendingMeetingId?.()
+    let cancelled = false
+    api().notetakerListMeetings?.()
+      .then((data) => {
+        if (cancelled) return
+        setMeetings(data ?? [])
+        setSelectedId(pendingMeetingId)
+        onConsumedPendingMeetingId?.()
+      })
+      .catch((err) => {
+        console.error('Failed to refresh meetings:', err)
+        if (!cancelled) onConsumedPendingMeetingId?.()
+      })
+    return () => { cancelled = true }
   }, [pendingMeetingId])
 
   const selected = selectedId ? meetings?.find((m) => m.id === selectedId) ?? null : null
@@ -127,7 +165,6 @@ export function MeetingsList({
         initialTitle={selected.title}
         startedAt={selected.started_at}
         durationMs={selected.duration_ms}
-        initialCleanupStatus={selected.cleanup_status}
         initialSummaryStatus={selected.summary_status}
         onBack={() => setSelectedId(null)}
       />
@@ -156,37 +193,82 @@ export function MeetingsList({
         </div>
         <p className="font-display font-bold text-ink text-lg mb-1">No meetings recorded yet</p>
         <p className="text-ink-35 text-sm max-w-[280px] leading-relaxed">
-          Double-tap Control + Option (left side) in a call to start a note-taking session.
+          Double-tap the left Control key in a call to start a note-taking session.
         </p>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
+      <div>
+        <h3 className="font-display text-[20px] font-bold text-ink tracking-tight">Meeting notes</h3>
+        <p className="text-[11px] text-ink-35 mt-1">
+          {SHOW_TRANSCRIPT_UI ? 'Your recordings, transcripts, and notes.' : 'Your recordings and notes.'}
+        </p>
+      </div>
       {groupMeetingsByDay(meetings).map(({ key, day }) => (
-        <div key={key} className="flex flex-col gap-1">
-          <div className="text-[11px] font-semibold text-ink-35 uppercase tracking-wide px-3 pb-1">
+        <div key={key} className="flex flex-col gap-2">
+          <div className="text-[11px] font-semibold text-ink-35 uppercase tracking-wide px-1">
             {formatDayHeader(day[0].started_at)}
           </div>
-          {day.map((meeting) => {
-            const date = new Date(meeting.started_at)
+          {day.map((meeting, index) => {
+            const progress = progressLabel(meeting)
+            const failed = meeting.status === 'failed' || meeting.summary_status === 'failed'
             return (
               <button
                 key={meeting.id}
                 onClick={() => setSelectedId(meeting.id)}
-                className="text-left px-3 py-2.5 rounded-[10px] hover:bg-ink-07 transition-colors"
+                className={`group text-left relative p-4 rounded-2xl border transition-all duration-200 hover:shadow-md animate-slide-in-up ${
+                  failed
+                    ? 'border-error/15 bg-error-soft hover:border-error/25'
+                    : meeting.summary_status === 'pending'
+                      ? 'border-accent/20 bg-accent/[0.025] hover:border-accent/30'
+                      : 'border-border bg-surface-2 hover:border-border-md'
+                }`}
+                style={{ animationDelay: `${index * 0.05}s` }}
               >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-[13px] font-medium text-ink truncate">{meeting.title}</div>
-                  {meeting.status !== 'ready' && (
-                    <span className="text-[10px] font-semibold text-ink-35 bg-ink-07 px-2 py-0.5 rounded-full shrink-0">
-                      {STATUS_LABEL[meeting.status]}
-                    </span>
-                  )}
-                </div>
-                <div className="text-[11px] text-ink-60">
-                  {date.toLocaleDateString()} · {date.toLocaleTimeString()} · {formatDuration(meeting.duration_ms)}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-[11px] text-ink-35 font-medium">{formatMeetingTime(meeting.started_at)}</span>
+                      {progress ? (
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full inline-flex items-center gap-1.5 ${
+                          failed
+                            ? 'text-error bg-error/[0.08]'
+                            : meeting.summary_status === 'pending'
+                              ? 'text-accent bg-accent/[0.08]'
+                              : 'text-ink-35 bg-ink-07'
+                        }`}>
+                          {meeting.summary_status === 'pending' && !failed && (
+                            <span className="flex items-center gap-[3px]" aria-hidden="true">
+                              <span className="w-[3px] h-[3px] rounded-full bg-accent animate-dot-bounce" />
+                              <span className="w-[3px] h-[3px] rounded-full bg-accent animate-dot-bounce" style={{ animationDelay: '0.15s' }} />
+                              <span className="w-[3px] h-[3px] rounded-full bg-accent animate-dot-bounce" style={{ animationDelay: '0.3s' }} />
+                            </span>
+                          )}
+                          {progress}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-semibold text-success bg-success/10 px-2 py-0.5 rounded-full">Notes ready</span>
+                      )}
+                    </div>
+                    <div className="text-[14px] font-medium text-ink leading-snug line-clamp-2">{meeting.title}</div>
+                    <div className="text-[11px] text-ink-60 mt-1.5">
+                      {formatDuration(meeting.duration_ms)} recording
+                      {meeting.summary_status === 'pending' && !failed && (
+                        // The list polls every 2s, so this row updates itself —
+                        // say so, rather than leaving the user watching it.
+                        <span className="text-accent"> · Summarising your meeting — check back in a moment</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <MeetingWaveform />
+                    <svg className="text-ink-35 group-hover:text-accent transition-colors" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="m9 18 6-6-6-6" />
+                    </svg>
+                  </div>
                 </div>
               </button>
             )

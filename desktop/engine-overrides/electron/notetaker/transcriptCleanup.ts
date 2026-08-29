@@ -139,6 +139,23 @@ export type CleanupResult =
   | { ok: true; segments: TranscriptSegment[] }
   | { ok: false; error: string }
 
+/** Cleanup runs on the user's own connected CLI agent only — see
+ *  notesSummary.ts's NoteProvider for why a managed cloud model is not an
+ *  option here. */
+export type CleanupProvider = HeadlessProvider
+
+type CleanupRunner = (
+  provider: CleanupProvider,
+  input: string,
+) => Promise<{ ok: true; output: string } | { ok: false; error: string }>
+
+async function runCleanupAgent(
+  provider: CleanupProvider,
+  input: string,
+): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
+  return runHeadlessAgent(provider, input)
+}
+
 /**
  * Orchestrates the cleanup call. `ok: false` only when the headless call
  * itself failed, or the response wasn't parseable as JSON AT ALL (spec §4:
@@ -149,11 +166,11 @@ export type CleanupResult =
  */
 export async function cleanupTranscript(
   segments: TranscriptSegment[],
-  provider: HeadlessProvider,
+  provider: CleanupProvider,
   // Injected for testability — defaults to the real headless CLI call.
   // Same shape as NotetakerController's own injected-deps pattern rather
   // than mocking the module graph.
-  runAgent: typeof runHeadlessAgent = runHeadlessAgent,
+  runAgent: CleanupRunner = runCleanupAgent,
 ): Promise<CleanupResult> {
   const input = buildCleanupInput(segments)
   const result = await runAgent(provider, input)

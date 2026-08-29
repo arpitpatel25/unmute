@@ -578,7 +578,7 @@ async function probeBackends(): Promise<BackendProbe[]> {
  * reusing probeBackends()'s existing detection rather than re-implementing
  * CLI/sign-in probing a second time. Passed to notetakerInit.ts as the
  * `getAgentAvailability` hook (same cross-tree opaque-injection pattern as
- * onOpenMeeting/onStopPendingChanged — see notetakerInit.ts's own header
+ * onOpenMeeting — see notetakerInit.ts's own header
  * comment on why this OSS-tree file can't import probeBackends directly).
  * Filtered to just the two PTY-transport CLI backends: a driven desktop
  * app can't run headlessly, so it's irrelevant here regardless of its own

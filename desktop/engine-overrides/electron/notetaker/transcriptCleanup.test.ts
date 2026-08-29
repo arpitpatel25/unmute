@@ -1,8 +1,7 @@
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseCleanupOutput, cleanupTranscript, buildCleanupInput } from './transcriptCleanup'
+import { parseCleanupOutput, cleanupTranscript, buildCleanupInput, type CleanupProvider } from './transcriptCleanup'
 import type { TranscriptSegment } from './transcriptMerge'
-import type { HeadlessProvider } from './headlessAgent'
 
 function seg(text: string, overrides: Partial<TranscriptSegment> = {}): TranscriptSegment {
   return { channel: 'mic', text, startMs: 0, endMs: 1000, ...overrides }
@@ -107,7 +106,7 @@ describe('buildCleanupInput', () => {
 
 describe('cleanupTranscript', () => {
   function fakeRunner(response: { ok: true; output: string } | { ok: false; error: string }) {
-    return async (_provider: HeadlessProvider, _input: string) => response
+    return async (_provider: CleanupProvider, _input: string) => response
   }
 
   test('happy path returns corrected segments', async () => {
@@ -115,6 +114,13 @@ describe('cleanupTranscript', () => {
     const result = await cleanupTranscript([seg('helo')], 'claude', runner)
     assert.equal(result.ok, true)
     if (result.ok) assert.equal(result.segments[0].text, 'hello')
+  })
+
+  test('a Devanagari segment follows the same text-only cleanup contract', async () => {
+    const runner = fakeRunner({ ok: true, output: JSON.stringify([{ id: 0, text: 'namaste' }]) })
+    const result = await cleanupTranscript([seg('नमस्ते')], 'codex', runner)
+    assert.equal(result.ok, true)
+    if (result.ok) assert.equal(result.segments[0].text, 'namaste')
   })
 
   test('the call itself failing is ok:false, with the underlying error', async () => {

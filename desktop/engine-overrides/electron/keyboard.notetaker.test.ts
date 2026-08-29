@@ -46,7 +46,7 @@ function captureKeyState(km: KeyboardManager): { last(): KeyStateSnapshot | unde
   return { last: () => last }
 }
 
-describe('notes key (left-Control, double-tap start / single-tap stop) — independent of the lock group', () => {
+describe('notes key (left-Control, double-tap start / double-tap stop) — independent of the lock group', () => {
   test('double-tapping left Control starts notes; dictation/instruction/agent/remote stay false', () => {
     const km = new KeyboardManager()
     let startRequested = 0
@@ -93,7 +93,7 @@ describe('notes key (left-Control, double-tap start / single-tap stop) — indep
     assert.equal(startRequested, 1)
   })
 
-  test('a single clean tap while notes is active emits notes-stop-requested — not a double-tap, no dialog', () => {
+  test('a double-tap while notes is active emits notes-stop-requested', () => {
     const km = new KeyboardManager()
     let startRequested = 0
     let stopRequested = 0
@@ -106,24 +106,23 @@ describe('notes key (left-Control, double-tap start / single-tap stop) — indep
     assert.equal(startRequested, 1)
     assert.equal(stopRequested, 0)
 
-    // ONE clean tap while active fires the stop event — not a double-tap,
-    // no confirm event, nothing else in between. What that event actually
-    // DOES (arm an undo window, cancel one, or finalize) is
-    // NotetakerController's own state machine, exercised in
-    // notetakerController.test.ts, not this key's.
+    // The first tap is harmless; the second completes the end gesture.
+    pressRelease(km)
+    assert.equal(stopRequested, 0)
     pressRelease(km)
     assert.equal(stopRequested, 1)
     assert.equal(startRequested, 1) // unchanged — this was a stop, not a restart
   })
 
-  test('the stop tap is never debounced — it always goes through immediately after start', () => {
+  test('a double-tap can end immediately after start', () => {
     const km = new KeyboardManager()
     let stopRequested = 0
     km.on('notes-stop-requested', () => stopRequested++)
 
     pressRelease(km)
     pressRelease(km) // starts
-    pressRelease(km) // stops, in the same tick — DEBOUNCE_MS only gates START
+    pressRelease(km) // first half of end
+    pressRelease(km) // ends, in the same tick — DEBOUNCE_MS only gates START
 
     assert.equal(stopRequested, 1)
   })
@@ -137,6 +136,7 @@ describe('notes key (left-Control, double-tap start / single-tap stop) — indep
 
     pressRelease(km)
     pressRelease(km) // start
+    pressRelease(km) // first half of end
     pressRelease(km) // stop-requested, but notesActive is still true until confirmed
     assert.equal(stopRequested, 1)
     assert.equal(stopped, 0)
