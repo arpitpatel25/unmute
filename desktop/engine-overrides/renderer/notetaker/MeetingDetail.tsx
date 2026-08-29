@@ -18,7 +18,7 @@
 // can change while this view is open (an in-flight auto pipeline, or a
 // user-triggered retry).
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -157,9 +157,17 @@ function legacyNotesAsMarkdown(notes: NotetakerMeetingNotes): string {
  * this: this renderer supplies the hierarchy, list rhythm and visual grouping
  * itself, while ReactMarkdown continues to safely parse the agent output.
  */
-function NotesDocument({ markdown, revealed }: { markdown: string; revealed: boolean }) {
+type NotesRevealPhase = 'idle' | 'preparing' | 'animating'
+
+function NotesDocument({ markdown, revealPhase }: { markdown: string; revealPhase: NotesRevealPhase }) {
+  const revealClass = revealPhase === 'preparing'
+    ? 'notetaker-notes-preparing'
+    : revealPhase === 'animating'
+      ? 'notetaker-notes-revealing'
+      : ''
+
   return (
-    <article className={`notetaker-notes-document ${revealed ? 'notetaker-notes-revealed' : ''}`}>
+    <article className={`notetaker-notes-document ${revealClass}`}>
       <div className="notetaker-notes-kicker">Meeting notes</div>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
@@ -277,17 +285,22 @@ function NotesDocument({ markdown, revealed }: { markdown: string; revealed: boo
         }
         .notetaker-note-strong { font-weight: 700; }
         .notetaker-note-link { color: #b92b2b; text-decoration: underline; text-underline-offset: 2px; }
-        .notetaker-notes-revealed > :not(style) {
+        .notetaker-notes-preparing > :not(style) {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        .notetaker-notes-revealing > :not(style) {
           animation: notetaker-note-reveal 500ms cubic-bezier(0.22, 1, 0.36, 1) both;
         }
-        .notetaker-notes-revealed > :nth-child(2) { animation-delay: 35ms; }
-        .notetaker-notes-revealed > :nth-child(3) { animation-delay: 115ms; }
-        .notetaker-notes-revealed > :nth-child(4) { animation-delay: 190ms; }
-        .notetaker-notes-revealed > :nth-child(5) { animation-delay: 265ms; }
-        .notetaker-notes-revealed > :nth-child(6) { animation-delay: 340ms; }
-        .notetaker-notes-revealed > :nth-child(n+7) { animation-delay: 415ms; }
+        .notetaker-notes-revealing > :nth-child(2) { animation-delay: 35ms; }
+        .notetaker-notes-revealing > :nth-child(3) { animation-delay: 115ms; }
+        .notetaker-notes-revealing > :nth-child(4) { animation-delay: 190ms; }
+        .notetaker-notes-revealing > :nth-child(5) { animation-delay: 265ms; }
+        .notetaker-notes-revealing > :nth-child(6) { animation-delay: 340ms; }
+        .notetaker-notes-revealing > :nth-child(n+7) { animation-delay: 415ms; }
         @media (prefers-reduced-motion: reduce) {
-          .notetaker-notes-revealed > :not(style) { animation: none; }
+          .notetaker-notes-preparing > :not(style) { opacity: 1; transform: none; }
+          .notetaker-notes-revealing > :not(style) { animation: none; }
         }
         @media (max-width: 520px) {
           .notetaker-notes-document { border-radius: 14px; padding: 22px 20px 24px; }
@@ -325,7 +338,8 @@ export function MeetingDetail({
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState(initialTitle)
   const [deleting, setDeleting] = useState(false)
-  const [notesRevealed, setNotesRevealed] = useState(false)
+  const [notesRevealPhase, setNotesRevealPhase] = useState<NotesRevealPhase>('preparing')
+  const revealedNotesKeyRef = useRef<string | null>(null)
   const [notesCopied, setNotesCopied] = useState(false)
   const [transcriptCopied, setTranscriptCopied] = useState(false)
 
@@ -337,7 +351,7 @@ export function MeetingDetail({
     setSummaryStatus(initialSummaryStatus)
     setTitle(initialTitle)
     setDraftTitle(initialTitle)
-    setNotesRevealed(false)
+    setNotesRevealPhase('preparing')
     setMeetingAudioUrl(null)
     setNotesCopied(false)
     setTranscriptCopied(false)
@@ -358,25 +372,35 @@ export function MeetingDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  // A newly opened finished meeting should feel like the notes have arrived,
-  // rather than like a static page jump. The same reveal also runs after a
-  // pending detail view polls the completed notes in.
+  const notesMarkdown = notes ? legacyNotesAsMarkdown(notes) : ''
+  const notesKey = notes ? `${id}\u0000${notes.title}\u0000${notesMarkdown}` : null
+
+  // Reveal each actual notes document once. Polling can replace `notes` with a
+  // fresh object containing identical text, and tab changes remount this view;
+  // neither should restart the animation. The animation class is also removed
+  // after the stagger finishes so scrolling uses ordinary, static layers.
   useEffect(() => {
-    if (tab !== 'notes' || summaryStatus !== 'success' || !notes) return
-    // Reset first, then reveal on the following paint. This deliberately runs
-    // every time the user comes back to Notes as well as when a new summary
-    // arrives, so the Granola-style reveal cannot be skipped by navigation or
-    // renderer hot reload preserving component state.
-    setNotesRevealed(false)
+    if (tab !== 'notes' || summaryStatus !== 'success' || !notesKey) return
+    if (revealedNotesKeyRef.current === notesKey) return
+    revealedNotesKeyRef.current = notesKey
+    setNotesRevealPhase('preparing')
+
     let revealFrame = 0
-    const resetFrame = requestAnimationFrame(() => {
-      revealFrame = requestAnimationFrame(() => setNotesRevealed(true))
+    let finishTimer = 0
+    const prepareFrame = requestAnimationFrame(() => {
+      revealFrame = requestAnimationFrame(() => {
+        setNotesRevealPhase('animating')
+        finishTimer = window.setTimeout(() => setNotesRevealPhase('idle'), 1000)
+      })
     })
+
     return () => {
-      cancelAnimationFrame(resetFrame)
+      cancelAnimationFrame(prepareFrame)
       cancelAnimationFrame(revealFrame)
+      clearTimeout(finishTimer)
+      setNotesRevealPhase('idle')
     }
-  }, [tab, summaryStatus, notes])
+  }, [tab, summaryStatus, notesKey])
 
   // Poll the note-generation status while it is pending — an in-flight run
   // (or a retry just kicked off below) needs
@@ -403,6 +427,8 @@ export function MeetingDetail({
   async function handleRetry() {
     if (retrying) return
     setRetrying(true)
+    revealedNotesKeyRef.current = null
+    setNotesRevealPhase('preparing')
     setSummaryStatus('pending')
     try {
       await api().notetakerRetryPipeline?.(id)
@@ -424,6 +450,8 @@ export function MeetingDetail({
   async function handleRetranscribe() {
     if (retranscribing) return
     setRetranscribing(true)
+    revealedNotesKeyRef.current = null
+    setNotesRevealPhase('preparing')
     setSummaryStatus('pending')
     setNotes(null)
     try {
@@ -562,7 +590,7 @@ export function MeetingDetail({
                 {notesCopied ? 'Copied' : 'Copy notes'}
               </button>
             </div>
-            <NotesDocument markdown={legacyNotesAsMarkdown(notes)} revealed={notesRevealed} />
+            <NotesDocument markdown={notesMarkdown} revealPhase={notesRevealPhase} />
           </div>
         ) : (
           <PipelineStatusNotice status={summaryStatus} onRetry={() => void handleRetry()} retrying={retrying} kind="summary" />
