@@ -27,10 +27,18 @@ public enum LevelMeter {
     /// matters is drawing a wave when nothing was said. A fixed gate in the
     /// signal's own units is the only honest way to hold that line — an
     /// adaptive one re-floors itself around whatever noise it is given.
-    public static let gate: Double = 0.03
+    /// Lowered from 0.03. The old gate sat above ordinary quiet speech — a
+    /// normal voice at a normal distance from a laptop mic — so the surface
+    /// stayed flat while somebody was actually talking. It still has to close
+    /// on room tone, which is why this is a small move and not a removal.
+    public static let gate: Double = 0.018
 
     /// The level that fills the bar. A loud moment, not a shout.
-    public static let ceiling: Double = 0.40
+    /// Lowered from 0.40. With the ceiling that high an ordinary speaking
+    /// voice lived in the bottom third of the bar and the top two thirds were
+    /// reserved for shouting. Bringing it down spends the height on the range
+    /// a voice actually occupies.
+    public static let ceiling: Double = 0.32
 
     /// Rise fast, fall slow — how a voice decays, and how every hardware meter
     /// has behaved for fifty years.
@@ -39,7 +47,12 @@ public enum LevelMeter {
     /// to resemble each other. Drawn raw they are 20 independent numbers, and
     /// independent numbers look like noise BECAUSE THEY ARE. The envelope is
     /// what makes neighbouring bars parts of one shape.
-    public static let attack: Double = 0.55
+    ///
+    /// Attack eased from 0.55: at that rate a single loud frame snapped the bar
+    /// to full height in one step, which reads as a flicker rather than a rise.
+    /// 0.42 still gets there in about three frames — fast enough to track a
+    /// voice, slow enough that consecutive bars belong to one shape.
+    public static let attack: Double = 0.42
     public static let release: Double = 0.22
 
     /// Where a raw level sits in the bar, before smoothing. 0…1.
@@ -52,7 +65,11 @@ public enum LevelMeter {
         let v = min(1, max(0, raw))
         guard v > gate else { return 0 }
         let norm = min(1, (v - gate) / (ceiling - gate))
-        return pow(norm, 0.75)
+        // 0.62 rather than 0.75: a lower exponent lifts the quiet end of the
+        // range, which is where speech mostly lives, without touching the loud
+        // end. This is what makes a soft sentence draw a shape instead of a
+        // twitch above the line.
+        return pow(norm, 0.62)
     }
 
     /// One frame of envelope movement toward `target`.

@@ -37,6 +37,11 @@ struct Waveform: View {
     /// thing on the surface.
     var color: Color = .white
 
+    /// The shortest bar that still reads as a bar. Below about this a 2pt-wide
+    /// capsule is round, and a row of them is the dot problem again — so this
+    /// is the floor for AUDIBLE signal, not for silence, which draws nothing.
+    static let minAudible: CGFloat = 3
+
     @State private var history: [Double] = []
     /// The smoothed level the last frame settled on. See `push`.
     @State private var envelope: Double = 0
@@ -56,16 +61,24 @@ struct Waveform: View {
 
             HStack(alignment: .center, spacing: spacing) {
                 ForEach(Array(padded.enumerated()), id: \.offset) { _, v in
-                    let h = CGFloat(v) * height
+                    // ANY AUDIO AT ALL IS VISIBLE. The previous cut — draw
+                    // nothing below 2pt — is a threshold on HEIGHT, so at a
+                    // 16pt bar it silently swallowed every level under 0.125.
+                    // Quiet speech produced a flat line, which is the opposite
+                    // of what a meter is for.
+                    //
+                    // Silence is exactly zero, because LevelMeter.advance parks
+                    // there rather than approaching it forever. So zero draws
+                    // nothing and the hairline speaks; anything above it gets a
+                    // floor tall enough to read as a BAR rather than a dot.
+                    let raw = CGFloat(v) * height
+                    let h: CGFloat = v <= 0 ? 0 : max(Self.minAudible, raw)
                     Capsule()
                         // Brighter across the whole range, peaking at pure
                         // white. The old ramp started at 0.35 of an already
                         // dimmed colour.
                         .fill(color.opacity(0.55 + 0.45 * v))
-                        // BELOW TWO POINTS, DRAW NOTHING. A sub-2pt capsule is
-                        // the dot again by another name; the line behind is
-                        // what speaks for silence.
-                        .frame(width: barWidth, height: h < 2 ? 0 : h)
+                        .frame(width: barWidth, height: h)
                 }
             }
         }
