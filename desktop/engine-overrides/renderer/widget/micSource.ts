@@ -45,17 +45,54 @@ export function findIphoneMic(
   return iphoneMics.find((d) => d.deviceId !== 'default') ?? iphoneMics[0]
 }
 
+/** The stored value meaning "follow whatever macOS is set to". */
+export const AUTOMATIC_DEVICE_ID = 'automatic'
+
+/**
+ * The Mac-side inputs a user may pick in Settings → Audio → Microphone.
+ *
+ * Everything real is offered — built-in, USB, interface, virtual. Two kinds of
+ * entry are removed: the iPhone (the widget glyph owns that choice; a second
+ * selector for it here read as if this picker routed Continuity capture), and
+ * Chromium's synthetic "default" alias, which merely duplicates another entry
+ * under a confusing name — AUTOMATIC is our own, clearer spelling of it.
+ */
+export function selectableMacInputs(
+  devices: AudioInputDeviceInfo[]
+): AudioInputDeviceInfo[] {
+  const seen = new Set<string>()
+  return devices.filter((d) => {
+    if (d.kind !== 'audioinput') return false
+    if (!d.deviceId || d.deviceId === 'default' || d.deviceId === 'communications') return false
+    if (/iphone|continuity/i.test(d.label)) return false
+    if (seen.has(d.deviceId)) return false
+    seen.add(d.deviceId)
+    return true
+  })
+}
+
 /**
  * Resolve the deviceId to capture from for ONE recording.
- * `undefined` = system default (the MacBook mic path) — including the silent
- * fallback when the iPhone is preferred but not around.
+ *
+ * `undefined` = system default. Order: the iPhone when it is preferred AND
+ * present, otherwise the user's chosen Mac input, otherwise the system
+ * default. A chosen device that is no longer plugged in resolves to automatic
+ * rather than a dead id — same silent-fallback guarantee the phone path has:
+ * unplugging a mic must never error or kill a dictation.
  */
 export function resolveCaptureDeviceId(
   preference: MicSource,
-  devices: AudioInputDeviceInfo[]
+  devices: AudioInputDeviceInfo[],
+  macDeviceId?: string
 ): string | undefined {
-  if (preference !== 'iphone') return undefined
-  return findIphoneMic(devices)?.deviceId
+  if (preference === 'iphone') {
+    const phone = findIphoneMic(devices)
+    if (phone) return phone.deviceId
+  }
+  if (!macDeviceId || macDeviceId === AUTOMATIC_DEVICE_ID) return undefined
+  return selectableMacInputs(devices).some((d) => d.deviceId === macDeviceId)
+    ? macDeviceId
+    : undefined
 }
 
 /**

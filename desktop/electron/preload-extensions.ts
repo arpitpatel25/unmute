@@ -300,6 +300,12 @@ export const paywallPreloadExtensions = {
   onIphoneMicChanged: (cb: (on: boolean) => void): void => {
     ipcRenderer.on('settings:iphone-mic-changed', (_e, on: boolean) => cb(on))
   },
+  /** Chosen Mac input for dictation; 'automatic' follows the macOS default. */
+  getMicDeviceId: (): Promise<string> => ipcRenderer.invoke('settings:get-mic-device'),
+  setMicDeviceId: (id: string): Promise<boolean> => ipcRenderer.invoke('settings:set-mic-device', id),
+  onMicDeviceChanged: (cb: (id: string) => void): void => {
+    ipcRenderer.on('settings:mic-device-changed', (_e, id: string) => cb(id))
+  },
   // HUD click-through toggle (renderer hit-test flips it while over the pill).
   hudSetInteractive: (on: boolean): void =>
     ipcRenderer.send('hud:set-interactive', on),

@@ -32,11 +32,13 @@
 // "What this does" link to its page under ./help.
 
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import Permissions from './Permissions'
 import Language from './Language'
 import Privacy from './Privacy'
 import MemoryManager from '../remote/MemoryManager'
 import { HELP_PAGES, HelpPage, type HelpPageId } from './help'
+import { selectableMacInputs, AUTOMATIC_DEVICE_ID } from '../widget/micSource'
 // Pack A owns the onboarding gate and exports the reset. Importing it here is a
 // module cycle (App → Settings → App) that resolves under ESM because it is only
 // ever CALLED from a click handler, never read at module-evaluation time.
@@ -92,6 +94,8 @@ interface SettingsApi {
   getPauseMediaWhileDictating?: () => Promise<boolean>
   setPauseMediaWhileDictating?: (on: boolean) => Promise<boolean>
   setIphoneMicEnabled?: (v: boolean) => Promise<boolean>
+  getMicDeviceId?: () => Promise<string>
+  setMicDeviceId?: (id: string) => Promise<boolean>
   remoteGetScreenshotCapture?: () => Promise<boolean>
   remoteSetScreenshotCapture?: (v: boolean) => Promise<boolean>
   remoteGetScratchpadEnabled?: () => Promise<boolean>
@@ -195,7 +199,7 @@ const KILL_SWITCHES_WIRED = false
 
 export default function Settings({ onDictationKeyChange, section = 'triggers' }: SettingsProps = {}) {
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([])
-  const [selectedDevice, setSelectedDevice] = useState<string>('')
+  const [selectedDevice, setSelectedDevice] = useState<string>(AUTOMATIC_DEVICE_ID)
   const [outputMode, setOutputMode] = useState<'paste' | 'clipboard'>('paste')
   const [launchAtLogin, setLaunchAtLogin] = useState(false)
   const [soundFeedback, setSoundFeedback] = useState(true)
@@ -338,6 +342,22 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // the sidebar would show whatever help page was last open.
   useEffect(() => { setHelpPage(null); setMemoryManagerOpen(false) }, [section])
 
+  // Devices come and go while Settings is open — a USB mic plugged in now
+  // should appear in the list without reopening the window.
+  useEffect(() => {
+    const refresh = () => { void loadAudioDevices() }
+    navigator.mediaDevices?.addEventListener?.('devicechange', refresh)
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refresh)
+  }, [])
+
+  // The stored choice lives in main (Settings picks it, the widget window
+  // captures with it), so read it from there rather than local state.
+  useEffect(() => {
+    api().getMicDeviceId?.()
+      .then((id) => setSelectedDevice(id || AUTOMATIC_DEVICE_ID))
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     loadAudioDevices()
     // Build number — shown in Help & about so users know which version they're
@@ -423,24 +443,46 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   async function loadAudioDevices() {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices()
-      // MacBook-only by design: the iPhone/Continuity mic is selected via the
-      // pill chip (Audio & behaviour → iPhone microphone), never from this list
-      // — a second selector showing the phone here misled users into thinking
-      // this picker routed capture. Built-in first; iPhone entries excluded.
-      const audioInputs = devices
-        .filter((d) => d.kind === 'audioinput' && !/iphone|continuity/i.test(d.label))
-        .filter((d, _i, all) => {
-          const builtIn = all.filter((x) => /built-in|macbook/i.test(x.label))
-          return builtIn.length ? /built-in|macbook/i.test(d.label) : true
-        })
-        .map((d) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${d.deviceId.slice(0, 8)}` }))
-      setAudioDevices(audioInputs)
-      if (audioInputs.length > 0 && !selectedDevice) {
-        setSelectedDevice(audioInputs[0].deviceId)
-      }
+      // Every real input is offered — built-in, USB, audio interface. This
+      // used to filter down to the built-in mic whenever one existed, so a USB
+      // mic was enumerated and then thrown away: the only way to reach it was
+      // to change the macOS system default. The iPhone stays out (the widget
+      // glyph owns that choice); `selectableMacInputs` is the tested rule.
+      const audioInputs = selectableMacInputs(
+        devices.map((d) => ({ kind: d.kind, label: d.label, deviceId: d.deviceId })),
+      ).map((d) => ({
+        deviceId: d.deviceId,
+        label: d.label || `Microphone ${d.deviceId.slice(0, 8)}`,
+      }))
+      // Automatic leads the list and is the default: it follows whatever macOS
+      // is set to, which is what capture did unconditionally before the picker
+      // was wired up — so plugging in a USB mic and making it the system
+      // default still Just Works without opening Settings at all.
+      setAudioDevices([{ deviceId: AUTOMATIC_DEVICE_ID, label: 'Automatic (system default)' }, ...audioInputs])
     } catch (err) {
       console.error('Failed to enumerate audio devices:', err)
     }
+  }
+
+  // A chosen mic that is currently unplugged stays chosen — capture falls back
+  // to the system default for now and returns to it when the device is back
+  // (resolveCaptureDeviceId owns that). Say so rather than dropping the value,
+  // which would render as the "No microphone found" placeholder on a machine
+  // that plainly has microphones.
+  const micOptions = audioDevices.map((d) => ({ value: d.deviceId, label: d.label }))
+  if (
+    audioDevices.length > 0 &&                                  // enumeration has run
+    selectedDevice !== AUTOMATIC_DEVICE_ID &&                   // a real device was chosen
+    !audioDevices.some((d) => d.deviceId === selectedDevice)    // and it is not here now
+  ) {
+    micOptions.push({ value: selectedDevice, label: 'Chosen mic — not connected' })
+  }
+
+  // Optimistic locally, authoritative in main — which also broadcasts the
+  // change to the widget window, the one that actually opens the mic.
+  function handleMicDeviceChange(value: string) {
+    setSelectedDevice(value)
+    void api().setMicDeviceId?.(value).catch(() => {})
   }
 
   function handleWidgetPositionChange(value: string) {
@@ -680,9 +722,9 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
             <SettingRow label="Microphone" description="Which input device unmute listens to">
               <Picker
                 value={selectedDevice}
-                options={audioDevices.map((d) => ({ value: d.deviceId, label: d.label }))}
+                options={micOptions}
                 placeholder="No microphone found"
-                onChange={setSelectedDevice}
+                onChange={handleMicDeviceChange}
               />
             </SettingRow>
           </Card>
@@ -1132,36 +1174,81 @@ function Picker({ value, options, placeholder, onChange }: {
   onChange: (value: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState<DOMRect | null>(null)
   const ref = useRef<HTMLDivElement | null>(null)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      // The menu is portaled OUT of this subtree, so it is not inside `ref`.
+      // Without the second test, mousedown on an option closed the menu and
+      // unmounted the button before its click could fire — every selection
+      // would be silently dropped.
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    // A fixed-position menu cannot follow its trigger, so close rather than
+    // let it drift away from the row it belongs to.
+    const onMove = () => setOpen(false)
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onMove)
+    window.addEventListener('scroll', onMove, true)
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onMove)
+      window.removeEventListener('scroll', onMove, true)
     }
   }, [open])
 
   const current = options.find((o) => o.value === value)
 
+  function toggle() {
+    if (!open) setRect(btnRef.current?.getBoundingClientRect() ?? null)
+    setOpen((v) => !v)
+  }
+
+  // Menu geometry: right-aligned under the trigger, flipped above when the
+  // viewport has no room below, and never taller than the space it has.
+  const GAP = 4
+  const below = rect ? window.innerHeight - rect.bottom - GAP * 2 : 0
+  const above = rect ? rect.top - GAP * 2 : 0
+  const flip = rect ? below < 160 && above > below : false
+  const maxHeight = Math.max(120, Math.floor(flip ? above : below))
+
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen((v) => !v)}
+        ref={btnRef}
+        onClick={toggle}
         disabled={options.length === 0}
         className="flex items-center justify-between gap-2 bg-cream-mid border border-border-md rounded-full pl-3.5 pr-3 py-2 text-[12.5px] font-medium text-ink shadow-sm min-w-[180px] max-w-[220px] disabled:opacity-40"
       >
         <span className="truncate">{current?.label ?? placeholder}</span>
         <span className="text-[13px] text-ink-35 shrink-0">⌄</span>
       </button>
-      {open && options.length > 0 && (
-        <div className="absolute right-0 top-full mt-1 z-20 min-w-[180px] max-w-[260px] bg-surface-2 border border-border rounded-[12px] shadow-lg overflow-hidden py-1">
+      {/* PORTALED TO body ON PURPOSE: every Card wraps its rows in
+          `overflow-hidden` to keep them inside the rounded corners, which also
+          clipped this menu — it opened correctly and was sliced off at the card
+          edge, so the microphone list looked empty. z-index cannot escape a
+          clipping ancestor; leaving the DOM subtree can. */}
+      {open && rect && options.length > 0 && createPortal(
+        <div
+          ref={menuRef}
+          style={{
+            position: 'fixed',
+            top: flip ? undefined : rect.bottom + GAP,
+            bottom: flip ? window.innerHeight - rect.top + GAP : undefined,
+            right: Math.max(GAP, window.innerWidth - rect.right),
+            maxHeight,
+          }}
+          className="z-[9999] min-w-[180px] max-w-[280px] overflow-y-auto bg-surface-2 border border-border rounded-[12px] shadow-lg py-1"
+        >
           {options.map((opt) => (
             <button
               key={opt.value}
@@ -1173,7 +1260,8 @@ function Picker({ value, options, placeholder, onChange }: {
               {opt.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
