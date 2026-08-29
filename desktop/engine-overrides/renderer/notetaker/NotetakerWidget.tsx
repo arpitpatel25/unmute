@@ -24,6 +24,18 @@ import { useEffect, useRef, useState } from 'react'
 // holds fourteen, which is what makes it read as a voice rather than a meter.
 const BAR_COUNT = 14
 
+// HOW EXCITABLE THE NOTETAKER'S WAVEFORM IS. Tuned DOWN from the dictation
+// pill's, deliberately: dictation is a thing you are actively doing and looking
+// at, so it should track your voice closely. The notetaker runs for an hour in
+// the corner of a meeting, and anything that moves that much in peripheral
+// vision is read as something demanding attention.
+//
+// Dictation's waveform is untouched — this is the notetaker only.
+const NT_GAIN = 1.25      // was 2 — a shout no longer pins every bar
+const NT_FLOOR = 0.08     // room tone, fans, a laptop on a desk: all gated to flat
+const NT_ATTACK = 0.28    // rises in ~4 frames, so speech still reads as speech
+const NT_RELEASE = 0.07   // falls over ~15, so it settles instead of flickering
+
 type API = {
   notetakerCancelRequested?: () => void
   notetakerOnCaptureActive?: (cb: (active: boolean) => void) => () => void
@@ -348,7 +360,7 @@ export function NotetakerWidget({
   stopPending?: boolean
   onCancelConfirmed: () => void
 }) {
-  const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0.35))
+  const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0))
   const [showDiscard, setShowDiscard] = useState(false)
   const rafRef = useRef<number | undefined>(undefined)
 
@@ -361,7 +373,7 @@ export function NotetakerWidget({
   // last one.
   useEffect(() => {
     setShowDiscard(false)
-    setLevels(new Array(BAR_COUNT).fill(0.35))
+    setLevels(new Array(BAR_COUNT).fill(0))
   }, [sessionId])
 
   // The discard option only ever makes sense while actually recording —
@@ -377,19 +389,39 @@ export function NotetakerWidget({
   useEffect(() => {
     if (!analyser) return
     const data = new Uint8Array(analyser.frequencyBinCount)
+    // The smoothed levels, kept outside React state: the envelope has to read
+    // the PREVIOUS frame every frame, and a state read inside rAF is stale.
+    const smoothed = new Array(BAR_COUNT).fill(0)
+
     const tick = () => {
       analyser.getByteTimeDomainData(data)
       const chunkSize = Math.max(1, Math.floor(data.length / BAR_COUNT))
-      const next = new Array(BAR_COUNT).fill(0).map((_, i) => {
+
+      for (let i = 0; i < BAR_COUNT; i++) {
         let sum = 0
         let n = 0
         for (let j = i * chunkSize; j < Math.min(data.length, (i + 1) * chunkSize); j++) {
           sum += Math.abs(data[j] - 128)
           n++
         }
-        return n === 0 ? 0 : Math.min(1, (sum / n / 128) * 2)
-      })
-      setLevels(next)
+        const raw = n === 0 ? 0 : (sum / n / 128) * NT_GAIN
+
+        // NOISE GATE. Room tone, a fan, a laptop on a desk — all of it sat
+        // above zero and kept the bars alive, which is what made the widget
+        // pull the eye during a meeting when nobody was even speaking.
+        const gated = raw <= NT_FLOOR ? 0 : (raw - NT_FLOOR) / (1 - NT_FLOOR)
+
+        // ASYMMETRIC ENVELOPE. Rise reasonably quickly so speech still reads as
+        // speech; fall slowly so the row settles instead of flickering. A
+        // symmetric filter either lags the voice or keeps twitching — this is
+        // the same shape a compressor's attack/release has, for the same
+        // reason.
+        const target = Math.min(1, gated)
+        const k = target > smoothed[i] ? NT_ATTACK : NT_RELEASE
+        smoothed[i] = smoothed[i] + (target - smoothed[i]) * k
+      }
+
+      setLevels(smoothed.slice())
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
