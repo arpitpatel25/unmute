@@ -5,6 +5,7 @@
 // feels native rather than introducing a new visual language.
 
 import { useEffect, useState } from 'react'
+import { SHOW_TRANSCRIPT_UI } from './notetakerUi'
 import { MeetingDetail } from './MeetingDetail'
 
 // Field-for-field mirror of NotetakerMeetingSnapshot (electron/remote-preload.ts).
@@ -40,7 +41,7 @@ const STATUS_LABEL: Record<NotetakerMeeting['status'], string> = {
 }
 
 function progressLabel(meeting: NotetakerMeeting): string | null {
-  if (meeting.summary_status === 'pending') return 'Preparing notes…'
+  if (meeting.summary_status === 'pending') return 'Writing notes'
   if (meeting.summary_status === 'failed') return 'Notes failed'
   if (meeting.summary_status === 'disabled' && meeting.status === 'ready') return 'No notes'
   return meeting.status === 'ready' ? null : STATUS_LABEL[meeting.status]
@@ -202,7 +203,9 @@ export function MeetingsList({
     <div className="flex flex-col gap-5">
       <div>
         <h3 className="font-display text-[20px] font-bold text-ink tracking-tight">Meeting notes</h3>
-        <p className="text-[11px] text-ink-35 mt-1">Your recordings, transcripts, and notes.</p>
+        <p className="text-[11px] text-ink-35 mt-1">
+          {SHOW_TRANSCRIPT_UI ? 'Your recordings, transcripts, and notes.' : 'Your recordings and notes.'}
+        </p>
       </div>
       {groupMeetingsByDay(meetings).map(({ key, day }) => (
         <div key={key} className="flex flex-col gap-2">
@@ -230,13 +233,20 @@ export function MeetingsList({
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-[11px] text-ink-35 font-medium">{formatMeetingTime(meeting.started_at)}</span>
                       {progress ? (
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full inline-flex items-center gap-1.5 ${
                           failed
                             ? 'text-error bg-error/[0.08]'
                             : meeting.summary_status === 'pending'
                               ? 'text-accent bg-accent/[0.08]'
                               : 'text-ink-35 bg-ink-07'
                         }`}>
+                          {meeting.summary_status === 'pending' && !failed && (
+                            <span className="flex items-center gap-[3px]" aria-hidden="true">
+                              <span className="w-[3px] h-[3px] rounded-full bg-accent animate-dot-bounce" />
+                              <span className="w-[3px] h-[3px] rounded-full bg-accent animate-dot-bounce" style={{ animationDelay: '0.15s' }} />
+                              <span className="w-[3px] h-[3px] rounded-full bg-accent animate-dot-bounce" style={{ animationDelay: '0.3s' }} />
+                            </span>
+                          )}
                           {progress}
                         </span>
                       ) : (
@@ -244,7 +254,14 @@ export function MeetingsList({
                       )}
                     </div>
                     <div className="text-[14px] font-medium text-ink leading-snug line-clamp-2">{meeting.title}</div>
-                    <div className="text-[11px] text-ink-60 mt-1.5">{formatDuration(meeting.duration_ms)} recording</div>
+                    <div className="text-[11px] text-ink-60 mt-1.5">
+                      {formatDuration(meeting.duration_ms)} recording
+                      {meeting.summary_status === 'pending' && !failed && (
+                        // The list polls every 2s, so this row updates itself —
+                        // say so, rather than leaving the user watching it.
+                        <span className="text-accent"> · Summarising your meeting — check back in a moment</span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     <MeetingWaveform />

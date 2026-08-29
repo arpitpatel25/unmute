@@ -1,4 +1,8 @@
-// Meeting detail — two top-level tabs (Notes / Transcript, 2026-08-25 spec
+// Meeting detail. Notes are the only artifact shown; the Notes/Transcript
+// tab bar and the transcript body are behind SHOW_TRANSCRIPT_UI (see
+// notetakerUi.ts) — still generated and still stored, just not on screen.
+//
+// Historically — two top-level tabs (Notes / Transcript, 2026-08-25 spec
 // §9), replacing the previous single flat transcript view.
 //
 // Transcript tab: the chronological raw STT transcript plus one normal
@@ -21,6 +25,7 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { SHOW_TRANSCRIPT_UI } from './notetakerUi'
 
 // Field-for-field mirrors of the preload-facing types (electron/remote-
 // preload.ts) — not imported directly, same cross-tree precedent every
@@ -124,7 +129,29 @@ function PipelineStatusNotice({ status, onRetry, retrying, kind }: {
     return <p className="text-ink-60 text-sm">{kind === 'cleanup' ? 'No cleaned transcript is available.' : 'No notes could be generated because the recording contained no transcript.'}</p>
   }
   if (status === 'pending') {
-    return <p className="text-ink-60 text-sm">{kind === 'cleanup' ? 'Cleaning up the transcript…' : 'Generating notes…'}</p>
+    // With the transcript hidden there is nothing else on this screen while a
+    // meeting processes, so say plainly that work is happening, that it takes
+    // a moment, and that leaving is safe — the run continues in the main
+    // process either way.
+    return (
+      <div className="flex flex-col gap-2 rounded-lg bg-accent/[0.04] border border-accent/15 p-4">
+        <div className="flex items-center gap-2">
+          <span className="flex items-center gap-1" aria-hidden="true">
+            <span className="w-[5px] h-[5px] rounded-full bg-accent animate-dot-bounce" />
+            <span className="w-[5px] h-[5px] rounded-full bg-accent animate-dot-bounce" style={{ animationDelay: '0.15s' }} />
+            <span className="w-[5px] h-[5px] rounded-full bg-accent animate-dot-bounce" style={{ animationDelay: '0.3s' }} />
+          </span>
+          <p className="text-[13px] font-medium text-ink">
+            {kind === 'cleanup' ? 'Cleaning up the transcript…' : 'Writing your notes…'}
+          </p>
+        </div>
+        <p className="text-[11.5px] text-ink-60 leading-relaxed">
+          {kind === 'cleanup'
+            ? 'This runs on your connected agent and usually takes under a minute.'
+            : 'Your recording is being cleaned up and summarised on your connected agent. This usually takes under a minute — you can close this and come back, it keeps running.'}
+        </p>
+      </div>
+    )
   }
   return (
     <div className="flex items-center gap-2">
@@ -327,6 +354,9 @@ export function MeetingDetail({
   onBack: () => void
 }) {
   const [tab, setTab] = useState<'notes' | 'transcript'>('notes')
+  // With the transcript UI withdrawn there is only one tab, so the stored tab
+  // is pinned to it. Flipping SHOW_TRANSCRIPT_UI restores the real selection.
+  const activeTab = SHOW_TRANSCRIPT_UI ? tab : 'notes'
   const [rawSegments, setRawSegments] = useState<NotetakerTranscriptSegment[] | null>(null)
   const [notes, setNotes] = useState<NotetakerMeetingNotes | null>(null)
   const [summaryStatus, setSummaryStatus] = useState(initialSummaryStatus)
@@ -380,7 +410,7 @@ export function MeetingDetail({
   // neither should restart the animation. The animation class is also removed
   // after the stagger finishes so scrolling uses ordinary, static layers.
   useEffect(() => {
-    if (tab !== 'notes' || summaryStatus !== 'success' || !notesKey) return
+    if (activeTab !== 'notes' || summaryStatus !== 'success' || !notesKey) return
     if (revealedNotesKeyRef.current === notesKey) return
     revealedNotesKeyRef.current = notesKey
     setNotesRevealPhase('preparing')
@@ -400,7 +430,7 @@ export function MeetingDetail({
       clearTimeout(finishTimer)
       setNotesRevealPhase('idle')
     }
-  }, [tab, summaryStatus, notesKey])
+  }, [activeTab, summaryStatus, notesKey])
 
   // Poll the note-generation status while it is pending — an in-flight run
   // (or a retry just kicked off below) needs
@@ -564,6 +594,7 @@ export function MeetingDetail({
 
       <div className="text-[12px] text-ink-60">{formatDateTime(startedAt)} · {formatDuration(durationMs)}</div>
 
+      {SHOW_TRANSCRIPT_UI && (
       <div className="flex gap-1 border-b border-black/10">
         {(['notes', 'transcript'] as const).map((t) => (
           <button
@@ -577,8 +608,9 @@ export function MeetingDetail({
           </button>
         ))}
       </div>
+      )}
 
-      {tab === 'notes' && (
+      {activeTab === 'notes' && (
         summaryStatus === 'success' && notes ? (
           <div className="flex flex-col gap-2">
             <div className="flex justify-end">
@@ -597,18 +629,12 @@ export function MeetingDetail({
         )
       )}
 
-      {tab === 'transcript' && (
+      {/* The transcript itself — the segment list and its copy action. This is
+       *  the only part the user was ever given to READ, so this is the part
+       *  SHOW_TRANSCRIPT_UI withdraws. */}
+      {SHOW_TRANSCRIPT_UI && activeTab === 'transcript' && (
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => void handleRetranscribe()}
-              disabled={retranscribing || !meetingAudioUrl}
-              className="text-[12px] px-2.5 py-1.5 rounded-md border border-black/10 text-ink-60 hover:text-ink hover:bg-black/[0.04] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              title="Re-transcribe from retained audio and regenerate notes"
-            >
-              {retranscribing ? 'Re-transcribing…' : 'Re-transcribe'}
-            </button>
             <button
               type="button"
               onClick={() => void copyTranscript()}
@@ -618,19 +644,36 @@ export function MeetingDetail({
               {transcriptCopied ? 'Copied' : 'Copy transcript'}
             </button>
           </div>
-          <div className="flex flex-col gap-2 rounded-lg bg-ink-07 p-3">
-            <div className="text-[12px] font-semibold text-ink">Meeting recording</div>
-            {meetingAudioUrl ? (
-              <div>
-                {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                <audio controls src={meetingAudioUrl} className="w-full" />
-              </div>
-            ) : <p className="text-[11px] text-ink-60">The recording is unavailable. Audio is retained for 24 hours.</p>}
-          </div>
 
           <TranscriptSegments segments={rawSegments} emptyLabel="No transcript available." />
         </div>
       )}
+
+      {/* Deliberately OUTSIDE the flag. Neither of these shows a transcript:
+       *  the recording is the meeting itself, and Re-transcribe re-runs STT
+       *  and regenerates the notes — with the transcript hidden it is the only
+       *  way to recover notes that were poor because the speech-to-text was.
+       *  Hidden while notes are still pending, so it cannot race its own run. */}
+      <div className="flex flex-col gap-2 rounded-lg bg-ink-07 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[12px] font-semibold text-ink">Meeting recording</div>
+          <button
+            type="button"
+            onClick={() => void handleRetranscribe()}
+            disabled={retranscribing || !meetingAudioUrl || summaryStatus === 'pending'}
+            className="text-[12px] px-2.5 py-1.5 rounded-md border border-black/10 text-ink-60 hover:text-ink hover:bg-black/[0.04] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            title="Re-transcribe from the retained audio and regenerate these notes"
+          >
+            {retranscribing ? 'Re-transcribing…' : 'Regenerate from audio'}
+          </button>
+        </div>
+        {meetingAudioUrl ? (
+          <div>
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+            <audio controls src={meetingAudioUrl} className="w-full" />
+          </div>
+        ) : <p className="text-[11px] text-ink-60">The recording is unavailable. Audio is retained for 24 hours.</p>}
+      </div>
 
       <button
         onClick={() => void handleDelete()}
