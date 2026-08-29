@@ -5109,11 +5109,39 @@ export class TaskManager extends EventEmitter {
     if (this.resuming.has(id) || this.opening.has(id)) return
     this.opening.add(id)
     const tlog = log.child({ taskId: id })
-    tlog.event('auto-resume-on-open', {})
-    void this.resume(id, { touchActivity: false })
-      .then((ok) => { if (!ok) tlog.warn('auto-resume on open did not take', {}) })
-      .catch((e) => tlog.error('auto-resume on open threw', { error: (e as Error).message }))
-      .finally(() => this.opening.delete(id))
+
+    void (async () => {
+      try {
+        // ASK TMUX, NOT JUST OURSELVES.
+        //
+        // The guard above — "do I have a live executor?" — is an IN-PROCESS
+        // question, and for the first seconds after launch the honest answer is
+        // always no: reattachPersistent() has not run yet. So opening a card in
+        // that window resumed a session whose runtime was alive the whole time.
+        //
+        // Measured 2026-08-29: card opened at 05:02:17, the discovery sweep ran
+        // at 05:02:22. Five seconds. Every other task got tmux-attach-existing
+        // and came straight up; the one touched inside the gap got a fresh
+        // `claude --resume` instead.
+        const live = await this.opts.listLiveRuntimeIds?.().catch(() => undefined)
+        if (live?.has(id)) {
+          // The runtime is there. Run the sweep NOW rather than waiting out its
+          // schedule — it owns the attach path, and duplicating that here is
+          // how the two would drift.
+          tlog.event('open-found-live-runtime', { via: 'tmux' })
+          await this.reattachPersistent()
+          return
+        }
+
+        tlog.event('auto-resume-on-open', {})
+        const ok = await this.resume(id, { touchActivity: false })
+        if (!ok) tlog.warn('auto-resume on open did not take', {})
+      } catch (e) {
+        tlog.error('auto-resume on open threw', { error: (e as Error).message })
+      } finally {
+        this.opening.delete(id)
+      }
+    })()
   }
 
   /** Tasks currently BLOCKED on a needs-user question, newest first. The router
