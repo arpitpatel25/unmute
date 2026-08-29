@@ -341,10 +341,75 @@ struct PocketRow: View {
 /// This is the FULLER card, not the 64pt compact one it replaces. Off the notch
 /// nothing forces the content onto a single line, so a card that shows only a
 /// title and a status word is not compact — it is withholding.
+/// THE ROW EITHER SIDE OF THE CAMERA.
+///
+/// The surface is always wider than the housing, so on a notched Mac there is
+/// usable space to its left and right — and until now that space was black and
+/// empty while the card below it carried everything.
+///
+/// The split is by MEANING, not by what happens to fit:
+///
+///   left   WHO this is — status dot, provider marks. Reading starts here, and
+///          it is the half with no controls in it, so a stray click on the side
+///          you look at first cannot do anything.
+///   middle NOTHING. The camera. This is the constraint the layout exists for.
+///   right  WHAT YOU CAN DO — dashboard, then close. Every destructive control
+///          on one side, away from identity, close outermost.
+///
+/// Anything you actually READ — title, prose, the carousel — stays below, where
+/// it has full width and more than one line. A shoulder is bar-height; prose
+/// does not fit there and should not be made to.
+struct PocketShoulderRow: View {
+    @ObservedObject var model: NotchModel
+    let listening: Bool
+
+    private var slot: PocketSlotP? { model.pocket.current }
+    private var quiet: Bool { slot?.demanding == false }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // LEFT — identity.
+            HStack(spacing: PocketRowMetrics.cardGap) {
+                Spacer(minLength: 0)
+                Dot(status: quiet ? .done : PocketFace.resolved(for: slot), size: PocketRowMetrics.dotSize)
+                ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true,
+                             size: PocketRowMetrics.markSize)
+            }
+            .padding(.trailing, BarContent.gap)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+
+            // MIDDLE — the housing. Zero width off-notch, so the row collapses
+            // to an ordinary header on a display without one.
+            Color.clear.frame(width: model.pocketCutoutWidth)
+
+            // RIGHT — controls.
+            HStack(spacing: PocketRowMetrics.buttonGap) {
+                RoundButton(symbol: "square.grid.2x2", size: 8.5, help: "Open the dashboard") {
+                    model.emit(.openDashboard)
+                }
+                RoundButton(symbol: "xmark", size: 8,
+                            help: "Close — your voice goes back to normal routing") {
+                    model.emit(.pocketRelease)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, BarContent.gap)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, BarContent.inset)
+        .frame(height: model.pocketTopInset)
+    }
+}
+
 struct PocketCard: View {
     @ObservedObject var model: NotchModel
     var pocketOverride: PocketP? = nil
     let listening: Bool
+    /// True when a `PocketShoulderRow` above is already carrying the dot, the
+    /// provider mark and the two controls. The card then draws the title alone
+    /// and reclaims the 46pt it was reserving for buttons that are no longer
+    /// in it.
+    var headerInShoulders: Bool = false
 
     private var pocket: PocketP { pocketOverride ?? model.pocket }
     private var slot: PocketSlotP? { pocket.current }
@@ -382,32 +447,37 @@ struct PocketCard: View {
             .contentShape(Rectangle())
             .onTapGesture { if slot != nil { model.emit(.pocketExpand) } }
 
-            HStack(spacing: PocketRowMetrics.buttonGap) {
-                RoundButton(symbol: "square.grid.2x2", size: 8.5, help: "Open the dashboard") {
-                    model.emit(.openDashboard)
+            if !headerInShoulders {
+                HStack(spacing: PocketRowMetrics.buttonGap) {
+                    RoundButton(symbol: "square.grid.2x2", size: 8.5, help: "Open the dashboard") {
+                        model.emit(.openDashboard)
+                    }
+                    RoundButton(symbol: "xmark", size: 8,
+                                help: "Close — your voice goes back to normal routing") {
+                        model.emit(.pocketRelease)
+                    }
                 }
-                RoundButton(symbol: "xmark", size: 8,
-                            help: "Close — your voice goes back to normal routing") {
-                    model.emit(.pocketRelease)
-                }
+                .padding(9)
             }
-            .padding(9)
         }
     }
 
     private var header: some View {
         HStack(spacing: 8) {
-            Dot(status: quiet ? .done : PocketFace.resolved(for: slot),
-                size: 8)
-            ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true, size: 14)
+            if !headerInShoulders {
+                Dot(status: quiet ? .done : PocketFace.resolved(for: slot),
+                    size: 8)
+                ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true, size: 14)
+            }
             Text(slot?.title ?? "Nothing in your pocket")
                 .font(.system(size: 13.5, weight: .semibold))
                 .foregroundColor(quiet ? Theme.textDim : Theme.text)
                 .lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
         }
-        // The two controls own this corner.
-        .padding(.trailing, 46)
+        // The two controls own this corner — unless they have moved up to the
+        // right shoulder, in which case the title gets the width back.
+        .padding(.trailing, headerInShoulders ? 0 : 46)
     }
 
     private var footer: some View {

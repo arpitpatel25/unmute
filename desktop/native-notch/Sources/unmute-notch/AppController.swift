@@ -82,6 +82,7 @@ final class AppController: NSObject, NotchResizing {
         window.resizer = self
         model.hasNotch = geometry.hasNotch
         model.pocketTopInset = geometry.pocketTopInset
+        model.pocketCutoutWidth = geometry.cutout?.width ?? 0
         model.emit = { [weak self] ev in
             NotchLog.log("EVENT out: \(ev.json)")
             IPC.emit(ev)

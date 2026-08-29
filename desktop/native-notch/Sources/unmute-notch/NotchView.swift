@@ -246,7 +246,22 @@ struct NotchView: View {
                 // The card clears the housing instead of working around it: see
                 // `pocketTopPad` and `NotchGeometry.pocketTopInset`, which are
                 // the same number so the window and the padding cannot disagree.
-                pocketPlane { PocketCard(model: model, listening: model.captureAimed) }
+                if model.hasNotch {
+                    // SHOULDERS, THEN THE BODY. The row fills the housing's own
+                    // line — identity left of the camera, controls right of it —
+                    // and everything you read hangs below. Off-notch the same
+                    // three slots sit in one unsplit header, which is the whole
+                    // point: one layout, not two.
+                    VStack(spacing: 0) {
+                        PocketShoulderRow(model: model, listening: model.captureAimed)
+                        pocketPlane {
+                            PocketCard(model: model, listening: model.captureAimed,
+                                       headerInShoulders: true)
+                        }
+                    }
+                } else {
+                    pocketPlane { PocketCard(model: model, listening: model.captureAimed) }
+                }
             }
             else { barRow }
         }
@@ -404,7 +419,10 @@ struct NotchView: View {
     /// Mirrors `NotchGeometry.pocketTopInset`, which sizes the window. If these
     /// two ever disagree the card is clipped, and a clipped card looks fine in
     /// a screenshot right up until the footer is missing.
-    private var pocketTopPad: CGFloat { model.pocketTopInset }
+    /// Ordinary panel padding on BOTH displays now. The housing clearance is no
+    /// longer padding — `PocketShoulderRow` occupies it and draws in it, which
+    /// is why `NotchGeometry.pocketTopInset` is exactly the cutout height.
+    private var pocketTopPad: CGFloat { Theme.panelPadding }
 
     @ViewBuilder private func pocketPlane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {
         body()
