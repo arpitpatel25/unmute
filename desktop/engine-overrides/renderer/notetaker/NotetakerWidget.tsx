@@ -4,8 +4,8 @@
 //
 // A small pill, bottom-left, showing a live waveform while a note-taking
 // session is active — spec §7: "not buried, more like a floating thing."
-// Clicking the compact vertical waveform reveals explicit End, Discard, and
-// close actions in that same capsule. No timer anywhere in this file — the
+// Clicking the pill reveals explicit End, Discard, and close actions in
+// place, in that SAME pill — never a second element. No timer in this file — the
 // waveform redraws itself off the AnalyserNode via
 // requestAnimationFrame, matching this codebase's existing precedent in
 // widget/useAudioRecorder.ts + widget/Widget.tsx (WidgetApp owns the
@@ -15,7 +15,22 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-const BAR_COUNT = 5
+// 55pt of waveform at 2px bars on a 2px gap. Five fat bars was the old
+// short-pill compromise; at the dictation pill's proportions the same width
+// holds fourteen, which is what makes it read as a voice rather than a meter.
+const BAR_COUNT = 14
+
+// HOW EXCITABLE THE NOTETAKER'S WAVEFORM IS. Tuned DOWN from the dictation
+// pill's, deliberately: dictation is a thing you are actively doing and looking
+// at, so it should track your voice closely. The notetaker runs for an hour in
+// the corner of a meeting, and anything that moves that much in peripheral
+// vision is read as something demanding attention.
+//
+// Dictation's waveform is untouched — this is the notetaker only.
+const NT_GAIN = 1.25      // was 2 — a shout no longer pins every bar
+const NT_FLOOR = 0.08     // room tone, fans, a laptop on a desk: all gated to flat
+const NT_ATTACK = 0.28    // rises in ~4 frames, so speech still reads as speech
+const NT_RELEASE = 0.07   // falls over ~15, so it settles instead of flickering
 
 type API = {
   notetakerEndRequested?: () => void
@@ -388,7 +403,7 @@ export function NotetakerWidget({
   onEndRequested: () => void
   onDiscardRequested: () => void
 }) {
-  const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0.35))
+  const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0))
   const [showDiscard, setShowDiscard] = useState(false)
   const rafRef = useRef<number | undefined>(undefined)
 
@@ -402,7 +417,7 @@ export function NotetakerWidget({
   // last one.
   useEffect(() => {
     setShowDiscard(false)
-    setLevels(new Array(BAR_COUNT).fill(0.35))
+    setLevels(new Array(BAR_COUNT).fill(0))
   }, [sessionId])
 
   // Live waveform: reads the analyser every animation frame. No setInterval —
@@ -411,19 +426,39 @@ export function NotetakerWidget({
   useEffect(() => {
     if (!analyser) return
     const data = new Uint8Array(analyser.frequencyBinCount)
+    // The smoothed levels, kept outside React state: the envelope has to read
+    // the PREVIOUS frame every frame, and a state read inside rAF is stale.
+    const smoothed = new Array(BAR_COUNT).fill(0)
+
     const tick = () => {
       analyser.getByteTimeDomainData(data)
       const chunkSize = Math.max(1, Math.floor(data.length / BAR_COUNT))
-      const next = new Array(BAR_COUNT).fill(0).map((_, i) => {
+
+      for (let i = 0; i < BAR_COUNT; i++) {
         let sum = 0
         let n = 0
         for (let j = i * chunkSize; j < Math.min(data.length, (i + 1) * chunkSize); j++) {
           sum += Math.abs(data[j] - 128)
           n++
         }
-        return n === 0 ? 0 : Math.min(1, (sum / n / 128) * 2)
-      })
-      setLevels(next)
+        const raw = n === 0 ? 0 : (sum / n / 128) * NT_GAIN
+
+        // NOISE GATE. Room tone, a fan, a laptop on a desk — all of it sat
+        // above zero and kept the bars alive, which is what made the widget
+        // pull the eye during a meeting when nobody was even speaking.
+        const gated = raw <= NT_FLOOR ? 0 : (raw - NT_FLOOR) / (1 - NT_FLOOR)
+
+        // ASYMMETRIC ENVELOPE. Rise reasonably quickly so speech still reads as
+        // speech; fall slowly so the row settles instead of flickering. A
+        // symmetric filter either lags the voice or keeps twitching — this is
+        // the same shape a compressor's attack/release has, for the same
+        // reason.
+        const target = Math.min(1, gated)
+        const k = target > smoothed[i] ? NT_ATTACK : NT_RELEASE
+        smoothed[i] = smoothed[i] + (target - smoothed[i]) * k
+      }
+
+      setLevels(smoothed.slice())
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
@@ -434,118 +469,196 @@ export function NotetakerWidget({
 
   const NOTETAKER_GREEN = '#6fbf9a'
   const NOTETAKER_RED = '#c4482e'
-  // Keep recording/actions as one compact translucent capsule. The previous
-  // expanded state stacked a black button, a pink button and a white shell,
-  // so almost every pixel looked like another background. Only completion
-  // and the keyboard undo message need the light acknowledgement surface.
-  const isLight = completed
-  const glassBackground = isLight
-    ? 'rgba(252,252,250,0.94)'
-    : 'linear-gradient(to bottom, rgba(255,255,255,0.12), rgba(255,255,255,0.025) 58%, rgba(255,255,255,0) 100%), rgba(34,35,39,0.72)'
-  const glassBorder = isLight
-    ? '1px solid rgba(0,0,0,0.08)'
-    : '1px solid rgba(255,255,255,0.17)'
-  const isActions = showDiscard
+  // "Recording" is its own look (dark PillGlass, matching the dictation
+  // pill); every other state — the action row, the saved acknowledgement —
+  // renders in this SAME pill in place, per feedback that a second,
+  // differently-sized element floating above it read as disproportionate no
+  // matter how either one was sized on its own. A small static 3-bar glyph
+  // (waveGlyph below) stays in every other state so it's still visibly "the
+  // recording thing," just not live-updating.
+  // THE DICTATION PILL, NOT A SECOND DESIGN.
+  //
+  // This was rgba(14,15,19,0.42) over a blur(14px) backdrop — a translucent
+  // dark wash that SAMPLES the wallpaper, so on a magenta desktop the pill came
+  // out maroon and never read as black at all. PillView.swift settled this for
+  // the dictation capsule and its comment says why: pure black with a rim reads
+  // as "a hole punched in the screen", identical on every wallpaper, every
+  // Space and every Mac. One instrument, not one that changes colour with the
+  // desktop behind it — which is also why `completed` below changes the RIM
+  // and the contents, never the fill.
+  const glassBackground = '#000'
+  const glassBorder = completed
+    ? '1.5px solid rgba(111,191,154,0.45)'
+    : '1px solid rgba(255,255,255,0.30)'
+  // Pill height is fixed across every state (no resize-on-state-change
+  // jank) — a true pill, not a tall capsule (2026-08-26: was 40px then
+  // 22px; nudged back up slightly so the waveform has room to actually
+  // read as a waveform rather than a near-flat line).
+  // PillMetrics.height. The widget is the dictation pill carrying less, so it
+  // is the same height and only the WAVEFORM is shorter — 30% off the length,
+  // which is the one deliberate difference between the two.
+  // MUST MATCH notetakerWidget.ts's widgetBounds() pillHeight.
+  const PILL_HEIGHT = 36
+  const WAVE_WIDTH = 55        // the dictation waveform is 78
+
+  const waveGlyph = (tone: string) => (
+    <span className="flex items-center flex-none" style={{ gap: 2 }}>
+      <span className="block rounded-full" style={{ width: 2, height: 7, background: tone, opacity: 0.55 }} />
+      <span className="block rounded-full" style={{ width: 2, height: 13, background: tone }} />
+      <span className="block rounded-full" style={{ width: 2, height: 9, background: tone, opacity: 0.75 }} />
+    </span>
+  )
+
+  const idle = !completed && !showDiscard
 
   return (
     <div
-      className="w-full h-full flex items-end"
+      className="w-full h-full flex flex-col-reverse items-start"
       style={{
         // @ts-expect-error -- WebkitAppRegion is a real, non-standard Electron CSS prop
         WebkitAppRegion: 'no-drag',
       }}
     >
+      {/* ONE pill, always. Tapping it while recording opens End/Discard in
+       *  place; the saved acknowledgement also renders in place. Never a
+       *  second element. */}
       <div
-        role={!isActions && !completed ? 'button' : undefined}
-        tabIndex={!isActions && !completed ? 0 : undefined}
-        title={!isActions && !completed ? 'Note taker — click for meeting actions' : undefined}
+        role={idle ? 'button' : undefined}
+        tabIndex={idle ? 0 : undefined}
+        title={idle ? 'Note taker — click for meeting actions' : undefined}
         aria-label={
-          completed ? 'Meeting saved — preparing notes'
+          completed
+            ? 'Meeting saved — preparing notes'
             : showDiscard ? undefined : 'Note-taking in progress — tap for options'
         }
-        onClick={!isActions && !completed ? openDiscard : undefined}
+        onClick={idle ? openDiscard : undefined}
         onKeyDown={
-          !isActions && !completed
+          idle
             ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDiscard() } }
             : undefined
         }
-        className={`rounded-[17px] flex flex-col items-center select-none overflow-hidden ${!isActions && !completed ? 'cursor-pointer' : ''}`}
+        className={`rounded-full flex items-center select-none overflow-hidden ${idle ? 'cursor-pointer' : ''}`}
         style={{
-          width: isActions ? 40 : 38,
-          height: isActions ? 108 : 58,
-          padding: isActions ? '3px 4px' : 0,
+          height: PILL_HEIGHT,
+          padding: showDiscard ? 0 : completed ? '0 12px' : '0 13px',
           background: glassBackground,
-          backdropFilter: isLight ? undefined : 'blur(16px) saturate(125%)',
-          WebkitBackdropFilter: isLight ? undefined : 'blur(16px) saturate(125%)',
+          // NO BACKDROP SAMPLING and no shadow. The fill is opaque black, so a
+          // blur behind it is invisible work; and PillView drops the shadow for
+          // the same reason it drops the sheen — both imply a lit object, and
+          // this one claims to be a hole rather than a surface.
           border: glassBorder,
-          boxShadow: isLight ? '0 5px 14px rgba(0,0,0,0.13)' : '0 4px 14px rgba(0,0,0,0.16)',
-          transition: 'width 180ms ease, height 180ms ease, background 180ms ease, border-color 180ms ease, padding 180ms ease, box-shadow 180ms ease',
+          boxShadow: 'none',
+          transition: 'background 180ms ease, border-color 180ms ease, padding 180ms ease, box-shadow 180ms ease',
         }}
       >
         {completed ? (
-          <span className="flex flex-1 items-center justify-center" aria-hidden="true">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" style={{ color: NOTETAKER_GREEN }}>
-              <path d="M5 12.5l4.2 4.1L19.5 6.8" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
+          /* The momentary post-stop acknowledgement (notetaker:completed),
+             shown for the ~900ms before main hides the window. Same pill,
+             same black: only the rim and the contents say "saved". */
+          <span className="flex items-center whitespace-nowrap" style={{ gap: 7 }}>
+            {waveGlyph(NOTETAKER_GREEN)}
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="flex-none" style={{ color: NOTETAKER_GREEN }}>
+              <path d="M5 12.5l4.2 4.1L19.5 6.8" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round" />
             </svg>
+            <span className="text-[13px] font-medium" style={{ color: 'rgba(255,255,255,0.92)' }}>
+              Saved — preparing notes
+            </span>
           </span>
         ) : showDiscard ? (
           <>
-            <button
-              type="button"
-              onClick={requestEnd}
-              title="End meeting"
-              aria-label="End meeting"
-              className="flex flex-col items-center justify-center flex-none"
-              style={{ width: '100%', height: 38, color: '#fff', gap: 2, borderBottom: '1px solid rgba(255,255,255,0.11)' }}
-            >
-              <span
-                className="block rounded-[2px]"
-                style={{ width: 10, height: 10, background: NOTETAKER_GREEN, boxShadow: '0 0 0 1px rgba(255,255,255,0.18)' }}
-                aria-hidden="true"
-              />
-              <span className="text-[7px] font-semibold uppercase leading-none tracking-[0.08em]" aria-hidden="true">
-                End
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={confirmDiscard}
-              title="Discard recording"
-              aria-label="Discard recording"
-              className="flex items-center justify-center flex-none"
-              style={{ width: '100%', height: 32, color: '#ef735d', borderBottom: '1px solid rgba(255,255,255,0.11)' }}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-12" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
             <button
               type="button"
               onClick={dismissDiscard}
               title="Keep recording"
               aria-label="Keep recording"
               className="flex items-center justify-center flex-none"
-              style={{ width: '100%', height: 29, color: 'rgba(255,255,255,0.58)' }}
+              // Was black-on-white; the pill is black now.
+              style={{ width: 30, height: PILL_HEIGHT, color: 'rgba(255,255,255,0.55)' }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
               </svg>
+            </button>
+            {/* END — the ordinary, non-destructive completion. Neutral white,
+                because the pill reserves colour for the one action that
+                destroys something. */}
+            <button
+              type="button"
+              onClick={requestEnd}
+              title="End meeting"
+              aria-label="End meeting"
+              className="flex items-center flex-none whitespace-nowrap"
+              style={{ gap: 6, height: PILL_HEIGHT, paddingRight: 12 }}
+            >
+              <span
+                className="block rounded-[2px] flex-none"
+                style={{ width: 9, height: 9, background: NOTETAKER_GREEN, boxShadow: '0 0 0 1px rgba(255,255,255,0.18)' }}
+                aria-hidden="true"
+              />
+              <span className="text-[13px] font-medium" style={{ color: 'rgba(255,255,255,0.92)' }}>End</span>
+            </button>
+            <span className="flex-none" aria-hidden="true" style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.16)' }} />
+            <button
+              type="button"
+              onClick={confirmDiscard}
+              title="Discard recording"
+              aria-label="Discard recording"
+              className="flex items-center flex-1 whitespace-nowrap"
+              style={{ gap: 6, height: PILL_HEIGHT, paddingLeft: 12, paddingRight: 13 }}
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="flex-none" style={{ color: NOTETAKER_RED }}>
+                <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-12" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {/* The red survives HERE and nowhere else — on the one label
+                  that means destructive. A black capsule with a red word in it
+                  reads as a warning; a red capsule reads as another product. */}
+              <span className="text-[13px] font-medium" style={{ color: NOTETAKER_RED }}>Discard</span>
             </button>
           </>
         ) : (
-          <span className="flex flex-1 flex-col items-center justify-center" style={{ gap: 5 }}>
-            <span className="rounded-full flex-none" style={{ width: 6, height: 6, background: NOTETAKER_RED, animation: 'notetaker-dot-pulse 1.1s ease-in-out infinite' }} />
-            <span className="flex items-end" style={{ gap: 1.5, height: 15 }}>
-              {levels.map((level, i) => (
-                <span key={i} className="w-[2px] rounded-full bg-white" style={{ height: Math.max(4, Math.round(level * 15)), transition: 'height 60ms linear' }} />
-              ))}
+          /* SILENCE IS A LINE, NOT A ROW OF DOTS.
+             The bars were 3px wide with a 5px floor and `rounded-full`, so at
+             rest each one rendered as a CIRCLE — the pill showed five dots
+             rather than a waveform. Same defect the Swift waveform had, and the
+             same fix: no floor, a hairline behind, and nothing drawn below 2px
+             because a sub-2px rounded div is that dot again by another name.
+             Bars are 2px on a 2px gap, matching Waveform.swift exactly. */
+          <span className="flex items-center" style={{ gap: 7 }}>
+            <span
+              className="rounded-full flex-none"
+              style={{ width: 6, height: 6, background: NOTETAKER_RED, animation: 'notetaker-dot-pulse 1.1s ease-in-out infinite' }}
+            />
+            <span
+              className="relative flex items-center justify-center flex-none"
+              style={{ width: WAVE_WIDTH, height: 20 }}
+            >
+              <span
+                className="absolute rounded-full"
+                style={{ left: 0, right: 0, height: 1, background: 'rgba(255,255,255,0.18)' }}
+              />
+              <span className="relative flex items-center" style={{ gap: 2 }}>
+                {levels.map((level, i) => {
+                  const h = Math.round(level * 20)
+                  return (
+                    <div
+                      key={i}
+                      className="w-[2px] rounded-full bg-white"
+                      style={{
+                        height: h < 2 ? 0 : h,
+                        opacity: 0.55 + 0.45 * level,
+                        transition: 'height 60ms linear',
+                      }}
+                    />
+                  )
+                })}
+              </span>
             </span>
           </span>
         )}
       </div>
 
-      {/* Inlined because this window has no route-specific stylesheet, same
-       *  reasoning as the waveform preferring CSS
+      {/* @keyframes for the recording dot — inlined (no stylesheet in
+       *  this window), same reasoning as the waveform preferring CSS
        *  transitions over extra rAF work. */}
       <style>{`
         @keyframes notetaker-dot-pulse {

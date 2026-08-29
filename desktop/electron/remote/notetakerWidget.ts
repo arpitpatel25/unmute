@@ -154,15 +154,21 @@ ipcMain.on('notetaker:widget-ready', () => {
 function widgetBounds(): { x: number; y: number; width: number; height: number } {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const wa = display.workArea
-  const width = 44
-  const height = 116
+  // MUST MATCH NotetakerWidget.tsx's PILL_HEIGHT. The window is exactly as tall
+  // as the pill, so a pill taller than this is CLIPPED — the widget's rounded
+  // ends and border get sliced off and it reads as a cut rectangle rather than
+  // a capsule. Duplicated across a process boundary, so it has to be changed in
+  // both places or not at all.
+  const pillHeight = 36
+  const width = 260
   const xMargin = 16
   const baseline = 30 // matches the dictation pill's own clearance from the bottom
+  const windowHeight = pillHeight
   return {
     width,
-    height,
+    height: windowHeight,
     x: wa.x + xMargin,
-    y: wa.y + wa.height - baseline - height,
+    y: wa.y + wa.height - baseline - windowHeight,
   }
 }
 
