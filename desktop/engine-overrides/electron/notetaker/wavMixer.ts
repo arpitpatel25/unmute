@@ -21,43 +21,12 @@ function readPcmWav(filePath: string): PcmWav | null {
   }
 }
 
-const STT_ACTIVITY_FRAME_MS = 10
-const STT_SPEECH_RMS = 0.015
-// 120ms admitted keyboard clicks and brief noise bursts observed in real
-// meeting logs (which Whisper then hallucinated as "Thank you" or prompt
-// fragments). Half a second still keeps short spoken acknowledgements while
-// refusing non-speech transients before they consume an STT request.
-export const MIN_STT_AUDIBLE_MS = 500
-
-/** Rejects retained WAVs that contain only silence or a momentary click.
- * Such files are still kept for playback, but sending them to Whisper is
- * what produced prompt fragments and repeated "Thank you" hallucinations. */
-export function hasEnoughSpeechEnergy(filePath: string, minimumMs = MIN_STT_AUDIBLE_MS): boolean {
-  const wav = readPcmWav(filePath)
-  if (!wav) return false
-  const frameSamples = Math.max(1, Math.round(wav.sampleRate * STT_ACTIVITY_FRAME_MS / 1000))
-  let audibleMs = 0
-  for (let from = 0; from < wav.samples.length; from += frameSamples) {
-    const to = Math.min(wav.samples.length, from + frameSamples)
-    let energy = 0
-    for (let i = from; i < to; i++) {
-      const sample = wav.samples[i] / 32768
-      energy += sample * sample
-    }
-    if (Math.sqrt(energy / Math.max(1, to - from)) >= STT_SPEECH_RMS) {
-      audibleMs += (to - from) * 1000 / wav.sampleRate
-      if (audibleMs >= minimumMs) return true
-    }
-  }
-  return false
-}
-
 type AlignedLanes = { mic: PcmWav; system: PcmWav; micOffset: number; systemOffset: number; length: number }
 
 /** The two capture paths start independently, so align their files to the
  * shared capture timeline before making any audio decision. */
 function alignLanes(mic: PcmWav, system: PcmWav, starts: RecordingStartTimes): AlignedLanes {
-  const fallbackStart = Math.min(starts.micStartMs ?? 0, starts.systemStartMs ?? 0)
+  const fallbackStart = starts.micStartMs ?? starts.systemStartMs ?? 0
   const micStart = starts.micStartMs ?? fallbackStart
   const systemStart = starts.systemStartMs ?? fallbackStart
   const origin = Math.min(micStart, systemStart)
@@ -121,14 +90,14 @@ function systemActivityByFrame(lanes: AlignedLanes): { active: Uint8Array; frame
  * ownership then use mic only while system audio is quiet. Raw lanes remain
  * untouched, and this avoids pretending a fixed offline subtraction is AEC.
  */
-function mixMinus(lanes: AlignedLanes, micOnly: boolean): Float32Array {
+function mixMinus(lanes: AlignedLanes): Float32Array {
   const output = new Float32Array(lanes.length)
   const activity = systemActivityByFrame(lanes)
   for (let i = 0; i < output.length; i++) {
     const system = laneSample(lanes.system.samples, i - lanes.systemOffset)
     const mic = laneSample(lanes.mic.samples, i - lanes.micOffset)
     const systemActive = activity.active[Math.floor(i / activity.frameSamples)] === 1
-    output[i] = micOnly ? (systemActive ? 0 : mic) : (systemActive ? system : mic)
+    output[i] = systemActive ? system : mic
   }
   return output
 }
@@ -140,22 +109,6 @@ function writeMonoWav(outputPath: string, samples: Float32Array, sampleRate: num
   } catch {
     return false
   }
-}
-
-/** Writes a derived mic lane with far-end/system bleed suppressed. */
-export function createEchoSuppressedMicRecording(
-  micPath: string | null,
-  systemPath: string | null,
-  outputPath: string,
-  starts: RecordingStartTimes = {},
-): boolean {
-  const mic = micPath ? readPcmWav(micPath) : null
-  const system = systemPath ? readPcmWav(systemPath) : null
-  if (!mic) return false
-  if (!system || system.sampleRate !== mic.sampleRate) {
-    return writeMonoWav(outputPath, Float32Array.from(mic.samples, (sample) => sample / 32768), mic.sampleRate)
-  }
-  return writeMonoWav(outputPath, mixMinus(alignLanes(mic, system, starts), true), mic.sampleRate)
 }
 
 /** Produces the sole user-facing, mono meeting recording. */
@@ -178,5 +131,5 @@ export function createMeetingRecording(
       return false
     }
   }
-  return writeMonoWav(outputPath, mixMinus(alignLanes(mic, system, starts), false), mic.sampleRate)
+  return writeMonoWav(outputPath, mixMinus(alignLanes(mic, system, starts)), mic.sampleRate)
 }

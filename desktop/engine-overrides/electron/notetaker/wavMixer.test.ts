@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { encodeWav } from './wavEncoder'
-import { createMeetingRecording, createEchoSuppressedMicRecording, hasEnoughSpeechEnergy } from './wavMixer'
+import { createMeetingRecording } from './wavMixer'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'notetaker-wav-mixer-'))
@@ -41,20 +41,6 @@ describe('createMeetingRecording', () => {
     writeWav(mic, [0.3, -0.2])
     assert.equal(createMeetingRecording(mic, null, output), true)
     assert.deepEqual(fs.readFileSync(output), fs.readFileSync(mic))
-  })
-
-  test('suppresses far-end audio from the derived mic retry lane without altering raw mic', () => {
-    const dir = tempDir()
-    const mic = path.join(dir, 'mic.wav')
-    const system = path.join(dir, 'system.wav')
-    const output = path.join(dir, 'mic-clean.wav')
-    writeWav(mic, new Array(1000).fill(0.5))
-    writeWav(system, new Array(1000).fill(0.5))
-
-    assert.equal(createEchoSuppressedMicRecording(mic, system, output), true)
-    const clean = fs.readFileSync(output)
-    assert.ok(Math.abs(sampleAt(clean, 500)) < 0.01)
-    assert.equal(fs.readFileSync(mic).readInt16LE(44), 16384)
   })
 
   test('keeps delayed speaker reflection muted after the system voice stops', () => {
@@ -97,30 +83,15 @@ describe('createMeetingRecording', () => {
     assert.ok(Math.abs(sampleAt(result, 400) - 0.2) < 0.02)
     assert.ok(Math.abs(sampleAt(result, 10000) - 0.4) < 0.02)
   })
-})
 
-describe('hasEnoughSpeechEnergy', () => {
-  test('rejects silence and a momentary click before STT', () => {
+  test('uses the one known lane start when timing metadata is partial', () => {
     const dir = tempDir()
-    const silence = path.join(dir, 'silence.wav')
-    const click = path.join(dir, 'click.wav')
-    writeWav(silence, new Array(16000).fill(0))
-    writeWav(click, [...new Array(160).fill(0.5), ...new Array(15840).fill(0)])
-    assert.equal(hasEnoughSpeechEnergy(silence), false)
-    assert.equal(hasEnoughSpeechEnergy(click), false)
-  })
-
-  test('rejects a few hundred milliseconds of background-noise energy', () => {
-    const dir = tempDir()
-    const noise = path.join(dir, 'noise.wav')
-    writeWav(noise, [...new Array(6400).fill(0.04), ...new Array(9600).fill(0)])
-    assert.equal(hasEnoughSpeechEnergy(noise), false)
-  })
-
-  test('accepts sustained speech-like energy', () => {
-    const dir = tempDir()
-    const speech = path.join(dir, 'speech.wav')
-    writeWav(speech, [...new Array(9600).fill(0.04), ...new Array(6400).fill(0)])
-    assert.equal(hasEnoughSpeechEnergy(speech), true)
+    const mic = path.join(dir, 'mic.wav')
+    const system = path.join(dir, 'system.wav')
+    const output = path.join(dir, 'meeting.wav')
+    writeWav(mic, new Array(100).fill(0.2), 100)
+    writeWav(system, new Array(100).fill(0), 100)
+    assert.equal(createMeetingRecording(mic, system, output, { micStartMs: 1_000 }), true)
+    assert.equal((fs.readFileSync(output).length - 44) / 2, 100)
   })
 })

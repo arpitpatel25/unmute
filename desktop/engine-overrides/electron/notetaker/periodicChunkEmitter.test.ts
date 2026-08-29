@@ -46,6 +46,18 @@ describe('PeriodicChunkEmitter', () => {
     assert.equal(segments.length, 1)
   })
 
+  test('a cut segment ends with its own final frame, not the first frame of the next segment', () => {
+    const segments: FinalizedSegment[] = []
+    const emitter = new PeriodicChunkEmitter((segment) => segments.push(segment), { minChunkMs: 100, hardCapMs: 200 })
+    emitter.feed(loudSamples(1600), 16000, 1, 1000) // [1000, 1100)
+    emitter.feed(loudSamples(1600), 16000, 1, 1250) // forces a cut before this frame
+    assert.equal(segments.length, 1)
+    assert.equal(segments[0].endTimestampMs, 1100)
+    emitter.flush()
+    assert.equal(segments[1].captureStartTimestampMs, 1250)
+    assert.equal(segments[1].endTimestampMs, 1350)
+  })
+
   test('chunk index increments across multiple cuts', () => {
     const segments: FinalizedSegment[] = []
     let clock = 0

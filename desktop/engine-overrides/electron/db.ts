@@ -172,6 +172,15 @@ export function initDB(): void {
   `)
   db.prepare('INSERT OR IGNORE INTO notetaker_settings (id) VALUES (1)').run()
 
+  // No capture or note pipeline survives an Electron process restart. Turn
+  // abandoned in-flight rows into explicit retryable failures instead of
+  // leaving the UI spinning forever after a crash or quit during processing.
+  db.prepare(`
+    UPDATE meetings
+    SET status = 'failed', cleanup_status = 'failed', summary_status = 'failed'
+    WHERE status IN ('recording', 'transcribing')
+  `).run()
+
   cleanupSessions()
   sweepExpiredMeetingAudio()
   // A write-triggered cleanup is not a hard retention guarantee for someone
@@ -390,8 +399,25 @@ export function markMeetingProcessing(id: string, endedAt: number): void {
     SET title = ?, ended_at = ?, duration_ms = ?, status = ?,
         cleanup_status = ?, summary_status = ?
     WHERE id = ?
-  `).run('Preparing notes…', endedAt, durationMs, 'transcribing', 'disabled', 'pending', id)
+  `).run('Preparing notes…', endedAt, durationMs, 'transcribing', 'pending', 'pending', id)
   notetakerLog.child({ meetingId: id }).event('meeting-marked-processing', { durationMs })
+}
+
+/** Ensure an unexpected persistence/transcription exception cannot leave a
+ * meeting permanently showing as in progress. Retained audio remains on disk
+ * so the user can retry transcription from the detail view. */
+export function markMeetingFailed(id: string): void {
+  db.prepare(`
+    UPDATE meetings
+    SET status = ?, cleanup_status = ?, summary_status = ?
+    WHERE id = ?
+  `).run('failed', 'failed', 'failed', id)
+  notetakerLog.child({ meetingId: id }).event('meeting-marked-failed')
+}
+
+export function markMeetingReady(id: string): void {
+  db.prepare('UPDATE meetings SET status = ? WHERE id = ?').run('ready', id)
+  notetakerLog.child({ meetingId: id }).event('meeting-marked-ready')
 }
 
 /** Narrow, partial update for the cleanup/summarization pipeline's own

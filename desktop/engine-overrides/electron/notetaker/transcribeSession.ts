@@ -212,7 +212,10 @@ export async function persistSession(
   fs.writeFileSync(temp, JSON.stringify(attributedSegments), 'utf8')
   fs.renameSync(temp, target)
 
-  const status: DBMeeting['status'] = failed ? 'failed' : 'ready'
+  // A failed source lane does not invalidate useful speech captured from the
+  // other lane. Reserve the meeting-level failure for the case where STT
+  // failed and no transcript survived at all.
+  const status: DBMeeting['status'] = failed && attributedSegments.length === 0 ? 'failed' : 'ready'
 
   mlog.event('session-persisted', {
     title,

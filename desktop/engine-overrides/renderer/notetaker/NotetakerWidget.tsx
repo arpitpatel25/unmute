@@ -4,13 +4,9 @@
 //
 // A small pill, bottom-left, showing a live waveform while a note-taking
 // session is active — spec §7: "not buried, more like a floating thing."
-// (2026-08-26: was a circle; redesigned to a pill sharing the dictation
-// pill's own PillGlass material, so the two overlays read as one visual
-// language.) Hovering (or focusing) reveals a separate white Cancel chip
-// above it — the pill itself is not clickable (spec §6: stop is NEVER a
-// single, direct action; hover-then-click-a-distinct-control satisfies
-// that as well as the old same-spot double-click did). No timer anywhere
-// in this file — the waveform redraws itself off the AnalyserNode via
+// Clicking the compact vertical waveform reveals explicit End, Discard, and
+// close actions in that same capsule. No timer anywhere in this file — the
+// waveform redraws itself off the AnalyserNode via
 // requestAnimationFrame, matching this codebase's existing precedent in
 // widget/useAudioRecorder.ts + widget/Widget.tsx (WidgetApp owns the
 // getUserMedia capture and analyser; Widget is the prop-driven presentational
@@ -25,7 +21,7 @@ type API = {
   notetakerEndRequested?: () => void
   notetakerCancelRequested?: () => void
   notetakerOnCaptureActive?: (cb: (active: boolean) => void) => () => void
-  notetakerOnStopPending?: (cb: (pending: boolean) => void) => () => void
+  notetakerOnCompleted?: (cb: () => void) => () => void
   notetakerWidgetReady?: () => void
   notetakerMicChunk?: (samples: ArrayBuffer, sampleRate: number, timestampMs: number) => void
   notetakerWidgetLog?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>) => void
@@ -254,8 +250,11 @@ async function attachMicChunkTap(
   // audio clocks on both paths is what makes transcript and playback order
   // comparable.
   const outputTimestamp = ctx.getOutputTimestamp?.()
-  const contextToWallMs = outputTimestamp && Number.isFinite(outputTimestamp.contextTime) && Number.isFinite(outputTimestamp.performanceTime)
-    ? performance.timeOrigin + outputTimestamp.performanceTime - outputTimestamp.contextTime * 1000
+  const outputContextTime = outputTimestamp?.contextTime
+  const outputPerformanceTime = outputTimestamp?.performanceTime
+  const contextToWallMs = typeof outputContextTime === 'number' && typeof outputPerformanceTime === 'number'
+    && Number.isFinite(outputContextTime) && Number.isFinite(outputPerformanceTime)
+    ? performance.timeOrigin + outputPerformanceTime - outputContextTime * 1000
     : Date.now() - ctx.currentTime * 1000
   // Renderer-side proof the audio graph is actually PRODUCING samples, distinct
   // from main's own 'mic-chunk heartbeat' (which only proves the IPC message
@@ -374,7 +373,6 @@ async function attachMicChunkTap(
 export function NotetakerWidget({
   analyser,
   sessionId = 0,
-  stopPending = false,
   completed = false,
   onEndRequested,
   onDiscardRequested,
@@ -385,14 +383,6 @@ export function NotetakerWidget({
    *  remounts — without this, the discard option left open in one session
    *  would still be showing when the next session opened the widget. */
   sessionId?: number
-  /** True while the KEYBOARD's own single-tap stop is in its undo window
-   *  (main → notetaker:stop-pending, see notetakerWidget.ts's
-   *  broadcastStopPending). Recording is still running — this is a separate
-   *  signal from `analyser` going null, which only happens once a stop is
-   *  actually finalized. The pill's own content swaps to a short message
-   *  for this state (see below) — the discard box never shows here, since
-   *  the only way to resolve it is another tap on the key. */
-  stopPending?: boolean
   /** Brief post-stop acknowledgement shown before the window hides. */
   completed?: boolean
   onEndRequested: () => void
@@ -402,7 +392,7 @@ export function NotetakerWidget({
   const [showDiscard, setShowDiscard] = useState(false)
   const rafRef = useRef<number | undefined>(undefined)
 
-  const openDiscard = () => { if (!stopPending) setShowDiscard(true) }
+  const openDiscard = () => setShowDiscard(true)
   const dismissDiscard = () => setShowDiscard(false)
   const requestEnd = () => { setShowDiscard(false); onEndRequested() }
   const confirmDiscard = () => { setShowDiscard(false); onDiscardRequested() }
@@ -414,13 +404,6 @@ export function NotetakerWidget({
     setShowDiscard(false)
     setLevels(new Array(BAR_COUNT).fill(0.35))
   }, [sessionId])
-
-  // The discard option only ever makes sense while actually recording —
-  // never while the undo window (stopPending) is counting down, since the
-  // only affordance that resolves that state is another tap on the key.
-  useEffect(() => {
-    if (stopPending) setShowDiscard(false)
-  }, [stopPending])
 
   // Live waveform: reads the analyser every animation frame. No setInterval —
   // requestAnimationFrame both matches the display refresh and stops for free
@@ -455,14 +438,14 @@ export function NotetakerWidget({
   // expanded state stacked a black button, a pink button and a white shell,
   // so almost every pixel looked like another background. Only completion
   // and the keyboard undo message need the light acknowledgement surface.
-  const isLight = stopPending || completed
+  const isLight = completed
   const glassBackground = isLight
     ? 'rgba(252,252,250,0.94)'
     : 'linear-gradient(to bottom, rgba(255,255,255,0.12), rgba(255,255,255,0.025) 58%, rgba(255,255,255,0) 100%), rgba(34,35,39,0.72)'
   const glassBorder = isLight
-    ? stopPending ? '1.5px solid rgba(111,191,154,0.45)' : '1px solid rgba(0,0,0,0.08)'
+    ? '1px solid rgba(0,0,0,0.08)'
     : '1px solid rgba(255,255,255,0.17)'
-  const isActions = showDiscard || stopPending
+  const isActions = showDiscard
 
   return (
     <div
@@ -478,8 +461,6 @@ export function NotetakerWidget({
         title={!isActions && !completed ? 'Note taker — click for meeting actions' : undefined}
         aria-label={
           completed ? 'Meeting saved — preparing notes'
-            : stopPending
-            ? 'Stopping note-taking — press left Control again to keep recording'
             : showDiscard ? undefined : 'Note-taking in progress — tap for options'
         }
         onClick={!isActions && !completed ? openDiscard : undefined}
@@ -495,7 +476,6 @@ export function NotetakerWidget({
           padding: isActions ? '3px 4px' : 0,
           background: glassBackground,
           backdropFilter: isLight ? undefined : 'blur(16px) saturate(125%)',
-          // @ts-expect-error -- WebkitBackdropFilter is a real, vendor-prefixed CSS prop Chromium still wants
           WebkitBackdropFilter: isLight ? undefined : 'blur(16px) saturate(125%)',
           border: glassBorder,
           boxShadow: isLight ? '0 5px 14px rgba(0,0,0,0.13)' : '0 4px 14px rgba(0,0,0,0.16)',
@@ -507,10 +487,6 @@ export function NotetakerWidget({
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" style={{ color: NOTETAKER_GREEN }}>
               <path d="M5 12.5l4.2 4.1L19.5 6.8" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-          </span>
-        ) : stopPending ? (
-          <span className="flex flex-1 items-center justify-center text-center text-[11px] font-semibold leading-tight" style={{ color: 'rgba(0,0,0,0.78)', padding: '0 4px' }}>
-            Press Control again to keep recording
           </span>
         ) : showDiscard ? (
           <>
@@ -568,8 +544,8 @@ export function NotetakerWidget({
         )}
       </div>
 
-      {/* @keyframes for the stopPending dot — inlined (no stylesheet in
-       *  this window), same reasoning as the waveform preferring CSS
+      {/* Inlined because this window has no route-specific stylesheet, same
+       *  reasoning as the waveform preferring CSS
        *  transitions over extra rAF work. */}
       <style>{`
         @keyframes notetaker-dot-pulse {
@@ -642,7 +618,6 @@ export function NotetakerWidgetRoute() {
 
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
   const [captureActive, setCaptureActive] = useState(false)
-  const [stopPending, setStopPending] = useState(false)
   const [completed, setCompleted] = useState(false)
   /** Increments on every false→true transition: one "session" of the widget. */
   const [sessionId, setSessionId] = useState(0)
@@ -702,29 +677,16 @@ export function NotetakerWidgetRoute() {
     return () => unsubscribe?.()
   }, [])
 
-  // Separate from captureActive on purpose — see NotetakerWidget's
-  // `stopPending` prop comment: capture keeps running through this window,
-  // it is only about to stop unless the user taps left Control again.
-  useEffect(() => {
-    const registeredAt = Date.now()
-    wlog('debug', 'stop-pending listener mounted', { msSinceMount: registeredAt - mountedAtRef.current })
-    const unsubscribe = api().notetakerOnStopPending?.((pending) => {
-      wlog('debug', 'stop-pending signal received from main', { pending, msSinceListenerMounted: Date.now() - registeredAt })
-      setStopPending(pending)
-    })
-    return () => unsubscribe?.()
-  }, [])
-
   useEffect(() => {
     const unsubscribe = api().notetakerOnCompleted?.(() => setCompleted(true))
     return () => unsubscribe?.()
   }, [])
 
-  // Fires once both listener-registering effects above have actually run —
+  // Fires once the listener-registering effects above have actually run —
   // React commits effects with empty deps in declaration order on mount, so
   // by the time THIS effect body runs, both subscriptions are guaranteed
   // live. Tells main it can safely resend the current capture-active/
-  // stop-pending state and have it actually arrive — see
+  // capture state and have it actually arrive — see
   // notetakerWidget.ts's 'notetaker:widget-ready' handler for why this
   // exists (a real dropped-signal bug on the widget's first-ever load that
   // neither the immediate send nor the 'did-finish-load' resend closed).
@@ -922,7 +884,6 @@ export function NotetakerWidgetRoute() {
     <NotetakerWidget
       analyser={analyser}
       sessionId={sessionId}
-      stopPending={stopPending}
       completed={completed}
       onEndRequested={() => api().notetakerEndRequested?.()}
       onDiscardRequested={() => api().notetakerCancelRequested?.()}

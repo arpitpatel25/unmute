@@ -1,11 +1,8 @@
 // Meeting detail — two top-level tabs (Notes / Transcript, 2026-08-25 spec
 // §9), replacing the previous single flat transcript view.
 //
-// Transcript tab: Cleaned/Raw sub-tabs, Cleaned selected by default once
-// cleanup has succeeded (else Raw, since Cleaned has nothing to show yet).
-// Raw is always available regardless of cleanup status — unchanged from
-// before this feature existed. Audio playback lives here as one normal
-// meeting recording; capture's mic/system source files stay internal.
+// Transcript tab: the chronological raw STT transcript plus one normal
+// meeting recording. Capture's mic/system source files stay internal.
 //
 // Notes tab: title/date/time followed by a deliberately document-like Markdown
 // view. It is not a stack of collapsible AI "key point" cards: the summary is
@@ -21,7 +18,7 @@
 // can change while this view is open (an in-flight auto pipeline, or a
 // user-triggered retry).
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -176,7 +173,7 @@ function NotesDocument({ markdown, revealed }: { markdown: string; revealed: boo
           li: ({ children }) => <li className="notetaker-note-list-item">{children}</li>,
           blockquote: ({ children }) => <blockquote className="notetaker-note-quote">{children}</blockquote>,
           strong: ({ children }) => <strong className="notetaker-note-strong">{children}</strong>,
-          a: ({ children, href }) => <a className="notetaker-note-link" href={href}>{children}</a>,
+          a: ({ children, href }) => <a className="notetaker-note-link" href={href} target="_blank" rel="noreferrer">{children}</a>,
         }}
       >
         {markdown}
@@ -385,26 +382,23 @@ export function MeetingDetail({
   // (or a retry just kicked off below) needs
   // SOMETHING to notice when it settles, since nothing pushes that update
   // to an already-open detail view. Stops itself once both are settled.
-  const pendingRef = useRef(false)
-  pendingRef.current = summaryStatus === 'pending'
   useEffect(() => {
-    if (!pendingRef.current) return
+    if (summaryStatus !== 'pending') return
     let cancelled = false
-    const interval = setInterval(() => {
-      if (!pendingRef.current) { clearInterval(interval); return }
-      api().notetakerGetPipelineStatus?.(id).then((result) => {
+    const poll = () => {
+      api().notetakerGetPipelineStatus?.(id).then(async (result) => {
         if (cancelled || !result) return
-        setSummaryStatus((prev) => {
-          if (prev === 'pending' && result.summary_status === 'success') {
-            api().notetakerGetNotes?.(id).then((data) => { if (!cancelled) setNotes(data) })
-          }
-          return result.summary_status
-        })
+        if (result.summary_status === 'success') {
+          const data = await api().notetakerGetNotes?.(id)
+          if (!cancelled) setNotes(data ?? null)
+        }
+        if (!cancelled) setSummaryStatus(result.summary_status)
       })
-    }, STATUS_POLL_MS)
+    }
+    void poll()
+    const interval = window.setInterval(poll, STATUS_POLL_MS)
     return () => { cancelled = true; clearInterval(interval) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, summaryStatus === 'pending'])
+  }, [id, summaryStatus])
 
   async function handleRetry() {
     if (retrying) return
@@ -412,8 +406,16 @@ export function MeetingDetail({
     setSummaryStatus('pending')
     try {
       await api().notetakerRetryPipeline?.(id)
+      const [nextNotes, status] = await Promise.all([
+        api().notetakerGetNotes?.(id),
+        api().notetakerGetPipelineStatus?.(id),
+      ])
+      setNotes(nextNotes ?? null)
+      setSummaryStatus(status?.summary_status ?? 'failed')
     } catch (err) {
       console.error('Failed to retry pipeline:', err)
+      const status = await api().notetakerGetPipelineStatus?.(id).catch(() => null)
+      setSummaryStatus(status?.summary_status ?? 'failed')
     } finally {
       setRetrying(false)
     }
@@ -438,7 +440,16 @@ export function MeetingDetail({
       setMeetingAudioUrl(audioUrl ? `${audioUrl}?v=${Date.now()}` : null)
     } catch (err) {
       console.error('Failed to re-transcribe meeting:', err)
-      setSummaryStatus('failed')
+      const [segments, previousNotes, status, audioUrl] = await Promise.all([
+        api().notetakerGetTranscript?.(id).catch(() => undefined),
+        api().notetakerGetNotes?.(id).catch(() => null),
+        api().notetakerGetPipelineStatus?.(id).catch(() => null),
+        api().notetakerGetAudioUrl?.(id, 'mixed').catch(() => null),
+      ])
+      setRawSegments(segments ?? [])
+      setNotes(previousNotes ?? null)
+      setSummaryStatus(status?.summary_status ?? 'failed')
+      setMeetingAudioUrl(audioUrl ?? null)
     } finally {
       setRetranscribing(false)
     }

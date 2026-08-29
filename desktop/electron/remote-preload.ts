@@ -664,8 +664,7 @@ export const remotePreloadExtensions = {
   /** User chose the normal, save-and-generate-notes completion path from the
    *  floating widget. */
   notetakerEndRequested: (): void => ipcRenderer.send('notetaker:end-requested'),
-  /** User chose Discard from the floating widget. Main still asks for the
-   *  destructive confirmation before deleting the in-progress meeting. */
+  /** User chose the explicit Discard action from the floating widget. */
   notetakerCancelRequested: (): void => ipcRenderer.send('notetaker:cancel-requested'),
   /** Main tells the widget whether a REAL capture is running right now.
    *  The widget window is REUSED across sessions (hidden, never closed), so
@@ -678,17 +677,6 @@ export const remotePreloadExtensions = {
     const handler = (_e: unknown, active: boolean) => cb(!!active)
     ipcRenderer.on('notetaker:capture-active', handler)
     return () => ipcRenderer.removeListener('notetaker:capture-active', handler)
-  },
-  /** Main tells the widget whether a manual (keyboard) stop is currently in
-   *  its undo window — capture is STILL running (this is not
-   *  notetakerOnCaptureActive going false), it is only about to stop unless
-   *  the user taps left Control again before it elapses. See
-   *  NotetakerController.onNotesStopRequested's own comment for the full
-   *  arm/cancel/finalize shape this mirrors. */
-  notetakerOnStopPending: (cb: (pending: boolean) => void): (() => void) => {
-    const handler = (_e: unknown, pending: boolean) => cb(!!pending)
-    ipcRenderer.on('notetaker:stop-pending', handler)
-    return () => ipcRenderer.removeListener('notetaker:stop-pending', handler)
   },
   /** Main gives the just-finished widget a momentary completion state before
    *  hiding it. */

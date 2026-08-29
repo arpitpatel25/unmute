@@ -121,13 +121,18 @@ export function MeetingsList({
 
   useEffect(() => {
     let cancelled = false
-    api().notetakerListMeetings?.()
+    const load = () => api().notetakerListMeetings?.()
       .then((data) => { if (!cancelled) setMeetings(data ?? []) })
       .catch((err) => {
         console.error('Failed to load meetings:', err)
-        if (!cancelled) setMeetings([])
+        if (!cancelled) setMeetings((current) => current ?? [])
       })
-    return () => { cancelled = true }
+    void load()
+    // Capture and note generation happen in the main process. Polling the
+    // local SQLite-backed list keeps an already-open Meetings page current,
+    // including the durable "Preparing notes…" row created at stop time.
+    const interval = window.setInterval(() => { void load() }, 2000)
+    return () => { cancelled = true; window.clearInterval(interval) }
   }, [])
 
   // A meeting can finish while this list is already mounted. Refresh before

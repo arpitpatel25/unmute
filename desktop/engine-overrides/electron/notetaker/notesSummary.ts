@@ -1,10 +1,9 @@
 // desktop/engine-overrides/electron/notetaker/notesSummary.ts
 //
 // Generates title/summary/key points/decisions/action items from a
-// meeting's CLEANED transcript (never raw — see transcriptCleanup.ts and
-// runNotetakerPipeline in notetakerInit.ts, which only calls this after
-// cleanup has succeeded) through the user's own headless Claude Code/Codex
-// CLI — 2026-08-25 spec §5.
+// meeting transcript through the user's selected connected agent. The
+// cleaned transcript is preferred; raw STT text is the deliberate fallback
+// when optional cleanup fails, so note generation remains useful.
 //
 // PROMPT IS TWO PARTS (2026-08-26): FIXED_SUMMARY_PREAMBLE/FIXED_SUMMARY_
 // CONTRACT bookend the editable instructions text (the user's own
@@ -35,8 +34,8 @@ export const DEFAULT_SUMMARY_INSTRUCTIONS =
   'complete note in summary as clean Markdown. Use 2–5 specific ## headings and bullet lists under every heading, ' +
   'in the style of a meeting document. Use topical headings such as ## Status, ## Decisions, ## Blockers, and ' +
   '## Next steps only when supported; never use a bare paragraph recap. Do not write a conclusion or third-person ' +
-  'recap. Leave keyPoints, decisions, actionItems, and ' +
-  'openQuestions as empty arrays. Only include content the transcript actually supports — never invent items.'
+  'recap. Leave keyPoints, decisions, actionItems, and openQuestions as empty arrays; put all rendered content in ' +
+  'summary. Only include content the transcript actually supports — never invent items.'
 
 const FIXED_SUMMARY_CONTRACT =
   'LANGUAGE\n\n' +
@@ -61,9 +60,8 @@ const FIXED_SUMMARY_CONTRACT =
   'from the transcript — never guess or invent an owner; omit it if it isn\'t clear.\n\n' +
 
   'OPEN QUESTIONS\n\n' +
-  'List, in `openQuestions`, anything the meeting raised but did not resolve — a question left unanswered, or a ' +
-  'choice the speakers explicitly disagreed on or never settled. Do not duplicate an item that is already in ' +
-  '`decisions`.\n\n' +
+  'Include unresolved questions under an appropriate Markdown heading in `summary`. Keep `openQuestions` empty, ' +
+  'like the other legacy list fields.\n\n' +
 
   'INSUFFICIENT SIGNAL\n\n' +
   'A short, casual, or test conversation is still valid source material: produce useful notes whenever any clear, ' +
@@ -103,7 +101,10 @@ export function buildSummaryInput(segments: TranscriptSegment[], instructions: s
 
 function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return []
-  return value.filter((v): v is string => typeof v === 'string' && v.length > 0)
+  return value
+    .filter((v): v is string => typeof v === 'string')
+    .map((v) => v.trim())
+    .filter(Boolean)
 }
 
 /** Pure. Requires non-empty title + summary to count as a real result —
@@ -120,10 +121,9 @@ export function parseSummaryOutput(raw: string): MeetingNotes | null {
   const parsed = extractJson(raw, 'object')
   if (!parsed || typeof parsed !== 'object') return null
   const obj = parsed as Record<string, unknown>
-  const title = obj.title
-  const summary = obj.summary
-  if (typeof title !== 'string' || title.length === 0) return null
-  if (typeof summary !== 'string' || summary.trim().length === 0) return null
+  const title = typeof obj.title === 'string' ? obj.title.trim() : ''
+  const summary = typeof obj.summary === 'string' ? obj.summary.trim() : ''
+  if (!title || !summary) return null
   return {
     title,
     summary,

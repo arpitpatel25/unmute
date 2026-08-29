@@ -210,8 +210,8 @@ async function handleSTT(
   const duration = parseFloat((form.get('duration_seconds') as string) || '0') || estimateDurationFromBytes(file.size)
   const flowType = (form.get('flow_type') as string) || 'dictation'
   // Preserve every existing transcription mode exactly as-is. Only the
-  // note-taker may omit a language so Whisper can auto-detect a code-switched
-  // English/Hindi meeting; dictation without a language remains English.
+  // note-taker may omit a language so Whisper can auto-detect multilingual,
+  // code-switched meetings; dictation without a language remains English.
   const requestedLanguage = (form.get('language') as string) || ''
   const language = flowType === 'notetaker' ? requestedLanguage : (requestedLanguage || 'en')
 

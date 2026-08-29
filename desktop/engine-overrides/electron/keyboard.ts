@@ -157,7 +157,7 @@ export class KeyboardManager extends EventEmitter {
   private _chainPending = false
   private _chainMode: SessionMode | null = null
 
-  // ─── Meeting Notetaker (left-Control, double-tap start / single-tap stop) ───
+  // ─── Meeting Notetaker (left-Control, double-tap start / double-tap stop) ───
   // DELIBERATELY NOT part of the dictation/instruction/agent/remote lock
   // group above, and DELIBERATELY not read or written by any of their
   // mutual-exclusion guards. Notes must never block, and never be blocked
@@ -675,7 +675,7 @@ export class KeyboardManager extends EventEmitter {
 
   /** Called by the owning module once a stop has actually happened — either
    *  the automatic confirm-dialog flow (onMeetingEnded) or this key's own
-   *  direct single-tap stop. The ONLY place `notesActive` is cleared back to
+   *  double-tap stop. The ONLY place `notesActive` is cleared back to
    *  false. */
   confirmNotesStop(): void {
     this.notesActive = false

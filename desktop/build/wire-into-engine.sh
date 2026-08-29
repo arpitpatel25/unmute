@@ -274,12 +274,6 @@ wire_paywall() {
     // by vite — not native.
     pkg.dependencies['react-markdown'] = '^9.0.1'
     pkg.dependencies['remark-gfm'] = '^4.0.0'
-    // ws loads these optional accelerators from its ESM entrypoint. Vite
-    // externalizes that import in the Electron main bundle, so a fresh npm
-    // install must make them explicit instead of relying on residue in
-    // node_modules from an older checkout.
-    pkg.dependencies['bufferutil'] = '^4.0.9'
-    pkg.dependencies['utf-8-validate'] = '^6.0.5'
     pkg.build = pkg.build || {}
     pkg.build.asarUnpack = pkg.build.asarUnpack || []
     if (!pkg.build.asarUnpack.includes('**/node_modules/node-pty/**')) {
@@ -411,38 +405,6 @@ patch_engine_sources() {
   # 1) main.ts: init paywall after windows are ready
   local main_ts="$engine/electron/main.ts"
 
-  # Development launches all share the same Electron userData directory,
-  # global keyboard hook, microphone, and native overlay. Running two copies
-  # at once therefore does not produce two isolated apps: it produces two
-  # controllers fighting over one set of resources. Prevent that explicitly
-  # in dev. The packaged app keeps its existing lifecycle unchanged.
-  if ! grep -q 'unmute-dev-single-instance-lock' "$main_ts"; then
-    local instance_patcher
-    instance_patcher="$(mktemp)"
-    cat > "$instance_patcher" <<'NODE_EOF'
-const fs = require('fs')
-const p = process.argv[2]
-let src = fs.readFileSync(p, 'utf-8')
-const marker = '// Simple JSON settings persistence'
-const block = `// unmute-dev-single-instance-lock
-// Dev copies share one userData directory and native keyboard/audio devices.
-// A second copy would duplicate global shortcuts, capture, and overlay state.
-if (!app.isPackaged && !app.requestSingleInstanceLock()) {
-  app.exit(0)
-}
-
-`
-if (src.includes(marker)) {
-  src = src.replace(marker, block + marker)
-} else {
-  console.error('[wire] WARN: main.ts settings marker not found — dev single-instance guard not applied')
-}
-fs.writeFileSync(p, src)
-NODE_EOF
-    node "$instance_patcher" "$main_ts"
-    rm -f "$instance_patcher"
-  fi
-
   if ! grep -q 'initPaywall' "$main_ts"; then
     # Insert import near the top imports block
     sed -i.bak "/^import { setupAutoUpdater/a\\
@@ -551,7 +513,7 @@ import { runHeadlessAgent } from './notetaker/headlessAgent'
   if ! grep -q 'initNotetaker' "$main_ts"; then
     sed -i.bak "/^import { initRemote } from '\.\/paywall\/remote\/init'/a\\
 import { initNotetaker } from './notetakerInit'\\
-import { showNotetakerWidget, hideNotetakerWidget, broadcastStopPending } from './paywall/remote/notetakerWidget'\\
+import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notetakerWidget'\\
 import { getAgentAvailability } from './paywall/remote/init'
 " "$main_ts"
     rm -f "$main_ts.bak"
@@ -570,11 +532,6 @@ import { getAgentAvailability } from './paywall/remote/init'
           '  initNotetaker({\n' +
           '    onSessionStart: showNotetakerWidget,\n' +
           '    onSessionStop: hideNotetakerWidget,\n' +
-          '    // The key\\'s own single-tap stop arms a short undo window before it\n' +
-          '    // actually stops (NotetakerController.onNotesStopRequested) — this tints\n' +
-          '    // the widget for exactly that window, same cross-tree reason as the two\n' +
-          '    // hooks above.\n' +
-          '    onStopPendingChanged: broadcastStopPending,\n' +
           '    // getMainWindow/createMainWindow/showMainWindow are already imported\n' +
           '    // above (this file creates its own main window) — the notetaker tree\n' +
           '    // cannot import windowManager.ts directly (see NotetakerInitHooks\\'s\n' +
@@ -597,22 +554,12 @@ import { getAgentAvailability } from './paywall/remote/init'
       log "WARN: initNotetaker call injection did not land in main.ts"
     fi
   fi
-  # Normalize this import on every wire, not only on the first injection.
-  # A prior generated engine can carry an obsolete extra symbol here; the
-  # one-time initNotetaker guard otherwise leaves that stale import in place
-  # and Rollup fails before the note-taker can compile.
+  # Keep the generated engine's widget import canonical across repeated wires.
   node -e "
     const fs = require('fs'); const p = '$main_ts'; let s = fs.readFileSync(p, 'utf-8')
     s = s.replace(
       /import \\{[^}]*\\} from '\\.\\/paywall\\/remote\\/notetakerWidget'/,
-      \"import { showNotetakerWidget, hideNotetakerWidget, broadcastStopPending } from './paywall/remote/notetakerWidget'\",
-    )
-    // Generated engine trees survive between runs. Remove the obsolete
-    // processing hook from a prior version of the note-taker integration so
-    // a development launch cannot retain a reference to a deleted symbol.
-    s = s.replace(
-      /    \/\/ Capture is over but the meeting is still being transcribed\/cleaned\/\n[\s\S]*?    onProcessingChanged: setNotetakerProcessing,\n/,
-      '',
+      \"import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notetakerWidget'\",
     )
     fs.writeFileSync(p, s)
   "

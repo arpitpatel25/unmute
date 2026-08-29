@@ -62,6 +62,17 @@ describe('parseSummaryOutput', () => {
     assert.deepEqual(out?.keyPoints, ['a', 'b'])
   })
 
+  test('trims document fields and drops whitespace-only list items', () => {
+    const out = parseSummaryOutput(JSON.stringify({
+      title: '  Planning  ',
+      summary: '  ## Next steps\n- Ship it  ',
+      keyPoints: ['  useful  ', '   '],
+    }))
+    assert.equal(out?.title, 'Planning')
+    assert.equal(out?.summary, '## Next steps\n- Ship it')
+    assert.deepEqual(out?.keyPoints, ['useful'])
+  })
+
   test('a ```json fenced response (the real, live-observed Claude Code shape) still parses', () => {
     const fenced = '```json\n{"title":"T","summary":"S"}\n```'
     assert.deepEqual(parseSummaryOutput(fenced), { title: 'T', summary: 'S', keyPoints: [], decisions: [], actionItems: [], openQuestions: [] })

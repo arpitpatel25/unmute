@@ -97,7 +97,7 @@ export class PeriodicChunkEmitter {
   feed(samples: Float32Array, sampleRate: number, channels: number, timestampMs: number): void {
     const rms = computeRms(samples)
     const frameDurationMs = (samples.length / channels / sampleRate) * 1000
-    this.lastFrameEndMs = timestampMs + frameDurationMs
+    const frameEndMs = timestampMs + frameDurationMs
     this.noiseFloor.feed(rms, timestampMs)
     const threshold = effectiveSilenceThreshold(this.config.silenceThreshold, this.noiseFloor.floor)
     // Do not use the adaptive noise threshold for the first-speech clock.
@@ -114,6 +114,7 @@ export class PeriodicChunkEmitter {
       this.captureStartMs = timestampMs
       this.contentStartMs = audibleForOrdering ? timestampMs : null
       this.audibleDurationMs = audibleForOrdering ? frameDurationMs : 0
+      this.lastFrameEndMs = frameEndMs
       this.sampleRate = sampleRate
       this.channels = channels
       this.silenceStartMs = rms < threshold ? timestampMs : null
@@ -150,6 +151,7 @@ export class PeriodicChunkEmitter {
       this.captureStartMs = timestampMs
       this.contentStartMs = audibleForOrdering ? timestampMs : null
       this.audibleDurationMs = audibleForOrdering ? frameDurationMs : 0
+      this.lastFrameEndMs = frameEndMs
       this.sampleRate = sampleRate
       this.channels = channels
       this.silenceStartMs = rms < threshold ? timestampMs : null
@@ -157,6 +159,7 @@ export class PeriodicChunkEmitter {
     } else {
       if (this.contentStartMs === null && audibleForOrdering) this.contentStartMs = timestampMs
       if (audibleForOrdering) this.audibleDurationMs += frameDurationMs
+      this.lastFrameEndMs = frameEndMs
       this.parts.push(samples)
     }
   }
