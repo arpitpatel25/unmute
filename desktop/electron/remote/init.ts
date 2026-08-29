@@ -4606,7 +4606,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       const notchBin = process.env.UNMUTE_NOTCH_PATH
         || (app.isPackaged
           ? join(process.resourcesPath, 'unmute-notch', 'unmute-notch')
-          : join(app.getAppPath(), 'native-notch', '.build', 'release', 'unmute-notch'))
+          : join(app.getAppPath(), 'vendor', 'unmute-notch', 'unmute-notch'))
       notchClient = new NotchClient({
         binPath: notchBin,
         onExit: (code) => log.warn('notch helper exited', { code }),
