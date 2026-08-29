@@ -19,7 +19,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-const BAR_COUNT = 5
+// 55pt of waveform at 2px bars on a 2px gap. Five fat bars was the old
+// short-pill compromise; at the dictation pill's proportions the same width
+// holds fourteen, which is what makes it read as a voice rather than a meter.
+const BAR_COUNT = 14
 
 type API = {
   notetakerCancelRequested?: () => void
@@ -404,26 +407,34 @@ export function NotetakerWidget({
   // disproportionate no matter how either one was sized on its own. A
   // small static 3-bar glyph (waveGlyph below) stays in every white state
   // so it's still visibly "the recording thing," just not live-updating.
-  const isWhite = showDiscard || stopPending
-  const glassBackground = isWhite
-    ? '#fff'
-    : 'linear-gradient(to bottom, rgba(255,255,255,0.10), rgba(255,255,255,0.02) 55%, rgba(255,255,255,0) 100%), rgba(14,15,19,0.42)'
-  const glassBorder = showDiscard
-    ? '1px solid rgba(0,0,0,0.08)'
-    : stopPending
-      ? `1.5px solid rgba(111,191,154,0.45)`
-      : '1px solid rgba(255,255,255,0.12)'
+  // THE DICTATION PILL, NOT A SECOND DESIGN.
+  //
+  // This was rgba(14,15,19,0.42) over a blur(14px) backdrop — a translucent
+  // dark wash that SAMPLES the wallpaper, so on a magenta desktop the pill came
+  // out maroon and never read as black at all. PillView.swift settled this for
+  // the dictation capsule and its comment says why: pure black with a rim reads
+  // as "a hole punched in the screen", identical on every wallpaper, every
+  // Space and every Mac. One instrument, not one that changes colour with the
+  // desktop behind it.
+  const glassBackground = '#000'
+  const glassBorder = stopPending
+    ? '1.5px solid rgba(111,191,154,0.45)'
+    : '1px solid rgba(255,255,255,0.30)'
   // Pill height is fixed across every state (no resize-on-state-change
   // jank) — a true pill, not a tall capsule (2026-08-26: was 40px then
   // 22px; nudged back up slightly so the waveform has room to actually
   // read as a waveform rather than a near-flat line).
-  const PILL_HEIGHT = 26
+  // PillMetrics.height. The widget is the dictation pill carrying less, so it
+  // is the same height and only the WAVEFORM is shorter — 30% off the length,
+  // which is the one deliberate difference between the two.
+  const PILL_HEIGHT = 36
+  const WAVE_WIDTH = 55        // the dictation waveform is 78
 
   const waveGlyph = (tone: string) => (
-    <span className="flex items-center flex-none" style={{ gap: 1.5 }}>
-      <span className="block rounded-full" style={{ width: 2, height: 5, background: tone, opacity: 0.55 }} />
-      <span className="block rounded-full" style={{ width: 2, height: 9, background: tone }} />
-      <span className="block rounded-full" style={{ width: 2, height: 6, background: tone, opacity: 0.75 }} />
+    <span className="flex items-center flex-none" style={{ gap: 2 }}>
+      <span className="block rounded-full" style={{ width: 2, height: 7, background: tone, opacity: 0.55 }} />
+      <span className="block rounded-full" style={{ width: 2, height: 13, background: tone }} />
+      <span className="block rounded-full" style={{ width: 2, height: 9, background: tone, opacity: 0.75 }} />
     </span>
   )
 
@@ -458,11 +469,12 @@ export function NotetakerWidget({
           height: PILL_HEIGHT,
           padding: showDiscard ? 0 : stopPending ? '0 12px' : '0 13px',
           background: glassBackground,
-          backdropFilter: isWhite ? undefined : 'blur(14px)',
-          // @ts-expect-error -- WebkitBackdropFilter is a real, vendor-prefixed CSS prop Chromium still wants
-          WebkitBackdropFilter: isWhite ? undefined : 'blur(14px)',
+          // NO BACKDROP SAMPLING and no shadow. The fill is opaque black, so a
+          // blur behind it is invisible work; and PillView drops the shadow for
+          // the same reason it drops the sheen — both imply a lit object, and
+          // this one claims to be a hole rather than a surface.
           border: glassBorder,
-          boxShadow: isWhite ? '0 6px 16px rgba(0,0,0,0.16)' : 'none',
+          boxShadow: 'none',
           transition: 'background 180ms ease, border-color 180ms ease, padding 180ms ease, box-shadow 180ms ease',
         }}
       >
@@ -473,7 +485,7 @@ export function NotetakerWidget({
               className="rounded-full flex-none"
               style={{ width: 6, height: 6, background: NOTETAKER_GREEN, animation: 'notetaker-dot-pulse 1.1s ease-in-out infinite' }}
             />
-            <span className="text-[10.5px] font-semibold" style={{ color: 'rgba(0,0,0,0.78)' }}>
+            <span className="text-[13px] font-medium" style={{ color: 'rgba(255,255,255,0.92)' }}>
               Press ⌃ again to keep recording
             </span>
           </span>
@@ -484,7 +496,8 @@ export function NotetakerWidget({
               onClick={dismissDiscard}
               title="Never mind — keep recording"
               className="flex items-center justify-center flex-none"
-              style={{ width: 24, height: PILL_HEIGHT, color: 'rgba(0,0,0,0.35)' }}
+              // Was black-on-white; the pill is black now.
+              style={{ width: 30, height: PILL_HEIGHT, color: 'rgba(255,255,255,0.55)' }}
             >
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" />
@@ -500,21 +513,44 @@ export function NotetakerWidget({
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="flex-none" style={{ color: NOTETAKER_RED }}>
                 <path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-12" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              <span className="text-[11px] font-bold" style={{ color: NOTETAKER_RED }}>Discard meeting</span>
+              {/* The red survives HERE and nowhere else — on the one label
+                  that means destructive. A black capsule with a red word in it
+                  reads as a warning; a red capsule reads as another product. */}
+              <span className="text-[13px] font-medium" style={{ color: NOTETAKER_RED }}>Discard meeting</span>
             </button>
           </>
         ) : (
-          <span className="flex items-center" style={{ gap: 3, height: '100%' }}>
-            {levels.map((level, i) => (
-              <div
-                key={i}
-                className="w-[3px] rounded-full bg-white"
-                style={{
-                  height: Math.max(5, Math.round(level * 18)),
-                  transition: 'height 60ms linear',
-                }}
-              />
-            ))}
+          /* SILENCE IS A LINE, NOT A ROW OF DOTS.
+             The bars were 3px wide with a 5px floor and `rounded-full`, so at
+             rest each one rendered as a CIRCLE — the pill showed five dots
+             rather than a waveform. Same defect the Swift waveform had, and the
+             same fix: no floor, a hairline behind, and nothing drawn below 2px
+             because a sub-2px rounded div is that dot again by another name.
+             Bars are 2px on a 2px gap, matching Waveform.swift exactly. */
+          <span
+            className="relative flex items-center justify-center flex-none"
+            style={{ width: WAVE_WIDTH, height: 20 }}
+          >
+            <span
+              className="absolute rounded-full"
+              style={{ left: 0, right: 0, height: 1, background: 'rgba(255,255,255,0.18)' }}
+            />
+            <span className="relative flex items-center" style={{ gap: 2 }}>
+              {levels.map((level, i) => {
+                const h = Math.round(level * 20)
+                return (
+                  <div
+                    key={i}
+                    className="w-[2px] rounded-full bg-white"
+                    style={{
+                      height: h < 2 ? 0 : h,
+                      opacity: 0.55 + 0.45 * level,
+                      transition: 'height 60ms linear',
+                    }}
+                  />
+                )
+              })}
+            </span>
           </span>
         )}
       </div>
