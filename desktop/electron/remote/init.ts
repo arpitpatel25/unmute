@@ -94,6 +94,7 @@ import { SessionsCapability } from './agent/capabilities/sessions'
 import { SessionStore, defaultCachePath } from './agent/sessions/store'
 import { defaultRecordPath } from './agent/sessions/record'
 import { SessionSweeper } from './agent/sessions/sweeper'
+import { ProviderHealth } from './agent/providerHealth'
 import { HistoryCapability } from './agent/capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
 
@@ -685,6 +686,66 @@ let unmuteAgentRegistry: CapabilityRegistry = new CapabilityRegistry([])
  *  it builds the registry below. */
 let notetakerAdapters: NotetakerAdapters | null = null
 let runHeadlessSummary: RemoteInitDeps['runHeadless'] | null = null
+
+/**
+ * Which Agent CLIs are currently working. In-memory and never persisted — see
+ * agent/providerHealth.ts for why the user's own setting is left alone.
+ */
+const agentProviderHealth = new ProviderHealth()
+
+/** Whether a provider's CLI is actually present on this machine. */
+function agentProviderInstalled(id: AgentProviderId): boolean {
+  return unmuteAgentAvailability.providers.find((p) => p.id === id)?.available === true
+}
+
+/**
+ * The provider the Agent should USE right now.
+ *
+ * Distinct from `settings.get('unmuteAgentProvider')`, which is the provider
+ * the user CHOSE. They differ only while the chosen one is cooling down after a
+ * failure, and they converge again on their own — nothing here writes settings.
+ */
+function resolveAgentProvider(): AgentProviderId {
+  const preferred = settings.get('unmuteAgentProvider')
+  const [effective] = agentProviderHealth.order(preferred, agentProviderInstalled)
+  if (effective !== preferred) {
+    log.event('agent-provider-fallback', {
+      chosen: preferred,
+      using: effective,
+      health: agentProviderHealth.snapshot(),
+    })
+  }
+  return effective
+}
+
+/**
+ * Runs one headless Agent request, trying the other CLI if the first fails.
+ *
+ * A failure marks the provider so the NEXT request skips it outright: without
+ * that, every call keeps paying for a doomed launch before its working retry.
+ */
+async function runAgentHeadless(
+  input: string,
+): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
+  const run = runHeadlessSummary
+  if (!run) return { ok: false, error: 'headless agent is not wired in this build' }
+  const preferred = settings.get('unmuteAgentProvider')
+  const order = agentProviderHealth.order(preferred, agentProviderInstalled)
+  let last: { ok: false; error: string } = { ok: false, error: 'no agent provider available' }
+  for (const provider of order) {
+    const result = await run(provider, input)
+    if (result.ok) {
+      agentProviderHealth.markWorking(provider)
+      return result
+    }
+    agentProviderHealth.markFailed(provider)
+    log.warn('agent provider failed — cooling it down', {
+      provider, chosen: preferred, error: result.error.slice(0, 200),
+    })
+    last = result
+  }
+  return last
+}
 let unmuteAgentSupervisor: AgentRunSupervisor | null = null
 let unmuteAgentController: UnmuteAgentController | null = null
 let unmuteAgentIndex: ReturnType<typeof openSqlCipherMemoryIndex> | null = null
@@ -1072,7 +1133,10 @@ async function initializeUnmuteAgent(): Promise<void> {
         recordPath: sessionRecordPath,
         // The provider choice stays where the setting lives; the injected
         // function only knows how to spawn one.
-        run: (input) => runSummary(settings.get('unmuteAgentProvider'), input),
+        // Routed through the fallback runner, not the raw setting: a sweep is
+        // unattended background work, so a dead provider must not silently
+        // stop it for hours (it did — see providerHealth.ts's header).
+        run: (input) => runAgentHeadless(input),
         parseJson: (raw) => JSON.parse(raw),
       })
       : null
@@ -1282,7 +1346,7 @@ async function initializeUnmuteAgent(): Promise<void> {
       providers: runtimeProviders,
       tokenStore: tokens,
       journal,
-      selectedProvider: () => settings.get('unmuteAgentProvider'),
+      selectedProvider: () => resolveAgentProvider(),
       maxActiveProcesses: settings.get('unmuteAgentMaxProcesses'),
     })
     pendingSupervisor = supervisor
@@ -1292,7 +1356,7 @@ async function initializeUnmuteAgent(): Promise<void> {
       attachmentHandles: handles,
       journal,
       capabilities: registry,
-      selectedProvider: () => settings.get('unmuteAgentProvider'),
+      selectedProvider: () => resolveAgentProvider(),
       runtime: () => {
         const endpoint = `http://127.0.0.1:${getKnobs().mcpPort}${MCP_PATH}`
         return {
@@ -1346,13 +1410,21 @@ async function initializeUnmuteAgent(): Promise<void> {
     pendingSupervisor = null
     pendingController = null
     const selected = settings.get('unmuteAgentProvider')
-    const selectedReady = providers.find((provider) => provider.id === selected)?.available === true
+    // Availability follows what the Agent will ACTUALLY run on, not just what
+    // the user picked. Reporting 'unavailable' because the chosen CLI is
+    // cooling down — while the other one is installed and working — would tell
+    // the user the Agent is broken at the exact moment it is about to succeed.
+    const usable = providers.filter((provider) => provider.available === true)
+      .map((provider) => provider.id)
+    const selectedReady = usable.includes(selected) || usable.length > 0
     unmuteAgentAvailability = {
       available: selectedReady,
       ...(selectedReady ? {} : { reason: 'provider-unavailable' as const }),
       providers,
     }
-    log.event('unmute-agent-initialized', { provider: selected, available: selectedReady })
+    log.event('unmute-agent-initialized', {
+      provider: selected, available: selectedReady, usable,
+    })
   } catch (error) {
     pendingController?.dispose()
     await pendingSupervisor?.dispose().catch(() => {})
