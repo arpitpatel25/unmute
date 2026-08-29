@@ -186,15 +186,16 @@ final class AppController: NSObject, NotchResizing {
 
     func handle(_ command: Command) {
         switch command {
-        case let .bootstrap(appearance, fill, show, terminalAutoExpand, present):
+        case let .bootstrap(appearance, tone, fill, show, terminalAutoExpand, present):
             Appearance.shared.preference = appearance
+            Appearance.shared.tone = tone
             NotchGeometry.SurfaceFill.user = min(max(fill, 0.5), 0.95)
             let sharing: NSWindow.SharingType = show ? .readOnly : .none
             window.sharingType = sharing
             pillWindow.sharingType = sharing
             model.terminalAutoExpand = terminalAutoExpand
             autoPresent = present
-            NotchLog.log("CMD bootstrap appearance=\(appearance.rawValue) fill=\(fill) capture=\(show) terminal=\(terminalAutoExpand) present=\(present)")
+            NotchLog.log("CMD bootstrap appearance=\(appearance.rawValue) tone=\(tone.rawValue) fill=\(fill) capture=\(show) terminal=\(terminalAutoExpand) present=\(present)")
 
         case .present:
             if !window.isVisible { window.present() }

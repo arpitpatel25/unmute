@@ -355,7 +355,8 @@ struct ProposalDetail: Codable {
 enum Command {
     /// Complete preferences applied atomically before the helper presents any
     /// window. Also replayed after a supervised restart.
-    case bootstrap(appearance: SurfaceAppearance, surfaceFill: CGFloat,
+    case bootstrap(appearance: SurfaceAppearance, surfaceTone: SurfaceTone,
+                   surfaceFill: CGFloat,
                    screenCaptureVisibility: Bool, terminalAutoExpand: Bool,
                    autoPresent: Bool)
     /// Sent after bootstrap plus replay so no stale/default frame flashes.
@@ -427,8 +428,14 @@ enum Command {
         switch type {
         case "bootstrap":
             let appearance = SurfaceAppearance(rawValue: obj["appearance"] as? String ?? "system") ?? .system
+            // READ AT BOOTSTRAP, not only on change. The host has always sent
+            // this field; dropping it here meant the tone applied live and then
+            // reverted to Space Gray on the next launch — a setting that
+            // forgets itself every restart.
+            let tone = SurfaceTone(rawValue: obj["surfaceTone"] as? String ?? "spaceGray") ?? .spaceGray
             return .bootstrap(
                 appearance: appearance,
+                surfaceTone: tone,
                 surfaceFill: CGFloat(obj["surfaceFill"] as? Double ?? 0.8),
                 screenCaptureVisibility: obj["showInScreenCapture"] as? Bool ?? true,
                 terminalAutoExpand: obj["terminalAutoExpand"] as? Bool ?? false,
