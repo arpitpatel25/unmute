@@ -343,7 +343,8 @@ struct NotchGeometry: Equatable {
 
     /// How much of the screen an expanded surface fills, by what it carries.
     enum SurfaceFill {
-        /// The user's choice, from Settings → Appearance & notch: 0.7 | 0.8 | 0.9.
+        /// The user's choice, from Settings → Appearance & notch: anywhere in
+        /// SurfaceSizeStep's range (0.40…0.95), dragged rather than picked.
         /// This is an absolute screen fraction for every expanded surface.
         static var user: CGFloat = 0.80
 

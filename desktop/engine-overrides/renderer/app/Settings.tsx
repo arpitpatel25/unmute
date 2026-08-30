@@ -844,26 +844,72 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
               label="Expanded size"
               description="How much of the screen the task view and the Orchestrator fill when they open. Drag to any size between 40% and 95%."
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{
-                  fontVariantNumeric: 'tabular-nums', fontSize: 13, opacity: 0.8,
-                  minWidth: 38, textAlign: 'right',
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end' }}>
+                {/* A PERCENTAGE IS NOT A SIZE. 70% means nothing until you see
+                    it against the screen it is a share of — so the preview is
+                    the control's real output, drawn to scale: a 16:10 display
+                    with the menubar and cutout it actually has, and the
+                    expanded surface centred on it exactly as refit() places it
+                    (observed: 0.9 fill on 1920x1080 → 1728x972 at x=96,y=108).
+                    It follows the drag live, which is safe precisely because it
+                    is a picture — the real surfaces only move on release. */}
+                <div style={{
+                  width: 208, aspectRatio: '16 / 10', borderRadius: 8,
+                  border: '1px solid rgba(0,0,0,0.14)', overflow: 'hidden', position: 'relative',
+                  background: 'linear-gradient(140deg, #2f3d63 0%, #5b3f6e 52%, #8a4a5c 100%)',
                 }}>
-                  {Math.round(surfaceFill * 100)}%
-                </span>
-                <input
-                  type="range"
-                  min={40}
-                  max={95}
-                  step={1}
-                  value={Math.round(surfaceFill * 100)}
-                  aria-label="Expanded size, percent of screen"
-                  onChange={(e) => handleSurfaceFillDrag(String(Number(e.target.value) / 100))}
-                  onPointerUp={(e) => handleSurfaceFillCommit(String(Number(e.currentTarget.value) / 100))}
-                  onKeyUp={(e) => handleSurfaceFillCommit(String(Number(e.currentTarget.value) / 100))}
-                  onBlur={(e) => handleSurfaceFillCommit(String(Number(e.currentTarget.value) / 100))}
-                  style={{ width: 180, accentColor: 'currentColor' }}
-                />
+                  {/* menubar + the cutout, so the mock reads as a Mac at a glance */}
+                  <div style={{
+                    position: 'absolute', top: 0, left: 0, right: 0, height: 7,
+                    background: 'rgba(0,0,0,0.34)',
+                  }} />
+                  <div style={{
+                    position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
+                    width: 34, height: 7, background: '#000', borderRadius: '0 0 4px 4px',
+                  }} />
+                  {/* the expanded surface itself */}
+                  <div style={{
+                    position: 'absolute', top: '50%', left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    width: `${Math.round(surfaceFill * 100)}%`,
+                    height: `${Math.round(surfaceFill * 100)}%`,
+                    background: 'rgba(0,0,0,0.88)',
+                    border: '1px solid rgba(255,255,255,0.18)',
+                    borderRadius: 5,
+                    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+                    // No transition: the box must track the knob frame for
+                    // frame. An eased box lags the number beside it and reads
+                    // as the control being slow rather than smooth.
+                  }}>
+                    <div style={{ height: '18%', background: 'rgba(255,255,255,0.05)', flex: 'none' }} />
+                    <div style={{ flex: 1, padding: '8%', display: 'flex', flexDirection: 'column', gap: '7%' }}>
+                      <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.16)' }} />
+                      <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.10)' }} />
+                      <div style={{ height: 4, width: '58%', borderRadius: 2, background: 'rgba(255,255,255,0.10)' }} />
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{
+                    fontVariantNumeric: 'tabular-nums', fontSize: 13, opacity: 0.8,
+                    minWidth: 38, textAlign: 'right',
+                  }}>
+                    {Math.round(surfaceFill * 100)}%
+                  </span>
+                  <input
+                    type="range"
+                    min={40}
+                    max={95}
+                    step={1}
+                    value={Math.round(surfaceFill * 100)}
+                    aria-label="Expanded size, percent of screen"
+                    onChange={(e) => handleSurfaceFillDrag(String(Number(e.target.value) / 100))}
+                    onPointerUp={(e) => handleSurfaceFillCommit(String(Number(e.currentTarget.value) / 100))}
+                    onKeyUp={(e) => handleSurfaceFillCommit(String(Number(e.currentTarget.value) / 100))}
+                    onBlur={(e) => handleSurfaceFillCommit(String(Number(e.currentTarget.value) / 100))}
+                    style={{ width: 180, accentColor: 'currentColor' }}
+                  />
+                </div>
               </div>
             </SettingRow>
             <SettingRow
