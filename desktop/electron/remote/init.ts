@@ -95,7 +95,7 @@ import { HistoryCapability } from './agent/capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
 import { SessionsCapability } from './agent/capabilities/sessions'
 import { locateSession } from './agent/sessions/locate'
-import { planResume } from './agent/sessions/resume'
+import { planResume, isReapedScratchCwd } from './agent/sessions/resume'
 
 /** Where the Agent's last conversation got to. Memory is the durable
  *  continuity; this is only the short-term thread. */
@@ -1215,6 +1215,17 @@ async function initializeUnmuteAgent(): Promise<void> {
           // A session Unmute never started has no card. Forking it keeps the
           // whole conversation and gives it one — the same dispatch the Remote
           // key uses, so nothing here is a special case.
+          // A REAPED SCRATCH DIRECTORY IS RECREATED, NOT REFUSED. Until the
+          // lifecycle change a finished one-off had its home fs.rm'd, and for
+          // a scratch task that home IS the cwd — so the sessions most worth
+          // recovering are exactly the ones naming a directory that no longer
+          // exists. Unmute owns that path and nothing of the user's was ever
+          // in it; an empty one is what a fresh task gets anyway. A missing
+          // directory the user owns is left alone (isReapedScratchCwd).
+          if (isReapedScratchCwd(plan.cwd, join(homedir(), '.unmute', 'remote', 'local'))) {
+            await fs.mkdir(plan.cwd, { recursive: true }).catch(() => {})
+          }
+
           const taskId = await manager.dispatch(plan.intent, {
             kind: 'session',
             agent: plan.harness,

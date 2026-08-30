@@ -48,3 +48,31 @@ export function planResume(input: {
     intent: intent || REOPEN_INTENT,
   }
 }
+
+/**
+ * Is this cwd a scratch directory Unmute reaped?
+ *
+ * A scratch one-off's cwd IS its home, and until the lifecycle change the warm
+ * timer fs.rm'd that home fifteen minutes after the task finished. The
+ * conversation outlives it — Claude keeps transcripts under ~/.claude/projects
+ * and Codex under ~/.codex/sessions, neither inside the task directory — so
+ * the session is still perfectly resumable. Refusing because the folder is
+ * missing left the resume feature unable to recover from the one bug it was
+ * most needed for.
+ *
+ * Recreating it is faithful: Unmute made that directory, nothing of the
+ * user's was ever in it, and an empty one is exactly what a fresh task gets.
+ *
+ * A USER'S OWN DIRECTORY IS DIFFERENT. If a project folder has gone, something
+ * happened outside Unmute — a move, a delete, an unmounted disk — and quietly
+ * conjuring an empty folder in its place would resume the conversation into a
+ * workspace stripped of everything it refers to. Only paths Unmute owns
+ * qualify, and only one level below the root, which is where task directories
+ * live.
+ */
+export function isReapedScratchCwd(cwd: string, localRoot: string): boolean {
+  const root = localRoot.endsWith('/') ? localRoot.slice(0, -1) : localRoot
+  if (!cwd.startsWith(`${root}/`)) return false
+  const rest = cwd.slice(root.length + 1)
+  return rest.length > 0 && !rest.includes('/')
+}

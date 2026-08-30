@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { planResume } from './resume.ts'
+import { planResume, isReapedScratchCwd } from './resume.ts'
 import type { LocatedSession } from './locate.ts'
 
 const owned: LocatedSession = {
@@ -67,4 +67,38 @@ test('an owned session whose card is gone is forked instead of woken', () => {
 
   assert.equal(plan.action, 'fork')
   assert.equal(plan.action === 'fork' && plan.harness, 'claude')
+})
+
+// ── A REAPED SCRATCH DIRECTORY IS NOT A REASON TO REFUSE ──
+//
+// Until the lifecycle change, a finished one-off was fully erased fifteen
+// minutes after its last turn — remove() fs.rm'd the task's home, which for a
+// scratch task IS its cwd. The conversation survived (Claude keeps transcripts
+// in ~/.claude/projects, Codex in ~/.codex/sessions, neither inside the task
+// dir), so the session is perfectly resumable — but the directory it names is
+// gone, and refusing on that made the resume feature unable to recover from
+// the exact bug that most needed recovering from.
+//
+// The distinction that matters: Unmute OWNS the scratch directory. Its absence
+// means the task was reaped, and recreating an empty one is faithful — there
+// was never anything in it worth keeping. A user's own project directory is
+// different: if that is gone, something happened outside Unmute and guessing
+// is not ours to do.
+
+const LOCAL = '/Users/me/.unmute/remote/local'
+
+test('a missing scratch cwd is recreated rather than refused', () => {
+  assert.equal(isReapedScratchCwd(`${LOCAL}/254ba44a-da34-4eeb-8274-bbfd178137c5`, LOCAL), true)
+})
+
+test('a missing project directory is not ours to recreate', () => {
+  assert.equal(isReapedScratchCwd('/Users/me/tools/unmute/unmute-cloud', LOCAL), false)
+})
+
+test('a path that merely mentions the scratch root is not inside it', () => {
+  assert.equal(isReapedScratchCwd('/Users/me/notes/.unmute/remote/local-notes', LOCAL), false)
+})
+
+test('the scratch root itself is not a task directory', () => {
+  assert.equal(isReapedScratchCwd(LOCAL, LOCAL), false)
 })
