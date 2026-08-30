@@ -3498,7 +3498,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result'] }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result'] }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { meta = {} }
       if (!meta.intent) {
         // meta.json is missing, empty, or unparseable — see atomic-file.ts for
@@ -3585,6 +3585,7 @@ export class TaskManager extends EventEmitter {
           ...(meta.model ? { model: meta.model } : {}),
           claudeDesktopSessionId: meta.claudeDesktopSessionId,
           kind: meta.kind ?? 'session',
+          followUps: meta.followUps,
           state: (normalizeState(meta.state) as UiTaskState | undefined) ?? 'done',
           createdAt: meta.createdAt ?? now0,
           updatedAt: meta.updatedAt ?? now0,
@@ -3617,6 +3618,7 @@ export class TaskManager extends EventEmitter {
           codexDomThreadId: meta.codexDomThreadId,
           codexProject: meta.codexProject ?? null,
           kind: meta.kind ?? 'oneoff',
+          followUps: meta.followUps,
           // RESTORE what we last observed. Defaulting to 'processing' meant the
           // first poll always "discovered" completion afresh and re-stamped it,
           // so a finished thread announced itself on every single launch.
@@ -3681,6 +3683,7 @@ export class TaskManager extends EventEmitter {
         ...(meta.codexRolloutId ? { codexRolloutId: meta.codexRolloutId } : {}),
         ...(meta.model ? { model: meta.model } : {}),
         kind: meta.kind ?? 'oneoff',
+        followUps: meta.followUps,
         // A non-terminal task whose session died with the app is, to the user,
         // interrupted — surface it as failed (still resumable) rather than a
         // forever-spinning 'processing'. Sessions get `ready` instead (above).
@@ -4447,6 +4450,14 @@ export class TaskManager extends EventEmitter {
    *  matter how many times it was replied to.) */
   private noteFollowUp(task: Task): void {
     task.followUps = (task.followUps ?? 0) + 1
+    // WRITTEN DOWN, NOT JUST COUNTED. This lived only on the in-memory Task,
+    // so every relaunch rebuilt tasks from meta.json without it and the count
+    // restarted at zero. The graduated KIND was already durable, so a task that
+    // made it stayed a session forever while a task partway there silently lost
+    // its progress — which is why nobody noticed. On 2026-08-30 two tasks the
+    // user replied to for hours were still `oneoff` when the warm timer reaped
+    // them: the app had been relaunched three times inside each of their lives.
+    this.mergeMeta(task, { followUps: task.followUps }, 'noteFollowUp')
     if (task.kind !== 'session' && task.followUps >= 2) {
       log.child({ taskId: task.id }).event('graduated-to-session', { followUps: task.followUps })
       this.setKind(task.id, 'session')
