@@ -99,3 +99,58 @@ test('keeping an actual file is named, with the large-file answer', () => {
 test('it is told to find the file rather than guess at its path', () => {
   assert.match(AGENT_PRINCIPLES, /never assemble a path from where you expect a thing to be/)
 })
+
+// ── THE TOOL NAMES IN THIS PROSE MUST BE THE REAL ONES ──
+//
+// FIELD FAILURE (2026-08-31). Asked to save something, the Agent called
+// `memory_search`, got "No such tool available", called `memory_list`, got the
+// same, and then told the user "my memory tools were unavailable" and created a
+// task instead. Its memory was never unavailable: the tools are exposed over
+// MCP as `mcp__unmute__memory_search` (init.ts registers the server under the
+// key `unmute`), and the very next call in that transcript —
+// `mcp__unmute__task_create` — succeeded.
+//
+// The list of real names is in the model's context on every turn. A tool call
+// is still GENERATED text, not a menu selection, so a wrong name is possible
+// however good the list is. What made it likely was this file: it named every
+// tool bare, priming a string that does not exist, and relied on the model to
+// translate silently. It did so 34 times for memory_search alone before this.
+//
+// Removing the mismatch is the cheap half. The rule below it is the half that
+// actually protects the user.
+
+const TOOL_NAMES = [
+  'memory_list', 'memory_store', 'memory_search', 'memory_get',
+  'task_create', 'task_status', 'session_resume',
+  'unmute_history_search', 'unmute_history_copy',
+  'notetaker_list', 'notetaker_read', 'notetaker_search', 'notetaker_open',
+]
+
+test('every tool it is told to call is named exactly as it is exposed', () => {
+  for (const name of TOOL_NAMES) {
+    for (const m of AGENT_PRINCIPLES.matchAll(new RegExp(name, 'g'))) {
+      const before = AGENT_PRINCIPLES.slice(Math.max(0, m.index - 14), m.index)
+      assert.ok(
+        before.endsWith('mcp__unmute__'),
+        `"${name}" appears without its mcp__unmute__ prefix — that string is not a tool`,
+      )
+    }
+  }
+})
+
+/**
+ * The more important half. A missing-tool error says "you spelled it wrong",
+ * not "you have no memory" — and the Agent turned one into the other, then
+ * substituted an action nobody asked for and reported a capability outage that
+ * had not happened.
+ */
+test('a missing-tool error is a naming mistake, not a capability outage', () => {
+  assert.match(AGENT_PRINCIPLES, /No such tool/i, 'names the error it must not misread')
+  assert.match(AGENT_PRINCIPLES, /retry with the full name/i, 'says what to do instead')
+  assert.match(AGENT_PRINCIPLES, /never tell the person a capability of yours is unavailable/i,
+    'and forbids the false report that was actually made')
+})
+
+test('it must not silently substitute a different action for the one asked', () => {
+  assert.match(AGENT_PRINCIPLES, /do something else instead/i)
+})
