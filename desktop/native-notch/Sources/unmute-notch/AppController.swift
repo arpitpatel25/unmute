@@ -1298,7 +1298,19 @@ final class AppController: NSObject, NotchResizing {
             // schedules its own), and that a live capture has not claimed the
             // rung — resting mid-dictation would drop the waveform out from
             // under it. Neither of those flaps.
-            guard self.commandedState == state,
+            // ASK WHAT IS ON SCREEN, NOT WHAT WAS LAST COMMANDED.
+            //
+            // This compared commandedState to the rung the clock was set for,
+            // and dropped itself on any mismatch. But a command does not always
+            // reach the surface — presentableState can decline an expanded rung
+            // — so `commanded=task` while the bar is STILL showing the banner
+            // is a real and common state. The clock then abandoned itself and
+            // the banner stayed up. Observed three times in one short session:
+            //     clock ABANDONED — commanded=task expected=active
+            //
+            // What matters is whether the thing this clock was started for is
+            // still the thing the user is looking at. If it is, take it down.
+            guard self.model.state == state,
                   !self.isCaptureLive() else {
                 self.restPending = nil
                 NotchLog.log("banner: clock ABANDONED — commanded=\(self.commandedState.rawValue) expected=\(state.rawValue) capture=\(self.model.capturePhase ?? "nil")")
