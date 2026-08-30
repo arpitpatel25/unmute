@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import QuartzCore
 import SurfaceTransitionSupport
 
@@ -273,4 +274,29 @@ final class ResizeBorderView: NSView {
             addCursorRect(r, cursor: .crosshair)
         }
     }
+}
+
+/// THE FIRST CLICK MUST COUNT.
+///
+/// AppKit swallows the click that activates an inactive window: the event
+/// focuses the window and is never delivered to the view under the pointer.
+/// For an ordinary app that is right — you do not want a stray click in a
+/// backgrounded document to do something. For this surface it is wrong twice
+/// over. The notch is a CONTROL that lives on top of whatever you are actually
+/// using, so it is inactive almost every time you reach for it, and the whole
+/// promise of it is that it is one gesture away. Reported from the field as
+/// "I have to tap the icon twice, and the pocket twice again to expand" —
+/// which is exactly one swallowed click at each level.
+///
+/// `acceptsFirstMouse` opts out of that rule for this view tree. It has to be
+/// on the view that is actually hit, not the window, which is why both the
+/// notch's container and the pill's hosting view carry it.
+final class FirstMouseView: NSView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// Same, for a hosting view that is installed as a contentView directly and so
+/// has no container of its own to carry the override.
+final class FirstMouseHostingView<V: View>: NSHostingView<V> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

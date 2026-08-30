@@ -87,6 +87,12 @@ final class AppController: NSObject, NotchResizing {
     private var lastAnnouncedAt: Date = .distantPast
     /// Long enough to absorb a flapping task, short enough that real new work
     /// is not held back. `attention` still gets its 8-minute nudge on top.
+    ///
+    /// THE RULE, stated by the owner: any message shows for a couple of seconds
+    /// at most and then ALWAYS goes away — stuck, waiting, working, whatever it
+    /// is. Treat the bar as a notification banner, not a status light. So this
+    /// window is not a tuning knob for flapping; it is the minimum gap between
+    /// two banners, and it applies to everything.
     private static let quietWindow: TimeInterval = 120
 
     /// What the surface is ABOUT — the task, not the rung it is being shown as.
@@ -139,7 +145,7 @@ final class AppController: NSObject, NotchResizing {
         let host = NSHostingView(rootView: NotchView(model: model, topInset: topInset))
         host.sizingOptions = []   // WE own the window size
         hostView = host
-        let container = NSView(frame: .zero)
+        let container = FirstMouseView(frame: .zero)
         container.autoresizingMask = [.width, .height]
         host.autoresizingMask = [.width, .height]
         container.addSubview(host)
@@ -209,7 +215,7 @@ final class AppController: NSObject, NotchResizing {
             IPC.emit(ev)
         }
         pillWindow.fit(geometry: geometry)
-        let host = NSHostingView(rootView: AnyView(PillHost(model: pillModel, scratch: scratchModel)))
+        let host = FirstMouseHostingView(rootView: AnyView(PillHost(model: pillModel, scratch: scratchModel)))
         host.sizingOptions = []
         pillHost = host
         pillWindow.contentView = host
@@ -310,10 +316,12 @@ final class AppController: NSObject, NotchResizing {
             //   2. the same SUBJECT inside its quiet window, whatever the rung
             //      or status is doing (see lastAnnouncedSubject)
             if isAnnounceable(state), !isExpanded(state), !model.hovering {
-                let subject = announcementSubject()
+                // A GLOBAL gap, deliberately not keyed on the task. Keying it
+                // on the subject still let two flapping tasks take turns
+                // announcing, which is the same wall of text arriving by a
+                // different route. One banner per window, whatever it is about.
+                let stillQuiet = Date().timeIntervalSince(lastAnnouncedAt) < Self.quietWindow
                 let sameThing = restedFrom == state && restedSignature == stateSignature(state)
-                let stillQuiet = subject == lastAnnouncedSubject
-                    && Date().timeIntervalSince(lastAnnouncedAt) < Self.quietWindow
                 if sameThing || stillQuiet {
                     if restedFrom == nil { restedFrom = state; restedSignature = stateSignature(state) }
                     scheduleReflash(for: state)
