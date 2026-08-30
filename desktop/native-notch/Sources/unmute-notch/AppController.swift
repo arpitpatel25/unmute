@@ -1243,13 +1243,26 @@ final class AppController: NSObject, NotchResizing {
         // Already counting down on this exact rung: let the clock run. Only a
         // CHANGE of rung, or a rung arriving while rested, starts a new one.
         if restPending == state, let t = restTimer, t.isValid { return }
-        restTimer?.invalidate(); restTimer = nil
-        restedFrom = nil
-        restPending = nil
+        // A STATE THAT CANNOT ANNOUNCE MUST NOT DISARM ONE THAT DID.
+        //
+        // This used to invalidate the pending clock and then bail on the guard
+        // below, so any `task` command landing inside a banner's two seconds
+        // destroyed its countdown and never replaced it — the banner then sat
+        // on screen until some later command happened to start AND finish a
+        // clock of its own. Measured: 9 clocks started, 7 rests, and a 14s gap
+        // where a banner was simply stranded. It is the reason "1 waiting on
+        // you" stayed up until the task was opened by hand.
+        //
+        // Leaving the clock alone is right in both directions. If the new
+        // state replaces the banner visually, the timer fires against a rung
+        // that is no longer commanded and its own guard drops it harmlessly.
+        // If it does not, the banner still stands down on schedule.
         guard isAnnounceable(state) else {
-            NotchLog.log("banner: no clock — \(state.rawValue) is not announceable (capturePhase=\(model.capturePhase ?? "nil"))")
+            NotchLog.log("banner: \(state.rawValue) cannot announce — leaving any live clock alone (capturePhase=\(model.capturePhase ?? "nil"))")
             return
         }
+        restTimer?.invalidate(); restTimer = nil
+        restedFrom = nil
         restPending = state
         NotchLog.log("banner: clock started, \(Self.restAfter)s → \(state.rawValue)")
         restTimer = Timer.scheduledTimer(withTimeInterval: Self.restAfter, repeats: false) { [weak self] _ in
