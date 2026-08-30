@@ -575,17 +575,12 @@ private struct BlockUserBubble: View {
             // commit was about: on black, white at 5% is rgb(13,13,13) and
             // your own message vanishes into the ground. It now shares the
             // tone-aware token, and takes the matching edge that came with it.
-            Text(text)
-                .font(.system(size: 14))
-                .foregroundColor(Theme.text)
-                .lineSpacing(22 - 14 * 1.2)
-                .fixedSize(horizontal: false, vertical: true)
+            FoldableUserText(text: text, lineSpacing: 22 - 14 * 1.2)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: 20).fill(Theme.userBubble))
                 .overlay(RoundedRectangle(cornerRadius: 20)
                     .stroke(Theme.userBubbleEdge, lineWidth: 0.5))
-                .textSelection(.enabled)
         }
     }
 }

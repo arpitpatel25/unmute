@@ -105,11 +105,7 @@ private struct UserBubble: View {
         HStack(spacing: 0) {
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 4) {
-                Text(text)
-                    .font(.system(size: 14))
-                    .foregroundColor(Theme.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                FoldableUserText(text: text)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
                     .background(RoundedRectangle(cornerRadius: 16).fill(Theme.userBubble))
