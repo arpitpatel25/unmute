@@ -60,6 +60,13 @@ final class AppController: NSObject, NotchResizing {
     /// and an unconditional re-arm meant the 2s clock was reset faster than it
     /// could ever fire. That is why "Working" never stood down.
     private var restPending: NotchState?
+    /// The latest a deferred banner may be held. A live capture defers the
+    /// stand-down — pulling the surface out from under a hot mic is wrong —
+    /// but deferring without a deadline is how a guard becomes permanent, and
+    /// this file has already shipped that bug once with the pocket. After this
+    /// the banner goes regardless.
+    private var restDeadline: Date?
+    private static let restMaxDefer: TimeInterval = 20
     /// What was on the surface when it rested — the rung plus the task and
     /// status it was describing. A later command carrying the SAME thing is not
     /// news and must not re-announce: the engine re-reports a live task every
@@ -1264,63 +1271,51 @@ final class AppController: NSObject, NotchResizing {
         restTimer?.invalidate(); restTimer = nil
         restedFrom = nil
         restPending = state
+        restDeadline = Date().addingTimeInterval(Self.restMaxDefer)
         NotchLog.log("banner: clock started, \(Self.restAfter)s → \(state.rawValue)")
         restTimer = Timer.scheduledTimer(withTimeInterval: Self.restAfter, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            // IT ALWAYS GOES AWAY. There is no condition under which an
-            // announceable rung outstays its couple of seconds.
-            //
-            // This used to reschedule while the pointer was on the surface or
-            // the pocket payload said "open", meaning to be polite about not
-            // yanking something away mid-read. With two tasks waiting the
-            // pocket IS open, so the reschedule fired every two seconds
-            // forever and the banner never left — "2 waiting on you" sat on
-            // screen for minutes with exactly one rest in the whole log. A
-            // politeness that can become permanent is not politeness.
-            //
-            // Hovering needs no special case: the pointer entering restores
-            // the rung through the hover ladder, which is the designed way to
-            // ask "what is waiting?" — a pull, not a residency.
-            // DECIDED AT ANNOUNCE TIME, NOT RE-LITIGATED HERE.
-            //
-            // This used to re-ask isAnnounceable() when the timer fired, which
-            // reads model.pocket. The field log shows the pocket payload
-            // oscillating closed→open→closed→open with a constant slot count,
-            // so a banner scheduled while it was closed found it open two
-            // seconds later, bailed, and never rested — one rest event in a
-            // whole session while "3 waiting on you" stayed on screen.
-            //
-            // Whether the bar was a banner is a fact about the moment it was
-            // SHOWN. A flap arriving during its two seconds does not retroact
-            // into it having been a surface all along.
-            //
-            // Still checked: that this timer is not stale (a newer command
-            // schedules its own), and that a live capture has not claimed the
-            // rung — resting mid-dictation would drop the waveform out from
-            // under it. Neither of those flaps.
-            // ASK WHAT IS ON SCREEN, NOT WHAT WAS LAST COMMANDED.
-            //
-            // This compared commandedState to the rung the clock was set for,
-            // and dropped itself on any mismatch. But a command does not always
-            // reach the surface — presentableState can decline an expanded rung
-            // — so `commanded=task` while the bar is STILL showing the banner
-            // is a real and common state. The clock then abandoned itself and
-            // the banner stayed up. Observed three times in one short session:
-            //     clock ABANDONED — commanded=task expected=active
-            //
-            // What matters is whether the thing this clock was started for is
-            // still the thing the user is looking at. If it is, take it down.
-            guard self.model.state == state,
-                  !self.isCaptureLive() else {
-                self.restPending = nil
-                NotchLog.log("banner: clock ABANDONED — commanded=\(self.commandedState.rawValue) expected=\(state.rawValue) capture=\(self.model.capturePhase ?? "nil")")
-                return
-            }
-            self.restPending = nil
-            self.restedFrom = state
-            NotchLog.log("rest: \(state.rawValue) → dormant (held, restorable on hover)")
-            self.applyState(.dormant, animated: true)
+            self?.standDown(state)
         }
+    }
+
+    /// The stand-down itself, as a named method so a DEFERRED run can re-enter
+    /// it. A live microphone postpones the banner rather than cancelling it,
+    /// and postponing means scheduling this same body again.
+    private func standDown(_ state: NotchState) {
+        // A LIVE MIC DEFERS; IT DOES NOT CANCEL.
+        //
+        // Abandoning here left the banner stranded: dictation ends and nothing
+        // re-arms the clock, so it stays up for good. Seen as
+        //     clock ABANDONED — commanded=attention expected=attention
+        //                       capture=listening
+        // with the rung matching perfectly — the mic was the only reason.
+        //
+        // Bounded by restDeadline, because an unbounded defer is the pocket
+        // bug again in another costume: this file has already shipped a
+        // politeness that could never clear.
+        if isCaptureLive(), let deadline = restDeadline, Date() < deadline {
+            NotchLog.log("banner: clock DEFERRED — mic live (capture=\(model.capturePhase ?? "nil"))")
+            restTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+                self?.standDown(state)
+            }
+            return
+        }
+        // ASK WHAT IS ON SCREEN, NOT WHAT WAS LAST COMMANDED. A command does
+        // not always reach the surface — presentableState can decline an
+        // expanded rung — so `commanded=task` while the bar still shows the
+        // banner is real and common, and comparing against it dropped the
+        // clock that was meant to take that banner down.
+        guard model.state == state else {
+            restPending = nil
+            restDeadline = nil
+            NotchLog.log("banner: clock ABANDONED — showing=\(model.state.rawValue) expected=\(state.rawValue)")
+            return
+        }
+        restPending = nil
+        restDeadline = nil
+        restedFrom = state
+        NotchLog.log("rest: \(state.rawValue) → dormant (held, restorable on hover)")
+        applyState(.dormant, animated: true)
     }
 
     /// Puts back the rung that decayed. Used by the hover ladder in place of
