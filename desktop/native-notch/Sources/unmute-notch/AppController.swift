@@ -61,6 +61,23 @@ final class AppController: NSObject, NotchResizing {
     /// and an unconditional re-arm meant the 2s clock was reset faster than it
     /// could ever fire. That is why "Working" never stood down.
     private var restPending: NotchState?
+    /// What was on the surface when it rested — the rung plus the task and
+    /// status it was describing. A later command carrying the SAME thing is not
+    /// news and must not re-announce: the engine re-reports a live task every
+    /// few seconds, so an unconditional re-announce turned "say it once" into
+    /// "say it every fifteen seconds", which is the original complaint wearing
+    /// a timer. Only a genuine change — a different rung, task, or status —
+    /// earns the surface back.
+    private var restedSignature: String?
+
+    /// Rung + what it is about. Deliberately includes status, so Working → Done
+    /// still announces; deliberately excludes anything that ticks on its own,
+    /// so mere progress does not.
+    private func stateSignature(_ s: NotchState) -> String {
+        let t = model.task
+        return [s.rawValue, t?.id ?? "-", t?.status.rawValue ?? "-", String(model.working)]
+            .joined(separator: "|")
+    }
     /// How long an announceable rung holds the eye before standing down.
     private static let restAfter: TimeInterval = 2.0
     /// Only a rung that is BLOCKED ON THE USER earns a second interruption.
@@ -261,9 +278,18 @@ final class AppController: NSObject, NotchResizing {
                 model.task = nil
             }
             commandedState = state
-            // Every fresh command re-arms the stand-down clock, so a rung that
-            // is re-sent (a status change on the same task) announces again
-            // rather than staying rested and silent.
+            // A REPEAT OF WHAT ALREADY RESTED STAYS RESTED. The engine re-reports
+            // a live task every few seconds; measured in the field, "1 waiting on
+            // you" stood down and then blinked back roughly every fifteen seconds
+            // because each report re-announced it. Nothing had changed, so there
+            // was nothing to say. It is still one hover away.
+            if restedFrom == state, restedSignature == stateSignature(state),
+               !isExpanded(state), !model.hovering {
+                scheduleReflash(for: state)
+                return
+            }
+            // Every genuinely new command re-arms the stand-down clock, so a
+            // changed rung, task or status announces again.
             scheduleRest(for: state)
             switch departureTransition.receive(isExpanded: isExpanded(state)) {
             case .applyNormally:
@@ -1153,6 +1179,7 @@ final class AppController: NSObject, NotchResizing {
                   self.isAnnounceable(self.model.state) else { self.restPending = nil; return }
             self.restPending = nil
             self.restedFrom = state
+            self.restedSignature = self.stateSignature(state)
             NotchLog.log("rest: \(state.rawValue) → dormant (held, restorable on hover)")
             self.applyState(.dormant, animated: true)
             self.scheduleReflash(for: state)
@@ -1182,6 +1209,7 @@ final class AppController: NSObject, NotchResizing {
         reflashTimer?.invalidate(); reflashTimer = nil
         restedFrom = nil
         restPending = nil
+        restedSignature = nil
         NotchLog.log("hover-reveal: dormant → \(rung.rawValue) (restored)")
         applyState(rung)
         return true
