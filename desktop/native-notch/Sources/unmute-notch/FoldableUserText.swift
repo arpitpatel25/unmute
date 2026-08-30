@@ -110,5 +110,20 @@ struct FoldableUserText: View {
 
 private struct UserTextHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    /// MAX, NOT LAST — and this is why the fold did not work when it shipped.
+    ///
+    /// Only the measuring copy publishes a real height; every other subview in
+    /// the stack (the mask, the overlaid hint, the clipped body) contributes
+    /// the DEFAULT of zero. `value = nextValue()` keeps whichever reduces last,
+    /// so a zero from a sibling overwrote the measurement and `fullHeight` sat
+    /// at 0 — which `userTextOverflows` correctly reads as "not measured yet"
+    /// and refuses to fold on. The bubble therefore never folded, however long
+    /// the message was.
+    ///
+    /// Taking the maximum makes the answer independent of reduce ORDER, which
+    /// is the only safe way to combine a measurement with siblings that have
+    /// nothing to say.
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
 }
