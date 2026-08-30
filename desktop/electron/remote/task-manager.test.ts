@@ -923,11 +923,18 @@ test('purgeStale never touches persistent sessions — in memory or as on-disk r
 // now also catches an already-terminal one-off using the shorter window,
 // instead of loading it back in as a zombie record for the pocket/cockpit/
 // dashboard to disagree about for up to a day.
-test('purgeStale erases a TERMINAL one-off past warmMs, well before the 24h purgeAgeMs backstop', async () => {
+// REVERSED DELIBERATELY (2026-08-30). This asserted that a finished one-off
+// was erased once past warmMs — record, home directory and all — "well before
+// the 24h backstop". warmMs measures how long a PROCESS is worth keeping warm;
+// letting it decide how long the WORK survives is what deleted real sessions
+// fifteen minutes after their last turn. armWarmTimer and reattachPersistent
+// stopped erasing at the same time; purgeAgeMs is now the only thing that
+// deletes, and the sweep must agree or the record dies here instead.
+test('purgeStale keeps a TERMINAL one-off past warmMs — only purgeAgeMs deletes', async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({
     executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0,
-    pollMs: 9999, warmMs: 100, purgeAgeMs: 60_000_000, // purgeAgeMs deliberately huge — only warmMs should catch this
+    pollMs: 9999, warmMs: 100, purgeAgeMs: 60_000_000, // huge: nothing should be old enough to delete
   })
   const id = await tm.dispatch('quick errand nobody follows up on')
   const task = tm.get(id)!
@@ -937,9 +944,28 @@ test('purgeStale erases a TERMINAL one-off past warmMs, well before the 24h purg
 
   await tm.purgeStale()
 
-  assert.equal(tm.get(id), undefined, 'finished one-off erased on the ordinary maintenance sweep, not just its own live timer')
-  await assert.rejects(fs.access(home), 'its on-disk record is gone too')
-  tm.kill(id) // no-op once erased; guards against a leaked poll interval if this regresses
+  assert.ok(tm.get(id), 'a lapsed warm window is not a reason to delete finished work')
+  await fs.access(home) // and its on-disk record is still there
+  tm.kill(id)
+})
+
+test('purgeStale DOES erase a terminal one-off once purgeAgeMs has passed', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0,
+    pollMs: 9999, warmMs: 100, purgeAgeMs: 1_000,
+  })
+  const id = await tm.dispatch('a genuinely finished errand')
+  const task = tm.get(id)!
+  task.state = 'done'
+  task.updatedAt = Date.now() - 5_000 // past the backstop
+  const home = task.home
+
+  await tm.purgeStale()
+
+  assert.equal(tm.get(id), undefined, 'the backstop still collects what nobody came back for')
+  await assert.rejects(fs.access(home))
+  tm.kill(id)
 })
 
 // The SAME age, but still working (or left ambiguously interrupted) — the
@@ -2453,7 +2479,17 @@ test('the warm-kill re-parks instead of killing a task that went back to work', 
 // over. remove() already does the full erase (PRD §10.4) — this just wires
 // the automatic 15-minute-of-no-interaction path to call it, same as the
 // manual "delete" button would.
-test('an unattended one-off is fully erased when its warm window lapses — not just process-killed', { timeout: 5000 }, async () => {
+// REVERSED DELIBERATELY (2026-08-30). This asserted the full erase: process
+// killed, row dropped, home directory rm'd. The argument was that leaving a
+// dead task behind made the pocket, cockpit and dashboard each decide how long
+// to show it. True — but a TERMINAL task is something those surfaces already
+// agree about, because that is exactly what a finished session is.
+//
+// Erasing solved a display problem by destroying the work. On 2026-08-30 the
+// user lost hours of it: tasks they were actively using were gone fifteen
+// minutes after their last turn, with nothing in Finished and no warning.
+// The process is a cache and Resume respawns it; the card cannot be undeleted.
+test('an unattended one-off loses its runtime when the warm window lapses, and KEEPS its record', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
   const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 120 })
@@ -2463,9 +2499,10 @@ test('an unattended one-off is fully erased when its warm window lapses — not 
   await (async () => { const d = once(tm, 'done'); await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'done' } }); await d })()
   await new Promise((r) => setTimeout(r, 300)) // past the warm window
 
-  assert.equal(fake.alive, false, 'the process is still killed, same as before')
-  assert.equal(tm.get(id), undefined, 'the task must be gone from the live list — pocket/cockpit/dashboard all read this')
-  await assert.rejects(fs.access(home), 'the on-disk record must be deleted, not just the in-memory row')
+  assert.equal(fake.alive, false, 'the runtime is what expires — unchanged')
+  assert.ok(tm.get(id), 'the card survives; purgeAgeMs is what deletes')
+  await fs.access(home) // and so does the on-disk record
+  tm.kill(id)
 })
 
 // Sessions must be completely unaffected — this is a one-off-only change.

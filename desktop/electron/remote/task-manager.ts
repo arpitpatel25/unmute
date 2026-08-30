@@ -122,6 +122,21 @@ import {
   type TaskReplyTrace,
 } from './task-reply-trace'
 
+/**
+ * HOW LONG A FINISHED ONE-OFF KEEPS ITS RUNTIME.
+ *
+ * Was 15 minutes, and reaching it was a FULL erase. Working across several
+ * tasks at once, you look away from one for a quarter of an hour and it is
+ * gone — card, status and home directory. Reported after losing real work on
+ * 2026-08-30. Fifteen minutes measures how long a PROCESS is worth keeping
+ * warm; it says nothing about how long the WORK is worth keeping, and the two
+ * were the same number.
+ *
+ * Twelve hours is a working day: come back after lunch, or after a meeting,
+ * and the thing you were doing is still there.
+ */
+export const DEFAULT_WARM_MS = 12 * 60 * 60_000
+
 const log = createLogger('task-manager')
 
 // ── UI-facing task state. Adds 'stuck' (PRD §5.3) on top of the file states. ──
@@ -703,7 +718,7 @@ export class TaskManager extends EventEmitter {
       submitConfirmMs: opts.submitConfirmMs ?? 450,
       verifyAfterMs: opts.verifyAfterMs ?? 7000,
       maxReinjects: opts.maxReinjects ?? 2,
-      warmMs: opts.warmMs ?? 15 * 60_000,
+      warmMs: opts.warmMs ?? DEFAULT_WARM_MS,
       navigateWarmMs: opts.navigateWarmMs ?? 8 * 60_000,
       detachGraceMs: opts.detachGraceMs ?? 1500,
       purgeAgeMs: opts.purgeAgeMs ?? 24 * 60 * 60_000, // 24h — "gone by end of day"
@@ -3798,13 +3813,16 @@ export class TaskManager extends EventEmitter {
           && oneoffWarmRemaining !== null
           && oneoffWarmRemaining <= 0
         if (completedOneoffExpired) {
-          // Same rule as the live timer (armWarmTimer): a one-off whose warm
-          // window has already lapsed is fully erased, not left as a record
-          // for the pocket/cockpit/dashboard to keep disagreeing about — this
-          // is just that expiry discovered lazily, on reattach, instead of by
-          // a timer that was running the whole time the app was closed.
-          tlog.event('warm-idle-timeout', { warmMs: oneoffWarmMs, state: restoredState, recovered: true })
-          void this.remove(task.id)
+          // Same rule as the live timer (armWarmTimer), which no longer erases
+          // either: the RUNTIME expired while the app was closed, so do not
+          // reattach it — but the card, its status and its home directory stay.
+          // This is that expiry discovered lazily on relaunch rather than by a
+          // timer, and it must reach the same end state or a task survives the
+          // window only to be deleted by the next launch.
+          tlog.event('warm-idle-timeout', { warmMs: oneoffWarmMs, state: restoredState, recovered: true, kept: true })
+          this.hardKill(task.id)
+          void this.persistState(task).catch(() => {})
+          this.emit('updated', task)
           return
         }
         if (!TERMINAL.includes(task.state)) this.startPolling(task.id)
@@ -4080,7 +4098,16 @@ export class TaskManager extends EventEmitter {
     // the backstop for everything ELSE a one-off can be — still working, or left
     // ambiguously interrupted — where guessing "abandoned" from age alone would
     // be wrong.
-    const oneoffCutoff = now - this.opts.warmMs
+    // A FINISHED ONE-OFF IS AGED BY purgeAgeMs, LIKE EVERYTHING ELSE.
+    //
+    // It used to be aged by warmMs, on the reasoning that a finished one-off
+    // "has its own much shorter rule". That rule was about how long to keep a
+    // PROCESS warm, and using it here made it decide how long to keep the WORK
+    // — so a task went from finished to permanently deleted in one window.
+    // armWarmTimer no longer erases either; it stops the runtime and leaves the
+    // record, and this is the same change on the sweep's side. purgeAgeMs is
+    // what deletes, and it is the only thing that deletes.
+    const oneoffCutoff = cutoff
     // 1. IN-MEMORY tasks that have aged out — remove() kills the live session too.
     //    PERSISTENT SESSIONS ARE EXEMPT: a multi-day working session is untouched
     //    "by updatedAt" for days by design — auto-purging it would delete the
@@ -5465,8 +5492,28 @@ export class TaskManager extends EventEmitter {
       // and its home dir are actually gone, so every surface agrees at once
       // and a relaunch can't resurrect it. Sessions never reach this timer
       // at all (parkWarm never arms it for kind === 'session').
-      tlog.event('warm-idle-timeout', { warmMs, state: cur?.state ?? null })
-      void this.remove(id)
+      // THE RUNTIME EXPIRES, THE RECORD DOES NOT.
+      //
+      // This used to call remove(): hardKill, drop the row, and fs.rm the
+      // task's home. The reasoning was that hardKill alone left the pocket,
+      // the cockpit and the dashboard each deciding how long to keep showing
+      // something already dead — three timers, three answers. That problem is
+      // real, and erasing the task is not the only way to solve it: a task
+      // left in a TERMINAL state is exactly what those surfaces already agree
+      // about for a finished session, and they have agreed about it all along.
+      //
+      // A process is a cache and can be respawned by Resume. A conversation
+      // and its card cannot be un-deleted, and on 2026-08-30 this cost the
+      // user hours of work — so the two are no longer settled by one event.
+      // purgeAgeMs remains the backstop that actually deletes.
+      tlog.event('warm-idle-timeout', { warmMs, state: cur?.state ?? null, kept: true })
+      this.hardKill(id)
+      const settled = this.tasks.get(id)
+      if (settled) {
+        if (!TERMINAL.includes(settled.state)) settled.state = 'done'
+        void this.persistState(settled).catch(() => {})
+        this.emit('updated', settled)
+      }
     }, warmMs)
     t.unref?.() // don't block process exit on the warm window
     this.warmTimers.set(id, t)
