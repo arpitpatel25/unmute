@@ -1195,6 +1195,18 @@ final class AppController: NSObject, NotchResizing {
     /// `task` and `cockpit` are the EXPANDED surfaces — isExpanded() is those
     /// two — and an expanded surface is one the user opened. It stays.
     private func isAnnounceable(_ s: NotchState) -> Bool {
+        // AN OPEN POCKET IS NOT A NOTIFICATION. With the pocket closed the bar
+        // is a banner — "1 waiting on you", a sentence about something
+        // elsewhere — and a banner is read once and dismissed. With the pocket
+        // open it is a surface: the slots are on screen, being looked at, and
+        // taking that away on a timer would be removing content mid-read.
+        //
+        // This is a property of WHAT IS SHOWN, so it belongs here rather than
+        // in the timer. The first cut had it as a reschedule inside the timer's
+        // body, which is why the banner could never leave while the pocket
+        // payload said open: the clock restarted every two seconds instead of
+        // the rung simply not being announceable.
+        guard !model.pocket.isOpen else { return false }
         switch s {
         case .attention: return true
         case .active:    return model.capturePhase == nil
