@@ -132,7 +132,11 @@ final class AppController: NSObject, NotchResizing {
         // A plain container holds the SwiftUI view and the resize border as
         // SIBLINGS. The border cannot live inside the hosting view — SwiftUI
         // owns that view's subviews and is free to reorder or drop them.
-        let host = NSHostingView(rootView: NotchView(model: model, topInset: topInset))
+        // FirstMouseHostingView, not a plain one. The container below is also
+        // a FirstMouseView, but AppKit asks the view that is actually HIT, and
+        // this hosting view covers the container completely — so the parent's
+        // override was never consulted and the first click stayed swallowed.
+        let host = FirstMouseHostingView(rootView: NotchView(model: model, topInset: topInset))
         host.sizingOptions = []   // WE own the window size
         hostView = host
         let container = FirstMouseView(frame: .zero)
@@ -310,14 +314,18 @@ final class AppController: NSObject, NotchResizing {
             // to itself, and none of it is news to the person watching.
             if isBannerRung(state), !isExpanded(state), !model.hovering {
                 let ids = attentionTaskIds()
+                NotchLog.log("banner: consider \(state.rawValue) ids=\(ids.sorted()) alreadyTold=\(announcedTaskIds.count) pocketOpen=\(model.pocket.isOpen) slots=\(model.pocket.slots.count)")
                 if !ids.isEmpty, ids.isSubset(of: announcedTaskIds) {
+                    NotchLog.log("banner: SUPPRESS — nothing new to say")
                     if restedFrom == nil { restedFrom = state }
                     // Put it down rather than merely declining to re-arm: a
                     // repeat arriving while the bar is up must settle too.
                     if model.state != .dormant, !isExpanded(model.state) { applyState(.dormant) }
                     return
                 }
+                let fresh = ids.subtracting(announcedTaskIds)
                 announcedTaskIds.formUnion(ids)
+                NotchLog.log("banner: ANNOUNCE \(state.rawValue) new=\(fresh.sorted()) told=\(announcedTaskIds.count)")
             }
             scheduleRest(for: state)
             switch departureTransition.receive(isExpanded: isExpanded(state)) {
@@ -1220,8 +1228,12 @@ final class AppController: NSObject, NotchResizing {
         restTimer?.invalidate(); restTimer = nil
         restedFrom = nil
         restPending = nil
-        guard isAnnounceable(state) else { return }
+        guard isAnnounceable(state) else {
+            NotchLog.log("banner: no clock — \(state.rawValue) is not announceable (capturePhase=\(model.capturePhase ?? "nil"))")
+            return
+        }
         restPending = state
+        NotchLog.log("banner: clock started, \(Self.restAfter)s → \(state.rawValue)")
         restTimer = Timer.scheduledTimer(withTimeInterval: Self.restAfter, repeats: false) { [weak self] _ in
             guard let self else { return }
             // IT ALWAYS GOES AWAY. There is no condition under which an
@@ -1256,7 +1268,11 @@ final class AppController: NSObject, NotchResizing {
             // rung — resting mid-dictation would drop the waveform out from
             // under it. Neither of those flaps.
             guard self.commandedState == state,
-                  self.model.capturePhase == nil else { self.restPending = nil; return }
+                  self.model.capturePhase == nil else {
+                self.restPending = nil
+                NotchLog.log("banner: clock ABANDONED — commanded=\(self.commandedState.rawValue) expected=\(state.rawValue) capture=\(self.model.capturePhase ?? "nil")")
+                return
+            }
             self.restPending = nil
             self.restedFrom = state
             NotchLog.log("rest: \(state.rawValue) → dormant (held, restorable on hover)")

@@ -292,11 +292,25 @@ final class ResizeBorderView: NSView {
 /// on the view that is actually hit, not the window, which is why both the
 /// notch's container and the pill's hosting view carry it.
 final class FirstMouseView: NSView {
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        NotchLog.log("tap: acceptsFirstMouse(container) → true windowKey=\(window?.isKeyWindow == true) appActive=\(NSApp.isActive)")
+        return true
+    }
+    override func mouseDown(with event: NSEvent) {
+        NotchLog.log("tap: mouseDown(container) clicks=\(event.clickCount) windowKey=\(window?.isKeyWindow == true)")
+        super.mouseDown(with: event)
+    }
 }
 
 /// Same, for a hosting view that is installed as a contentView directly and so
 /// has no container of its own to carry the override.
 final class FirstMouseHostingView<V: View>: NSHostingView<V> {
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        NotchLog.log("tap: acceptsFirstMouse(host) → true windowKey=\(window?.isKeyWindow == true) appActive=\(NSApp.isActive)")
+        return true
+    }
+    override func mouseDown(with event: NSEvent) {
+        NotchLog.log("tap: mouseDown(host) clicks=\(event.clickCount) windowKey=\(window?.isKeyWindow == true)")
+        super.mouseDown(with: event)
+    }
 }
