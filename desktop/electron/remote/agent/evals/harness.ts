@@ -27,6 +27,7 @@ import { MemoryCapability, type MemoryCapabilityService } from '../capabilities/
 import { HandoffCapability, type HandoffAdapters } from '../capabilities/handoff'
 import { HistoryCapability, type HistoryService } from '../capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from '../capabilities/notetaker'
+import { SessionsCapability, type SessionAdapters } from '../capabilities/sessions'
 import { AGENT_PRINCIPLES } from '../constitution'
 import { providerTranscript } from '../controller'
 
@@ -86,6 +87,7 @@ function realTools(): Array<Record<string, unknown>> {
     new HandoffCapability({} as HandoffAdapters),
     new HistoryCapability({} as HistoryService),
     new NotetakerCapability({} as NotetakerAdapters),
+    new SessionsCapability({} as SessionAdapters),
   ]
   return modules.flatMap((module) => module.tools.map((tool) => ({
     name: tool.name,

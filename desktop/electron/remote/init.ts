@@ -93,6 +93,9 @@ import { HandoffCapability } from './agent/capabilities/handoff'
 import { ProviderHealth } from './agent/providerHealth'
 import { HistoryCapability } from './agent/capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
+import { SessionsCapability } from './agent/capabilities/sessions'
+import { locateSession } from './agent/sessions/locate'
+import { planResume } from './agent/sessions/resume'
 
 /** Where the Agent's last conversation got to. Memory is the durable
  *  continuity; this is only the short-term thread. */
@@ -1170,12 +1173,58 @@ async function initializeUnmuteAgent(): Promise<void> {
           return copyHistoryToClipboard(payload.text, payload.attachments)
         },
       }),
-      // RESUMING A PAST SESSION REMOVED WITH THE SUMMARY SWEEP. Looking a
-      // session up by id was served by the sweep's on-disk index, which only
-      // existed because the sweep maintained it — see the note at its
-      // construction site above for why that machinery is gone. Resuming an
-      // Unmute task still works through the card; a session Unmute never
-      // started is reachable by reading its transcript.
+      // PICKING PAST WORK BACK UP. The Agent finds the session itself, with
+      // the Grep and Read it already holds; this is only the part it cannot
+      // do — spawning a process that carries the conversation, and giving it
+      // a card. Lookup is on demand and costs a walk and a 64 KB read, so
+      // nothing here re-creates the index (or the sweep that maintained it)
+      // deleted in cc48bbf.
+      new SessionsCapability({
+        async resume(input) {
+          if (!manager) throw new Error('Unmute Remote is not initialized')
+          const located = await locateSession(input.sessionId)
+          if (!located) throw new Error('That session is not on this machine')
+
+          // A Codex task holds the Codex THREAD id in `sessionId` and a Claude
+          // task holds Claude's, so this matches whichever the Agent gave us.
+          const existing = manager.list().find((t) => t.sessionId === input.sessionId)
+          const plan = planResume({
+            located,
+            ...(existing ? { existingTaskId: existing.id } : {}),
+            ...(input.intent ? { intent: input.intent } : {}),
+          })
+          if (plan.action === 'refuse') throw new Error(plan.reason)
+
+          if (plan.action === 'wake') {
+            await manager.resume(plan.taskId)
+            // The same path the router uses to land a follow-up in a live
+            // task, so a resumed session receives the request exactly as it
+            // would have by voice.
+            if (plan.followUp) manager.followUp(plan.taskId, plan.followUp)
+            log.event('agent-session-resumed', {
+              taskId: plan.taskId, sessionId: input.sessionId, via: 'wake',
+            })
+            return { taskId: plan.taskId }
+          }
+
+          // A session Unmute never started has no card. Forking it keeps the
+          // whole conversation and gives it one — the same dispatch the Remote
+          // key uses, so nothing here is a special case.
+          const taskId = await manager.dispatch(plan.intent, {
+            kind: 'session',
+            agent: plan.harness,
+            forkFromSessionId: plan.sessionId,
+            cwd: plan.cwd,
+          })
+          // A fork's id is minted by the CLI and cannot be pinned, so the card
+          // adopts it once it exists — the same 8s the MCP fork path allows.
+          setTimeout(() => { void manager?.adoptForkSessionId(taskId, plan.sessionId) }, 8000)
+          log.event('agent-session-resumed', {
+            taskId, sessionId: plan.sessionId, harness: plan.harness, via: 'fork',
+          })
+          return { taskId }
+        },
+      }),
       // What the user recorded. Optional: only present when the notetaker
       // feature wired its adapters in via RemoteInitDeps.notetaker — a build
       // without it simply never registers this capability, the same as any

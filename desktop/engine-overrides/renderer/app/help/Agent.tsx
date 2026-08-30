@@ -39,10 +39,10 @@ export default function Agent({ onBack }: HelpProps) {
 
       <Sec title="It knows what you have been working on">
         <P>
-          Unmute keeps a record of every coding session on this Mac — Claude
-          Code and Codex alike, the ones Unmute started and the ones you ran
-          yourself in a terminal. For each one it notes what the session was,
-          what got done, where it stands, and which files it touched.
+          Every coding session on this Mac is on disk — Claude Code and Codex
+          alike, the ones Unmute started and the ones you ran yourself in a
+          terminal. The Agent reads those transcripts directly when you refer
+          to work you have already done.
         </P>
         <P>
           That is what lets you say <em>“carry on with the migration”</em> or{' '}
@@ -50,7 +50,7 @@ export default function Agent({ onBack }: HelpProps) {
           You should not have to remember which window a thing happened in.
         </P>
         <P>
-          Picking work back up is ordinary: it finds the session and continues
+          Picking work back up is ordinary: it finds the session and reopens
           it, with its whole history intact, as a card you can watch. Asked to
           continue in a different harness, it starts a fresh session there
           carrying what the old one was about — and says so honestly, because
@@ -58,22 +58,18 @@ export default function Agent({ onBack }: HelpProps) {
         </P>
       </Sec>
 
-      <Sec title="How the record is kept">
+      <Sec title="Nothing reads your sessions in the background">
         <P>
-          A background job reads each transcript <strong>once</strong>, keeping
-          a cursor so it never re-reads what it has already seen. It waits until
-          a session has been quiet for five minutes — a summary written
-          mid-thought records a state that is about to change.
-        </P>
-        <P>
-          Summaries only ever grow. New work is appended; nothing rewrites what
-          was already recorded, so the note about your first step is still
-          exactly as written when you are two hundred steps in.
+          A transcript is opened <strong>only when you ask for something that
+          needs it</strong>. There is no scheduled job, no rolling window and
+          no summary index kept up to date behind you — an earlier version had
+          one, and it spent your own CLI usage re-reading work nobody had asked
+          about.
         </P>
         <Note>
-          It runs on the provider you pick above, and spends your own CLI usage
-          rather than anything metered by Unmute. Sessions nobody talked to —
-          subagent forks, plan workers, Unmute’s own jobs — are left out.
+          Reopening a session you ran yourself starts a fork of it: the new card
+          inherits the whole conversation, and your original session stays
+          exactly as it was.
         </Note>
       </Sec>
 

@@ -62,6 +62,15 @@ test('resuming needs no name for the session', () => {
   assert.match(AGENT_PRINCIPLES, /never answer a question about their own past with a question/)
 })
 
+/**
+ * The summary sweep and its index went in cc48bbf, and "the record" went with
+ * them. Aiming the Agent at a file nothing writes is the same fault the
+ * neighbouring tier was rewritten to avoid.
+ */
+test('resuming sends the Agent to the transcripts, not to a withdrawn record', () => {
+  assert.doesNotMatch(AGENT_PRINCIPLES, /[Ff]ind it in the record/)
+})
+
 /** Deleted tools must not still be advertised as available. */
 test('no removed tool is still named as if it existed', () => {
   for (const gone of ['sessions_list', 'sessions_search', 'session_read', 'session_continue_in']) {
