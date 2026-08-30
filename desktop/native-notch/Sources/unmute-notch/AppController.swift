@@ -1215,11 +1215,20 @@ final class AppController: NSObject, NotchResizing {
         restPending = state
         restTimer = Timer.scheduledTimer(withTimeInterval: Self.restAfter, repeats: false) { [weak self] _ in
             guard let self else { return }
-            // Never yank the surface out from under a pointer or an open
-            // pocket — resting mid-read is the one thing worse than lingering.
-            guard !self.model.hovering, !self.model.pocket.isOpen else {
-                self.scheduleRest(for: state); return
-            }
+            // IT ALWAYS GOES AWAY. There is no condition under which an
+            // announceable rung outstays its couple of seconds.
+            //
+            // This used to reschedule while the pointer was on the surface or
+            // the pocket payload said "open", meaning to be polite about not
+            // yanking something away mid-read. With two tasks waiting the
+            // pocket IS open, so the reschedule fired every two seconds
+            // forever and the banner never left — "2 waiting on you" sat on
+            // screen for minutes with exactly one rest in the whole log. A
+            // politeness that can become permanent is not politeness.
+            //
+            // Hovering needs no special case: the pointer entering restores
+            // the rung through the hover ladder, which is the designed way to
+            // ask "what is waiting?" — a pull, not a residency.
             // A capture that began during the countdown claims the rung —
             // resting mid-dictation would drop the waveform out from under it.
             guard self.commandedState == state,
