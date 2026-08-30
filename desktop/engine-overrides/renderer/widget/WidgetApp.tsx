@@ -24,6 +24,7 @@ import {
   type AudioInputDeviceInfo,
 } from './micSource'
 import { connectWarmMic, disconnectWarmMic, onWarmState, warmState, type WarmState } from './micWarm'
+import { acceptsRecordingStop } from './stopGuard'
 import {
   nativePillActive, toPhase, usePillState, usePillTicker, usePillEvents,
 } from './pillBridge'
@@ -952,6 +953,16 @@ export default function WidgetApp() {
     })
 
     api.onRecordingStop(async () => {
+      // THE SECOND STOP IS AN ECHO. Main sends one when the capture ends and
+      // another ~1.3s later with its reset-state; this used to set
+      // 'processing' for both, so the echo re-armed the spinner after the
+      // first stop had already resolved to output/hidden — and nothing was
+      // coming to clear it. Measured on 2026-08-30: 56 duplicates, 56 stuck,
+      // none recovering on their own. See stopGuard.ts.
+      if (!acceptsRecordingStop(stateRef.current)) {
+        console.log(`[widget:ux] EVENT recording:stop IGNORED (echo; state is ${stateRef.current})`)
+        return
+      }
       console.log(`[widget:ux] EVENT recording:stop (state was ${stateRef.current})`)
       setState('processing')
       setShowDiscardHint(false)
