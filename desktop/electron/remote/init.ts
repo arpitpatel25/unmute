@@ -2535,6 +2535,15 @@ let orchestrateFocusId: string | null = null
  *  broadcast beside the existing capture calls, zero touch of the capture path. */
 type CapturePhase = 'listening' | 'transcribing' | 'routing' | 'idle'
 function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): void {
+  // WHO ASKED FOR THIS PHASE. A `processing` pill was observed appearing with
+  // no keypress, no dictation session and no sleep/wake behind it, and sitting
+  // for 68 seconds — and the log could not say who sent it, because only the
+  // phase was recorded. The emitter is the one fact needed to answer that, so
+  // it is captured here rather than inferred later. `caller` is the frame
+  // above this one; `stack` survives across the async boundaries the phase
+  // travels through, which a breadcrumb variable would not.
+  const caller = (new Error().stack ?? '').split('\n')[2]?.trim().replace(/^at\s+/, '') ?? 'unknown'
+  log.event('capture-phase-broadcast', { phase, taskId: taskId ?? null, caller })
   captureBusy = phase !== 'idle' // the doorbell stays silent while the user speaks
   // The pill's model/agent chips come from HERE, not from the capture renderer:
   // main owns the setting and the config-driven catalog, so a second copy in the
