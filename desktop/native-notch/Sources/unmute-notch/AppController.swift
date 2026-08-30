@@ -69,6 +69,28 @@ final class AppController: NSObject, NotchResizing {
     /// a timer. Only a genuine change — a different rung, task, or status —
     /// earns the surface back.
     private var restedSignature: String?
+    /// ONE ANNOUNCEMENT PER SUBJECT PER WINDOW, however much the engine flaps.
+    ///
+    /// A signature that only asked "did anything change" was not enough: the
+    /// controller derives its rung from a live snapshot
+    /// (notch-controller.ts:1039) and one task was observed flipping between
+    /// `demanding` and `processing` every few seconds, so it alternated
+    /// attention ⇄ active. Every flip was a genuine change, so every flip
+    /// announced, and the surface was never quiet — the rest was firing
+    /// correctly the whole time.
+    ///
+    /// Keying the quiet period on the SUBJECT rather than the rung makes the
+    /// surface immune to that: one task gets one announcement, whatever its
+    /// status does afterwards. A different task still announces at once,
+    /// because that is genuinely new work.
+    private var lastAnnouncedSubject: String?
+    private var lastAnnouncedAt: Date = .distantPast
+    /// Long enough to absorb a flapping task, short enough that real new work
+    /// is not held back. `attention` still gets its 8-minute nudge on top.
+    private static let quietWindow: TimeInterval = 120
+
+    /// What the surface is ABOUT — the task, not the rung it is being shown as.
+    private func announcementSubject() -> String { model.task?.id ?? "-" }
 
     /// Rung + what it is about. Deliberately includes status, so Working → Done
     /// still announces; deliberately excludes anything that ticks on its own,
@@ -283,13 +305,30 @@ final class AppController: NSObject, NotchResizing {
             // you" stood down and then blinked back roughly every fifteen seconds
             // because each report re-announced it. Nothing had changed, so there
             // was nothing to say. It is still one hover away.
-            if restedFrom == state, restedSignature == stateSignature(state),
-               !isExpanded(state), !model.hovering {
-                scheduleReflash(for: state)
-                return
+            // Two suppressions, both only for a rung that announces:
+            //   1. the identical thing that already rested — nothing to say
+            //   2. the same SUBJECT inside its quiet window, whatever the rung
+            //      or status is doing (see lastAnnouncedSubject)
+            if isAnnounceable(state), !isExpanded(state), !model.hovering {
+                let subject = announcementSubject()
+                let sameThing = restedFrom == state && restedSignature == stateSignature(state)
+                let stillQuiet = subject == lastAnnouncedSubject
+                    && Date().timeIntervalSince(lastAnnouncedAt) < Self.quietWindow
+                if sameThing || stillQuiet {
+                    if restedFrom == nil { restedFrom = state; restedSignature = stateSignature(state) }
+                    scheduleReflash(for: state)
+                    // Keep the surface down rather than merely not re-arming it:
+                    // a flap arriving while visible must also be able to settle.
+                    if model.state != .dormant, !isExpanded(model.state) { applyState(.dormant) }
+                    return
+                }
             }
             // Every genuinely new command re-arms the stand-down clock, so a
             // changed rung, task or status announces again.
+            if isAnnounceable(state) {
+                lastAnnouncedSubject = announcementSubject()
+                lastAnnouncedAt = Date()
+            }
             scheduleRest(for: state)
             switch departureTransition.receive(isExpanded: isExpanded(state)) {
             case .applyNormally:
