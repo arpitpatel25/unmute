@@ -39,6 +39,27 @@ final class AppController: NSObject, NotchResizing {
     private var commandedState: NotchState = .dormant
     private var hoverTimer: Timer?
     private var hoverExitTimer: Timer?
+    // ── QUIET AT REST ────────────────────────────────────────────
+    //
+    // A held task used to keep its sentence on screen for as long as the state
+    // stayed true — "1 waiting on you" parked over the user's browser tabs for
+    // hours. Seeing it a second time never made it more actionable; it just
+    // made the surface furniture.
+    //
+    // So an announceable rung now says its piece and stands down. This is
+    // PRESENTATION ONLY: `commandedState` still holds what main asked for, the
+    // same way the dormant⇄idle hover ladder never fights main. Nothing is
+    // forgotten — hovering restores exactly the rung that decayed, and a click
+    // still opens what it always opened.
+    private var restTimer: Timer?
+    private var reflashTimer: Timer?
+    /// The rung that decayed, kept so hover can put it back. nil = not rested.
+    private var restedFrom: NotchState?
+    /// How long an announceable rung holds the eye before standing down.
+    private static let restAfter: TimeInterval = 2.0
+    /// Only a rung that is BLOCKED ON THE USER earns a second interruption.
+    /// Working and Done say their piece once and stay quiet.
+    private static let reflashEvery: TimeInterval = 8 * 60
     private var departureTransition = SurfaceDepartureTransition()
     private var departureReturnTimer: Timer?
     private var expandedContentGeneration: UInt64 = 0
@@ -234,6 +255,10 @@ final class AppController: NSObject, NotchResizing {
                 model.task = nil
             }
             commandedState = state
+            // Every fresh command re-arms the stand-down clock, so a rung that
+            // is re-sent (a status change on the same task) announces again
+            // rather than staying rested and silent.
+            scheduleRest(for: state)
             switch departureTransition.receive(isExpanded: isExpanded(state)) {
             case .applyNormally:
                 applyState(state)
@@ -1015,7 +1040,12 @@ final class AppController: NSObject, NotchResizing {
                 projectInteraction()
                 if !isExpanded(model.state), model.state != .dormant { refreshBar() }
             }
-            if model.state == .dormant && commandedState == .dormant {
+            // A rested rung outranks the plain reveal: the question a quiet
+            // notch raises is "is anything waiting on me", and idle cannot
+            // answer it. Falls through to idle when nothing is held.
+            if model.state == .dormant, restoreRestedRung() {
+                // restored
+            } else if model.state == .dormant && commandedState == .dormant {
                 NotchLog.log("hover-reveal: dormant → idle")
                 applyState(.idle)
             }
@@ -1048,6 +1078,14 @@ final class AppController: NSObject, NotchResizing {
                         self.refreshBar()
                     }
                 }
+                // A rung restored by hover goes back to sleep on exit —
+                // otherwise one stray pointer pass reinstates the furniture
+                // this whole change exists to remove.
+                if self.isAnnounceable(self.model.state), self.commandedState == self.model.state,
+                   !self.model.pocket.isOpen, !self.isExpanded(self.model.state) {
+                    self.scheduleRest(for: self.model.state)
+                    return
+                }
                 guard self.model.state == .idle, self.commandedState == .dormant else { return }
                 // Off-notch there is no dormant to fall back to (applyState
                 // maps it to idle). Idle IS the resting state there.
@@ -1063,6 +1101,64 @@ final class AppController: NSObject, NotchResizing {
             }
         }
     }
+    // MARK: - Quiet at rest
+
+    /// Rungs that announce and then stand down. `active` is excluded because
+    /// the user is INSIDE it — the waveform is the feedback — and `cockpit`
+    /// because they opened it deliberately. Persistence is earned by being in
+    /// the thing, not by the thing still being true.
+    private func isAnnounceable(_ s: NotchState) -> Bool {
+        s == .task || s == .attention
+    }
+
+    /// Starts the stand-down clock for a rung that has just been shown.
+    private func scheduleRest(for state: NotchState) {
+        restTimer?.invalidate(); restTimer = nil
+        reflashTimer?.invalidate(); reflashTimer = nil
+        restedFrom = nil
+        guard isAnnounceable(state), geometry.hasNotch || true else { return }
+        restTimer = Timer.scheduledTimer(withTimeInterval: Self.restAfter, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            // Never yank the surface out from under a pointer or an open
+            // pocket — resting mid-read is the one thing worse than lingering.
+            guard !self.model.hovering, !self.model.pocket.isOpen else {
+                self.scheduleRest(for: state); return
+            }
+            guard self.commandedState == state, !self.isExpanded(self.model.state) else { return }
+            self.restedFrom = state
+            NotchLog.log("rest: \(state.rawValue) → dormant (held, restorable on hover)")
+            self.applyState(.dormant, animated: true)
+            self.scheduleReflash(for: state)
+        }
+    }
+
+    /// A second interruption, for the one rung actually blocking on the user.
+    private func scheduleReflash(for state: NotchState) {
+        reflashTimer?.invalidate(); reflashTimer = nil
+        guard state == .attention else { return }
+        reflashTimer = Timer.scheduledTimer(withTimeInterval: Self.reflashEvery, repeats: false) { [weak self] _ in
+            guard let self, self.restedFrom == .attention,
+                  self.commandedState == .attention,
+                  !self.model.hovering else { return }
+            NotchLog.log("reflash: attention is still waiting")
+            self.restedFrom = nil
+            self.applyState(.attention, animated: true)
+        }
+    }
+
+    /// Puts back the rung that decayed. Used by the hover ladder in place of
+    /// the plain dormant → idle reveal, so hovering answers the only question
+    /// a quiet notch raises: is anything waiting on me?
+    private func restoreRestedRung() -> Bool {
+        guard let rung = restedFrom, commandedState == rung else { return false }
+        restTimer?.invalidate(); restTimer = nil
+        reflashTimer?.invalidate(); reflashTimer = nil
+        restedFrom = nil
+        NotchLog.log("hover-reveal: dormant → \(rung.rawValue) (restored)")
+        applyState(rung)
+        return true
+    }
+
     @objc func mouseEntered(with event: NSEvent) { handleHover(true) }
     @objc func mouseExited(with event: NSEvent) { handleHover(false) }
 
