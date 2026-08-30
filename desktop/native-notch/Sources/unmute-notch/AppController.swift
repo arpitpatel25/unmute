@@ -55,6 +55,12 @@ final class AppController: NSObject, NotchResizing {
     private var reflashTimer: Timer?
     /// The rung that decayed, kept so hover can put it back. nil = not rested.
     private var restedFrom: NotchState?
+    /// The rung the stand-down clock is currently counting down on, so a repeat
+    /// of the SAME command does not keep restarting it. Main re-sends a live
+    /// rung on ordinary activity — measured gaps of 0s and 2s during one task —
+    /// and an unconditional re-arm meant the 2s clock was reset faster than it
+    /// could ever fire. That is why "Working" never stood down.
+    private var restPending: NotchState?
     /// How long an announceable rung holds the eye before standing down.
     private static let restAfter: TimeInterval = 2.0
     /// Only a rung that is BLOCKED ON THE USER earns a second interruption.
@@ -1082,7 +1088,7 @@ final class AppController: NSObject, NotchResizing {
                 // otherwise one stray pointer pass reinstates the furniture
                 // this whole change exists to remove.
                 if self.isAnnounceable(self.model.state), self.commandedState == self.model.state,
-                   !self.model.pocket.isOpen, !self.isExpanded(self.model.state) {
+                   !self.model.pocket.isOpen {
                     self.scheduleRest(for: self.model.state)
                     return
                 }
@@ -1103,20 +1109,37 @@ final class AppController: NSObject, NotchResizing {
     }
     // MARK: - Quiet at rest
 
-    /// Rungs that announce and then stand down. `active` is excluded because
-    /// the user is INSIDE it — the waveform is the feedback — and `cockpit`
-    /// because they opened it deliberately. Persistence is earned by being in
-    /// the thing, not by the thing still being true.
+    /// Rungs that announce and then stand down.
+    ///
+    /// `active` CARRIES TWO DIFFERENT THINGS and only one of them may rest.
+    /// It is the rung for a live capture — where the user is inside it and the
+    /// waveform is the feedback — but it is ALSO the rung that renders
+    /// "Working" for N running tasks (see BarContent's `.active` case, which
+    /// draws Theme.statusLabel(.processing) with a `working` badge). The first
+    /// must persist; the second is the exact sentence that was parking over
+    /// people's browser tabs. `capturePhase` is what separates them.
+    ///
+    /// `task` and `cockpit` are the EXPANDED surfaces — isExpanded() is those
+    /// two — and an expanded surface is one the user opened. It stays.
     private func isAnnounceable(_ s: NotchState) -> Bool {
-        s == .task || s == .attention
+        switch s {
+        case .attention: return true
+        case .active:    return model.capturePhase == nil
+        default:         return false
+        }
     }
 
     /// Starts the stand-down clock for a rung that has just been shown.
     private func scheduleRest(for state: NotchState) {
+        // Already counting down on this exact rung: let the clock run. Only a
+        // CHANGE of rung, or a rung arriving while rested, starts a new one.
+        if restPending == state, let t = restTimer, t.isValid { return }
         restTimer?.invalidate(); restTimer = nil
         reflashTimer?.invalidate(); reflashTimer = nil
         restedFrom = nil
-        guard isAnnounceable(state), geometry.hasNotch || true else { return }
+        restPending = nil
+        guard isAnnounceable(state) else { return }
+        restPending = state
         restTimer = Timer.scheduledTimer(withTimeInterval: Self.restAfter, repeats: false) { [weak self] _ in
             guard let self else { return }
             // Never yank the surface out from under a pointer or an open
@@ -1124,7 +1147,11 @@ final class AppController: NSObject, NotchResizing {
             guard !self.model.hovering, !self.model.pocket.isOpen else {
                 self.scheduleRest(for: state); return
             }
-            guard self.commandedState == state, !self.isExpanded(self.model.state) else { return }
+            // A capture that began during the countdown claims the rung —
+            // resting mid-dictation would drop the waveform out from under it.
+            guard self.commandedState == state,
+                  self.isAnnounceable(self.model.state) else { self.restPending = nil; return }
+            self.restPending = nil
             self.restedFrom = state
             NotchLog.log("rest: \(state.rawValue) → dormant (held, restorable on hover)")
             self.applyState(.dormant, animated: true)
@@ -1154,6 +1181,7 @@ final class AppController: NSObject, NotchResizing {
         restTimer?.invalidate(); restTimer = nil
         reflashTimer?.invalidate(); reflashTimer = nil
         restedFrom = nil
+        restPending = nil
         NotchLog.log("hover-reveal: dormant → \(rung.rawValue) (restored)")
         applyState(rung)
         return true
