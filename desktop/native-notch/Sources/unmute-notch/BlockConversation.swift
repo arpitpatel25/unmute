@@ -285,10 +285,17 @@ private struct JumpToLatest: View {
             //
             // The shadow is what actually separates it from the text beneath;
             // fill alone still reads as flat against a dark ground.
+            //
+            // TRANSLUCENT, THOUGH. Fully opaque it stopped floating OVER the
+            // transcript and started punching a hole IN it — a solid slab
+            // sitting on the words rather than a control hovering above them.
+            // At ~0.67 effective the text still shows through enough to read
+            // as depth, while ink on it stays legible. Far from the white-at-
+            // 5.5% ghost it replaced; not a lid either.
             .foregroundColor(Theme.accentInk)
             .padding(.horizontal, 13)
             .padding(.vertical, 7)
-            .background(Capsule().fill(Theme.accent))
+            .background(Capsule().fill(Theme.accent.opacity(0.72)))
             .overlay(Capsule().stroke(Color.black.opacity(0.18), lineWidth: 0.5))
             .shadow(color: Color.black.opacity(0.45), radius: 8, y: 2)
             .contentShape(Capsule())
