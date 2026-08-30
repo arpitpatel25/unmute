@@ -215,8 +215,15 @@ struct TaskSurfaceView: View {
                 // Closing the card gives the audio back whether or not it is
                 // pressed again — see the release on `collapsed`. A mute you
                 // can no longer see is a mute you cannot undo.
-                KeyButton(label: model.backgroundAudioMuted ? "Unmute audio" : "Mute audio",
-                          symbol: model.backgroundAudioMuted ? "speaker.slash" : "speaker.wave.2") {
+                // "Mute" was the wrong verb and said so out loud: nothing is
+                // muted, the player is PAUSED and resumed where it left off —
+                // which is the whole reason this reads state instead of
+                // sending a toggle. And it is BACKGROUND audio, not the task's
+                // and not the microphone's, which on a task card is what the
+                // bare word would have been read as.
+                KeyButton(label: model.backgroundAudioMuted
+                            ? "Resume background audio" : "Pause background audio",
+                          symbol: model.backgroundAudioMuted ? "play.circle" : "pause.circle") {
                     let next = !model.backgroundAudioMuted
                     model.backgroundAudioMuted = next
                     model.emit(.backgroundAudio(muted: next))
