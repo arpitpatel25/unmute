@@ -315,7 +315,7 @@ final class AppController: NSObject, NotchResizing {
             //   1. the identical thing that already rested — nothing to say
             //   2. the same SUBJECT inside its quiet window, whatever the rung
             //      or status is doing (see lastAnnouncedSubject)
-            if isAnnounceable(state), !isExpanded(state), !model.hovering {
+            if isBannerRung(state), !isExpanded(state), !model.hovering {
                 // A GLOBAL gap, deliberately not keyed on the task. Keying it
                 // on the subject still let two flapping tasks take turns
                 // announcing, which is the same wall of text arriving by a
@@ -333,7 +333,7 @@ final class AppController: NSObject, NotchResizing {
             }
             // Every genuinely new command re-arms the stand-down clock, so a
             // changed rung, task or status announces again.
-            if isAnnounceable(state) {
+            if isBannerRung(state) {
                 lastAnnouncedSubject = announcementSubject()
                 lastAnnouncedAt = Date()
             }
@@ -1194,6 +1194,18 @@ final class AppController: NSObject, NotchResizing {
     ///
     /// `task` and `cockpit` are the EXPANDED surfaces — isExpanded() is those
     /// two — and an expanded surface is one the user opened. It stays.
+    /// The rungs that can ever be a banner, IGNORING the pocket. Used for
+    /// suppression, which must not be defeated by a flapping pocket payload:
+    /// if it consulted the pocket, every flip to `open` would let a duplicate
+    /// through, which is how "3 waiting on you" kept re-announcing.
+    private func isBannerRung(_ s: NotchState) -> Bool {
+        switch s {
+        case .attention: return true
+        case .active:    return model.capturePhase == nil
+        default:         return false
+        }
+    }
+
     private func isAnnounceable(_ s: NotchState) -> Bool {
         // AN OPEN POCKET IS NOT A NOTIFICATION. With the pocket closed the bar
         // is a banner — "1 waiting on you", a sentence about something
@@ -1241,10 +1253,25 @@ final class AppController: NSObject, NotchResizing {
             // Hovering needs no special case: the pointer entering restores
             // the rung through the hover ladder, which is the designed way to
             // ask "what is waiting?" — a pull, not a residency.
-            // A capture that began during the countdown claims the rung —
-            // resting mid-dictation would drop the waveform out from under it.
+            // DECIDED AT ANNOUNCE TIME, NOT RE-LITIGATED HERE.
+            //
+            // This used to re-ask isAnnounceable() when the timer fired, which
+            // reads model.pocket. The field log shows the pocket payload
+            // oscillating closed→open→closed→open with a constant slot count,
+            // so a banner scheduled while it was closed found it open two
+            // seconds later, bailed, and never rested — one rest event in a
+            // whole session while "3 waiting on you" stayed on screen.
+            //
+            // Whether the bar was a banner is a fact about the moment it was
+            // SHOWN. A flap arriving during its two seconds does not retroact
+            // into it having been a surface all along.
+            //
+            // Still checked: that this timer is not stale (a newer command
+            // schedules its own), and that a live capture has not claimed the
+            // rung — resting mid-dictation would drop the waveform out from
+            // under it. Neither of those flaps.
             guard self.commandedState == state,
-                  self.isAnnounceable(self.model.state) else { self.restPending = nil; return }
+                  self.model.capturePhase == nil else { self.restPending = nil; return }
             self.restPending = nil
             self.restedFrom = state
             self.restedSignature = self.stateSignature(state)
