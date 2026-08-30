@@ -141,7 +141,9 @@ struct BlockConversation: View {
                                 })
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.bottom, 2)
+                        // Room for the control to float over, so the last line
+                        // of the newest message is never underneath it.
+                        .padding(.bottom, jumpControlHeight)
                     }
                     .coordinateSpace(name: BLOCK_SCROLL)
                     .background(GeometryReader { g in
@@ -149,15 +151,28 @@ struct BlockConversation: View {
                             .onChange(of: g.size.height) { viewportHeight = $0 }
                     })
 
-                    if !atBottom {
-                        JumpToLatest(status: liveStatus) {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo(BLOCK_BOTTOM, anchor: .bottom)
-                            }
+                    // ALWAYS PRESENT, never conditional.
+                    //
+                    // It used to appear only when `atBottom` was false, and in
+                    // this surface — the one you get when the terminal is
+                    // hidden — that meant it was usually absent: the thread
+                    // opens anchored on the last turn, so the flag reads true
+                    // and the only way back to the live end was to scroll up
+                    // far enough to summon the control that scrolls you down.
+                    //
+                    // Drawing it unconditionally also RETIRES the loop this
+                    // file was rewritten to avoid. The hysteresis in
+                    // BottomProximity exists because the control's presence
+                    // moved the content it was measuring; a control that is
+                    // always there cannot move anything. `atBottom` now feeds
+                    // one thing only — whether new turns may scroll a reader —
+                    // and the dead zone still earns its place there.
+                    JumpToLatest(status: liveStatus) {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(BLOCK_BOTTOM, anchor: .bottom)
                         }
-                        .padding(.bottom, 10)
-                        .transition(.opacity)
                     }
+                    .padding(.bottom, 10)
                 }
                 // A THREAD OPENS AT THE START OF ITS LAST MESSAGE, and
                 // follows the live end as it grows.
