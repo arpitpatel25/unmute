@@ -263,16 +263,34 @@ private struct JumpToLatest: View {
                 Text("Jump to latest")
                     .font(.system(size: 11.5))
                 if let status {
+                    // On the light pill the old Theme.textFaint (white at 40%)
+                    // was invisible. Ink, held back, so it reads as secondary
+                    // without disappearing.
                     Text(status)
                         .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(Theme.textFaint)
+                        .foregroundColor(Theme.accentInk.opacity(0.62))
                 }
             }
-            .foregroundColor(Theme.text)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(Theme.raised))
-            .overlay(Capsule().stroke(Theme.hairline, lineWidth: 0.5))
+            // SOLID, NOT A GHOST. It was Theme.raised — white at 5.5% — which
+            // is the same treatment as every inert chip on the surface, and it
+            // floats over a transcript that is itself mostly text on black. It
+            // read as part of the content it sits on top of.
+            //
+            // NO HUE. Red, blue and green are all spoken for: status colour
+            // means failed / working / done on every other surface, and a
+            // control borrowing one would claim a state it does not have. The
+            // accent is white, which is the strongest contrast available here
+            // and carries no meaning of its own — the same treatment the
+            // composer's send button uses for the same reason.
+            //
+            // The shadow is what actually separates it from the text beneath;
+            // fill alone still reads as flat against a dark ground.
+            .foregroundColor(Theme.accentInk)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(Theme.accent))
+            .overlay(Capsule().stroke(Color.black.opacity(0.18), lineWidth: 0.5))
+            .shadow(color: Color.black.opacity(0.45), radius: 8, y: 2)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)

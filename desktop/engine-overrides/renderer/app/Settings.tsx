@@ -849,8 +849,13 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                     it against the screen it is a share of — so the preview is
                     the control's real output, drawn to scale: a 16:10 display
                     with the menubar and cutout it actually has, and the
-                    expanded surface centred on it exactly as refit() places it
-                    (observed: 0.9 fill on 1920x1080 → 1728x972 at x=96,y=108).
+                    expanded surface placed exactly as NotchGeometry places it.
+                    HINGED TO THE TOP, not floating: topPinnedFrame centres it
+                    horizontally and pins its TOP edge flush to the screen's
+                    top, so it hangs from the notch and grows downward. (The
+                    first cut centred it vertically on a misread of the AppKit
+                    frame — y is measured from the BOTTOM, so y=108 h=972 on a
+                    1080 screen is flush with the top, not centred.)
                     It follows the drag live, which is safe precisely because it
                     is a picture — the real surfaces only move on release. */}
                 <div style={{
@@ -869,13 +874,18 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                   }} />
                   {/* the expanded surface itself */}
                   <div style={{
-                    position: 'absolute', top: '50%', left: '50%',
-                    transform: 'translate(-50%, -50%)',
+                    position: 'absolute', top: 0, left: '50%',
+                    transform: 'translateX(-50%)',
                     width: `${Math.round(surfaceFill * 100)}%`,
                     height: `${Math.round(surfaceFill * 100)}%`,
                     background: 'rgba(0,0,0,0.88)',
                     border: '1px solid rgba(255,255,255,0.18)',
-                    borderRadius: 5,
+                    borderTop: 'none',
+                    // Square shoulders at the top, rounded at the bottom —
+                    // panelPlacement's own shape. A panel rounded all round
+                    // reads as a window pasted over the screen rather than
+                    // something the screen grew.
+                    borderRadius: '0 0 6px 6px',
                     display: 'flex', flexDirection: 'column', overflow: 'hidden',
                     // No transition: the box must track the knob frame for
                     // frame. An eased box lags the number beside it and reads
