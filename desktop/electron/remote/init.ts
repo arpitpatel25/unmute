@@ -6097,12 +6097,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('notch-auto-expand-set', { on: !!on })
     return true
   })
-  // Share of the screen the expanded surfaces fill. Clamped to the three
-  // offered choices rather than trusted: a stray value here would resize every
-  // surface on the machine, and there is no UI path back from a bad one.
+  // Share of the screen the expanded surfaces fill. CLAMPED TO THE RANGE, not
+  // to a list: the control is a slider now (40–95%), so every whole percent
+  // between the ends is a legitimate value. Still never trusted — a stray
+  // number would resize every surface on the machine and there is no UI path
+  // back from a bad one — but an out-of-range value is brought back in rather
+  // than replaced with the default, which would look like the drag was ignored.
+  // The same bounds live in SurfaceSizeStep on the Swift side; both clamp,
+  // because the notch process outlives any one engine run.
   ipcMain.handle('remote:set-surface-fill', async (_e, fill: number) => {
-    const allowed = [0.7, 0.8, 0.9]
-    const v = allowed.includes(fill) ? fill : 0.8
+    const v = Number.isFinite(fill)
+      ? Math.round(Math.min(Math.max(fill, 0.4), 0.95) * 100) / 100
+      : 0.8
     settings.set('surfaceFill', v)
     notchClient?.send({ type: 'surfaceFill', fill: v })
     log.event('surface-fill-set', { fill: v })

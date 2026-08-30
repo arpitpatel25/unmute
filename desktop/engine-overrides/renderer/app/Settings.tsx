@@ -521,10 +521,20 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
     setTerminalAutoExpand(next)
     void api().remoteSetTerminalAutoExpand?.(next)
   }
-  function handleSurfaceFillChange(value: string): void {
+  // DRAGGING MOVES THE KNOB; RELEASING MOVES THE SURFACE.
+  //
+  // The value is committed on release, not on every frame of the drag. Writing
+  // it live would resize the notch surfaces under the pointer while the hand is
+  // still moving — and on the notch's own copy of this control that literally
+  // slides the track out from under the cursor. Same rule in both places, so
+  // the two behave identically.
+  function handleSurfaceFillDrag(value: string): void {
+    setSurfaceFill(Number(value))
+  }
+  function handleSurfaceFillCommit(value: string): void {
     const v = Number(value)
     setSurfaceFill(v)
-    // Main clamps to the three offered values and returns what it stored, so a
+    // Main clamps to the supported range and returns what it stored, so a
     // rejected value corrects the control rather than leaving it lying.
     void api().remoteSetSurfaceFill?.(v)?.then((stored) => { if (stored) setSurfaceFill(stored) })
   }
@@ -832,17 +842,29 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
             </SettingRow>
             <SettingRow
               label="Expanded size"
-              description="How much of the screen the task view and the Orchestrator fill when they open."
+              description="How much of the screen the task view and the Orchestrator fill when they open. Drag to any size between 40% and 95%."
             >
-              <SegmentedControl
-                options={[
-                  { value: '0.7', label: '70%' },
-                  { value: '0.8', label: '80%' },
-                  { value: '0.9', label: '90%' },
-                ]}
-                value={String(surfaceFill)}
-                onChange={handleSurfaceFillChange}
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{
+                  fontVariantNumeric: 'tabular-nums', fontSize: 13, opacity: 0.8,
+                  minWidth: 38, textAlign: 'right',
+                }}>
+                  {Math.round(surfaceFill * 100)}%
+                </span>
+                <input
+                  type="range"
+                  min={40}
+                  max={95}
+                  step={1}
+                  value={Math.round(surfaceFill * 100)}
+                  aria-label="Expanded size, percent of screen"
+                  onChange={(e) => handleSurfaceFillDrag(String(Number(e.target.value) / 100))}
+                  onPointerUp={(e) => handleSurfaceFillCommit(String(Number(e.currentTarget.value) / 100))}
+                  onKeyUp={(e) => handleSurfaceFillCommit(String(Number(e.currentTarget.value) / 100))}
+                  onBlur={(e) => handleSurfaceFillCommit(String(Number(e.currentTarget.value) / 100))}
+                  style={{ width: 180, accentColor: 'currentColor' }}
+                />
+              </div>
             </SettingRow>
             <SettingRow
               label="Show in screen sharing and screenshots"

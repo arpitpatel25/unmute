@@ -263,7 +263,7 @@ final class AppController: NSObject, NotchResizing {
         case let .bootstrap(appearance, tone, fill, show, terminalAutoExpand, present):
             Appearance.shared.preference = appearance
             Appearance.shared.tone = tone
-            NotchGeometry.SurfaceFill.user = min(max(fill, 0.5), 0.95)
+            NotchGeometry.SurfaceFill.user = SurfaceSizeStep.clamp(fill)
             let sharing: NSWindow.SharingType = show ? .readOnly : .none
             window.sharingType = sharing
             pillWindow.sharingType = sharing
@@ -529,7 +529,7 @@ final class AppController: NSObject, NotchResizing {
             // Clamped again here, not only in main: this process outlives a
             // single engine run and a bad value would resize every surface
             // with no UI path back.
-            let v = min(max(fill, 0.5), 0.95)
+            let v = SurfaceSizeStep.clamp(fill)
             NotchLog.log("CMD surfaceFill \(v)")
             NotchGeometry.SurfaceFill.user = v
             refreshSurfaceControlAvailability()
@@ -960,9 +960,12 @@ final class AppController: NSObject, NotchResizing {
     }
 
     private func selectSurface(_ fill: CGFloat) {
-        guard isExpanded(model.state), SurfaceSizeStep.values.contains(where: { abs($0 - fill) < 0.001 }) else { return }
+        // Any value in the range now, not one of three — so this clamps rather
+        // than checking membership. A number from outside is brought back in,
+        // never ignored: silently doing nothing would read as a dead control.
+        guard isExpanded(model.state) else { return }
         userScale = 1
-        temporarySurfaceFill = fill
+        temporarySurfaceFill = SurfaceSizeStep.clamp(fill)
         refreshSurfaceControlAvailability()
         refit(animated: true)
     }
