@@ -52,7 +52,6 @@ final class AppController: NSObject, NotchResizing {
     // forgotten — hovering restores exactly the rung that decayed, and a click
     // still opens what it always opened.
     private var restTimer: Timer?
-    private var reflashTimer: Timer?
     /// The rung that decayed, kept so hover can put it back. nil = not rested.
     private var restedFrom: NotchState?
     /// The rung the stand-down clock is currently counting down on, so a repeat
@@ -68,49 +67,40 @@ final class AppController: NSObject, NotchResizing {
     /// "say it every fifteen seconds", which is the original complaint wearing
     /// a timer. Only a genuine change — a different rung, task, or status —
     /// earns the surface back.
-    private var restedSignature: String?
-    /// ONE ANNOUNCEMENT PER SUBJECT PER WINDOW, however much the engine flaps.
+    /// ONE ANNOUNCEMENT PER TASK, EVER.
     ///
-    /// A signature that only asked "did anything change" was not enough: the
-    /// controller derives its rung from a live snapshot
-    /// (notch-controller.ts:1039) and one task was observed flipping between
-    /// `demanding` and `processing` every few seconds, so it alternated
-    /// attention ⇄ active. Every flip was a genuine change, so every flip
-    /// announced, and the surface was never quiet — the rest was firing
-    /// correctly the whole time.
+    /// The rule, as stated by the owner: a banner shows for two seconds and
+    /// then goes, and it never comes back until a NEW task needs attention.
+    /// Three tasks waiting announce once between them; a fourth arriving
+    /// announces once more, because that id has not been seen.
     ///
-    /// Keying the quiet period on the SUBJECT rather than the rung makes the
-    /// surface immune to that: one task gets one announcement, whatever its
-    /// status does afterwards. A different task still announces at once,
-    /// because that is genuinely new work.
-    private var lastAnnouncedSubject: String?
-    private var lastAnnouncedAt: Date = .distantPast
-    /// Long enough to absorb a flapping task, short enough that real new work
-    /// is not held back. `attention` still gets its 8-minute nudge on top.
+    /// THIS REPLACED FIVE MOVING PARTS: a 120s quiet window, an 8-minute
+    /// reflash, a four-field signature, and the two bookkeeping fields they
+    /// needed. Every one of them was TIME-based, and time was the wrong axis —
+    /// it let the same task announce again once the window lapsed, and it
+    /// swallowed a genuinely new task that arrived inside one. Identity is the
+    /// axis the rule was always about.
     ///
-    /// THE RULE, stated by the owner: any message shows for a couple of seconds
-    /// at most and then ALWAYS goes away — stuck, waiting, working, whatever it
-    /// is. Treat the bar as a notification banner, not a status light. So this
-    /// window is not a tuning knob for flapping; it is the minimum gap between
-    /// two banners, and it applies to everything.
-    private static let quietWindow: TimeInterval = 120
+    /// Never pruned, deliberately. Pruning would mean deciding a task has
+    /// "stopped waiting", and the engine flaps that very fact — a task
+    /// alternating demanding/processing every few seconds would re-announce on
+    /// every flip. An id seen once is done.
+    private var announcedTaskIds: Set<String> = []
 
-    /// What the surface is ABOUT — the task, not the rung it is being shown as.
-    private func announcementSubject() -> String { model.task?.id ?? "-" }
-
-    /// Rung + what it is about. Deliberately includes status, so Working → Done
-    /// still announces; deliberately excludes anything that ticks on its own,
-    /// so mere progress does not.
-    private func stateSignature(_ s: NotchState) -> String {
-        let t = model.task
-        return [s.rawValue, t?.id ?? "-", t?.status.rawValue ?? "-", String(model.working)]
-            .joined(separator: "|")
+    /// The tasks currently asking for the user, by id. Falls back to the front
+    /// task when the pocket has not sent slots yet, so a banner shown before
+    /// any pocket payload still counts as announced rather than repeating.
+    private func attentionTaskIds() -> Set<String> {
+        let waiting = model.pocket.slots.filter { $0.demanding == true }.map(\.id)
+        if !waiting.isEmpty { return Set(waiting) }
+        if let t = model.task { return [t.id] }
+        return []
     }
+
     /// How long an announceable rung holds the eye before standing down.
     private static let restAfter: TimeInterval = 2.0
     /// Only a rung that is BLOCKED ON THE USER earns a second interruption.
     /// Working and Done say their piece once and stay quiet.
-    private static let reflashEvery: TimeInterval = 8 * 60
     private var departureTransition = SurfaceDepartureTransition()
     private var departureReturnTimer: Timer?
     private var expandedContentGeneration: UInt64 = 0
@@ -312,30 +302,22 @@ final class AppController: NSObject, NotchResizing {
             // because each report re-announced it. Nothing had changed, so there
             // was nothing to say. It is still one hover away.
             // Two suppressions, both only for a rung that announces:
-            //   1. the identical thing that already rested — nothing to say
-            //   2. the same SUBJECT inside its quiet window, whatever the rung
-            //      or status is doing (see lastAnnouncedSubject)
+            // NOTHING NEW TO SAY → SAY NOTHING.
+            //
+            // A banner is earned by a task id nobody has been told about yet.
+            // Everything else — the same task reporting again, a count going
+            // 2→3, the pocket flapping open and closed — is the engine talking
+            // to itself, and none of it is news to the person watching.
             if isBannerRung(state), !isExpanded(state), !model.hovering {
-                // A GLOBAL gap, deliberately not keyed on the task. Keying it
-                // on the subject still let two flapping tasks take turns
-                // announcing, which is the same wall of text arriving by a
-                // different route. One banner per window, whatever it is about.
-                let stillQuiet = Date().timeIntervalSince(lastAnnouncedAt) < Self.quietWindow
-                let sameThing = restedFrom == state && restedSignature == stateSignature(state)
-                if sameThing || stillQuiet {
-                    if restedFrom == nil { restedFrom = state; restedSignature = stateSignature(state) }
-                    scheduleReflash(for: state)
-                    // Keep the surface down rather than merely not re-arming it:
-                    // a flap arriving while visible must also be able to settle.
+                let ids = attentionTaskIds()
+                if !ids.isEmpty, ids.isSubset(of: announcedTaskIds) {
+                    if restedFrom == nil { restedFrom = state }
+                    // Put it down rather than merely declining to re-arm: a
+                    // repeat arriving while the bar is up must settle too.
                     if model.state != .dormant, !isExpanded(model.state) { applyState(.dormant) }
                     return
                 }
-            }
-            // Every genuinely new command re-arms the stand-down clock, so a
-            // changed rung, task or status announces again.
-            if isBannerRung(state) {
-                lastAnnouncedSubject = announcementSubject()
-                lastAnnouncedAt = Date()
+                announcedTaskIds.formUnion(ids)
             }
             scheduleRest(for: state)
             switch departureTransition.receive(isExpanded: isExpanded(state)) {
@@ -1232,7 +1214,6 @@ final class AppController: NSObject, NotchResizing {
         // CHANGE of rung, or a rung arriving while rested, starts a new one.
         if restPending == state, let t = restTimer, t.isValid { return }
         restTimer?.invalidate(); restTimer = nil
-        reflashTimer?.invalidate(); reflashTimer = nil
         restedFrom = nil
         restPending = nil
         guard isAnnounceable(state) else { return }
@@ -1274,24 +1255,8 @@ final class AppController: NSObject, NotchResizing {
                   self.model.capturePhase == nil else { self.restPending = nil; return }
             self.restPending = nil
             self.restedFrom = state
-            self.restedSignature = self.stateSignature(state)
             NotchLog.log("rest: \(state.rawValue) → dormant (held, restorable on hover)")
             self.applyState(.dormant, animated: true)
-            self.scheduleReflash(for: state)
-        }
-    }
-
-    /// A second interruption, for the one rung actually blocking on the user.
-    private func scheduleReflash(for state: NotchState) {
-        reflashTimer?.invalidate(); reflashTimer = nil
-        guard state == .attention else { return }
-        reflashTimer = Timer.scheduledTimer(withTimeInterval: Self.reflashEvery, repeats: false) { [weak self] _ in
-            guard let self, self.restedFrom == .attention,
-                  self.commandedState == .attention,
-                  !self.model.hovering else { return }
-            NotchLog.log("reflash: attention is still waiting")
-            self.restedFrom = nil
-            self.applyState(.attention, animated: true)
         }
     }
 
@@ -1301,10 +1266,8 @@ final class AppController: NSObject, NotchResizing {
     private func restoreRestedRung() -> Bool {
         guard let rung = restedFrom, commandedState == rung else { return false }
         restTimer?.invalidate(); restTimer = nil
-        reflashTimer?.invalidate(); reflashTimer = nil
         restedFrom = nil
         restPending = nil
-        restedSignature = nil
         NotchLog.log("hover-reveal: dormant → \(rung.rawValue) (restored)")
         applyState(rung)
         return true
