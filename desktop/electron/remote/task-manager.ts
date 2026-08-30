@@ -93,7 +93,8 @@ function blocksChanged(prev: Block[] | undefined, next: Block[]): boolean {
 }
 import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
-import { resolveTranscriptById, locateTranscript } from './trace-reducer'
+import { locateTranscript } from './trace-reducer'
+import { findTranscriptById } from './transcript-locate'
 import { rollupCodexEvents, conversationFromCodexEvents } from './codex/cli-observer'
 import { discoverSessionId, findRollout, isRolloutIntegrityError, parseRolloutJsonl, readRolloutEvents } from './codex/cli-session'
 import { projectSlug } from './projects'
@@ -1489,7 +1490,7 @@ export class TaskManager extends EventEmitter {
     // `tool-used` (including the checkpoint capture) is handled earlier, in
     // onHookEvent, before this function is even called — see its own comment.
     if (event.kind === 'turn-ended') {
-      const path = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
+      const path = task.sessionId ? await findTranscriptById(task.cwd, task.sessionId) : null
       sideEffects = hadSideEffects(await readTranscript(path))
 
       // THE REPLY COMES FROM THE EVENT, NOT THE TRANSCRIPT.
@@ -2543,18 +2544,26 @@ export class TaskManager extends EventEmitter {
       await this.refreshCodexBlocks(task)
       return
     }
-    // BY SESSION ID IF WE KNOW IT, BY DIRECTORY IF WE DO NOT.
+    // BY SESSION ID, WHEREVER IT NOW LIVES.
     //
-    // Claude names its transcript after ITS OWN session id, which Unmute only
-    // learns once a hook fires. For the first seconds of a task — exactly when
-    // someone is watching it work — sessionId is still the task id and the path
-    // does not resolve, so the panel stayed empty while the terminal filled.
+    // findTranscriptById checks the folder derived from cwd first and then
+    // SEARCHES for the id, because the folder is derived from the session's
+    // CURRENT directory and moves with it — a session that enters a git
+    // worktree takes its transcript along. The id never moves. See
+    // transcript-locate.ts for the field record.
     //
-    // locateTranscript keys on the task's cwd instead. Every task gets its own
-    // directory named after the task id, so the newest transcript in it belongs
-    // to this task and nothing else.
-    const path = (task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null)
-      ?? await locateTranscript(task.cwd)
+    // THE DIRECTORY FALLBACK IS FOR SCRATCH TASKS ONLY. "Newest .jsonl in the
+    // folder" is unique exactly when the folder belongs to one task — which is
+    // true of a scratch home (named after the task id) and false of every
+    // project-bound task, where several tasks and the user's own terminal
+    // sessions share one repo. Applied to a project cwd it silently binds a
+    // card to whichever session touched that repo last: on 2026-08-30 it put
+    // 5.4 MB of a different, live conversation onto task 87083840's card and
+    // followed it as it grew. An empty panel is correct; someone else's
+    // transcript is not.
+    const byId = task.sessionId ? await findTranscriptById(task.cwd, task.sessionId) : null
+    const path = byId
+      ?? (task.cwd === task.home ? await locateTranscript(task.cwd) : null)
     if (path) {
       this.ensureTranscriptWatcher(id, path)
       await this.refreshClaudeBlocks(task, path, log.child({ taskId: id }))
@@ -2645,7 +2654,11 @@ export class TaskManager extends EventEmitter {
    *  count is not subject to the same stall that can delay the hook. */
   private async claudeUserTurns(task: Task): Promise<number> {
     if (!task.sessionId) return 0
-    const path = (await resolveTranscriptById(task.cwd, task.sessionId)) ?? (await locateTranscript(task.cwd))
+    // Same rule as loadBlocksFor: search by id, and only fall back to "newest
+    // in the folder" when that folder is this task's own scratch home. Counting
+    // ANOTHER session's user turns would mis-decide whether this one is stuck.
+    const path = (await findTranscriptById(task.cwd, task.sessionId))
+      ?? (task.cwd === task.home ? await locateTranscript(task.cwd) : null)
     if (!path) return 0
     try {
       const raw = await fs.readFile(path, 'utf8')
@@ -5001,7 +5014,7 @@ export class TaskManager extends EventEmitter {
     const byId = !task.sessionId ? null
       : task.agent === 'codex'
         ? await findRollout(task.codexRolloutId ?? task.sessionId)
-        : await resolveTranscriptById(task.cwd, task.sessionId)
+        : await findTranscriptById(task.cwd, task.sessionId)
     // ONE RESUME AT A TIME. `alive` only turns true once the PTY has spawned, so
     // a second call arriving during the (seconds-long) respawn passed the check
     // above and built a SECOND session — orphaning the first, which nothing then

@@ -8,7 +8,7 @@ import { devEvent } from './curator-devlog'
 const log = createLogger('trace-reducer')
 const reducerLog = createLogger('trace-reducer:reduce')
 
-function defaultProjectsDir(): string { return join(homedir(), '.claude', 'projects') }
+export function defaultProjectsDir(): string { return join(homedir(), '.claude', 'projects') }
 
 /** The DETERMINISTIC transcript path for a (cwd, Claude session id) pair. Claude
  *  Code stores each conversation at
