@@ -24,7 +24,7 @@ import {
   type AudioInputDeviceInfo,
 } from './micSource'
 import { connectWarmMic, disconnectWarmMic, onWarmState, warmState, type WarmState } from './micWarm'
-import { acceptsRecordingStop } from './stopGuard'
+import { acceptsRecordingStop, endsOnRemoteDispatch } from './stopGuard'
 import {
   nativePillActive, toPhase, usePillState, usePillTicker, usePillEvents,
 } from './pillBridge'
@@ -886,8 +886,18 @@ export default function WidgetApp() {
     const remoteApi = api as unknown as {
       remoteOnCaptureKind?: (cb: (kind: 'dictation' | 'remote') => void) => void
       remoteOnCaptureRoute?: (cb: (route: 'cursor' | 'task' | 'agent') => void) => (() => void) | void
+      remoteOnDispatched?: (cb: () => void) => (() => void) | void
       remoteAgentOptions?: () => Promise<{ current: string; options: Array<{ id: string; label: string; available: boolean }> }>
     }
+
+    // THE REMOTE LANE'S TERMINAL EVENT. Without it a Remote capture reaches
+    // `processing` and stays there for the life of the app — see stopGuard.ts.
+    const offDispatched = remoteApi.remoteOnDispatched?.(() => {
+      if (!endsOnRemoteDispatch(stateRef.current)) return
+      console.log(`[widget:ux] EVENT remote:dispatched — capture complete (state was ${stateRef.current})`)
+      setState('hidden')
+      setShowDiscardHint(false)
+    })
     // Warm the picker at mount. The capture-start refresh below keeps it honest,
     // but this guarantees the chip has data the first time a Remote capture
     // opens, instead of depending on one event arriving before first paint.
@@ -1052,6 +1062,9 @@ export default function WidgetApp() {
 
     return () => {
       window.removeEventListener('unmute:phone-mic-zombie', onZombie)
+      // Its own unsubscribe, because the bridge returns one — removeAllListeners
+      // on a shared channel would take out anything else listening to it.
+      if (typeof offDispatched === 'function') offDispatched()
       api.removeAllListeners('recording:start')
       api.removeAllListeners('recording:stop')
       api.removeAllListeners('output:ready')

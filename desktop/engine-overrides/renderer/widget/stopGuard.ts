@@ -37,3 +37,23 @@ const ALREADY_SETTLED: ReadonlySet<string> = new Set<string>([
 export function acceptsRecordingStop(state: WidgetState): boolean {
   return !ALREADY_SETTLED.has(state)
 }
+
+/**
+ * Does a remote dispatch end this capture?
+ *
+ * A right-Option capture goes to a task, not to a paste, so NONE of the
+ * widget's terminal events fire for it — output:ready, output-fallback,
+ * output-error, cancelled and too-short are all dictation outcomes. Without
+ * this the state sits at `processing` for the rest of the app's life, and
+ * every later re-push of the state object puts the pill back on screen with
+ * nothing behind it. Main already hides the native pill on its own timer,
+ * which makes it look finished while the widget still disagrees; this is the
+ * widget being told the same thing.
+ *
+ * ONLY FROM `processing`. The dispatch confirmation can arrive while the mic
+ * is open on the NEXT capture — ending that one would hide a live recording —
+ * and a settled outcome has already said something truer than "done".
+ */
+export function endsOnRemoteDispatch(state: WidgetState): boolean {
+  return state === 'processing'
+}

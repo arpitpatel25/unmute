@@ -644,6 +644,20 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('recording:start', (_e, _mode, _sessionId, kind) =>
       cb(kind === 'remote' ? 'remote' : 'dictation')),
 
+  // ── The remote capture reached its task ──
+  //
+  // A Remote capture has no output:ready: the words go to a task, not to the
+  // pasteboard, so every terminal event the widget listens for belongs to the
+  // dictation lane and none of them fire. sessionManager has always SENT this
+  // (`sendToWidget('remote:dispatched', …)`) and nothing has ever listened,
+  // which left the widget stuck at `processing` after every Remote capture —
+  // and any later re-push of that state object put the pill back on screen.
+  remoteOnDispatched: (cb: () => void) => {
+    const h = () => cb()
+    ipcRenderer.on('remote:dispatched', h)
+    return () => ipcRenderer.removeListener('remote:dispatched', h)
+  },
+
   // ── The live capture changed lanes (fn ⇄ right-Option ⇄ right-Command) ──
   //
   // ITS OWN CHANNEL, AND THAT IS THE WHOLE POINT. The obvious way to update
