@@ -589,6 +589,8 @@ enum Event {
     case clearFinished
     case digestDismiss
     case bellToggle
+    /// Hold the room quiet while a card is open, and give it back on close.
+    case backgroundAudio(muted: Bool)
     case offerAccept(newTaskId: String)
     case openArtifact(type: String, value: String)
     case openInTerminal(id: String)
@@ -658,6 +660,7 @@ enum Event {
         case .clearFinished: return ["type": "clearFinished"]
         case .digestDismiss: return ["type": "digestDismiss"]
         case .bellToggle: return ["type": "bellToggle"]
+        case .backgroundAudio(let muted): return ["type": "backgroundAudio", "muted": muted]
         case .offerAccept(let id): return ["type": "offerAccept", "newTaskId": id]
         case .openArtifact(let type, let value): return ["type": "openArtifact", "artifactType": type, "value": value]
         case .openInTerminal(let id): return ["type": "openInTerminal", "id": id]

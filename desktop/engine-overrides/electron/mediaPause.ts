@@ -39,7 +39,14 @@ export function mediaActionOnCaptureStart(o: { enabled: boolean; audioPlaying: b
   return o.audioPlaying ? 'pause' : 'none'
 }
 
-export function mediaActionOnCaptureEnd(o: { wePaused: boolean; audioPlaying: boolean }): MediaAction {
+export function mediaActionOnCaptureEnd(
+  o: { wePaused: boolean; audioPlaying: boolean; heldByUser?: boolean },
+): MediaAction {
+  // A HOLD OUTRANKS A CAPTURE. The user asked for quiet and has not taken it
+  // back; handing their audio to them because a dictation happened to end is
+  // Unmute inventing a state, which is the one thing this file forbids. The
+  // hold's own release is the only thing that lifts it.
+  if (o.heldByUser) return 'none'
   // Never restore something we did not stop: if nothing was playing when the
   // dictation began, there is nothing of the user's to bring back.
   if (!o.wePaused) return 'none'
@@ -72,4 +79,33 @@ export function parseNowPlaying(stdout: string): NowPlaying | null {
   } catch {
     return null
   }
+}
+
+/**
+ * The user asked for quiet, on demand, and will ask for it back.
+ *
+ * Same rule as a capture pause and for the same reason: a command sent into
+ * silence is how a naive implementation starts music nobody asked for. So a
+ * hold placed when nothing is playing holds NOTHING — there is no debt to
+ * record and nothing to give back later.
+ */
+export function mediaActionOnHold(o: { heldByUser: boolean; audioPlaying: boolean }): MediaAction {
+  if (o.heldByUser) return 'none'
+  return o.audioPlaying ? 'pause' : 'none'
+}
+
+/**
+ * Give the room back.
+ *
+ * Called both when the user presses the control again and when they close the
+ * surface they pressed it on — leaving someone's audio muted because a card
+ * went away would be the same broken promise as leaving it paused after a
+ * dictation.
+ */
+export function mediaActionOnRelease(o: { heldByUser: boolean; audioPlaying: boolean }): MediaAction {
+  if (!o.heldByUser) return 'none'
+  // They started something themselves while it was held. Resuming now would
+  // be a second player, not a restoration.
+  if (o.audioPlaying) return 'none'
+  return 'resume'
 }

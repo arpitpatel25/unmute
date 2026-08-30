@@ -246,6 +246,11 @@ export interface RemoteInitDeps {
     provider: 'claude' | 'codex',
     input: string,
   ) => Promise<{ ok: true; output: string } | { ok: false; error: string }>
+  /** Hold background audio quiet on demand, and give it back. Injected for the
+   *  same reason as the two above: the implementation is
+   *  engine-overrides/electron/mediaController.ts, which this tree cannot
+   *  import. Absent = the control is inert; it never breaks a card. */
+  backgroundAudio?: { hold(): void; release(): void }
 }
 
 const log = createLogger('init')
@@ -4696,6 +4701,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         listTasks: () => mgr.list().map(serializeTask),
         getTask: (id) => { const t = mgr.get(id); return t ? serializeTask(t) : undefined },
         answer: (id, text) => mgr.answer(id, text),
+        ...(deps.backgroundAudio ? {
+          holdBackgroundAudio: () => deps.backgroundAudio!.hold(),
+          releaseBackgroundAudio: () => deps.backgroundAudio!.release(),
+        } : {}),
         getDraft: (id) => taskDrafts.get(id),
         setDraftText: (id, text) => {
           const before = taskDrafts.get(id)

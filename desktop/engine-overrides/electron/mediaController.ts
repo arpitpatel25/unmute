@@ -16,10 +16,21 @@ import { execFile, execFileSync } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import Store from 'electron-store'
-import { mediaActionOnCaptureStart, mediaActionOnCaptureEnd, parseNowPlaying, MR_PLAY, MR_PAUSE } from './mediaPause'
+import {
+  mediaActionOnCaptureStart, mediaActionOnCaptureEnd, mediaActionOnHold, mediaActionOnRelease,
+  parseNowPlaying, MR_PLAY, MR_PAUSE,
+} from './mediaPause'
 
-/** Whether WE paused the media, and therefore owe the user a resume. */
+/** Whether WE paused the media for a capture, and therefore owe a resume. */
 let wePaused = false
+
+/** Whether the user asked for quiet and has not asked for it back.
+ *
+ *  Deliberately a SECOND flag rather than a reuse of `wePaused`. The two debts
+ *  are settled by different events — a capture ends on its own, a hold ends
+ *  only when the user releases it or closes the surface — and folding them
+ *  into one boolean is how a dictation would silently un-mute someone. */
+let heldByUser = false
 
 // The SAME store main-extensions writes the toggle into. Read fresh on every
 // capture rather than cached at startup, so turning the setting on takes effect
@@ -42,8 +53,9 @@ function pauseEnabled(): boolean {
 // its way out is settle that debt, synchronously, because there is no event
 // loop left to await on.
 app.on('before-quit', () => {
-  if (!wePaused) return
+  if (!wePaused && !heldByUser) return
   wePaused = false
+  heldByUser = false
   const paths = adapterPaths()
   if (!paths) return
   try {
@@ -116,7 +128,9 @@ export function resumeAfterCapture(): void {
   void (async () => {
     try {
       const np = await readNowPlaying()
-      const action = mediaActionOnCaptureEnd({ wePaused: true, audioPlaying: np?.playing === true })
+      const action = mediaActionOnCaptureEnd({
+        wePaused: true, audioPlaying: np?.playing === true, heldByUser,
+      })
       wePaused = false
       if (action !== 'resume') {
         console.log('[media] not resuming — playback changed during the dictation')
@@ -127,6 +141,64 @@ export function resumeAfterCapture(): void {
     } catch (e) {
       wePaused = false
       console.warn('[media] resume skipped:', e instanceof Error ? e.message : e)
+    }
+  })()
+}
+
+/** Is the room being held quiet right now? The control's label follows this. */
+export function isBackgroundAudioHeld(): boolean { return heldByUser }
+
+/**
+ * Mute the background on demand, for as long as the user wants it muted.
+ *
+ * Not the dictation path and not gated by its setting: this is an explicit
+ * press, so the preference about whether Unmute may pause things *for a
+ * capture* has no bearing on it.
+ *
+ * Fire-and-forget, like everything else here — a control must not wait on a
+ * perl round trip to look pressed.
+ */
+export function holdBackgroundAudio(): void {
+  void (async () => {
+    try {
+      const np = await readNowPlaying()
+      const action = mediaActionOnHold({ heldByUser, audioPlaying: np?.playing === true })
+      if (action !== 'pause') return
+      await runAdapter(['send', String(MR_PAUSE)], 2000)
+      // Recorded ONLY once the pause actually went out, so a hold that found
+      // silence leaves no debt to "resume" into music nobody was playing.
+      heldByUser = true
+      console.log(`[media] holding ${np?.bundleIdentifier ?? 'now playing'} — user asked for quiet`)
+    } catch (e) {
+      console.warn('[media] hold skipped:', e instanceof Error ? e.message : e)
+    }
+  })()
+}
+
+/**
+ * Give the room back.
+ *
+ * Called on a second press AND when the surface carrying the control closes.
+ * Closing must release: a mute the user cannot see is a mute they cannot undo,
+ * and leaving one behind is the same broken promise as leaving music paused
+ * after a dictation.
+ */
+export function releaseBackgroundAudio(): void {
+  if (!heldByUser) return
+  void (async () => {
+    try {
+      const np = await readNowPlaying()
+      const action = mediaActionOnRelease({ heldByUser: true, audioPlaying: np?.playing === true })
+      heldByUser = false
+      if (action !== 'resume') {
+        console.log('[media] not resuming — playback changed while it was held')
+        return
+      }
+      await runAdapter(['send', String(MR_PLAY)], 2000)
+      console.log('[media] released the hold')
+    } catch (e) {
+      heldByUser = false
+      console.warn('[media] release skipped:', e instanceof Error ? e.message : e)
     }
   })()
 }

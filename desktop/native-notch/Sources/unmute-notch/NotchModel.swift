@@ -6,7 +6,33 @@ import ConversationSupport
 // response to commands; views emit user intents through `emit`.
 final class NotchModel: ObservableObject {
     // Ladder + counts (pushed by main).
-    @Published var state: NotchState = .dormant
+    @Published var state: NotchState = .dormant {
+        didSet {
+            // A HOLD BELONGS TO THE OPEN CARD, AND THE RELEASE IS DRIVEN FROM
+            // HERE — not from the close event.
+            //
+            // The engine also releases on `collapsed`, but that is only ONE of
+            // the ways a card goes away: onUserLeft collapses the surface when
+            // you switch app or swipe to another Space, and never raises it.
+            // Releasing there and only there would leave the audio muted with
+            // the control gone, which is precisely the state this feature
+            // promises cannot happen.
+            //
+            // Every path ends here, because every path changes the state. So
+            // the label and the debt are cleared by the same line and cannot
+            // disagree. The engine's own release stays as belt-and-braces; a
+            // release with nothing held is a no-op.
+            if state != .task && backgroundAudioMuted {
+                backgroundAudioMuted = false
+                emit(.backgroundAudio(muted: false))
+            }
+        }
+    }
+
+    /// Is the room being held quiet from the open task card? Local to the
+    /// surface: the engine owns the actual media debt and settles it on
+    /// collapse, this is only what the control says.
+    @Published var backgroundAudioMuted: Bool = false
     // NO `commandedState` HERE ANY MORE.
     //
     // It mirrored the rung MAIN last asked for, so a view could refuse to carry

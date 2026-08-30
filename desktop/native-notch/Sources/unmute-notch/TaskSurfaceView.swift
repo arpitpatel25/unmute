@@ -202,6 +202,25 @@ struct TaskSurfaceView: View {
                 if !t.alive && t.canResume {
                     KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
                 }
+                // QUIET, ON DEMAND — the same thing dictation already does to
+                // your speakers for the length of an utterance, offered as a
+                // choice for the length of a card. Reading a task while a
+                // podcast runs is the case: nothing is capturing, so nothing
+                // pauses it for you.
+                //
+                // It is not tied to the dictation SETTING. That preference is
+                // about whether Unmute may pause things on its own; this is a
+                // press, and a press is not a policy.
+                //
+                // Closing the card gives the audio back whether or not it is
+                // pressed again — see the release on `collapsed`. A mute you
+                // can no longer see is a mute you cannot undo.
+                KeyButton(label: model.backgroundAudioMuted ? "Unmute audio" : "Mute audio",
+                          symbol: model.backgroundAudioMuted ? "speaker.slash" : "speaker.wave.2") {
+                    let next = !model.backgroundAudioMuted
+                    model.backgroundAudioMuted = next
+                    model.emit(.backgroundAudio(muted: next))
+                }
             }
             Spacer(minLength: 0)
             // This drops OUR card; it has never touched the agent's session. For

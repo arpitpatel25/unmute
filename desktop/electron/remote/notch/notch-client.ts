@@ -397,6 +397,10 @@ export type NotchEvent =
   | { type: 'pocketMove'; delta?: number; to?: number }
   /** Tap the pocket open (sticky), or let it go back to the notch. */
   | { type: 'pocketOpen' }
+  /** Hold background audio quiet from an open card, or give it back. The hold
+   *  is released on collapse too — a mute the user can no longer see is one
+   *  they cannot undo. */
+  | { type: 'backgroundAudio'; muted: boolean }
   | { type: 'pocketRelease' }
   /** Back to the full task. The pocket is a GLANCE state — it exists
    *  because the panel is large, not because the panel is wrong, so the

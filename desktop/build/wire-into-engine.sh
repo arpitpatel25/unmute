@@ -477,7 +477,8 @@ NODE_EOF
     sed -i.bak "/^import { buildOSSAdapter } from '\.\/buildOSSAdapter'/a\\
 import { initRemote } from './paywall/remote/init'\\
 import { notetakerAgentAdapters } from './notetakerInit'\\
-import { runHeadlessAgent } from './notetaker/headlessAgent'
+import { runHeadlessAgent } from './notetaker/headlessAgent'\\
+import { holdBackgroundAudio, releaseBackgroundAudio } from './mediaController'
 " "$main_ts"
     rm -f "$main_ts.bak"
     node -e "
@@ -485,7 +486,7 @@ import { runHeadlessAgent } from './notetaker/headlessAgent'
       if (!s.includes('initRemote({')) {
         s = s.replace(
           'initPaywall(app, buildOSSAdapter())\n',
-          'initPaywall(app, buildOSSAdapter())\n  initRemote({ sessionManager, keyboardManager, notetaker: notetakerAgentAdapters(), runHeadless: (provider, input) => runHeadlessAgent(provider, input, { timeoutMs: 120000 }) })\n'
+          'initPaywall(app, buildOSSAdapter())\n  initRemote({ sessionManager, keyboardManager, notetaker: notetakerAgentAdapters(), runHeadless: (provider, input) => runHeadlessAgent(provider, input, { timeoutMs: 120000 }), backgroundAudio: { hold: holdBackgroundAudio, release: releaseBackgroundAudio } })\n'
         )
       }
       fs.writeFileSync(p, s)

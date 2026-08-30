@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import {
   mediaActionOnCaptureStart,
   mediaActionOnCaptureEnd,
+  mediaActionOnHold,
+  mediaActionOnRelease,
   parseNowPlaying,
   MR_PLAY,
   MR_PAUSE,
@@ -80,5 +82,52 @@ describe('the command codes sent to MediaRemote', () => {
     // that starts music when nothing is playing; it must never appear here.
     assert.equal(MR_PLAY, 0)
     assert.equal(MR_PAUSE, 1)
+  })
+})
+
+// A HOLD IS NOT A CAPTURE PAUSE. Dictation borrows your audio for a few
+// seconds and hands it straight back; a hold is a choice the user made and
+// keeps until they take it back or close the surface they made it on. The two
+// share one adapter and must not undo each other — a dictation ending while a
+// hold is in force is the case that would otherwise un-mute the user.
+describe('holding background audio on demand', () => {
+  test('pauses what is playing when the user asks for quiet', () => {
+    assert.equal(mediaActionOnHold({ heldByUser: false, audioPlaying: true }), 'pause')
+  })
+
+  test('sends nothing into silence, so a hold cannot start playback', () => {
+    assert.equal(mediaActionOnHold({ heldByUser: false, audioPlaying: false }), 'none')
+  })
+
+  test('a second hold is not a second pause', () => {
+    assert.equal(mediaActionOnHold({ heldByUser: true, audioPlaying: true }), 'none')
+  })
+
+  test('releasing gives back exactly what the hold took', () => {
+    assert.equal(mediaActionOnRelease({ heldByUser: true, audioPlaying: false }), 'resume')
+  })
+
+  test('releasing a hold nobody placed does nothing', () => {
+    assert.equal(mediaActionOnRelease({ heldByUser: false, audioPlaying: false }), 'none')
+  })
+
+  test('does not resume when the user started something themselves', () => {
+    assert.equal(mediaActionOnRelease({ heldByUser: true, audioPlaying: true }), 'none')
+  })
+
+  // THE INTERACTION THAT MATTERS. Mute the room, then dictate: the capture
+  // ends and its resume would hand back the audio the user just silenced.
+  test('a dictation ending never lifts a hold the user placed', () => {
+    assert.equal(
+      mediaActionOnCaptureEnd({ wePaused: true, audioPlaying: false, heldByUser: true }),
+      'none',
+    )
+  })
+
+  test('a dictation ending still resumes when no hold is in force', () => {
+    assert.equal(
+      mediaActionOnCaptureEnd({ wePaused: true, audioPlaying: false, heldByUser: false }),
+      'resume',
+    )
   })
 })

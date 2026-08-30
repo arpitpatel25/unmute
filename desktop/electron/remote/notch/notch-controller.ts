@@ -114,6 +114,11 @@ export interface NotchControllerDeps {
   removeDraftAttachment?(id: string, attachmentId: string): Promise<void> | void
   sendDraft?(id: string): Promise<boolean> | boolean
   kill(id: string): void
+  /** Hold background audio quiet, and give it back. Optional: a build without
+   *  the media adapter simply never supplies these, and the control is inert
+   *  rather than broken — the same shape every other optional dep here takes. */
+  holdBackgroundAudio?(): void
+  releaseBackgroundAudio?(): void
   remove(id: string): Promise<void> | void
   killAll(): void
   resume(id: string): Promise<boolean> | boolean
@@ -475,7 +480,13 @@ export class NotchController {
     // IPC handlers call (via deps).
     const on = (type: string, fn: (e: NotchEvent) => void) => this.client.on(type, fn)
     on('tap', () => this.onTap())
-    on('collapsed', () => { this.seenThenClose({ collapse: true }) })
+    on('collapsed', () => {
+      // THE HOLD DIES WITH THE CARD. Whether or not they pressed it again, a
+      // mute placed on a surface that is no longer on screen is one they can
+      // no longer undo — so closing settles it, exactly as quitting does.
+      this.deps.releaseBackgroundAudio?.()
+      this.seenThenClose({ collapse: true })
+    })
     on('openDashboard', () => this.openCockpit())
     on('next', () => this.onNext())
     on('prev', () => this.onPrev())
@@ -580,6 +591,10 @@ export class NotchController {
       })
     })
     on('kill', (e) => this.deps.kill((e as { id: string }).id))
+    on('backgroundAudio', (e) => {
+      if ((e as { muted: boolean }).muted) this.deps.holdBackgroundAudio?.()
+      else this.deps.releaseBackgroundAudio?.()
+    })
     // A RESUME THAT FAILS MUST SAY SO.
     //
     // This was fire-and-forget: the boolean went nowhere, and a resume that
