@@ -1188,10 +1188,28 @@ final class AppController: NSObject, NotchResizing {
     /// suppression, which must not be defeated by a flapping pocket payload:
     /// if it consulted the pocket, every flip to `open` would let a duplicate
     /// through, which is how "3 waiting on you" kept re-announcing.
+    /// The phases where the microphone is actually hot. ONLY these keep the
+    /// surface: the waveform is live feedback and pulling it mid-sentence
+    /// would be wrong.
+    ///
+    /// `routing` is NOT one of them, and assuming it was is what kept the
+    /// banner on screen. It is the POST-capture phase — the utterance is
+    /// already taken and is being dispatched — but the old test was
+    /// `capturePhase == nil`, so every routing phase read as "dictation in
+    /// progress" and the bar never got a stand-down clock. The field log said
+    /// so in as many words: `no clock — active is not announceable
+    /// (capturePhase=routing)`, seven times in one session.
+    private static let liveCapturePhases: Set<String> = ["listening", "recording"]
+
+    private func isCaptureLive() -> Bool {
+        guard let phase = model.capturePhase else { return false }
+        return Self.liveCapturePhases.contains(phase)
+    }
+
     private func isBannerRung(_ s: NotchState) -> Bool {
         switch s {
         case .attention: return true
-        case .active:    return model.capturePhase == nil
+        case .active:    return !isCaptureLive()
         default:         return false
         }
     }
@@ -1215,7 +1233,7 @@ final class AppController: NSObject, NotchResizing {
         // does not exist, at the cost of the one guarantee that does.
         switch s {
         case .attention: return true
-        case .active:    return model.capturePhase == nil
+        case .active:    return !isCaptureLive()
         default:         return false
         }
     }
@@ -1268,7 +1286,7 @@ final class AppController: NSObject, NotchResizing {
             // rung — resting mid-dictation would drop the waveform out from
             // under it. Neither of those flaps.
             guard self.commandedState == state,
-                  self.model.capturePhase == nil else {
+                  !self.isCaptureLive() else {
                 self.restPending = nil
                 NotchLog.log("banner: clock ABANDONED — commanded=\(self.commandedState.rawValue) expected=\(state.rawValue) capture=\(self.model.capturePhase ?? "nil")")
                 return
