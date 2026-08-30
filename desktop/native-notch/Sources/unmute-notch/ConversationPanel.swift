@@ -301,6 +301,10 @@ struct StageComposer: View {
     @State private var text = ""
     @State private var editorHeight: CGFloat = 30
     @FocusState private var focused: Bool
+    /// Theme.composerFill follows Appearance.tone, and a computed colour
+    /// changing does not invalidate a view on its own — the same belt-and-
+    /// braces UserBubble carries, for the same reason.
+    @ObservedObject private var appearance = Appearance.shared
 
     private var canSend: Bool { !text.trimmingCharacters(in: .whitespaces).isEmpty || !(draft?.attachments.isEmpty ?? true) }
 
@@ -392,9 +396,10 @@ struct StageComposer: View {
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Theme.sunken))
+            .background(RoundedRectangle(cornerRadius: 14).fill(Theme.composerFill))
             .overlay(RoundedRectangle(cornerRadius: 14)
-                .stroke(focused ? Theme.accent.opacity(0.55) : Theme.hairline, lineWidth: focused ? 1 : 0.5))
+                .stroke(focused ? Theme.accent.opacity(0.55) : Theme.composerEdge,
+                        lineWidth: focused ? 1 : 0.75))
             .animation(Theme.hover, value: focused)
         }
         .onAppear { text = draft?.text ?? "" }

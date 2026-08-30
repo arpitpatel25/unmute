@@ -146,6 +146,30 @@ enum Theme {
             ? Color.white.opacity(0.16)
             : Color.white.opacity(0.10)
     }
+
+    /// THE COMPOSER, which has to look like somewhere you can type.
+    ///
+    /// It filled with `sunken` — BLACK at 30%. Against the Space Gray plane
+    /// that reads as a well, which is what a recessed control should do. On
+    /// the black plane it is black on black: the box has no fill anyone can
+    /// see, and `hairline` (white at 10%) is too faint to draw its own edge,
+    /// so the text field disappears and the surface offers no sign that a
+    /// reply goes anywhere.
+    ///
+    /// On black the fill therefore goes the OTHER WAY — a lift rather than a
+    /// well, because there is nothing darker than the ground to recess into —
+    /// and the resting edge is strengthened to carry the shape. Space Gray is
+    /// untouched: it was tuned against that plane and still reads correctly.
+    static var composerFill: Color {
+        Appearance.shared.tone == .black
+            ? Color.white.opacity(0.075)
+            : sunken
+    }
+    static var composerEdge: Color {
+        Appearance.shared.tone == .black
+            ? Color.white.opacity(0.20)
+            : hairline
+    }
     static let raisedHover  = Color.white.opacity(0.085)
     /// A recessed element — text fields, the terminal well.
     static let sunken       = Color.black.opacity(0.30)

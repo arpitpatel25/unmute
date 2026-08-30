@@ -556,14 +556,25 @@ private func shortPath(_ path: String) -> String {
 
 private struct BlockUserBubble: View {
     let text: String
+    /// See Theme.userBubble: the lift is tone-aware, and a computed colour
+    /// changing does not invalidate a view on its own.
+    @ObservedObject private var appearance = Appearance.shared
+
     var body: some View {
         HStack(spacing: 0) {
             Spacer(minLength: 40)
             // YOUR TEXT IS THE SAME SIZE AS THE AGENT'S. The 16pt I measured
             // off Codex belonged to its composer, not its prompt bubble — set
             // on a reply it read as shouting next to the 14pt answer beneath.
-            // Everything else here is measured: radius 20, padding 8×12,
-            // background white at 5%, no border.
+            // Everything else here is measured: radius 20, padding 8×12.
+            //
+            // THE FILL IS NOT MEASURED ANY MORE. It was a literal white-at-5%,
+            // tuned against Space Gray, and 5b0ff42 fixed exactly that value
+            // on ConversationPanel's UserBubble without reaching this one — so
+            // the surface you get when the terminal is HIDDEN kept the bug the
+            // commit was about: on black, white at 5% is rgb(13,13,13) and
+            // your own message vanishes into the ground. It now shares the
+            // tone-aware token, and takes the matching edge that came with it.
             Text(text)
                 .font(.system(size: 14))
                 .foregroundColor(Theme.text)
@@ -571,7 +582,9 @@ private struct BlockUserBubble: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 20).fill(Color.white.opacity(0.05)))
+                .background(RoundedRectangle(cornerRadius: 20).fill(Theme.userBubble))
+                .overlay(RoundedRectangle(cornerRadius: 20)
+                    .stroke(Theme.userBubbleEdge, lineWidth: 0.5))
                 .textSelection(.enabled)
         }
     }
