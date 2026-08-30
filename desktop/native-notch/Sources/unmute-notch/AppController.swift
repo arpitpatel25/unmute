@@ -1189,18 +1189,22 @@ final class AppController: NSObject, NotchResizing {
     }
 
     private func isAnnounceable(_ s: NotchState) -> Bool {
-        // AN OPEN POCKET IS NOT A NOTIFICATION. With the pocket closed the bar
-        // is a banner — "1 waiting on you", a sentence about something
-        // elsewhere — and a banner is read once and dismissed. With the pocket
-        // open it is a surface: the slots are on screen, being looked at, and
-        // taking that away on a timer would be removing content mid-read.
+        // THE BANNER ALWAYS RESTS. No pocket condition here any more.
         //
-        // This is a property of WHAT IS SHOWN, so it belongs here rather than
-        // in the timer. The first cut had it as a reschedule inside the timer's
-        // body, which is why the banner could never leave while the pocket
-        // payload said open: the clock restarted every two seconds instead of
-        // the rung simply not being announceable.
-        guard !model.pocket.isOpen else { return false }
+        // It was tried twice and defeated both times by the same thing: the
+        // pocket payload oscillates open→closed→open with an unchanged slot
+        // count, so whether the bar "was a banner" depended on which side of a
+        // flap a command happened to land. As a reschedule inside the timer it
+        // made the banner immortal. Moved here to schedule time, a command
+        // arriving while the pocket read `open` got no clock at all — the bar
+        // appeared and simply stayed. That is what "1 waiting on you" sitting
+        // there was, in both directions.
+        //
+        // It is also unnecessary. Dormant takes down the BAR only; the pocket
+        // is a separate surface with its own render path (NotchView gates it
+        // on model.pocket.isOpen), so standing the bar down does not close a
+        // pocket someone is reading. The condition was guarding a problem that
+        // does not exist, at the cost of the one guarantee that does.
         switch s {
         case .attention: return true
         case .active:    return model.capturePhase == nil
