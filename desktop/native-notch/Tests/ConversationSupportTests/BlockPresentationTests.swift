@@ -13,6 +13,88 @@ final class BlockPresentationTests: XCTestCase {
         Block(kind: "fileChange", path: path, verb: "Edited", added: added, removed: removed)
     }
 
+    // MARK: - one work group per turn, whatever the harness emits
+
+    // CLAUDE NARRATES WHILE IT WORKS. Every one of those texts arrives as a
+    // `message` with role assistant, and closing a turn on each produced a
+    // separate "Worked for…" toggle per paragraph — five or six down one
+    // answer. Codex looks right only because it emits its commentary as
+    // `reasoning` and exactly one message per turn.
+    //
+    // The rule that makes them agree: a turn ends at the USER, and the LAST
+    // assistant message in it is the reply. Earlier ones are narration about
+    // the work, which is what they are.
+    func testInterleavedNarrationDoesNotSplitATurn() {
+        let turns = BlockPresentation.buildTurns([
+            msg("user", "set the project up"),
+            msg("assistant", "I'll set it up now with the approved structure."),
+            cmd("mkdir -p project"),
+            msg("assistant", "The files are assembled and verified."),
+            cmd("ls project"),
+            msg("assistant", "The project is created and organized."),
+        ])
+
+        XCTAssertEqual(turns.count, 1, "one question, one work group")
+        XCTAssertEqual(turns[0].reply?.text, "The project is created and organized.",
+                       "the LAST message is the answer")
+        // Narration counts toward the step total exactly as Codex's own
+        // commentary already did — it is `reasoning` in the work either way.
+        // Matching Codex is the point; a separate rule for Claude would put
+        // the two harnesses back out of step, which is the bug being fixed.
+        XCTAssertEqual(turns[0].meta.steps, 4)
+    }
+
+    // Moved narration has to land where Codex's already lands: as the note
+    // above the run it describes, not as a step row inside it.
+    func testEarlierMessagesBecomeTheNarrationAboveTheirWork() {
+        let turns = BlockPresentation.buildTurns([
+            msg("user", "set it up"),
+            msg("assistant", "First I'll make the directory."),
+            cmd("mkdir -p project"),
+            msg("assistant", "Done."),
+        ])
+        let runs = WorkRun.runs(of: turns[0].work)
+
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(runs[0].note, "First I'll make the directory.")
+        XCTAssertEqual(runs[0].steps.count, 1)
+    }
+
+    // The existing boundary rule still holds: a new question ends whatever
+    // came before, so two exchanges are still two groups.
+    func testANewQuestionStillEndsTheTurn() {
+        let turns = BlockPresentation.buildTurns([
+            msg("user", "one"),
+            msg("assistant", "narrating"),
+            cmd("a"),
+            msg("assistant", "first answer"),
+            msg("user", "two"),
+            cmd("b"),
+            msg("assistant", "second answer"),
+        ])
+
+        XCTAssertEqual(turns.count, 2)
+        XCTAssertEqual(turns[0].reply?.text, "first answer")
+        XCTAssertEqual(turns[1].reply?.text, "second answer")
+        XCTAssertEqual(turns[0].meta.steps, 2, "one narration + one command")
+        XCTAssertEqual(turns[1].meta.steps, 1)
+    }
+
+    // A turn still running has narration but no answer yet. It must not
+    // promote the last narration line into the reply slot — that would show
+    // an answer the agent has not given.
+    func testARunningTurnHasNoReplyYet() {
+        let turns = BlockPresentation.buildTurns([
+            msg("user", "go"),
+            msg("assistant", "working on it"),
+            cmd("a", status: "running"),
+        ])
+
+        XCTAssertEqual(turns.count, 1)
+        XCTAssertNil(turns[0].reply, "nothing has been answered yet")
+        XCTAssertEqual(WorkRun.runs(of: turns[0].work).first?.note, "working on it")
+    }
+
     // MARK: - the open rule
 
     // A kind this build does not know must decode and draw as a plain row. The

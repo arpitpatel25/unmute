@@ -80,15 +80,52 @@ public enum BlockPresentation {
         return turns
     }
 
+    /// Clock markers bound a turn; they are not work that came after an answer.
+    private static func isBoundary(_ b: Block) -> Bool {
+        b.kind == "turnStart" || b.kind == "turnEnd"
+    }
+
     static func buildTurns(_ blocks: [Block]) -> [BlockTurn] {
         var turns: [BlockTurn] = []
         var prompt: Block?
-        var work: [Block] = []
+        var body: [Block] = []
         var index = 0
 
-        func close(_ reply: Block?) {
+        func close() {
             // Do not manufacture an empty turn out of nothing.
-            if prompt == nil && reply == nil && work.isEmpty { return }
+            if prompt == nil && body.isEmpty { return }
+
+            // THE ANSWER IS THE LAST THING SAID, AND ONLY IF NOTHING FOLLOWED.
+            //
+            // This used to end a turn at EVERY assistant message, which is
+            // right for Codex and wrong for Claude Code. Codex emits its
+            // commentary as `reasoning` and exactly one message per turn, so
+            // one turn produced one work group. Claude narrates as it goes —
+            // "I'll set it up now", tool calls, "the files are assembled",
+            // more tool calls — and every one of those arrives as a message,
+            // so a single question produced five or six separate
+            // "Worked for…" toggles instead of the one the user expects.
+            //
+            // The rule that makes both harnesses agree: a turn ends at the
+            // USER. Within it, the last assistant message is the reply — but
+            // only when nothing but boundary markers follows it. If the agent
+            // spoke and then went back to work, that was not the answer, and
+            // promoting it would show a reply for a turn still running.
+            var work = body
+            var reply: Block?
+            if let last = body.lastIndex(where: { $0.isAssistant }),
+               body[body.index(after: last)...].allSatisfy(isBoundary) {
+                reply = body[last]
+                work.remove(at: last)
+            }
+
+            // Everything else it said mid-turn is narration ABOUT the work,
+            // which is what `reasoning` already means here — WorkRun.runs
+            // turns it into the note above the steps it describes, exactly
+            // where Codex's commentary lands. Left as messages they would fall
+            // through to `steps` and draw as unlabelled rows.
+            work = work.map { $0.isAssistant ? Block(kind: "reasoning", text: $0.text) : $0 }
+
             turns.append(BlockTurn(
                 id: "turn-\(index)",
                 prompt: prompt,
@@ -99,7 +136,7 @@ public enum BlockPresentation {
             ))
             index += 1
             prompt = nil
-            work = []
+            body = []
         }
 
         for block in blocks {
@@ -108,15 +145,13 @@ public enum BlockPresentation {
                 // unanswered turn is a real state — interrupted, or still
                 // thinking when you typed again — and it must keep its own work
                 // rather than donate it to the next turn.
-                close(nil)
+                close()
                 prompt = block
-            } else if block.isAssistant {
-                close(block)
             } else {
-                work.append(block)
+                body.append(block)
             }
         }
-        close(nil)
+        close()
         return turns
     }
 
