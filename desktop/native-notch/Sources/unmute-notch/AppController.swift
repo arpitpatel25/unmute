@@ -1150,8 +1150,29 @@ final class AppController: NSObject, NotchResizing {
             // answer it. Falls through to idle when nothing is held.
             if model.state == .dormant, restoreRestedRung() {
                 // restored
-            } else if model.state == .dormant && commandedState == .dormant {
-                NotchLog.log("hover-reveal: dormant → idle")
+            } else if model.state == .dormant {
+                // HOVERING A DORMANT NOTCH ALWAYS REVEALS SOMETHING.
+                //
+                // This second branch used to require commandedState == .dormant.
+                // A notch resting while the engine still held a task — the
+                // ordinary case, commandedState == .attention or .task — matched
+                // NEITHER branch, so hover did nothing at all. On a notched Mac
+                // dormant IS the cutout, so nothing is drawn and there is no
+                // feedback: the app reads as gone, and the only way back is
+                // relaunching it.
+                //
+                // Reachable whenever restedFrom is nil or holds a rung that is
+                // no longer commanded, and there are several ways in:
+                // scheduleRest() nils it for the length of its clock, an
+                // ABANDONED clock never restores it, restoreRestedRung() nils it
+                // on the way out, and every direct applyState(.dormant) —
+                // dismiss, escape, system idle — leaves it untouched while
+                // commandedState stays on the held rung.
+                //
+                // The rested rung still wins when there is one (the branch
+                // above). This is only the floor: there is no state in which
+                // hovering the notch should do nothing.
+                NotchLog.log("hover-reveal: dormant → idle (commanded=\(commandedState.rawValue))")
                 applyState(.idle)
             }
         } else {
