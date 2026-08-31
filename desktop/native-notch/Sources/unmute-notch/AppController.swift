@@ -325,9 +325,35 @@ final class AppController: NSObject, NotchResizing {
                 if !ids.isEmpty, ids.isSubset(of: announcedTaskIds) {
                     NotchLog.log("banner: SUPPRESS — nothing new to say")
                     if restedFrom == nil { restedFrom = state }
-                    // Put it down rather than merely declining to re-arm: a
-                    // repeat arriving while the bar is up must settle too.
-                    if model.state != .dormant, !isExpanded(model.state) { applyState(.dormant) }
+                    // A SUPPRESSED ANNOUNCEMENT IS STILL A COMPACT STATE, and
+                    // the departure transition has to hear about it.
+                    //
+                    // Leaving while an expanded surface is open (screen lock,
+                    // app switch, Space change) orderOuts the window and parks
+                    // in .awaitingCompact — see beginAutomaticDeparture. The
+                    // ONLY exit is receive() with a compact state, and the
+                    // 0.35s fallback cannot help because abandonReturn() fires
+                    // only from .returning. This early return skipped the
+                    // switch at the bottom of this case, so the window stayed
+                    // off-screen: nothing drawn, nothing to hover, and no way
+                    // back but relaunching the app.
+                    //
+                    // Field record 2026-08-31: hidden at 02:29 on a lock, then
+                    // two setState commands that should each have restored it
+                    // were suppressed, and it was still gone six hours later.
+                    // Every path that accepts a state command must settle the
+                    // departure — this was the only one that did not.
+                    switch departureTransition.receive(isExpanded: false) {
+                    case .applyImmediatelyAndShow:
+                        departureReturnTimer?.invalidate()
+                        applyState(.dormant, animated: false)
+                        window.present()
+                        NotchLog.log("departure settled by a suppressed banner — showing dormant")
+                    case .applyHidden, .applyNormally:
+                        // Put it down rather than merely declining to re-arm: a
+                        // repeat arriving while the bar is up must settle too.
+                        if model.state != .dormant, !isExpanded(model.state) { applyState(.dormant) }
+                    }
                     return
                 }
                 let fresh = ids.subtracting(announcedTaskIds)

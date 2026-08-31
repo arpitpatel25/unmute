@@ -151,4 +151,33 @@ final class SurfaceFrameTransitionTests: XCTestCase {
             hasPocketSnapshot: true
         ))
     }
+
+    // ── THE INVARIANT A CALLER MUST HONOUR ──
+    //
+    // FIELD FAILURE (2026-08-31): the notch vanished and could not be hovered
+    // back; only relaunching the app restored it. It was not small or dormant —
+    // it was gone. begin() orderOuts the window and parks in .awaitingCompact,
+    // and the ONLY exit is receive() with a compact state. The 0.35s rescue
+    // timer cannot help, because abandonReturn() fires only from .returning.
+    //
+    // So a caller that accepts a state command and returns WITHOUT consulting
+    // receive() strands the window off-screen permanently. The banner's
+    // "nothing new to say" suppression did exactly that, and the window stayed
+    // hidden for six hours across two commands that should each have restored
+    // it. This pins the contract the state machine depends on.
+    func testAWindowHiddenByDepartureIsRecoverableOnlyThroughReceive() {
+        var t = SurfaceDepartureTransition()
+        XCTAssertEqual(t.begin(isExpanded: true), .hide)
+
+        // The fallback timer is not a rescue for this phase.
+        XCTAssertEqual(t.abandonReturn(), .none)
+
+        // Expanded updates keep it hidden, however many arrive.
+        XCTAssertEqual(t.receive(isExpanded: true), .applyHidden)
+        XCTAssertEqual(t.receive(isExpanded: true), .applyHidden)
+
+        // One compact state is the entire recovery — miss it and nothing else
+        // in the machine will show the window again.
+        XCTAssertEqual(t.receive(isExpanded: false), .applyImmediatelyAndShow)
+    }
 }
