@@ -44,13 +44,22 @@ body {
 /* top line: logo + tiny right-aligned nav */
 .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 46px; }
 .top .logo { flex: none; display: inline-flex; align-items: center;
-  color: var(--ink); padding: 4px 7px; margin: -4px -7px; border-radius: 8px;
-  text-decoration: none; }
-.top .logo svg { height: 30px; width: 127.5px; display: block; }
-/* hover inverts: the wordmark strokes are currentColor, so they flip with it.
-   This is why the logo is inline SVG and not a <img> — a PNG can't take colour,
-   which is how it used to go dark-on-dark (and light-on-light) on hover. */
-.top .logo:hover { background: var(--ink); color: var(--paper); }
+  padding: 4px 7px; margin: -4px -7px; border-radius: 8px; text-decoration: none; }
+.top .logo img { height: 30px; width: auto; display: block; }
+
+/* Official wordmarks: black on paper, white on charcoal.
+   Hover fills the block with --ink, which flips the background under the mark —
+   so the mark has to flip too, or it goes dark-on-dark / light-on-light. That
+   was the bug. Both files are in the DOM; only one is ever shown. */
+.top .logo .logo-white { display: none; }
+html[data-theme="dark"] .top .logo .logo-black { display: none; }
+html[data-theme="dark"] .top .logo .logo-white { display: block; }
+
+.top .logo:hover { background: var(--ink); }
+.top .logo:hover .logo-black { display: none; }
+.top .logo:hover .logo-white { display: block; }
+html[data-theme="dark"] .top .logo:hover .logo-white { display: none; }
+html[data-theme="dark"] .top .logo:hover .logo-black { display: block; }
 .top nav { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 16px; font-size: 13px; }
 .top nav a { color: var(--ink-60); }
 .top nav a:hover { background: var(--ink); color: var(--paper); }
@@ -124,8 +133,11 @@ footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--rule);
 footer .links { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 12px; }
 footer .links a { color: var(--ink-60); }
 footer .links a:hover { color: var(--paper); }
-footer .logo { color: var(--ink); opacity: 0.72; margin-bottom: 14px; }
-footer .logo svg { height: 22px; width: 93.5px; display: block; }
+footer .logo { opacity: 0.72; margin-bottom: 14px; }
+footer .logo img { height: 22px; width: auto; display: block; }
+footer .logo .logo-white { display: none; }
+html[data-theme="dark"] footer .logo .logo-black { display: none; }
+html[data-theme="dark"] footer .logo .logo-white { display: block; }
 
 
 /* ═══ added for the rebuild ══════════════════════════════════════
