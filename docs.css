@@ -167,6 +167,14 @@ a:focus-visible, .btn:focus-visible, .theme-toggle:focus-visible {
 }
 .hero h1 .cursor { font-family: 'JetBrains Mono', monospace; font-size: 0.72em; }
 .hero-sub { font-size: 17px; line-height: 1.62; color: var(--ink-60); max-width: 33em; margin: 0 0 24px; }
+/* the leverage claim — the one place in the hero that gets the accent rule */
+.claim { border-left: 2px solid var(--purple); padding: 2px 0 2px 16px; margin: 0 0 26px; max-width: 34em; }
+.claim p { margin: 0; }
+.claim p + p { margin-top: 8px; }
+.claim .lead { font-size: 15.5px; line-height: 1.6; }
+.claim .lead b { font-weight: 700; }
+.claim .why { font-size: 13.5px; line-height: 1.55; color: var(--ink-40); }
+
 .cta-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 0 0 14px; }
 .hero-note { color: var(--ink-40); font-size: 13px; margin: 0; }
 
