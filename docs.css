@@ -156,10 +156,16 @@ a:focus-visible, .btn:focus-visible, .theme-toggle:focus-visible {
 /* ── hero ── */
 .hero { margin: 4px 0 0; }
 .eyebrow { color: var(--mark); font-size: 13px; margin: 0 0 16px; }
+/* Display face for the one headline. Outfit is geometric with circular
+   bowls, which is the same construction as the wordmark sitting above it —
+   so the word "unmute" in the headline rhymes with the logo. Everything
+   else on the page stays mono. */
 .hero h1 {
-  font-size: clamp(38px, 8.2vw, 66px); line-height: 1.02;
-  letter-spacing: -0.045em; font-weight: 700; margin: 0 0 20px;
+  font-family: 'Outfit', ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
+  font-size: clamp(42px, 9vw, 76px); line-height: 0.98;
+  letter-spacing: -0.035em; font-weight: 800; margin: 0 0 22px;
 }
+.hero h1 .cursor { font-family: 'JetBrains Mono', monospace; font-size: 0.72em; }
 .hero-sub { font-size: 17px; line-height: 1.62; color: var(--ink-60); max-width: 33em; margin: 0 0 24px; }
 .cta-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 0 0 14px; }
 .hero-note { color: var(--ink-40); font-size: 13px; margin: 0; }
@@ -214,7 +220,7 @@ a:focus-visible, .btn:focus-visible, .theme-toggle:focus-visible {
 }
 
 /* ── manifesto ── */
-.mf-hero h1 { font-size: clamp(30px, 6vw, 52px); line-height: 1.06; }
+.mf-hero h1 { font-size: clamp(32px, 6.4vw, 58px); line-height: 1.04; letter-spacing: -0.03em; }
 .mf { margin: 40px 0 0; max-width: 40em; }
 .mf .numeral {
   color: var(--purple); font-weight: 700; font-size: 13px;
