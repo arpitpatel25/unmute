@@ -44,8 +44,8 @@ body {
 /* top line: logo + tiny right-aligned nav */
 .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 46px; }
 .top .logo { flex: none; display: inline-flex; align-items: center;
-  padding: 4px 7px; margin: -4px -7px; border-radius: 8px; text-decoration: none; }
-.top .logo img { height: 30px; width: auto; display: block; }
+  padding: 5px 8px; margin: -5px -8px; border-radius: 9px; text-decoration: none; }
+.top .logo img { height: 36px; width: auto; display: block; }
 
 /* Official wordmarks: black on paper, white on charcoal.
    Hover fills the block with --ink, which flips the background under the mark —
@@ -134,7 +134,7 @@ footer .links { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 12px; 
 footer .links a { color: var(--ink-60); }
 footer .links a:hover { color: var(--paper); }
 footer .logo { opacity: 0.72; margin-bottom: 14px; }
-footer .logo img { height: 22px; width: auto; display: block; }
+footer .logo img { height: 26px; width: auto; display: block; }
 footer .logo .logo-white { display: none; }
 html[data-theme="dark"] footer .logo .logo-black { display: none; }
 html[data-theme="dark"] footer .logo .logo-white { display: block; }
