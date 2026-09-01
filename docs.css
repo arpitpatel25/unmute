@@ -10,6 +10,7 @@
   --ink-40: rgba(20,17,13,0.40);
   --rule:  rgba(20,17,13,0.16);
   --mark:  rgba(20,17,13,0.34);   /* // comment colour */
+  --purple: #7C4DEA;              /* brand accent, used sparingly */
 }
 
 /* dark mode — neutral near-black, a hair of grey (no brown/warm tint) */
@@ -20,6 +21,7 @@ html[data-theme="dark"] {
   --ink-40: rgba(236,236,236,0.40);
   --rule:  rgba(236,236,236,0.15);
   --mark:  rgba(236,236,236,0.34);
+  --purple: #A98BFF;
 }
 
 * { box-sizing: border-box; }
@@ -124,3 +126,87 @@ footer .links a { color: var(--ink-60); }
 footer .links a:hover { color: var(--paper); }
 footer .logo { color: var(--ink); opacity: 0.72; margin-bottom: 14px; }
 footer .logo svg { height: 22px; width: 93.5px; display: block; }
+
+
+/* ═══ added for the rebuild ══════════════════════════════════════
+   Same paper/ink/mono system. New structure only: a hero, a keys
+   grid, pull-quote bands, and the lineage ledger. Purple stays rare
+   — the logo, the live row of the ledger, the cursor, focus rings.
+   ══════════════════════════════════════════════════════════════ */
+
+h3 { font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 6px; }
+
+/* keyboard focus — visible, everywhere */
+a:focus-visible, .btn:focus-visible, .theme-toggle:focus-visible {
+  outline: 2px solid var(--purple); outline-offset: 3px; border-radius: 4px;
+}
+
+/* ── hero ── */
+.hero { margin: 4px 0 0; }
+.eyebrow { color: var(--mark); font-size: 13px; margin: 0 0 16px; }
+.hero h1 {
+  font-size: clamp(38px, 8.2vw, 66px); line-height: 1.02;
+  letter-spacing: -0.045em; font-weight: 700; margin: 0 0 20px;
+}
+.hero-sub { font-size: 17px; line-height: 1.62; color: var(--ink-60); max-width: 33em; margin: 0 0 24px; }
+.cta-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 0 0 14px; }
+.hero-note { color: var(--ink-40); font-size: 13px; margin: 0; }
+
+@keyframes blink { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
+.cursor { color: var(--purple); animation: blink 1.1s steps(1,end) infinite; }
+
+/* ── the four keys ── */
+.keys {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px;
+  background: var(--rule); border: 1px solid var(--rule);
+  border-radius: 10px; overflow: hidden; margin: 36px 0 0;
+}
+.keys .k { background: var(--paper); padding: 16px 16px 18px; }
+.keys .k .cap { display: block; margin-bottom: 10px; }
+.keys .k p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--ink-60); }
+.keys .k b { color: var(--ink); font-weight: 700; }
+@media (max-width: 560px) { .keys { grid-template-columns: 1fr; } }
+
+/* ── pull-quote band ── */
+.band { margin: 58px 0 0; padding-top: 30px; border-top: 1px solid var(--rule); }
+.band .big {
+  font-size: clamp(21px, 3.4vw, 29px); line-height: 1.3;
+  letter-spacing: -0.022em; font-weight: 700; margin: 0 0 10px;
+}
+
+/* ── the lineage ledger (the one loud thing) ── */
+.lineage { margin: 18px 0 0; border-top: 1px solid var(--rule); }
+.lineage .row {
+  display: grid; grid-template-columns: 58px 0.82fr 1.35fr; gap: 14px;
+  padding: 11px 2px; border-bottom: 1px solid var(--rule);
+  font-size: 13.5px; line-height: 1.5; align-items: baseline;
+}
+.lineage .yr { color: var(--mark); font-variant-numeric: tabular-nums; }
+.lineage .what { font-weight: 700; }
+.lineage .how { color: var(--ink-60); }
+.lineage .now .yr, .lineage .now .what, .lineage .now .how { color: var(--purple); }
+.lineage .now .what { font-weight: 700; }
+@media (max-width: 600px) {
+  .lineage .row { grid-template-columns: 52px 1fr; row-gap: 3px; }
+  .lineage .how { grid-column: 2; }
+}
+
+/* ── scroll reveal ── */
+.reveal { opacity: 0; transform: translateY(7px); transition: opacity .5s ease, transform .5s ease; }
+.reveal.in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor { animation: none; }
+  .reveal { opacity: 1; transform: none; transition: none; }
+  body, .btn, a, .top nav a, .theme-toggle { transition: none; }
+}
+
+/* ── manifesto ── */
+.mf-hero h1 { font-size: clamp(30px, 6vw, 52px); line-height: 1.06; }
+.mf { margin: 40px 0 0; max-width: 40em; }
+.mf .numeral {
+  color: var(--purple); font-weight: 700; font-size: 13px;
+  letter-spacing: 0.14em; margin: 0 0 12px;
+}
+.mf p { margin: 0 0 14px; }
+.mf p:last-child { margin-bottom: 0; }

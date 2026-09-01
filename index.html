@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" href="icon.png" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
 <meta property="og:title" content="unmute" />
-<meta property="og:description" content="The fastest Mac dictation there is — then a voice surface over the agents already on your machine." />
+<meta property="og:description" content="Think it. It’s done. Voice + agents — the interface this era has been missing." />
 <meta property="og:image" content="https://justunmute.me/og.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
@@ -33,6 +33,7 @@
         <a href="dictation.html">dictation</a>
         <a href="remote.html">unmute remote</a>
         <a href="pricing.html">pricing</a>
+        <a href="manifesto.html">manifesto</a>
         <button class="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
           <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
@@ -41,92 +42,114 @@
       </nav>
     </div>
 
-    <p class="lede"><b>unmute</b> does two things: it types what you say, and it does what you say.</p>
-    <p class="sublede">A Mac dictation app that also, casually, runs your computer — and then keeps track of the work while it runs. Hold a key. Talk. Typing was a mistake; we're walking it back.</p>
+    <section class="hero">
+      <p class="eyebrow">// voice + agents · macOS</p>
+      <h1>Think it.<br />It’s done.<span class="cursor">█</span></h1>
+      <p class="hero-sub">The fastest dictation on the Mac — under a second, every time, online or not. Then one more key that turns a sentence into work your agent actually does, and a surface that watches it so you don’t have to.</p>
+      <div class="cta-row">
+        <a class="btn" href="pricing.html">Get unmute</a>
+        <a class="arrow" href="https://cal.com/unmute/15min" data-cal-link="unmute/15min" data-cal-namespace="unmute15" data-cal-config='{"layout":"month_view"}'>book 15 minutes</a>
+      </div>
+      <p class="hero-note">// free offline dictation, no account. the agent half needs a Claude Code Pro or Max plan — because it is one, and it uses yours.</p>
 
-    <p class="mark" style="margin-top:22px;">// we know our landing page is simple, but hey — this is the best way to convey the message without the noise. so read it, and don't complain.</p>
+      <div class="keys">
+        <div class="k"><span class="cap"><kbd>hold</kbd></span><p><b>Talk. It types.</b> Sub-second, 10 seconds or 10 minutes. Network dies mid-word, it keeps going on-device.</p></div>
+        <div class="k"><span class="cap"><kbd>right option</kbd></span><p><b>Talk. It does it.</b> A real agent session on your actual Mac. Files, browsers, apps.</p></div>
+        <div class="k"><span class="cap"><kbd>right command</kbd></span><p><b>Talk to unmute itself.</b> Memory, what you said last week, hand work out, reopen anything.</p></div>
+        <div class="k"><span class="cap"><kbd>left control ×2</kbd></span><p><b>Double-tap. It takes notes.</b> Your meeting, written up by your own CLI. Never a cloud model.</p></div>
+      </div>
+    </section>
+
+    <div class="band">
+      <p class="big">The machine is capable of far more than you can ask it to be.</p>
+      <p class="dim">// that gap is the oldest problem in computing. it is back, and it is the widest it has ever been.</p>
+    </div>
 
     <section>
-      <p class="mark">// the first key — dictation, except fast</p>
-      <p>You've dictated before. Not like this. <b>Under a second to text, always</b> — 10 seconds of audio or 10 minutes, same sub-1-second latency, every single time. We're not going to explain dictation to you; you know what it is. We're going to out-run everyone who's ever sold it to you. The speed is the whole pitch.</p>
-      <p>And your words do not die. Wi-Fi quits mid-sentence — keeps going. Café internet from a dial-up fever dream — keeps going. The instant the network wobbles, dictation falls back <b>on-device, automatically</b> — no toggle, no spinner, no "something went wrong." <b>Wispr Flow couldn't keep a sentence alive through a hiccup. So we had to.</b></p>
-      <p>What you copy <em>while</em> you're talking doesn't vanish either. Grab an error line, a URL, a screenshot, mid-sentence — the scratchpad holds it and composes it into what gets pasted, instead of letting the clipboard eat it. It only arms when you say so, so nothing gets swept up behind your back.</p>
+      <p class="mark">// the toll</p>
+      <h2>You don’t have fewer ideas. You just stopped saying them.</h2>
+      <p>A thought arrives. Now: which app. Which window. New session — name it, prompt it, wait. Switch to the other one. What was that doing again?</p>
+      <p>None of it is hard. All of it is a toll, and you pay it <em>per thought.</em> So you quietly stop having the small ones. The task has to be big enough to be worth the ceremony.</p>
+      <p><b>Under-utilisation was never a capability problem.</b> The models are done arguing. The interface isn’t.</p>
     </section>
 
     <section>
-      <p class="mark">// raw by default — what dictation is actually for</p>
-      <p>Be honest: most of what you dictate goes straight into ChatGPT, Claude, Cursor. Prompts. And prompts don't need commas. So we paste <b>raw</b> — no auto-punctuation, no autocorrect editing you into a stranger.</p>
-      <p class="dim">Need it shaped? Select the text, hold <kbd>Caps Lock</kbd>, and say the format out loud — "three bullets," "less corporate," "make it sound human." You name it; we don't pick for you. Two seconds, done.</p>
+      <p class="mark">// every leap was an interface, not a machine</p>
+      <div class="lineage">
+        <div class="row reveal"><span class="yr">1945</span><span class="what">ENIAC</span><span class="how">rewired by hand · days per question</span></div>
+        <div class="row reveal"><span class="yr">1953</span><span class="what">punch cards</span><span class="how">you mailed it a letter · hours</span></div>
+        <div class="row reveal"><span class="yr">1970</span><span class="what">the terminal</span><span class="how">you typed, it answered · now</span></div>
+        <div class="row reveal"><span class="yr">1984</span><span class="what">the GUI</span><span class="how">see it, don’t memorise it</span></div>
+        <div class="row reveal"><span class="yr">1984</span><span class="what">the mouse</span><span class="how">you could just point</span></div>
+        <div class="row reveal"><span class="yr">2023</span><span class="what">coding agents</span><span class="how">it can do anything — and you type at it</span></div>
+        <div class="row reveal now"><span class="yr">2026</span><span class="what">voice + agents</span><span class="how">you think it. it’s done. ← you are here</span></div>
+      </div>
+      <p class="dim" style="margin-top:14px;">The mouse didn’t add one clock cycle. It changed everything anyway. The interface isn’t decoration on top of the real machine — the interface <em>is</em> the revolution.</p>
+      <p><a class="arrow" href="manifesto.html">read the manifesto</a> <span class="aside">// eighty years of this, argued properly.</span></p>
     </section>
 
     <hr />
 
     <section>
-      <p class="mark">// the second key — remote · a voice remote for your coding agent</p>
+      <p class="mark">// key one — dictation, except fast</p>
+      <h2>Under a second to text. Always.</h2>
+      <p>10 seconds of audio or 10 minutes — same sub-1-second latency, every single time. We’re not going to explain dictation to you. We’re going to out-run everyone who ever sold it to you.</p>
+      <p>And your words don’t die. The instant the network wobbles it falls back <b>on-device, automatically</b> — no toggle, no spinner, no “something went wrong.” <b>Wispr Flow couldn’t keep a sentence alive through a hiccup. So we had to.</b></p>
+      <ul class="dash">
+        <li><b>Raw by default.</b> <span class="note">Most of what you dictate is a prompt. Prompts don’t need commas. No auto-punctuation, no autocorrect editing you into a stranger.</span></li>
+        <li><b>Shape it out loud.</b> <span class="note">Select text, hold <kbd>Caps Lock</kbd>, say “three bullets,” “less corporate.” Two seconds.</span></li>
+        <li><b>The scratchpad.</b> <span class="note">Copy an error, a URL, a screenshot mid-sentence — it’s held and composed into what gets pasted, not eaten by the clipboard.</span></li>
+      </ul>
+    </section>
+
+    <section>
+      <p class="mark">// key two — remote</p>
       <h2>Dictation types it. Remote does it.</h2>
-      <p>Hold <kbd>right ⌥</kbd>, say the thing, it happens — on your actual Mac.</p>
-
-      <p>The twist: <b>unmute is dumb. Proudly, aggressively dumb.</b> We didn't train a model — the smartest one already exists, you're already paying for it, and ours would only get in the way. We gave it ears. That's the innovation.</p>
-
-      <p>Which is the entire trust story. Remote <em>is</em> Claude Code — your own terminal session, just voice-driven. The best agent anyone has shipped, minus the part where you type at it. Nothing new to trust. Friendly neighborhood Claude Code. <span class="dim">(Codex too, if that's your executor. We sit above it, not inside it.)</span></p>
-
-      <p>We got this wrong once and it's worth telling you how. unmute used to <em>rewrite</em> the session it started for you — a wall of our scaffolding pasted in as though you'd typed it, our model pinned over your choice, a hook blocking the end of every turn. Two people told us their terminal was full of our furniture and that Claude Code worked <em>worse</em> under us. Both were right. All of it is deleted. Remote now starts an ordinary session and watches from the outside — what's in your terminal is yours.</p>
-
-      <p>Here's the thing: you probably use Claude Code hard — for code, for a couple of workflows you'd defend with your life. And that's still maybe <b>20% of what it can actually do.</b> Press a key, say it, watch the other 80% show up:</p>
+      <p>Hold <kbd>right ⌥</kbd>, say the thing, it happens — on your actual Mac. The ones that touch apps and browsers run <b>in the background</b>, so nothing snatches your screen mid-thought.</p>
       <ul class="dash">
-        <li>"who won the match last night?"</li>
-        <li>"put on the next episode."</li>
-        <li>"what's eating my battery — and kill it."</li>
-        <li>"rename these 40 screenshots by date."</li>
-        <li>"open Skyscanner, London to Tokyo, next Friday, cheapest."</li>
-        <li>"my flight's at 6 — when do I leave the house?"</li>
-        <li>"drop this tweet URL in my Google Sheet with a one-line summary."</li>
-        <li>"total every invoice in my Downloads and put it in a sheet."</li>
-        <li>"read this repo and tell me what it actually does."</li>
-        <li>"go through my last 50 emails and flag the 3 that actually need me."</li>
+        <li>“what’s eating my battery — and kill it.”</li>
+        <li>“rename these 40 screenshots by date.”</li>
+        <li>“open Skyscanner, London to Tokyo, next Friday, cheapest.”</li>
+        <li>“total every invoice in my Downloads and put it in a sheet.”</li>
+        <li>“go through my last 50 emails and flag the 3 that actually need me.”</li>
       </ul>
-      <p class="aside">None of these are features we built. It's just your agent, finally within reach. The bottleneck was never the model — it was the keyboard.</p>
-      <p class="dim">The ones that touch apps and browsers go through our own hands — unmute drives them <b>in the background</b>, so nothing snatches your screen while you're mid-thought.</p>
+      <p class="aside">// none of these are features we built. it’s your agent, finally within reach. the bottleneck was never the model.</p>
     </section>
+
+    <section>
+      <p class="mark">// key three — the unmute agent</p>
+      <h2>Right ⌘ doesn’t talk to a session. It talks to unmute.</h2>
+      <ul class="dash">
+        <li>“what did I say about pricing last week?” <span class="note">— it searches what you actually dictated. Nothing else on your machine can look there.</span></li>
+        <li>“remember I always want X.” <span class="note">— it keeps a memory, and the memory survives.</span></li>
+        <li>“what was I working on yesterday?” <span class="note">— read off disk, not off an index built behind your back.</span></li>
+        <li>“take this and run with it.” <span class="note">— hands the work out as its own task.</span></li>
+      </ul>
+    </section>
+
+    <section>
+      <p class="mark">// key four — meetings</p>
+      <h2>Double-tap left ⌃. Get notes.</h2>
+      <p>It taps system audio and your mic and writes the thing up. The notes are written by <b>your own connected CLI — never a cloud model.</b> We had one in the fallback path and pulled it before shipping: a third vendor quietly receiving the full text of your meetings isn’t a trade we’ll make on your behalf.</p>
+    </section>
+
+    <div class="band">
+      <p class="big">Ten things running. One question: whose move is it.</p>
+      <p>Every session is either <em>our move</em> — it’s working, leave it alone — or <em>your move</em>: blocked, failed, or done and waiting on you. That’s the only thing unmute sorts by. Not newest. Not loudest.</p>
+      <p class="dim">It all renders in <b>the notch</b> — the menubar row and the display cutout, which turns out to be exactly the right amount of screen for this. Attention gets <b>pulled, never grabbed.</b> Nothing modal, nothing steals focus. One calm spoken line when something becomes yours, and then it stands down.</p>
+    </div>
 
     <hr />
 
     <section>
-      <p class="mark">// the third key — the unmute agent</p>
-      <p>Hold <kbd>right ⌘</kbd> and you're not talking to a session. You're talking to <b>unmute</b>.</p>
+      <p class="mark">// why you can trust it</p>
+      <h2>unmute is dumb. Deliberately, aggressively dumb.</h2>
       <ul class="dash">
-        <li>"what did I say about pricing last week?" <span class="note">— it searches what you actually dictated. Nothing else on your machine can look there.</span></li>
-        <li>"remember I always want X." <span class="note">— it keeps a memory, and the memory survives.</span></li>
-        <li>"what was I working on yesterday?" <span class="note">— it reads your past sessions straight off disk, not off some index it built behind your back.</span></li>
-        <li>"take this and run with it." <span class="note">— hands the work out as its own task.</span></li>
-        <li>"open that one again." <span class="note">— a past session comes back as a card.</span></li>
+        <li><b>We didn’t train a model.</b> <span class="note">The best one already exists, you’re already paying for it, and ours would only get in the way. We gave it ears. That’s the innovation.</span></li>
+        <li><b>Remote is your own session.</b> <span class="note">We used to rewrite it — our scaffolding pasted in as if you’d typed it, our model pinned over your choice. Two people said their terminal was full of our furniture and that Claude Code worked worse under us. Both were right. It’s deleted. We start an ordinary session and watch from outside.</span></li>
+        <li><b>Your files are yours.</b> <span class="note">Agent work runs on your subscription, never ours. Nothing writes into your skills folder without you saying so.</span></li>
+        <li><b>Offline dictation is free forever.</b> <span class="note">No account. Runs on your Mac. Charging for that would be rude.</span></li>
       </ul>
-      <p class="dim">It deliberately has no card of its own. It's the thing you talk to <em>about</em> your work, not another piece of work to manage.</p>
-    </section>
-
-    <section>
-      <p class="mark">// when it's more than one thing at once</p>
-      <p>Once you can start work by talking, you start more of it than you can hold in your head. So the question stops being "what's running" and becomes <b>whose move is it.</b></p>
-      <p>Every session is, at any moment, either <em>our move</em> — it's working, leave it alone — or <em>your move</em>: blocked, failed, or just finished and waiting on you. That's the only thing unmute sorts by. Not newest. Not loudest. Things move <b>down</b> as they stop needing you, they don't fall off a cliff.</p>
-      <p>All of it renders in <b>the notch</b> — the menubar row and the display cutout, which turns out to be the right amount of screen for this. A pill while you're talking. A wall of what's waiting. The task itself. A pocket of what you've actually been working in.</p>
-      <p class="dim">Attention gets <b>pulled, never grabbed</b>. Nothing modal, nothing steals focus. When something becomes yours, you get one calm spoken line — and then it stands down, instead of parking a sentence over your screen for the rest of the afternoon.</p>
-    </section>
-
-    <section>
-      <p class="mark">// meetings — new</p>
-      <p>Double-tap <kbd>left ⌃</kbd>. It taps system audio and your mic, and hands you notes at the end.</p>
-      <p>The notes are written by <b>your own connected CLI — never a cloud model.</b> We had one in the fallback path and pulled it out before shipping: a third vendor quietly receiving the full text of your meetings isn't a trade we were willing to make on your behalf. The notes are the product; the transcript stays out of your way.</p>
-      <p class="aside">// this one is genuinely new, and we'd rather you heard that from us than found out.</p>
-    </section>
-
-    <hr />
-
-    <section>
-      <p class="mark">// the flywheel (this is the actual pitch)</p>
-      <p>Agents get better the more you feed them — memory, project files, notes-to-self, the shape of how you work. Give one structure and it serves you better, permanently. The power users know this; they're forever curating context.</p>
-      <p>You're probably not. Not because you're lazy — okay, a little — but because doing all that by hand, in a terminal, is a chore, so the flywheel never starts spinning.</p>
-      <p><b>unmute spins it.</b> "Remember I always want X." "What did I say about that last week?" "Start a task for this." Said out loud, in passing, zero friction. You end up feeding your agent without trying — and the more you feed it, the more it's worth to you. The value compounds somewhere you've genuinely never taken it before.</p>
-      <p class="dim">Honest notes: it needs a <b>Claude Code Pro or Max plan</b>, because it is one and it uses yours. It's as fast as Claude Code (not instant) and as reliable as Claude Code (the most reliable agent there is). And every time Claude Code levels up, so does unmute — free. <a class="arrow" href="remote.html">how remote works</a></p>
     </section>
 
     <hr />
@@ -134,24 +157,19 @@
     <section>
       <p class="mark">// price</p>
       <ul class="dash">
-        <li><b>Offline dictation</b> — $0. <span class="note">No account. Runs on your Mac. Forever. We're not monsters.</span></li>
+        <li><b>Offline dictation</b> — $0. <span class="note">No account. Forever.</span></li>
         <li><b>Dictation</b> (cloud) — <b>$5.99/mo</b></li>
         <li><b>Unmute</b> (dictation + remote) — <b>$8.99/mo</b> <span class="note">// the whole thing. a rounding error next to your Claude Code bill.</span></li>
       </ul>
       <p class="dim">Yearly is cheaper, obviously. Arithmetic still works in 2026. <a class="arrow" href="pricing.html">see pricing</a></p>
-      <p><a class="btn" href="pricing.html">Get unmute</a> &nbsp;<span class="aside">// we allowed ourselves exactly one button. Restraint.</span></p>
-      <p class="aside" style="margin-top:10px;">// macOS says "damaged"? It's signed &amp; notarized — that's just a browser quarantine flag. Drag unmute into Applications, then run <code>xattr -dr com.apple.quarantine /Applications/unmute.app</code> once. <a href="pricing.html">more</a></p>
+      <p class="aside">// macOS says “damaged”? It’s signed &amp; notarized — that’s a browser quarantine flag. Drag unmute into Applications, then run <code>xattr -dr com.apple.quarantine /Applications/unmute.app</code> once. <a href="pricing.html">more</a></p>
     </section>
-
-    <hr />
 
     <section>
       <p class="mark">// talk to a human — 15 minutes</p>
-      <p>If you live in <b>Claude Code, Codex or Cursor</b>, I'd like 15 minutes of your time.</p>
-      <p>Not a demo, not a pitch. There's nothing I could sell you on a call that this page hasn't already tried. I want to hear how you <em>actually</em> work — what you run all day, where it goes slow, and which part of it you'd hand to your voice if you trusted it enough.</p>
-      <p>Because the next piece is the hard one: you say a thing, an agent task starts. One gets stuck, you unblock it by talking. No terminal. I'd rather build that out of ten real conversations than a hundred confident guesses.</p>
-      <p><a class="arrow" href="https://cal.com/unmute/15min" data-cal-link="unmute/15min" data-cal-namespace="unmute15" data-cal-config='{"layout":"month_view"}'>book 15 minutes</a> &nbsp;<span class="aside">// pick a slot — that's the entire form. no phone number, no "when works for you?", no follow-up sequence.</span></p>
-      <p class="aside">// and yes, still exactly one button on this site. that was a link. if no slot works, <a href="https://x.com/just_unmute">dm me</a> instead.</p>
+      <p>If you live in <b>Claude Code, Codex or Cursor</b>, I’d like 15 minutes. Not a demo, not a pitch — there’s nothing I could sell you on a call that this page hasn’t already tried.</p>
+      <p>I want to hear how you <em>actually</em> work: what you run all day, where it goes slow, and which part you’d hand to your voice if you trusted it enough.</p>
+      <p><a class="arrow" href="https://cal.com/unmute/15min" data-cal-link="unmute/15min" data-cal-namespace="unmute15" data-cal-config='{"layout":"month_view"}'>book 15 minutes</a> &nbsp;<span class="aside">// pick a slot — that’s the entire form. no phone number, no follow-up sequence. if no slot works, <a href="https://x.com/just_unmute">dm me</a>.</span></p>
     </section>
 
     <footer>
@@ -160,6 +178,7 @@
         <a href="dictation.html">dictation</a>
         <a href="remote.html">unmute remote</a>
         <a href="pricing.html">pricing</a>
+        <a href="manifesto.html">manifesto</a>
         <a href="https://cal.com/unmute/15min" data-cal-link="unmute/15min" data-cal-namespace="unmute15">book a call</a>
         <a href="https://github.com/arpitpatel25/unmute-dictation">open source</a>
         <a href="https://x.com/just_unmute">twitter</a>
