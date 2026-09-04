@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { ClaudeTaskSession, type ClaudeTaskEvent } from './task-session'
 
-function fixture(resume = false) {
+function fixture(resume = false, extra: Partial<import('./task-session').ClaudeTaskOptions> = {}) {
   const events: ClaudeTaskEvent[] = []
   const writes: any[] = []
   let args: string[] = []
@@ -21,7 +21,7 @@ function fixture(resume = false) {
   } })
   child.kill = () => { queueMicrotask(() => child.emit('close', 0, null)); return true }
   const emit = (frame: unknown) => child.stdout.emit('data', Buffer.from(JSON.stringify(frame) + '\n'))
-  const driver = new ClaudeTaskSession({ binary: 'claude', cwd: '/tmp', sessionId: '65be0561-443e-4248-8e6c-31556e0bd414', resume, permissionMode: 'bypassPermissions', onEvent: event => events.push(event), spawn: (_binary, argv) => { args = argv; return child } })
+  const driver = new ClaudeTaskSession({ binary: 'claude', cwd: '/tmp', sessionId: '65be0561-443e-4248-8e6c-31556e0bd414', resume, permissionMode: 'bypassPermissions', onEvent: event => events.push(event), spawn: (_binary, argv) => { args = argv; return child }, ...extra })
   return { driver, events, writes, child, emit, args: () => args }
 }
 
@@ -124,4 +124,25 @@ test('cancelled permission requests cannot be answered and session mismatches fa
   f.emit({ type: 'system', subtype: 'init', session_id: 'different' })
   assert.equal(f.driver.alive, false)
   assert.ok(f.events.some(e => e.type === 'error' && e.message.includes('different session')))
+})
+
+test('append prompt preserves the built-in system prompt and asks CLI to echo user messages', async () => {
+  const f = fixture(false, { appendSystemPromptFile: '/tmp/task-instructions.md' })
+  await f.driver.start()
+  assert.equal(f.args()[f.args().indexOf('--append-system-prompt-file') + 1], '/tmp/task-instructions.md')
+  assert.equal(f.args().includes('--system-prompt-file'), false)
+  assert.ok(f.args().includes('--replay-user-messages'))
+  f.driver.close()
+})
+
+test('failed approval writes keep a request actionable when the process remains available', async () => {
+  const f = fixture(); await f.driver.start()
+  f.emit({ type: 'control_request', request_id: 'ask', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'pwd' } } })
+  const original = f.child.stdin.write
+  f.child.stdin.write = () => { throw new Error('transient write failure') }
+  await assert.rejects(f.driver.answer('ask', { behavior: 'allow' }), /transient/)
+  f.child.stdin.write = original
+  await f.driver.answer('ask', { behavior: 'deny' })
+  assert.equal(f.writes.at(-1).response.request_id, 'ask')
+  f.driver.close()
 })

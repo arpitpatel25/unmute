@@ -25,6 +25,8 @@ export interface ClaudeTaskOptions {
   effort?: string
   permissionMode?: ClaudePermissionMode
   systemPromptFile?: string
+  /** Append task instructions while keeping Claude Code's built-in prompt. */
+  appendSystemPromptFile?: string
   settingsFile?: string
   mcpConfigFile?: string
   env?: NodeJS.ProcessEnv
@@ -52,6 +54,7 @@ export class ClaudeTaskSession {
   private active?: string
   private submitted = new Set<string>()
   private requests = new Map<string, Json>()
+  private answering = new Set<string>()
   private controls = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   private decoder = new StringDecoder('utf8')
   private buffer = ''
@@ -72,8 +75,8 @@ export class ClaudeTaskSession {
 
   private async launch(): Promise<void> {
     const o = this.options
-    const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', o.permissionMode ?? 'manual', o.resume ? '--resume' : '--session-id', this.sessionId]
-    for (const [flag, value] of [['--model', o.model], ['--effort', o.effort], ['--system-prompt-file', o.systemPromptFile], ['--settings', o.settingsFile], ['--mcp-config', o.mcpConfigFile]]) if (value) args.push(flag!, value)
+    const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', o.permissionMode ?? 'manual', o.resume ? '--resume' : '--session-id', this.sessionId]
+    for (const [flag, value] of [['--model', o.model], ['--effort', o.effort], ['--system-prompt-file', o.systemPromptFile], ['--append-system-prompt-file', o.appendSystemPromptFile], ['--settings', o.settingsFile], ['--mcp-config', o.mcpConfigFile]]) if (value) args.push(flag!, value)
     const env = { ...process.env, ...o.env }
     delete env.CLAUDECODE
     delete env.CLAUDE_CODE_ENTRYPOINT
@@ -125,15 +128,18 @@ export class ClaudeTaskSession {
   async answer(requestId: string, decision: ClaudeTaskAnswer): Promise<void> {
     const request = this.requests.get(requestId)
     if (!request) throw new Error(`Unknown or resolved Claude request: ${requestId}`)
+    if (this.answering.has(requestId)) throw new Error('An answer is already being submitted for this request')
     const question = request.tool_name === 'AskUserQuestion'
     if (question && decision.behavior !== 'deny' && !decision.answers && !decision.updatedInput?.answers) throw new Error('Question responses require structured answers')
     if (!question && decision.behavior === 'answer') throw new Error('This request requires an allow or deny decision')
     const response = decision.behavior === 'deny'
       ? { behavior: 'deny', message: decision.message ?? 'The user declined this request' }
       : { behavior: 'allow', updatedInput: { ...request.input, ...decision.updatedInput, ...(decision.answers ? { answers: decision.answers } : {}) } }
-    this.requests.delete(requestId) // Prevent double clicks while the write is pending.
-    await this.write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
-    this.emit({ type: 'request-resolved', requestId })
+    this.answering.add(requestId)
+    try {
+      await this.write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
+      if (this.requests.delete(requestId)) this.emit({ type: 'request-resolved', requestId })
+    } finally { this.answering.delete(requestId) }
   }
 
   async interrupt(): Promise<void> {
