@@ -12,6 +12,7 @@ function fixture(resume = false, extra: Partial<import('./task-session').ClaudeT
   const events: ClaudeTaskEvent[] = []
   const writes: any[] = []
   let args: string[] = []
+  let environment: NodeJS.ProcessEnv = {}
   const child = new EventEmitter() as ChildProcessWithoutNullStreams
   child.stdout = new PassThrough()
   child.stderr = new PassThrough()
@@ -21,8 +22,8 @@ function fixture(resume = false, extra: Partial<import('./task-session').ClaudeT
   } })
   child.kill = () => { queueMicrotask(() => child.emit('close', 0, null)); return true }
   const emit = (frame: unknown) => child.stdout.emit('data', Buffer.from(JSON.stringify(frame) + '\n'))
-  const driver = new ClaudeTaskSession({ binary: 'claude', cwd: '/tmp', sessionId: '65be0561-443e-4248-8e6c-31556e0bd414', resume, permissionMode: 'bypassPermissions', onEvent: event => events.push(event), spawn: (_binary, argv) => { args = argv; return child }, ...extra })
-  return { driver, events, writes, child, emit, args: () => args }
+  const driver = new ClaudeTaskSession({ binary: 'claude', cwd: '/tmp', sessionId: '65be0561-443e-4248-8e6c-31556e0bd414', resume, permissionMode: 'bypassPermissions', onEvent: event => events.push(event), spawn: (_binary, argv, options) => { args = argv; environment = options.env; return child }, ...extra })
+  return { driver, events, writes, child, emit, args: () => args, environment: () => environment }
 }
 
 test('persistent turns reject concurrency and duplicate submission IDs and resume exact identity', async () => {
@@ -145,4 +146,53 @@ test('failed approval writes keep a request actionable when the process remains 
   await f.driver.answer('ask', { behavior: 'deny' })
   assert.equal(f.writes.at(-1).response.request_id, 'ask')
   f.driver.close()
+})
+
+test('interrupt during initialization cancels the pending send before any user frame', async () => {
+  const f = fixture()
+  const sending = f.driver.send('must not run')
+  const rejected = assert.rejects(sending, /cancelled/i)
+  const stopping = f.driver.interrupt()
+  // A pre-submission cancellation must not issue a CLI interrupt before user input.
+  assert.equal(f.writes.filter(w => w.request?.subtype === 'interrupt').length, 0)
+  await stopping; await rejected
+  assert.equal(f.writes.filter(w => w.type === 'user').length, 0)
+  assert.equal(f.driver.busy, false)
+  await f.driver.send('new turn')
+  assert.equal(f.writes.filter(w => w.type === 'user').length, 1)
+  f.driver.close()
+})
+
+test('interrupt during image loading rejects promptly and never submits after the read finishes', async () => {
+  let finishRead!: (buffer: Buffer) => void
+  let beganRead!: () => void
+  const reading = new Promise<void>(resolve => { beganRead = resolve })
+  const f = fixture(false, { readImage: () => { beganRead(); return new Promise(resolve => { finishRead = resolve }) } })
+  await f.driver.start()
+  const sending = f.driver.send('must not run', ['/tmp/image.png'])
+  const rejected = assert.rejects(sending, /cancelled/i)
+  await reading
+  await f.driver.interrupt(); await rejected
+  assert.equal(f.driver.busy, false)
+  await f.driver.send('replacement')
+  finishRead(Buffer.from('image'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(f.writes.filter(w => w.type === 'user').map(w => w.message.content[0].text), ['replacement'])
+  f.driver.close()
+})
+
+test('per-session directories and Chrome settings preserve MCP env while removing API credentials', async () => {
+  const f = fixture(false, { addDirs: ['/tmp/one', '/tmp/two'], chrome: true, env: { ANTHROPIC_API_KEY: 'secret', ANTHROPIC_AUTH_TOKEN: 'secret', CLAUDE_API_KEY: 'secret', UNMUTE_MCP_TOKEN: 'keep' } })
+  await f.driver.start()
+  assert.deepEqual(f.args().flatMap((arg, index, args) => arg === '--add-dir' ? [args[index + 1]] : []), ['/tmp/one', '/tmp/two'])
+  assert.ok(f.args().includes('--chrome'))
+  assert.equal(f.environment().ANTHROPIC_API_KEY, undefined)
+  assert.equal(f.environment().ANTHROPIC_AUTH_TOKEN, undefined)
+  assert.equal(f.environment().CLAUDE_API_KEY, undefined)
+  assert.equal(f.environment().UNMUTE_MCP_TOKEN, 'keep')
+  f.driver.close()
+  const disabled = fixture(false, { chrome: false })
+  await disabled.driver.start()
+  assert.ok(disabled.args().includes('--no-chrome'))
+  disabled.driver.close()
 })

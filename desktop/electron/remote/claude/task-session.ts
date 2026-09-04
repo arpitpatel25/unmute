@@ -29,10 +29,13 @@ export interface ClaudeTaskOptions {
   appendSystemPromptFile?: string
   settingsFile?: string
   mcpConfigFile?: string
+  addDirs?: string[]
+  chrome?: boolean
   env?: NodeJS.ProcessEnv
   onEvent: (event: ClaudeTaskEvent) => void
   spawn?: (binary: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdio: 'pipe' }) => ChildProcessWithoutNullStreams
   controlTimeoutMs?: number
+  readImage?: (path: string) => Promise<Buffer>
 }
 
 export interface ClaudeTaskAnswer {
@@ -52,6 +55,7 @@ export class ClaudeTaskSession {
   private closed = false
   private ready = false
   private active?: string
+  private preparing?: { cancel: () => void }
   private submitted = new Set<string>()
   private requests = new Map<string, Json>()
   private answering = new Set<string>()
@@ -77,9 +81,15 @@ export class ClaudeTaskSession {
     const o = this.options
     const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', o.permissionMode ?? 'manual', o.resume ? '--resume' : '--session-id', this.sessionId]
     for (const [flag, value] of [['--model', o.model], ['--effort', o.effort], ['--system-prompt-file', o.systemPromptFile], ['--append-system-prompt-file', o.appendSystemPromptFile], ['--settings', o.settingsFile], ['--mcp-config', o.mcpConfigFile]]) if (value) args.push(flag!, value)
+    for (const directory of o.addDirs ?? []) args.push('--add-dir', directory)
+    if (o.chrome !== undefined) args.push(o.chrome ? '--chrome' : '--no-chrome')
     const env = { ...process.env, ...o.env }
     delete env.CLAUDECODE
     delete env.CLAUDE_CODE_ENTRYPOINT
+    // Subscription auth must not be overridden by keys inherited from the host.
+    delete env.ANTHROPIC_API_KEY
+    delete env.ANTHROPIC_AUTH_TOKEN
+    delete env.CLAUDE_API_KEY
     try {
       const child = (o.spawn ?? ((binary, argv, options) => spawn(binary, argv, options)))(o.binary, args, { cwd: o.cwd, env, stdio: 'pipe' })
       this.child = child
@@ -107,22 +117,34 @@ export class ClaudeTaskSession {
     if (this.submitted.has(submissionId)) throw new Error('This submission has already been accepted')
     if (!text.trim() && !imagePaths.length) throw new Error('Enter a message or attach an image')
     this.active = submissionId // Reserve before async startup or image loading.
+    let cancel!: () => void
+    let wasCancelled = false
+    const cancellationError = new Error('Claude submission cancelled before acceptance')
+    const cancelled = new Promise<never>((_resolve, reject) => { cancel = () => { wasCancelled = true; reject(cancellationError) } })
+    const preparation = { cancel }
+    this.preparing = preparation
     try {
-      await this.start()
+      await Promise.race([this.start(), cancelled])
+      if (wasCancelled) throw cancellationError
       const content: Json[] = text ? [{ type: 'text', text }] : []
       for (const path of imagePaths) {
         const mediaType = ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' } as Record<string, string>)[extname(path).toLowerCase()]
         if (!mediaType) throw new Error(`Unsupported image format: ${path}. Use PNG, JPEG, GIF, or WebP.`)
-        const bytes = await readFile(path)
+        const bytes = await Promise.race([(this.options.readImage ?? readFile)(path), cancelled])
+        if (wasCancelled) throw cancellationError
         if (bytes.length > 20 * 1024 * 1024) throw new Error(`Image is too large: ${path}`)
         content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: bytes.toString('base64') } })
       }
       if (this.closed) throw new Error('Claude session closed before submission')
+      // No await between leaving preparation and writing input: interrupts now
+      // target an actual submitted CLI turn instead of racing future input.
+      this.preparing = undefined
       await this.write({ type: 'user', uuid: submissionId, session_id: this.sessionId, parent_tool_use_id: null, message: { role: 'user', content } })
       this.submitted.add(submissionId)
       this.emit({ type: 'turn-start', submissionId, sessionId: this.sessionId })
       return { submissionId, sessionId: this.sessionId }
     } catch (error) { if (this.active === submissionId) this.active = undefined; throw error }
+    finally { if (this.preparing === preparation) this.preparing = undefined }
   }
 
   async answer(requestId: string, decision: ClaudeTaskAnswer): Promise<void> {
@@ -143,6 +165,7 @@ export class ClaudeTaskSession {
   }
 
   async interrupt(): Promise<void> {
+    if (this.preparing) { this.preparing.cancel(); return }
     if (!this.alive || !this.busy) return
     await this.control({ subtype: 'interrupt' })
     // Only a result frame ends the turn. An acknowledgement is not completion.
@@ -151,6 +174,7 @@ export class ClaudeTaskSession {
   close(): void {
     if (this.closed) return
     this.closed = true
+    this.preparing?.cancel()
     this.ready = false
     this.active = undefined
     for (const [requestId] of this.requests) this.emit({ type: 'request-resolved', requestId })
