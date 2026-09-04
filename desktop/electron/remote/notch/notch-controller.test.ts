@@ -1671,31 +1671,67 @@ test('opening an old task relaunches it without putting it in Today or the pocke
 
 // ── ordering: what YOU touched, not what happened ──────────────────────────
 
-test('the pocket orders by when a task actually moved', () => {
+// The pocket used to sort on `updatedAt`, which a task stamps on a message sent
+// OR RECEIVED — so a background agent printing a line climbed to card 1 ahead of
+// the task the user was mid-sentence with, and re-aimed the voice at itself. The
+// order reads as random precisely because the thing reordering it is invisible.
+// It sorts on the USER's clock now: only your own moves change it.
+test('the pocket orders by when YOU last talked to a task', () => {
   const h = setup()
   const t0 = Date.now()
-  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A', updatedAt: t0 - 5 * 60_000 }))
-  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B', updatedAt: t0 - 60_000 }))
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A',
+                    createdAt: t0 - 5 * 60_000, updatedAt: t0 - 5 * 60_000 }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B',
+                    createdAt: t0 - 60_000, updatedAt: t0 - 60_000 }))
   h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['b', 'a'])
+  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['b', 'a'],
+    'never talked to since dispatch: most recently dispatched leads')
 
-  // A moves for real — a message went in, or the agent answered.
+  // THE AGENT MOVING IS NOT YOU MOVING.
   h.client.fire({ type: 'pocketRelease' })
   h.tasks.get('a')!.updatedAt = Date.now()
   h.events.emit('updated', h.tasks.get('a')); h.flush()
   h.client.fire({ type: 'pocketOpen' })
+  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['b', 'a'],
+    'output arriving on its own must not reorder your pocket')
+
+  // You answer A. Now it is the one you last talked to, so it is card 1.
+  h.client.fire({ type: 'pocketRelease' })
+  h.client.fire({ type: 'answerText', id: 'a', text: 'carry on' })
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })
   assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['a', 'b'])
+})
+
+test('opening a card counts as talking to it', () => {
+  const h = setup()
+  const t0 = Date.now()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A', createdAt: t0 - 5 * 60_000 }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B', createdAt: t0 - 60_000 }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketMove', delta: 1 })   // onto A
+  h.client.fire({ type: 'pocketExpand' })           // and into it
+  h.flush()
+  // The expand deliberately HOLDS the order so escaping returns you to your
+  // place (see setPocketMode). Let it go, the way closing the pocket does, and
+  // the next fresh visit re-sorts.
+  h.client.fire({ type: 'pocketRelease' })
+  h.client.fire({ type: 'pocketOpen' })
+  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['a', 'b'],
+    'the one you just had open is the one at hand')
 })
 
 test('the order is held while you walk it, and released when you close it', () => {
   const h = setup()
   const t0 = Date.now()
-  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A', updatedAt: t0 - 5 * 60_000 }))
-  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B', updatedAt: t0 - 60_000 }))
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A',
+                    createdAt: t0 - 5 * 60_000, updatedAt: t0 - 5 * 60_000 }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B',
+                    createdAt: t0 - 60_000, updatedAt: t0 - 60_000 }))
   h.client.fire({ type: 'pocketOpen' })
   h.client.fire({ type: 'pocketMove', delta: 1 })     // walking — order now held
-  h.tasks.get('a')!.updatedAt = Date.now()            // A moves underneath you
-  h.events.emit('updated', h.tasks.get('a')); h.flush()
+  h.controller.notifyCapturePhase('idle', 'a')        // you speak to A underneath you
+  h.flush()
   assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['b', 'a'],
     'the list you are reading must not reshuffle under your thumb')
   h.client.fire({ type: 'pocketRelease' })
@@ -1719,8 +1755,10 @@ test('work finishing while you are AT the machine never takes your screen', () =
 test('coming back with a backlog stays compact and does not open a task', () => {
   const h = setup()
   h.presence.away()
-  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor', updatedAt: Date.now() - 90_000 }))
-  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Blocked', updatedAt: Date.now() - 30_000, question: { text: 'which?' } }))
+  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor',
+                    createdAt: Date.now() - 90_000, updatedAt: Date.now() - 90_000 }))
+  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Blocked',
+                    createdAt: Date.now() - 30_000, updatedAt: Date.now() - 30_000, question: { text: 'which?' } }))
   h.presence.wake()
   h.flush()
   assert.equal(h.client.last('showTask')!.task.id, 'q', 'newest touch first')

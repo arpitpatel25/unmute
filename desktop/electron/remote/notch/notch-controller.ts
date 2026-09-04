@@ -404,6 +404,21 @@ export class NotchController {
   private pocketMode: PocketMode = 'closed'
   /** Index into `crankSlots()`. Whatever sits here is the voice's address. */
   private pocketAt = 0
+  /** WHEN YOU LAST TALKED TO IT — your clock, not the agent's.
+   *
+   *  This is what orders the pocket. `updatedAt` cannot: it is stamped by a
+   *  message sent OR RECEIVED, so a task chattering away in the background
+   *  climbed to card 1 ahead of the one you were mid-sentence with, and the
+   *  order looked random because the thing reordering it was invisible. Here
+   *  only YOUR moves are recorded — you answered it, sent to it, chose from it,
+   *  typed at it, spoke to it, or opened it — so nothing an agent does on its
+   *  own can move a card.
+   *
+   *  IN MEMORY ONLY. A task with no stamp falls back to `createdAt`, which is
+   *  itself the first time you addressed it (dispatch), and which never moves.
+   *  So after a restart the pocket is newest-dispatch-first and still stable —
+   *  it can be wrong about the order, never restless in it. */
+  private addressedStamp = new Map<string, number>()
   /** The pocket's order, nailed down for the duration of a visit. Null when
    *  the pocket is closed, so the next open re-sorts to what you last worked in. */
   private frozenOrder: string[] | null = null
@@ -543,6 +558,7 @@ export class NotchController {
       // the next task there would carry the user away from the very question
       // they still have to go answer, and away from the card explaining why.
       this.attentionAcknowledged.delete(id) // speaking starts a fresh episode
+      this.addressed(id)
       const landed = this.deps.answer(id, text)
       if (wasBlocking && landed) this.advanceAfterAnswer(id)
       else this.scheduleReconcile()
@@ -587,6 +603,7 @@ export class NotchController {
       devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'sendDraft' })
       void Promise.resolve(this.deps.sendDraft?.(id)).then((accepted) => {
         devEvent(log, 'task-reply-ui-event-result', { taskId: id, event: 'sendDraft', accepted: accepted === true })
+        if (accepted === true) this.addressed(id)
         this.scheduleReconcile()
       })
     })
@@ -668,13 +685,14 @@ export class NotchController {
         containsCtrlV: decoded.includes('\u0016'),
         transport: 'direct-pty-input',
       })
+      this.addressed(id)
       this.deps.sendInput(id, decoded)
     })
     on('termResize', (e) => { const { id, cols, rows } = e as { id: string; cols: number; rows: number }; this.deps.resizeTerm(id, cols, rows) })
     on('suggestionOpen', (e) => void this.onSuggestionOpen((e as { id: string }).id))
     on('suggestionAccept', (e) => void this.onSuggestionAccept((e as { id: string }).id))
     on('suggestionReject', (e) => { const { id, reason } = e as { id: string; reason: string }; void this.onSuggestionReject(id, reason) })
-    on('converseWrite', (e) => { const { id, text } = e as { id: string; text: string }; void this.onConverseWrite(id, text) })
+    on('converseWrite', (e) => { const { id, text } = e as { id: string; text: string }; this.addressed(id); void this.onConverseWrite(id, text) })
     on('converseStop', (e) => { this.deps.converseStop((e as { id: string }).id); this.conversing.delete((e as { id: string }).id) })
     // The scratchpad. NO STATE LIVES HERE — every one of these is a straight
     // relay onto the same internals the scratchpad:* IPC handlers call, and the
@@ -802,7 +820,22 @@ export class NotchController {
    * response received — so keeping a second notion of recency beside it only
    * created ways for the two to disagree. Opening a task writes neither. */
 
-  private byEngagement = (a: TaskLite, b: TaskLite): number => this.engagedAt(b) - this.engagedAt(a)
+  /** YOU touched this task. The one write to the user's clock. */
+  private addressed(id: string): void {
+    this.addressedStamp.set(id, Date.now())
+    this.scheduleReconcile()
+  }
+
+  /** Falls back to `createdAt` — dispatching a task IS addressing it, and that
+   *  number never moves afterwards. `updatedAt` is deliberately NOT a fallback:
+   *  it is the agent's clock, and letting it in through the back door would
+   *  restore exactly the reshuffling this replaced. */
+  private addressedAt(t: TaskLite): number {
+    return this.addressedStamp.get(t.id) ?? t.createdAt ?? 0
+  }
+
+  /** THE POCKET'S ORDER. Most recently talked-to first, in both halves. */
+  private byAddressed = (a: TaskLite, b: TaskLite): number => this.addressedAt(b) - this.addressedAt(a)
 
   /** Has this task's answer to `demanding()` moved since we last drew it? */
   private demandingChanged(t: TaskLite): boolean {
@@ -818,7 +851,14 @@ export class NotchController {
     // surface said three were waiting while the crank had a list of one and
     // `→` could not move. One filter, applied once, at the source.
     this.queue = tasks.filter((t) => this.demanding(t) && this.addressable(t))
-      .sort(this.byEngagement).map((t) => t.id)
+      .sort(this.byAddressed).map((t) => t.id)
+    // The stamps outlive nothing. A task that is gone from the runtime is gone
+    // from the user's clock too, so a recycled id cannot inherit a stranger's
+    // position in the order.
+    if (this.addressedStamp.size > tasks.length) {
+      const live = new Set(tasks.map((t) => t.id))
+      for (const id of this.addressedStamp.keys()) if (!live.has(id)) this.addressedStamp.delete(id)
+    }
   }
 
   /**
@@ -883,11 +923,17 @@ export class NotchController {
 
     const already = new Set(demanding.map((t) => t.id))
     const rest = this.deps.listTasks()
+      // TWO CLOCKS, TWO QUESTIONS, AND THEY ARE NOT THE SAME QUESTION.
+      //
+      // IS IT STILL AT HAND? — the task's own clock. A long run you dispatched
+      // this morning and have not touched since is still live work, and judging
+      // that by when YOU last spoke would drop it off your desk while it was
+      // still going.
+      //
+      // WHICH ONE FIRST? — your clock. See `addressedStamp`.
       .filter((t) => !already.has(t.id) && !t.shelved && this.addressable(t)
-        // Recent by the task's OWN clock. Opening one from the wall no longer
-        // qualifies it — nothing about reading a task moves this.
         && now - this.engagedAt(t) < POCKET_IDLE_MS)
-      .sort(this.byEngagement)
+      .sort(this.byAddressed)
       .slice(0, POCKET_MAX)
 
     return [...demanding, ...rest]
@@ -1281,6 +1327,7 @@ export class NotchController {
     // return. Index deliberately kept, not reset.
     this.cameFromPocket = this.pocketMode === 'open'
     this.attentionAcknowledged.delete(id) // opening it asks to hear about it again
+    this.addressed(id)
     this.engaged = 'task'
     this.setFocus(id)
     log.event('pocket-expanded', { taskId: id })
@@ -1409,6 +1456,7 @@ export class NotchController {
    * because the user looked at an old thread. */
   private onFocusTask(id: string): void {
     this.engaged = 'cockpit'
+    this.addressed(id)
     this.setFocus(id)
     this.deps.opened?.(id)
     this.reconcile()
@@ -1515,6 +1563,7 @@ export class NotchController {
     const t = this.deps.getTask(id)
     const label = t?.question?.choices?.[index]
     if (label == null) return
+    this.addressed(id)
     if (!this.deps.answer(id, label)) { this.scheduleReconcile(); return }
     this.advanceAfterAnswer(id)
   }
@@ -1627,6 +1676,11 @@ export class NotchController {
    * nothing, that is the answer.
    */
   notifyCapturePhase(phase: string, taskId: string | null): void {
+    // LANDED. `idle` with a task on it is the router reporting where the
+    // utterance actually went, and speaking to a task is the plainest form of
+    // talking to it there is — but it never passes through a handler here, so
+    // without this the one thing the pocket is FOR would not move the order.
+    if (phase === 'idle' && taskId) this.addressed(taskId)
     const t = taskId ? this.deps.getTask(taskId) : undefined
     const target = t ? (t.name ?? truncate(t.intent)) : undefined
     this.client.send({ type: 'capturePhase', phase, target })
