@@ -226,7 +226,25 @@ export function headlessEvents(value: unknown): AgentProcessEvent[] {
     // explicitly a success is a failure, so a shape we have not seen before
     // can never be reported to the user as a good answer.
     const failed = record.is_error === true || record.subtype !== 'success'
-    if (failed) return [{ type: 'completion', outcome: 'failed' }]
+    if (failed) {
+      // THE CLI ALREADY SAID WHY, AND THIS DROPPED IT. `subtype` names the
+      // class of failure and `result` carries the text; both were discarded
+      // here, which is what left the supervisor with a failure and no reason
+      // and forced it to guess `provider-crashed`.
+      const message = typeof record.result === 'string' && record.result
+        ? record.result
+        : (typeof record.error === 'string' ? record.error : undefined)
+      return [{
+        type: 'completion',
+        outcome: 'failed',
+        ...(record.subtype || message
+          ? { failure: {
+              ...(typeof record.subtype === 'string' ? { subtype: record.subtype } : {}),
+              ...(message ? { message: message.slice(0, 600) } : {}),
+            } }
+          : {}),
+      }]
+    }
     return [{
       type: 'completion',
       outcome: 'completed',

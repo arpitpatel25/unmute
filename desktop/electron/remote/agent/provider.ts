@@ -43,6 +43,16 @@ export interface AgentActivity {
 export interface AgentCompletion {
   outcome: 'completed' | 'interrupted' | 'failed'
   finalText?: string
+  /**
+   * WHY A FAILED TURN FAILED, in the provider's own words.
+   *
+   * There was nowhere to put this, so every failure arrived shapeless and the
+   * supervisor stamped `provider-crashed` on it by elimination — the user saw
+   * "The Agent provider stopped unexpectedly" for a CLI that had, in fact,
+   * explained itself on the way out. Optional because a clean turn has nothing
+   * to say and older drivers do not set it.
+   */
+  failure?: { subtype?: string; message?: string; exitCode?: number }
 }
 
 export interface AgentSession {
@@ -90,7 +100,7 @@ function publicErrorMessage(code: AgentProviderErrorCode): string {
 export type AgentProcessEvent =
   | { type: 'handle'; sessionId: string }
   | { type: 'activity'; kind: AgentActivityKind; summary: string }
-  | { type: 'completion'; outcome: AgentCompletion['outcome']; finalText?: string }
+  | { type: 'completion'; outcome: AgentCompletion['outcome']; finalText?: string; failure?: AgentCompletion['failure'] }
   | { type: 'observer-failure' }
   | { type: 'terminal-output'; chunk: string }
   /** `stderrTail` is the process's last words. Optional because only the
@@ -406,6 +416,9 @@ export class CliProviderRuntime implements AgentProvider {
             this.settle(live, {
               outcome: event.outcome,
               ...(event.finalText ? { finalText: redact(event.finalText, live.input) } : {}),
+              // The last link. Everything above carried the reason this far and
+              // it was dropped here, one hop from the supervisor that needed it.
+              ...(event.failure ? { failure: event.failure } : {}),
             })
           }
           continue

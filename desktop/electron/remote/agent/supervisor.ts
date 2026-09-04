@@ -509,6 +509,19 @@ export class AgentRunSupervisor {
     } else if (turn.journalFailed) {
       completion = { outcome: 'failed', errorCode: 'journal-unavailable' }
     } else if (completion.outcome === 'failed' && !completion.errorCode) {
+      // THE PATH THAT ACTUALLY FIRES, and it is not a crash at all.
+      //
+      // The provider RESOLVED with a failure and no code, so the catch above
+      // never ran and this branch guessed `provider-crashed` by elimination —
+      // reporting "the provider stopped unexpectedly" for a CLI that exited
+      // normally after explaining itself. `failure` now carries that account.
+      this.options.log?.('agent-turn-failed', {
+        runId: run.id,
+        provider: run.provider,
+        subtype: completion.failure?.subtype,
+        message: completion.failure?.message,
+        exitCode: completion.failure?.exitCode,
+      })
       completion = { outcome: 'failed', errorCode: 'provider-crashed' }
     }
 
