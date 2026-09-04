@@ -1853,6 +1853,62 @@ test('escaping the chat returns to the pocket and releases the voice', () => {
   assert.equal(pocketOf(h)!.slots[0].kind, 'agent')
 })
 
+test('the chat stays open while you read it', () => {
+  // THE FIELD BUG, in one test. reconcile runs on every task event and did not
+  // know the chat existed: `focusedId` is deliberately null for the Agent, so
+  // `shown` fell through to whatever task was at the front of the queue. The
+  // chat lived 0.8 seconds.
+  const h = setup()
+  put(h, makeTask({ id: 'noisy', state: 'needs-user', name: 'Noisy', question: { text: 'q' } }))
+  h.controller.agentAnswered('Here is a long answer you are still reading.')
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketExpand' })
+  h.flush()
+  assert.equal(h.client.last('showTask')!.task.id, 'unmute-agent')
+
+  // Anything at all happens in the task runtime — the tick that used to kill it.
+  put(h, makeTask({ id: 'other', state: 'done', kind: 'session', name: 'Other' }))
+  h.events.emit('updated', h.tasks.get('noisy')); h.flush()
+  assert.equal(h.client.last('showTask')!.task.id, 'unmute-agent', 'still the chat')
+  assert.equal(h.client.last('setState')!.state, 'task', 'still expanded')
+})
+
+test('opening a task takes the surface from the chat, and keeps it', () => {
+  // The other half: a stale agentOpen must not bring the chat back over the
+  // task you switched to, nor when you then close that task.
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  h.controller.agentAnswered('Something.')
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketExpand' })      // into the chat
+  h.flush()
+  assert.equal(h.client.last('showTask')!.task.id, 'unmute-agent')
+
+  // Opening a card from the wall goes to the COCKPIT with that task staged —
+  // a different surface again, and the one a stale agentOpen would fight.
+  h.client.fire({ type: 'focusTask', id: 'a' })
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'cockpit', 'the wall took the front')
+  assert.equal(h.client.last('stageDetail')!.task.id, 'a')
+  h.events.emit('updated', h.tasks.get('a')); h.flush()
+  assert.equal(h.client.last('setState')!.state, 'cockpit', 'and kept it')
+})
+
+test('leaving for another app gets the chat out of the way too', () => {
+  const h = setup()
+  h.controller.agentAnswered('Something.')
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketExpand' })
+  h.flush()
+  h.client.fire({ type: 'userLeft', reason: 'blur' })
+  h.flush()
+  assert.notEqual(h.client.last('setState')!.state, 'task',
+    'a chat left open over the app you switched to is the complaint this answers')
+})
+
 test('purging clears the chat and leaves the card', () => {
   const h = setup()
   h.controller.agentAsked('anything?')

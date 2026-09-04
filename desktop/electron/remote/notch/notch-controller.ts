@@ -1235,6 +1235,29 @@ export class NotchController {
       return
     }
 
+    // THE AGENT CHAT IS A SURFACE, AND RECONCILE HAS TO KNOW THAT.
+    //
+    // The comment below called this exactly right for tasks and the Agent was
+    // added underneath it without being told: openAgent sets `engaged = 'task'`
+    // but deliberately leaves `focusedId` null, because the Agent is not a task
+    // and handing the task runtime an id it cannot resolve is its own bug. So
+    // `opened` was undefined, `shown` fell through to whatever task was at the
+    // front of the queue, and the next tick either REPLACED the chat with that
+    // task or — with nothing demanding — collapsed the surface outright.
+    //
+    // Measured in the field: the chat lived 0.8 seconds. Reconcile runs on
+    // every task event, so it was never the user closing it.
+    //
+    // The three conditions are the whole state: the chat is open, the surface
+    // is expanded, and no task owns it. Anything that focuses a task or opens
+    // the cockpit therefore wins here without needing a flag of its own — a
+    // stale `agentOpen` can never hijack a surface it does not own.
+    if (this.agentOpen && this.engaged === 'task' && !this.focusedId) {
+      this.sendAgentDetail()
+      this.client.send({ type: 'setState', state: 'task', attention, working })
+      return
+    }
+
     // The task surface can hold a task that is NOT in the attention queue — the
     // user tapped a merely-working one. Without this the surface would open and
     // then immediately collapse back to `active` on the next reconcile.
@@ -1394,6 +1417,10 @@ export class NotchController {
    * before, and closing says "done with this", which is rarely what was meant.
    */
   private onUserLeft(reason: 'blur' | 'screenshot' | 'space'): void {
+    // GETTING OUT OF THE WAY APPLIES TO THE CHAT TOO. It is a full-screen
+    // surface like any other, and a chat left open over the app you switched to
+    // is the exact complaint this behaviour exists to answer.
+    this.leaveAgent()
     // ANY BIG SURFACE GETS OUT OF THE WAY, not just one holding a task.
     //
     // This keyed on `focusedId`, which exempted the one surface most likely to
@@ -1461,6 +1488,7 @@ export class NotchController {
     // outright, so Escape dropped you onto the bare notch and you had to reopen
     // and re-find your place. The pocket is where you were; it is where you
     // return. Index deliberately kept, not reset.
+    this.leaveAgent()
     this.cameFromPocket = this.pocketMode === 'open'
     this.attentionAcknowledged.delete(id) // opening it asks to hear about it again
     this.addressed(id)
@@ -1575,6 +1603,7 @@ export class NotchController {
   }
 
   private openCockpit(): void {
+    this.leaveAgent()
     this.engaged = 'cockpit'
     // "OPEN DASHBOARD" MEANS THE DASHBOARD, NOT THE TASK YOU CAME FROM.
     //
@@ -1641,6 +1670,7 @@ export class NotchController {
    * automatic relaunch preserves updatedAt so the wall never reorders merely
    * because the user looked at an old thread. */
   private onFocusTask(id: string): void {
+    this.leaveAgent()
     this.engaged = 'cockpit'
     this.addressed(id)
     this.setFocus(id)
@@ -1768,6 +1798,21 @@ export class NotchController {
     if (this.agentOpen) return true
     if (this.pocketMode !== 'open') return false
     return this.pocketSlots()[this.pocketAt]?.kind === 'agent'
+  }
+
+  /**
+   * THE CHAT IS NO LONGER THE SURFACE.
+   *
+   * Called from every transition that puts something else in front, rather
+   * than trusted to reconcile's guard alone. The guard makes a stale flag
+   * HARMLESS; this makes it not stale — and the difference shows the moment
+   * you close the task you switched to, because a leftover `agentOpen` would
+   * bring the chat back instead of the notch.
+   */
+  private leaveAgent(): void {
+    if (!this.agentOpen) return
+    this.agentOpen = false
+    log.ui('agent-chat', { shown: false, why: 'another surface took the front' })
   }
 
   /** A chat is not a log: the oldest turns fall off the front, which is the end
