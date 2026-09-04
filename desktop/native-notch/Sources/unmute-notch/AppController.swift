@@ -515,6 +515,20 @@ final class AppController: NSObject, NotchResizing {
             // expanded task outranks it: you are already looking at one address,
             // and a card announcing a second would be two answers to one question.
             model.pocket = p
+            // THE OPEN POCKET HOLDS THE KEYBOARD.
+            //
+            // Arrow keys can only reach a surface that is key, and a GLOBAL
+            // monitor is observe-only by macOS's definition — it cannot consume.
+            // Reading the arrows from one would walk the pocket AND move the
+            // caret in whatever the user was typing in, at the same time.
+            //
+            // Safe because this is a nonactivating panel: taking the keyboard
+            // does not activate our app or disturb the frontmost window, which
+            // is the same reasoning applyState already relies on for Escape.
+            // Clicking anything else resigns key on its own, and the arrows go
+            // back where they belong — the pocket stays OPEN and still aimed,
+            // it just stops eating keystrokes.
+            updatePocketKeyFocus()
             let pocketIsVisible = !isExpanded(model.state) || model.state == .attention
             NotchLog.log("CMD pocket mode=\(p.mode) at=\(p.at) slots=\(p.slots.count)")
             // ONE STATE, SO ONE KIND OF CHANGE. Opening, closing, moving to the
@@ -726,7 +740,7 @@ final class AppController: NSObject, NotchResizing {
         reconcileTerminalSubscription()
         refreshSurfaceControlAvailability()
         let engaged = (state == .task || state == .cockpit)
-        window.allowsKey = engaged
+        window.allowsKey = engaged || model.pocket.isOpen
         // ESC MUST NOT LEAK TO THE APP UNDERNEATH.
         //
         // `allowsKey` alone only makes the panel key-ABLE; with
@@ -743,7 +757,7 @@ final class AppController: NSObject, NotchResizing {
         // nonactivating panel, so we take the KEYBOARD without activating our
         // app or disturbing the user's frontmost window; on step-down
         // `allowsKey = false` resigns key and the keyboard goes straight back.
-        if engaged {
+        if engaged || model.pocket.isOpen {
             if !window.isKeyWindow { window.makeKey() }
         }
         let contentGeneration = expandedContentGeneration
@@ -847,6 +861,21 @@ final class AppController: NSObject, NotchResizing {
     }
 
     private func isExpanded(_ s: NotchState) -> Bool { s == .task || s == .cockpit }
+
+    /// Key-ability follows the pocket as well as the state. applyState owns the
+    /// same decision for a state CHANGE; this is for the pocket opening or
+    /// closing underneath a state that did not move.
+    private func updatePocketKeyFocus() {
+        let wants = isExpanded(model.state) || model.pocket.isOpen
+        window.allowsKey = wants
+        if wants {
+            if !window.isKeyWindow { window.makeKey() }
+        } else if window.isKeyWindow {
+            // `allowsKey = false` already resigns key (NotchWindow.didSet); this
+            // is only here to say so out loud.
+            NotchLog.log("pocket: released the keyboard")
+        }
+    }
 
     /// Re-resolve the CURRENT state in place.
     ///
@@ -1432,6 +1461,36 @@ final class AppController: NSObject, NotchResizing {
                 // fired and the panel was not key (see NotchWindow).
                 NotchLog.log("esc: LOCAL monitor (swallowed) state=\(self.model.state.rawValue) key=\(self.window.isKeyWindow)")
                 self.closeAll(); return nil
+            }
+
+            // ── WALKING THE OPEN POCKET FROM THE KEYBOARD ──────────────────
+            //
+            // BARE ARROWS, NO MODIFIER. ⌥← and ⌘← are load-bearing in every
+            // text field on the platform; the unmodified arrows are not, and
+            // they can only arrive here while this panel holds the keyboard —
+            // which means the app underneath is not receiving them anyway.
+            // There is nothing to collide with.
+            //
+            // Return expands, because that is what Return does to the selected
+            // thing everywhere else. The chord expands too (see the controller's
+            // pocketChord): two keys, one event, the same way the chevrons and
+            // the swipe both move the carousel.
+            if !typing, self.model.pocket.isOpen, !isExpanded(self.model.state) {
+                switch e.keyCode {
+                case 123:                                  // ←
+                    if self.model.pocket.slots.count > 1 {
+                        self.model.emit(.pocketMove(delta: -1)); return nil
+                    }
+                case 124:                                  // →
+                    if self.model.pocket.slots.count > 1 {
+                        self.model.emit(.pocketMove(delta: 1)); return nil
+                    }
+                case 36, 76:                               // Return, Enter
+                    if self.model.pocket.current != nil {
+                        self.model.emit(.pocketExpand); return nil
+                    }
+                default: break
+                }
             }
 
             // ⌘V AND FRIENDS, BECAUSE NOTHING ELSE WILL DELIVER THEM.

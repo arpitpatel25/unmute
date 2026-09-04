@@ -61,6 +61,47 @@ const liveLanes = (events: Emitted[]): string[] => {
 const lifecycle = (events: Emitted[]): string[] =>
   events.map((e) => e.type).filter((t) => t !== 'key-state')
 
+describe('the pocket chord — right Command held, right Option tapped', () => {
+  // The native listener decides this, not keyboard.ts: it sees right Command
+  // already down when right Option arrives, so it emits `pocket-chord` and
+  // withholds the Remote key's own down/up entirely. What this file can prove
+  // is the half that matters here — that the chord disturbs neither lane.
+  test('opens no capture and latches nothing', () => {
+    const { km, events } = fresh()
+    key(km, 'right-command-down')
+    key(km, 'right-command-chord')   // right Option joining is itself a chord
+    key(km, 'pocket-chord')
+    key(km, 'right-command-up')
+    assert.deepEqual(liveLanes(events), [], 'no lane may go live')
+    assert.deepEqual(lifecycle(events), ['pocket-chord'],
+      'not a capture: no start, no stop, no route change')
+  })
+
+  test('the Agent stands down rather than submitting', () => {
+    const { km, events } = fresh()
+    cmdDouble(km)
+    assert.deepEqual(liveLanes(events), ['agent'], 'an Agent capture is running')
+    // Now chord into the pocket while it is still recording. The release must
+    // NOT read as the clean single tap that submits — the same failure the
+    // screenshot chord caused, and the reason right-command-chord exists.
+    key(km, 'right-command-down')
+    key(km, 'right-command-chord')
+    key(km, 'pocket-chord')
+    key(km, 'right-command-up')
+    assert.deepEqual(liveLanes(events), ['agent'], 'still recording, not submitted')
+  })
+
+  test('right Option ALONE is still an ordinary task capture', () => {
+    // The whole reason the chord is Command-FIRST: Option keeps its zero-
+    // latency key-down start, so nothing here may change.
+    const { km, events } = fresh()
+    opt(km)
+    assert.deepEqual(liveLanes(events), ['task'])
+    opt(km)
+    assert.deepEqual(lifecycle(events), ['remote-start', 'remote-stop'])
+  })
+})
+
 describe('starting and submitting one lane — unchanged behaviour', () => {
   test('fn opens and closes a cursor capture', () => {
     const { km, events } = fresh()

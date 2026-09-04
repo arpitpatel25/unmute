@@ -5267,6 +5267,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // route them to the sessionManager's Remote capture (which reuses the STT
   // pipeline then calls dispatchFromCapture).
   deps.keyboardManager.on('keyboard', (e) => {
+    if (e.type === 'pocket-chord') {
+      // ONE GESTURE, TWO RUNGS — the controller decides which, because it is
+      // the only thing that knows whether the pocket is already open. Deciding
+      // here would mean a second copy of that state, and the two would drift.
+      log.event('pocket-chord', { lane: 'pocket' })
+      notchController?.pocketChord()
+      return
+    }
     if (e.type === 'remote-start') {
       // WHICH KEY, AND WHAT IT DECIDED. Every diagnosis on 18 August meant
       // reconstructing ownership from timestamps; the address is now stated

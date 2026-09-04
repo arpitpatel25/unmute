@@ -48,6 +48,21 @@ static NSEventModifierFlags g_previousRawFlags = 0;
 // cannot distinguish left from right, so the flagsChanged handler tracks it and
 // the keyDown handler reads it.
 static bool g_rightCommandDown = false;
+/** THE POCKET CHORD — right Command held, right Option tapped.
+ *
+ *  ORDER IS THE WHOLE DESIGN. Right Option starts a Remote capture on its own
+ *  key-DOWN, with no deferral, because push-to-talk that hesitates clips the
+ *  first syllable. So a chord that had to WAIT to see whether Command was
+ *  coming would put that hesitation on the busiest key in the product.
+ *
+ *  Requiring Command FIRST costs nothing: by the time Option lands we already
+ *  know Command is held, so the decision is a lookup, not a timer. Option
+ *  pressed alone is still a plain Remote capture, byte for byte as before.
+ *
+ *  Latched so the RELEASE is swallowed too. Emitting the down as a chord and
+ *  the up as a Remote key would hand the Remote lane an unmatched `up` — a
+ *  capture stopping that never started. */
+static bool g_optionChorded = false;
 /** Whether left-Control is down right now — the meeting notetaker's trigger
  *  key. Read by the keyDown handler so any other key (or modifier) pressed
  *  while it is held can spoil the gesture, exactly as g_rightCommandDown does
@@ -112,8 +127,16 @@ static void handle_flags_changed(NSEvent* event) {
   if (event.keyCode == 61) {
     bool hadOpt = (g_previousRawFlags & kRightOption) != 0;
     bool hasOpt = (event.modifierFlags & kRightOption) != 0;
-    if (!hadOpt && hasOpt) emit_event("right-option-down");
-    if (hadOpt && !hasOpt) emit_event("right-option-up");
+    if (!hadOpt && hasOpt) {
+      if (g_rightCommandDown) { g_optionChorded = true; emit_event("pocket-chord"); }
+      else emit_event("right-option-down");
+    }
+    if (hadOpt && !hasOpt) {
+      // A chord that began under Command stays a chord for its whole life, even
+      // if Command is let go first.
+      if (g_optionChorded) g_optionChorded = false;
+      else emit_event("right-option-up");
+    }
   }
 
   // Left Control specifically (keyCode 59) — the meeting notetaker's trigger

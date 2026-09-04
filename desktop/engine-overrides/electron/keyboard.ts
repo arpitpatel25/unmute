@@ -57,6 +57,13 @@ export type KeyboardEvent =
   // events above are untouched (no-regression, PRD §2.4.1).
   | { type: 'remote-start' }
   | { type: 'remote-stop' }
+  // ─── The pocket chord — right Command held, right Option tapped ───
+  // NOT a capture lane. It carries no audio, holds no state here and is
+  // mutually exclusive with nothing: it opens the pocket, and pressed again it
+  // expands the card the pocket is on. The native listener has already decided
+  // this is a chord and has withheld the Remote key's own down/up, so this
+  // arrives as one event with no lifecycle to pair it with.
+  | { type: 'pocket-chord' }
 
 export type DictationKey = 'fn' | 'right-option'
 export type ActivationMode = 'tap-toggle' | 'push-to-talk' | 'double-tap-push'
@@ -387,6 +394,16 @@ export class KeyboardManager extends EventEmitter {
         // Another key arrived while right Command was held: this is a
         // shortcut, so it can never be a tap.
         this.feedAgentGesture('other')
+        break
+      case 'pocket-chord':
+        // DELIBERATELY STATELESS. Every other key here owns a capture and has
+        // to be reconciled with the others — dictation blocks Remote, Remote
+        // blocks dictation, the Agent spoils on a chord. This one records
+        // nothing and blocks nothing, because opening a surface is not a
+        // capture. Note the Agent has already stood down on its own: right
+        // Option joining right Command emits right-command-chord above.
+        console.log('[keyboard] pocket chord (right Command + right Option)')
+        this.emit('keyboard', { type: 'pocket-chord' } as KeyboardEvent)
         break
       case 'caps-down':
       case 'caps-up':

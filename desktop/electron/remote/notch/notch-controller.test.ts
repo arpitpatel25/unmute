@@ -1721,6 +1721,38 @@ test('opening a card counts as talking to it', () => {
     'the one you just had open is the one at hand')
 })
 
+// ── the pocket chord — one gesture, one rung deeper each press ─────────────
+
+test('the chord opens the pocket, then expands the card it is on', () => {
+  const h = setup()
+  const t0 = Date.now()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A', createdAt: t0 - 5 * 60_000 }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B', createdAt: t0 - 60_000 }))
+
+  h.controller.pocketChord()
+  h.flush()
+  assert.equal(pocketOf(h)!.mode, 'open', 'rung one')
+  assert.equal(pocketOf(h)!.at, 0, 'a fresh visit lands on card 1')
+
+  h.client.fire({ type: 'pocketMove', delta: 1 })   // walk to A
+  h.controller.pocketChord()
+  h.flush()
+  assert.equal(h.client.last('showTask')!.task.id, 'a', 'rung two expands the card you are on')
+})
+
+test('the chord does nothing once you are already expanded', () => {
+  // Going deeper again would mean guessing, and the way out is Escape.
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  h.controller.pocketChord()
+  h.controller.pocketChord()
+  h.flush()
+  const before = h.client.ofType('pocket').length
+  h.controller.pocketChord()
+  h.flush()
+  assert.equal(h.client.ofType('pocket').length, before, 'nothing moved')
+})
+
 test('the order is held while you walk it, and released when you close it', () => {
   const h = setup()
   const t0 = Date.now()

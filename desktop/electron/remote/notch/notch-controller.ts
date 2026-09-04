@@ -1462,6 +1462,47 @@ export class NotchController {
     this.reconcile()
   }
 
+  /**
+   * THE POCKET CHORD — right Command held, right Option tapped.
+   *
+   * One gesture, and it goes one rung deeper each time it is pressed:
+   *
+   *     nothing open   ->  the pocket, on the card you last talked to
+   *     pocket open    ->  that card, expanded
+   *     already there  ->  nothing. Going deeper again would mean guessing.
+   *
+   * WHY THE SAME KEYS TWICE rather than a second binding: your hand never
+   * leaves the chord, and neither rung needs the surface to hold keyboard
+   * focus — which the arrow keys do. So the whole open → choose → expand path
+   * works identically whether or not you have clicked away since.
+   *
+   * The ONE WAY OUT is Escape, exactly as it is everywhere else on this
+   * surface. This gesture deliberately does not toggle: a key that opens on
+   * press and closes on the next press cannot also mean "go deeper", and going
+   * deeper is the thing worth having.
+   */
+  pocketChord(): void {
+    if (this.engaged === 'task' || this.engaged === 'cockpit') {
+      log.event('pocket-chord', { did: 'nothing', reason: 'already-expanded' })
+      return
+    }
+    if (this.pocketMode === 'open') {
+      // Rung two: into the card you are on. onPocketExpand does the rest,
+      // including remembering you came from the pocket so Escape returns here.
+      log.event('pocket-chord', { did: 'expand', at: this.pocketAt })
+      this.onPocketExpand()
+      return
+    }
+    // Rung one. A FRESH VISIT, so it re-sorts and lands on card 1 — the same
+    // thing tapping the pocket open does, and the reason the order is worth
+    // getting right.
+    this.frozenOrder = null
+    this.pocketAt = 0
+    log.event('pocket-chord', { did: 'open', slots: this.crankSlots().length })
+    this.setPocketMode('open')
+    this.reconcile()
+  }
+
   /** Live-settable from Settings → Appearance & notch. */
   setAutoExpand(on: boolean): void {
     this.autoExpand = on
