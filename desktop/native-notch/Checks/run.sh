@@ -25,12 +25,43 @@
 # Run from anywhere:  sh desktop/native-notch/Checks/run.sh
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
-src="$here/../Sources/unmute-notch"
+pkg="$here/.."
+src="$pkg/Sources/unmute-notch"
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
+
+# THIS HARNESS HAD STOPPED RUNNING, SILENTLY, AND THAT IS THE WORST FAILURE A
+# GUARD CAN HAVE.
+#
+# The files below now `import ConversationSupport` and `import
+# SurfaceSizeSupport` — SwiftPM library targets in this same package. A bare
+# `swiftc` knows nothing about them, so the compile died on IPC.swift's second
+# line with "no such module 'ConversationSupport'". Piped through `tail` in a
+# build script the error scrolled past and the exit status belonged to `tail`,
+# so every caller read success. The decode contract this exists to protect —
+# one missing key kills every notch update — has therefore been unguarded for
+# as long as those imports have existed.
+#
+# So: build the package first, point the compiler at the emitted modules, and
+# link their objects. SwiftPM emits no `.a` for a plain library target, which is
+# why these are `.o` files found rather than a library named.
+swift build --package-path "$pkg" >/dev/null
+bin=$(swift build --package-path "$pkg" --show-bin-path)
+
+# The support modules these files import. Test bundles are excluded on purpose:
+# `*Tests.build` also holds `.o` files and linking them pulls in XCTest.
+objs=""
+for m in ConversationSupport SurfaceSizeSupport LifecycleSupport; do
+  [ -d "$bin/$m.build" ] || { echo "MISSING: $bin/$m.build — did swift build fail?" >&2; exit 1; }
+  for o in "$bin/$m.build"/*.o; do objs="$objs $o"; done
+done
+
+# shellcheck disable=SC2086  # $objs is a deliberately word-split list
 swiftc -o "$out/decode-check" \
+  -I "$bin/Modules" \
   "$src/IPC.swift" "$src/PillModel.swift" "$src/ScratchpadModel.swift" \
   "$src/NotchModel.swift" "$src/Theme.swift" "$src/NotchLog.swift" \
   "$src/NotchGeometry.swift" "$src/NotchShape.swift" "$src/BarContent.swift" \
-  "$here/main.swift"
+  "$src/Lifecycle.swift" "$src/UnMark.swift" "$src/UnMarkArt.swift" \
+  "$here/main.swift" $objs
 "$out/decode-check"

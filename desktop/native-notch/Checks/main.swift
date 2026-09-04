@@ -193,14 +193,24 @@ check("a degenerate mass still produces a path",
 
 // ── MOTION ───────────────────────────────────────────────────────────────────
 
-check("one spring: response 0.34", Theme.springResponse == 0.34)
-check("one spring: damping 0.82", Theme.springDamping == 0.82)
-let sp = Theme.springSolver
-check("an axis that has not started yet has not moved", sp.value(at: -0.05) == 0 && sp.value(at: 0) == 0)
-check("it settles at 1", sp.value(at: sp.settle) == 1 && sp.value(at: 9) == 1)
-check("it settles in well under half a second", sp.settle < 0.5)
-check("it is under-damped — it overshoots and comes back",
-      stride(from: 0.0, to: sp.settle, by: 0.005).contains { sp.value(at: $0) > 1.0 })
+// THE SPRING IS GONE, AND THESE CHECKS FOLLOWED IT.
+//
+// This asserted Theme.springResponse / springDamping / springSolver — an
+// under-damped spring that overshoots and settles. The surface moved to a
+// single eased duration instead (Theme.morph over surfaceTransitionDuration),
+// deliberately: an ease reads as one surface and survives a new destination
+// arriving mid-transition, which a spring mid-overshoot does not. Nothing named
+// `spring` exists in Sources any more.
+//
+// The INTENT of the original checks survives and is what is asserted now:
+// there is exactly ONE timing for the surface, and everything else is defined
+// in terms of it rather than carrying its own number.
+check("one surface timing, and it is the one the window frame uses",
+      Theme.surfaceTransitionDuration == 0.24)
+check("reduce-motion's stand-in is shorter than the move it replaces",
+      Theme.reducedFadeDuration < Theme.surfaceTransitionDuration)
+check("control feedback is faster than the surface it sits on",
+      Theme.hoverDuration < Theme.surfaceTransitionDuration)
 check("content leaves before the shape and arrives after it",
       Theme.contentOutDuration < Theme.contentInDuration && Theme.contentInDelay > 0)
 
@@ -219,7 +229,19 @@ check("dormant says nothing at all", BarContent.make(for: vm, state: .dormant, h
 vm.hasNotch = true
 let idle = BarContent.make(for: vm, state: .idle, hovering: false)
 check("idle ON a notch is ONE segment — the wordmark", idle.left == "unmute" && idle.right == nil && idle.dot == nil)
-check("hover REVEALS the count", BarContent.make(for: vm, state: .idle, hovering: true).right == "2 running")
+// IDLE SAYS THE WORDMARK AND NOTHING ELSE, HOVERED OR NOT.
+//
+// This asserted `right == "2 running"`. That text is gone on purpose:
+// BarContent's own comment records why. The controller sends `active` the
+// moment anything is running, so idle's count was always zero, and hovering
+// "revealed" the words "Nothing running" — a surface volunteering an absence.
+// The count moved to the badge on `active`, where one vocabulary covers it.
+//
+// So the check now pins the DELIBERATE silence, which is the thing that would
+// be lost if someone re-added hover text here without reading that comment.
+let idleHovered = BarContent.make(for: vm, state: .idle, hovering: true)
+check("hover adds nothing to idle — the mark alone is the state",
+      idleHovered.left == "unmute" && idleHovered.right == nil && idleHovered.dot == nil)
 check("idle never glows", idle.alarm == nil)
 
 vm.hasNotch = false
@@ -236,15 +258,26 @@ vm.hasNotch = true
 // say something, on either display kind, and it outranks the resting states.
 vm.capturePhase = "routing"
 let routing = BarContent.make(for: vm, state: .idle, hovering: false)
-check("routing speaks even when idle would rest", routing.left == "creating task")
+// "Sending", not "creating task". The word changed when the bar settled on one
+// vocabulary — status words the whole surface shares — and this assertion was
+// never updated because the harness had stopped compiling.
+check("routing speaks even when idle would rest", routing.left == "Sending")
 check("routing shows a working dot", routing.dot == .processing)
 check("routing outranks dormant too",
-      BarContent.make(for: vm, state: .dormant, hovering: false).left == "creating task")
+      BarContent.make(for: vm, state: .dormant, hovering: false).left == "Sending")
 check("routing never glows", routing.alarm == nil)
 vm.capturePhase = nil
 check("and clears cleanly", BarContent.make(for: vm, state: .dormant, hovering: false).isEmpty)
 let act = BarContent.make(for: vm, state: .active, hovering: false)
-check("active carries the count on the left", act.left == "2 running" && act.dot == .processing)
+// THE COUNT MOVED TO THE BADGE, and the left says the one status word.
+//
+// This asserted `left == "2 running"` while the very same slot says "Working"
+// for a single task — two vocabularies for one fact, which is what made the bar
+// read as arbitrary text. BarContent now carries the status word on the left
+// and the count in the badge, exactly as `attention` already did. Both halves
+// are pinned here so the count cannot quietly vanish either.
+check("active says the status word and puts the count in the badge",
+      act.left == "Working" && act.badge == 2 && act.dot == .processing)
 check("active never glows", act.alarm == nil)
 let att = BarContent.make(for: vm, state: .attention, hovering: false)
 check("attention says what it needs", att.left == "Needs you" && att.dot == .needsUser)

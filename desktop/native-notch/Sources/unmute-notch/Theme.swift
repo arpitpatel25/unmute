@@ -242,7 +242,8 @@ enum Theme {
     static let morph: Animation = .easeInOut(duration: surfaceTransitionDuration)
 
     /// Reduce Motion's stand-in: a short cross-fade, no spring, no overshoot.
-    static let reducedFade: Animation = .easeInOut(duration: 0.16)
+    static let reducedFadeDuration: Double = 0.16
+    static let reducedFade: Animation = .easeInOut(duration: reducedFadeDuration)
 
     // ── Content, offset from the container ──
     //
@@ -259,7 +260,8 @@ enum Theme {
     static let flip: Animation     = .easeInOut(duration: 0.24)
     /// Hover / press feedback. NOT a size change — this is opacity and fill on
     /// controls, and it is deliberately faster than the spring.
-    static let hover: Animation    = .easeOut(duration: 0.15)
+    static let hoverDuration: Double = 0.15
+    static let hover: Animation    = .easeOut(duration: hoverDuration)
 
     // MARK: - Type scale
     //
