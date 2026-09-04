@@ -396,12 +396,12 @@ test('stderr is reported as terminal output and never completes a turn', async (
 // Headless is the default because the REPL path's turn-completion signal is an
 // out-of-band hook POST that was observed never arriving. The switch back must
 // stay a one-word environment change, with no code edit and no rebuild.
-test('persistent is the default runtime', () => {
-  // It was headless-per-turn. One process for the whole conversation is the
-  // same driver without the spawn — see agentRuntimeMode for why that is not a
-  // return to the PTY.
-  assert.equal(agentRuntimeMode({}), 'persistent')
-  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: '' }), 'persistent')
+test('headless is the default runtime', () => {
+  // It was briefly `persistent`, which cannot work: a driver does not outlive a
+  // turn (CliProviderRuntime closes it on resume), so the warm process it
+  // exists for never happens. Every Agent turn failed for a day.
+  assert.equal(agentRuntimeMode({}), 'headless')
+  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: '' }), 'headless')
 })
 
 test('one environment variable reverts to the REPL', () => {
@@ -411,7 +411,7 @@ test('one environment variable reverts to the REPL', () => {
 
 // A typo must not quietly land you on the path that hangs.
 test('an unrecognised value keeps the default rather than guessing', () => {
-  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'ptty' }), 'persistent')
+  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'ptty' }), 'headless')
 })
 
 test('the chosen runtime is the driver that actually gets built', () => {
@@ -794,15 +794,16 @@ test('a live turn is reaped with the app', async () => {
   await driver.close()
 })
 
-test('persistent is the default, and both steps back are still reachable', () => {
-  assert.equal(agentRuntimeMode({}), 'persistent')
-  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'headless' }), 'headless')
+test('headless is the default, and both other drivers are opt-in', () => {
+  assert.equal(agentRuntimeMode({}), 'headless')
+  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'persistent' }), 'persistent')
   assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'repl' }), 'repl')
   // A typo must not silently drop you onto a different driver.
-  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'headles' }), 'persistent')
+  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'persisten' }), 'headless')
 })
 
-test('the provider builds the persistent driver by default', () => {
+test('the provider builds the driver the mode names', () => {
+  assert.ok(new ClaudeCodeProvider().createProcess() instanceof HeadlessAgentProcess)
   assert.ok(new ClaudeCodeProvider({ runtime: 'persistent' }).createProcess()
     instanceof PersistentHeadlessAgentProcess)
   assert.ok(new ClaudeCodeProvider({ runtime: 'headless' }).createProcess()

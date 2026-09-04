@@ -31,12 +31,40 @@ export type AgentRuntimeMode = 'persistent' | 'headless' | 'repl'
 /**
  * THREE DRIVERS, AND THE DEFAULT MOVED.
  *
- *   persistent  ONE process for the whole conversation, fed turn by turn over
- *               stdin as stream-json. The default.
- *   headless    one process PER TURN — what persistent replaced. Kept as the
- *               step back that changes one thing, for bisecting a regression.
+ *   headless    one process PER TURN. THE DEFAULT, and the only one that has
+ *               ever worked in the field: 6 turns of 6.
+ *   persistent  streaming input, ready for a runtime that can keep a driver
+ *               alive across turns. NOT YET USEFUL — see below.
  *   repl        the PTY driver. Kept for completeness; see the header above for
  *               why it is not the default and should not be.
+ *
+ * WHY PERSISTENT IS NOT THE DEFAULT, THOUGH IT WAS BRIEFLY.
+ *
+ * A driver cannot outlive a turn. CliProviderRuntime.startTurn builds a new one
+ * from processFactory() for every turn, and resume() explicitly closes the
+ * previous driver before starting the next — one driver per turn is the
+ * contract, and the contract suite is built on it.
+ *
+ * So a "persistent" driver is constructed, spawns once, answers, and is closed.
+ * It buys nothing: identical behaviour to headless with an extra flag, extra
+ * moving parts, and one more thing to get wrong — which is exactly what
+ * happened (it shipped resuming a session that did not exist, and every Agent
+ * turn failed). Shipped as the default on reasoning about the CLI, without ever
+ * checking what owned the driver's lifetime.
+ *
+ * WHAT A WARM PROCESS ACTUALLY NEEDS, if it is wanted later: persistence has to
+ * live in CliProviderRuntime, not under it. Two things move with it. The driver
+ * must survive resume() instead of being closed. And the MCP bearer token must
+ * outlive one interaction — it is minted per interaction into the process
+ * ENVIRONMENT at spawn, and mint() invalidates the previous token for that run,
+ * so a process that spans turns would hold a dead token from turn two onward
+ * and lose every capability the Agent has.
+ *
+ * NONE OF THIS AFFECTS THE PERSISTENT CHAT. The conversation is continuous
+ * because the runtime resumes the RUN (continuity.ts → priorRunId →
+ * provider.resume → `--resume <session>`), which is independent of any of this.
+ * What is missing is only the ~4s spawn, which is a latency improvement and not
+ * a feature the user can otherwise see.
  *
  * WHY PERSISTENT IS NOT A RETURN TO THE REPL. The three failures that removed
  * the PTY driver all come from driving a TUI: outcomes learned from a side
@@ -53,8 +81,8 @@ export type AgentRuntimeMode = 'persistent' | 'headless' | 'repl'
 export function agentRuntimeMode(env: NodeJS.ProcessEnv = process.env): AgentRuntimeMode {
   const raw = env.UNMUTE_AGENT_RUNTIME?.trim().toLowerCase()
   if (raw === 'repl') return 'repl'
-  if (raw === 'headless') return 'headless'
-  return 'persistent'
+  if (raw === 'persistent') return 'persistent'
+  return 'headless'
 }
 
 /**
