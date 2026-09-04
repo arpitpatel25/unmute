@@ -1434,13 +1434,30 @@ final class AppController: NSObject, NotchResizing {
         // dismiss the resting state — only steps ENGAGED states down).
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self, e.keyCode == 53 else { return }
+            // GLOBAL MEANS SOMEONE ELSE'S KEYSTROKE, and this had no guard at all.
+            //
+            // A global monitor sees every Escape on the machine — one aimed at a
+            // browser, a terminal, a dialog in another app entirely — and this
+            // called closeAll() on all of them. With the pocket open at bar
+            // level that tore the surface down from under the user, and because
+            // closeAll logs only `close-all from idle` and this branch logged
+            // nothing at bar level, the teardown had no visible cause: the next
+            // ⌘⌥ then correctly reported `open` instead of `expand`, which reads
+            // as "the chord closed it" when the chord never ran.
+            //
+            // Measured in one session: 56 close-alls against 42 Escapes, and
+            // every unexplained one landed while the pocket was open.
+            //
+            // The doc comment above always said this only steps ENGAGED states
+            // down. That is now what it does. The resting rungs and the pocket
+            // are dismissed by the LOCAL monitor, which only fires when the
+            // panel is actually key — i.e. when the Escape was aimed at us.
+            guard self.isExpanded(self.model.state) else { return }
             // A global monitor is OBSERVE-ONLY — it cannot consume the event, so
             // reaching here while expanded means the Escape ALSO landed in the
             // app underneath. That is the leak, and this line names it.
-            if self.model.state == .task || self.model.state == .cockpit {
-                NotchLog.log("esc: GLOBAL monitor while expanded — LEAKED to the app below (key=\(self.window.isKeyWindow))")
-            }
-            self.closeAll()
+            NotchLog.log("esc: GLOBAL monitor while expanded — LEAKED to the app below (key=\(self.window.isKeyWindow))")
+            self.stepDown()
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self else { return e }
@@ -1451,8 +1468,15 @@ final class AppController: NSObject, NotchResizing {
                 // Logged so a leak is DIAGNOSABLE rather than inferred: if this
                 // line is absent when Escape leaks, the local monitor never
                 // fired and the panel was not key (see NotchWindow).
-                NotchLog.log("esc: LOCAL monitor (swallowed) state=\(self.model.state.rawValue) key=\(self.window.isKeyWindow)")
-                self.closeAll(); return nil
+                NotchLog.log("esc: LOCAL monitor (swallowed) state=\(self.model.state.rawValue) key=\(self.window.isKeyWindow) pocket=\(self.model.pocket.isOpen)")
+                // ONE RUNG, NOT ALL OF THEM. `closeAll()` collapsed the whole
+                // surface whatever was on it, so Escape from an open pocket did
+                // not go back to the bar — it took the pocket, the focus and the
+                // voice aim with it. `stepDown()` already owns the ladder
+                // (popup → pocket → stage → collapsed) and is what the ✕ and the
+                // click-out path use; Escape had simply never been routed
+                // through it.
+                self.stepDown(); return nil
             }
 
             // ── WALKING THE OPEN POCKET FROM THE KEYBOARD ──────────────────
