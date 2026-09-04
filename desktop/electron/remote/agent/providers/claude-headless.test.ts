@@ -81,9 +81,31 @@ test('the result event completes the turn and carries the answer', () => {
 })
 
 test('an errored result fails the turn rather than completing it emptily', () => {
+  // The CLI says WHY, and the parser now carries it (see the failure field) —
+  // this expectation was left behind when it started to.
   assert.deepEqual(
     headlessEvents({ type: 'result', subtype: 'error_during_execution', is_error: true }),
-    [{ type: 'completion', outcome: 'failed' }],
+    [{ type: 'completion', outcome: 'failed', failure: { subtype: 'error_during_execution' } }],
+  )
+})
+
+test('the reason travels with the failure, not just its class', () => {
+  // `No conversation found with session ID` is the sentence that named a real
+  // bug in about a second. Dropping it left the supervisor guessing
+  // `provider-crashed` and the user reading "stopped unexpectedly".
+  assert.deepEqual(
+    headlessEvents({
+      type: 'result', subtype: 'error_during_execution', is_error: true,
+      result: 'No conversation found with session ID: 3822CFEF',
+    }),
+    [{
+      type: 'completion',
+      outcome: 'failed',
+      failure: {
+        subtype: 'error_during_execution',
+        message: 'No conversation found with session ID: 3822CFEF',
+      },
+    }],
   )
 })
 
@@ -92,7 +114,7 @@ test('an errored result fails the turn rather than completing it emptily', () =>
 test('a non-success subtype fails even when is_error is missing', () => {
   assert.deepEqual(
     headlessEvents({ type: 'result', subtype: 'error_max_turns' }),
-    [{ type: 'completion', outcome: 'failed' }],
+    [{ type: 'completion', outcome: 'failed', failure: { subtype: 'error_max_turns' } }],
   )
 })
 
@@ -191,7 +213,12 @@ class FakeChild implements HeadlessChild {
 
   /** Every turn written to stdin, in order. A persistent process takes many. */
   readonly prompts: string[] = []
-  writePrompt(text: string): void { this.written = text; this.prompts.push(text) }
+  /** True once something closed stdin — fatal for a streaming session. */
+  stdinEnded = false
+  writePrompt(text: string): void {
+    this.written = text; this.prompts.push(text); this.stdinEnded = true
+  }
+  writeTurn(text: string): void { this.written = text; this.prompts.push(text) }
   kill(signal: NodeJS.Signals): void { this.killed.push(signal) }
   onExit(cb: (code: number | null) => void): void { this.exit = cb }
 
@@ -620,12 +647,44 @@ test('streaming input is the one flag that keeps the process alive', () => {
   assert.ok(!headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'C').includes('--input-format'))
 })
 
-test('two turns share one process', async () => {
+test('a FRESH conversation is launched fresh, not resumed', async () => {
+  // THE BUG THIS FILE MISSED. start() is handed the uuid the conversation WILL
+  // be called; the driver read it as the id of a session that already existed
+  // and rewrote argv to `--resume <uuid>` on the very first spawn. Claude
+  // answered `No conversation found with session ID` in about a second, and
+  // every single Agent turn failed with "the Agent provider stopped
+  // unexpectedly" — 0 of 5 in the field against 6 of 6 on the old driver.
+  //
+  // The old tests asserted argvs[1] — the RESPAWN — and never argvs[0], which
+  // is exactly the gap the bug lived in.
+  const child = new FakeChild()
+  const { driver, argvs } = persistentWith(child)
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('first')
+  assert.deepEqual(argvs[0].slice(-2), ['--session-id', FRESH],
+    'the runtime already decided fresh-vs-resume; the driver must not overrule it')
+  assert.ok(!argvs[0].includes('--resume'))
+})
+
+test('a conversation the RUNTIME is resuming keeps its resume', async () => {
+  const child = new FakeChild()
+  const { driver, argvs } = persistentWith(child)
+  await driver.start(launch({ kind: 'resume', id: FRESH }))
+  await driver.submitUserTurn('carry on')
+  assert.deepEqual(argvs[0].slice(-2), ['--resume', FRESH])
+})
+
+test('two turns share one process, and stdin is never closed', async () => {
+  // CLOSING STDIN ENDS THE INPUT STREAM, and with it the process — so sharing
+  // the per-turn driver's writePrompt made this quietly per-turn: it answered
+  // the first turn, exited, and respawned for the second, paying the spawn it
+  // exists to avoid. Invisible in the events; visible only here.
   const child = new FakeChild()
   const { driver, spawnCount } = persistentWith(child)
   await driver.start(launch({ kind: 'fresh', id: FRESH }))
   await driver.submitUserTurn('first')
   await driver.submitUserTurn('second')
+  assert.equal(child.stdinEnded, false, 'EOF would end the conversation')
   assert.equal(spawnCount(), 1, 'the whole point: no respawn between turns')
   assert.deepEqual(child.prompts.map((p) => JSON.parse(p).message.content[0].text),
     ['first', 'second'])

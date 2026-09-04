@@ -260,6 +260,18 @@ export interface HeadlessChild {
   readonly stderr?: AsyncIterable<string | Buffer>
   /** Writes the prompt and closes stdin — print mode reads until EOF. */
   writePrompt(text: string): void
+  /**
+   * Writes ONE TURN and leaves stdin open, for streaming input.
+   *
+   * A separate method rather than a flag on the one above, because the two are
+   * opposite contracts and the difference is invisible at the call site: the
+   * per-turn driver MUST close stdin (print mode reads to EOF) and the
+   * persistent one must never close it (EOF ends the input stream, and with it
+   * the process). Sharing `writePrompt` made the persistent driver quietly
+   * per-turn — it answered the first turn, exited, and respawned for the
+   * second, paying the spawn it exists to avoid.
+   */
+  writeTurn(text: string): void
   kill(signal: NodeJS.Signals): void
   onExit(cb: (code: number | null) => void): void
 }
@@ -441,6 +453,23 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
   /** The id this conversation resumes by, learned from the `system/init` line.
    *  Survives the process it was learned from — that is the entire point. */
   private sessionId: string | null = null
+  /**
+   * HAS A PROCESS EVER RUN FOR THIS CONVERSATION?
+   *
+   * The difference between "this id names a session that exists" and "this id
+   * is what the session WILL be called", which are not the same thing and were
+   * conflated here. A fresh Claude conversation is handed a brand-new UUID at
+   * start() and launched with `--session-id <uuid>`; resuming one that has
+   * already run uses `--resume <uuid>`. Rewriting argv to `--resume` on the
+   * FIRST spawn asked Claude to continue a conversation that had never
+   * happened, and it answered — correctly, and in about a second — with
+   * `No conversation found with session ID`, which reaches the user as "the
+   * Agent provider stopped unexpectedly".
+   *
+   * So the first spawn always honours the launch the runtime built. Only a
+   * RESPAWN, after a process we were using died, resumes by the learned id.
+   */
+  private hasSpawned = false
 
   constructor(options: HeadlessAgentProcessOptions = {}) {
     this.spawn = options.spawn ?? defaultSpawner
@@ -463,7 +492,7 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
     this.interrupted = false
     await this.ensureChild(launch)
     // The user turn, in the shape stream-json input expects. One line, one turn.
-    this.child?.writePrompt(`${JSON.stringify({
+    this.child?.writeTurn(`${JSON.stringify({
       type: 'user',
       message: { role: 'user', content: [{ type: 'text', text }] },
     })}\n`)
@@ -494,10 +523,15 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
   private async ensureChild(launch: AgentProcessLaunch): Promise<void> {
     if (this.child) return
     const systemPrompt = await this.readSystemPrompt(launch.systemContext.path)
-    // RESUME BY WHAT WE LEARNED, not by what we were told at start. A process
-    // that died mid-conversation must come back into the SAME session, and the
-    // id from `system/init` is the only one that reflects turns already taken.
-    const resumed: AgentProcessLaunch = this.sessionId
+    // THE FIRST SPAWN IS THE RUNTIME'S TO DECIDE. It already knows whether this
+    // is a fresh conversation or a resumed one and has built argv accordingly;
+    // second-guessing it here is what turned every fresh conversation into a
+    // resume of a session that did not exist.
+    //
+    // A RESPAWN IS OURS. A process that died mid-conversation must come back
+    // into the SAME session, and the id from `system/init` is the only one that
+    // reflects turns already taken.
+    const resumed: AgentProcessLaunch = this.hasSpawned && this.sessionId
       ? { ...launch, argv: ['--resume', this.sessionId] }
       : launch
     const child = this.spawn(
@@ -505,6 +539,7 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
       { binary: launch.binary, cwd: launch.cwd, env: launch.environment },
     )
     this.child = child
+    this.hasSpawned = true
     liveTurns.add(child)
     void this.readStdout(child)
     void this.readStderr(child)
@@ -605,6 +640,8 @@ const defaultSpawner: HeadlessSpawner = (argv, { binary, cwd, env }) => {
       child.stdin.write(text)
       child.stdin.end()
     },
+    // STDIN STAYS OPEN. See HeadlessChild.writeTurn.
+    writeTurn(text) { child.stdin.write(text) },
     kill(signal) { child.kill(signal) },
     onExit(cb) {
       // 'close' rather than 'exit': it fires once the stdio streams are done,
