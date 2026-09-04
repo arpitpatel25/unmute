@@ -17,6 +17,7 @@ import {
   agentRuntimeMode,
   type AgentRuntimeMode,
 } from './claude-headless'
+import { agentTraceSinks } from '../traceLog'
 
 export interface ClaudeCodeProviderOptions {
   binary?: string
@@ -57,9 +58,14 @@ export class ClaudeCodeProvider extends CliProviderRuntime {
     const runtime = options.runtime ?? agentRuntimeMode()
     // ONE PROCESS FOR THE CONVERSATION by default; one per turn on request; the
     // PTY only if someone explicitly asks for it. See agentRuntimeMode.
+    // EVERY TURN IS WRITTEN DOWN. See traceLog: what we ran, what the model
+    // thought, which tool it called with which arguments, what came back, and
+    // what the turn cost. An injected sink rather than an import inside the
+    // driver, so the driver stays testable without one.
+    const trace = agentTraceSinks('claude')
     const processFactory = options.processFactory
-      ?? (runtime === 'persistent' ? () => new PersistentHeadlessAgentProcess()
-        : runtime === 'headless' ? () => new HeadlessAgentProcess()
+      ?? (runtime === 'persistent' ? () => new PersistentHeadlessAgentProcess(trace)
+        : runtime === 'headless' ? () => new HeadlessAgentProcess(trace)
           : replFactory)
     super({
       id: 'claude',

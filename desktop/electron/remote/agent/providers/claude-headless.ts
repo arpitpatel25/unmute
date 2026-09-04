@@ -5,6 +5,7 @@ import type {
   AgentProcessEvent,
   AgentProcessLaunch,
 } from '../provider'
+import { traceStreamLine, type AgentTrace } from '../trace'
 
 /**
  * Headless Claude driver — the Agent as one thing, not as a session.
@@ -313,6 +314,17 @@ export interface HeadlessAgentProcessOptions {
   spawn?: HeadlessSpawner
   readSystemPrompt?: (path: string) => Promise<string>
   allowedTools?: string
+  /**
+   * EVERY LINE THE CLI SPOKE, for the record.
+   *
+   * Injected rather than imported so this module stays free of the logger and
+   * the translation can be tested against real fixtures. A no-op by default:
+   * the contract fakes and the driver tests must not depend on a sink.
+   */
+  onTrace?: (trace: AgentTrace) => void
+  /** What we ran, before it produced anything. The `--resume` bug was visible
+   *  in the argv and nothing was writing it down. */
+  onSpawn?: (info: { argv: string[]; cwd: string; session: AgentProcessLaunch['session'] }) => void
 }
 
 class EventQueue implements AsyncIterable<AgentProcessEvent> {
@@ -351,6 +363,8 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
   private readonly spawn: HeadlessSpawner
   private readonly readSystemPrompt: (path: string) => Promise<string>
   private readonly allowedTools: string
+  private readonly onTrace: (trace: AgentTrace) => void
+  private readonly onSpawn: NonNullable<HeadlessAgentProcessOptions['onSpawn']>
   private pending: AgentProcessLaunch | null = null
   private child: HeadlessChild | null = null
   private drained: Promise<void> = Promise.resolve()
@@ -362,6 +376,8 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
     this.spawn = options.spawn ?? defaultSpawner
     this.readSystemPrompt = options.readSystemPrompt ?? ((path) => fs.readFile(path, 'utf8'))
     this.allowedTools = options.allowedTools ?? AGENT_TOOL_ALLOWLIST
+    this.onTrace = options.onTrace ?? (() => {})
+    this.onSpawn = options.onSpawn ?? (() => {})
   }
 
   /**
@@ -379,8 +395,10 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
     if (!launch) throw new Error('not started')
     if (this.closed) throw new Error('closed')
     const systemPrompt = await this.readSystemPrompt(launch.systemContext.path)
+    const argv = headlessArgv(launch, systemPrompt, this.allowedTools)
+    this.onSpawn({ argv, cwd: launch.cwd, session: launch.session })
     const child = this.spawn(
-      headlessArgv(launch, systemPrompt, this.allowedTools),
+      argv,
       { binary: launch.binary, cwd: launch.cwd, env: launch.environment },
     )
     this.child = child
@@ -412,6 +430,9 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
         if (this.closed) return
         let parsed: unknown
         try { parsed = JSON.parse(line) } catch { continue } // non-JSON noise is not authoritative
+        // TRACE FIRST. If a line both explains the turn and ends it, the
+        // explanation must already be written down when the end is announced.
+        for (const trace of traceStreamLine(parsed)) this.onTrace(trace)
         for (const event of headlessEvents(parsed)) {
           if (event.type === 'completion') this.completed = true
           this.queue.emit(event)
@@ -474,6 +495,8 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
   private readonly spawn: HeadlessSpawner
   private readonly readSystemPrompt: (path: string) => Promise<string>
   private readonly allowedTools: string
+  private readonly onTrace: (trace: AgentTrace) => void
+  private readonly onSpawn: NonNullable<HeadlessAgentProcessOptions['onSpawn']>
   private pending: AgentProcessLaunch | null = null
   private child: HeadlessChild | null = null
   private interrupted = false
@@ -503,6 +526,8 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
     this.spawn = options.spawn ?? defaultSpawner
     this.readSystemPrompt = options.readSystemPrompt ?? ((path) => fs.readFile(path, 'utf8'))
     this.allowedTools = options.allowedTools ?? AGENT_TOOL_ALLOWLIST
+    this.onTrace = options.onTrace ?? (() => {})
+    this.onSpawn = options.onSpawn ?? (() => {})
   }
 
   async start(launch: AgentProcessLaunch): Promise<void> {
@@ -562,8 +587,10 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
     const resumed: AgentProcessLaunch = this.hasSpawned && this.sessionId
       ? { ...launch, argv: ['--resume', this.sessionId] }
       : launch
+    const argv = headlessArgv(resumed, systemPrompt, this.allowedTools, true)
+    this.onSpawn({ argv, cwd: launch.cwd, session: resumed.session })
     const child = this.spawn(
-      headlessArgv(resumed, systemPrompt, this.allowedTools, true),
+      argv,
       { binary: launch.binary, cwd: launch.cwd, env: launch.environment },
     )
     this.child = child
@@ -588,6 +615,7 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
         if (this.closed || this.child !== child) return
         let parsed: unknown
         try { parsed = JSON.parse(line) } catch { continue }
+        for (const trace of traceStreamLine(parsed)) this.onTrace(trace)
         for (const event of headlessEvents(parsed)) {
           // Learn the id once and keep it for the life of the conversation —
           // a resumed process re-announces the same one, and taking it again is

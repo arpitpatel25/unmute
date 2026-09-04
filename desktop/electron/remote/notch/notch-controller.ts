@@ -1055,6 +1055,28 @@ export class NotchController {
     return this.agentUnread ? [agent, ...tasks] : [...tasks, agent]
   }
 
+  /**
+   * THE POCKET AS THE USER SEES IT, recorded when it changes.
+   *
+   * A report is always "it showed me the wrong thing", and answering that means
+   * knowing what it showed and which slot the voice was aimed at — neither of
+   * which any existing line carried. Written from `sendPocket`, which is
+   * already the one place that knows the payload actually changed, so this
+   * cannot log a view that was never drawn.
+   */
+  private logPocketView(slots: PocketSlotP[]): void {
+    const at = Math.min(this.pocketAt, Math.max(0, slots.length - 1))
+    const current = slots[at]
+    log.ui('pocket', {
+      mode: this.pocketMode,
+      at,
+      aimed: current ? `${current.kind ?? 'task'}:${current.title}` : null,
+      slots: slots.map((sl, i) => `${i === at ? '>' : ' '}${sl.kind ?? 'task'}:${sl.title}${sl.demanding ? '!' : ''}`).join(' | '),
+      agentAt: slots.findIndex((sl) => sl.kind === 'agent'),
+      waiting: slots.filter((sl) => sl.demanding && sl.kind !== 'agent').length,
+    })
+  }
+
   private crankSlots(): PocketSlotP[] {
     const byId = new Map(this.pocketList().map((t) => [t.id, t]))
     return this.pocketOrder()
@@ -1348,6 +1370,7 @@ export class NotchController {
     const json = JSON.stringify(data)
     if (json === this.lastPocketJson) return
     this.lastPocketJson = json
+    this.logPocketView(slots)
     this.client.send({ type: 'pocket', data })
   }
 
@@ -1462,6 +1485,7 @@ export class NotchController {
    */
   private openAgent(): void {
     this.cameFromPocket = this.pocketMode === 'open'
+    const wasUnread = this.agentUnread
     this.agentUnread = false
     this.engaged = 'task'
     // NOT setFocus: focus means a TASK, and handing the task runtime an id it
@@ -1469,7 +1493,11 @@ export class NotchController {
     // addressed as itself — see applyVoiceTarget.
     this.setFocus(null)
     this.agentOpen = true
-    log.event('agent-opened', { turns: this.agentBlocks.length })
+    log.ui('agent-chat', {
+      shown: true, turns: this.agentBlocks.length,
+      kinds: this.agentBlocks.map((b) => b.kind).join(','),
+      wasUnread, why: 'you opened the card, which is what counts as reading it',
+    })
     this.sendAgentDetail()
     this.client.send({ type: 'setState', state: 'task', attention: this.lastWaiting, working: 0 })
     this.setPocketMode('closed')
@@ -1673,6 +1701,10 @@ export class NotchController {
     this.agentBlocks = [...this.agentBlocks,
       { kind: 'message', role: 'user', text: text.trim(), at: Date.now() }]
     this.trimAgentBlocks()
+    // WHAT THE CARD IS ABOUT TO SAY, and that it is now busy — so a card stuck
+    // on "Thinking…" can be traced to the turn that never came back rather
+    // than to the surface.
+    log.ui('agent-card', { says: 'Thinking…', busy: true, turns: this.agentBlocks.length })
     if (this.agentOpen) this.sendAgentDetail()
     this.reconcile()
   }
@@ -1694,6 +1726,21 @@ export class NotchController {
     if (!this.agentOpen) this.agentUnread = true
     if (this.agentOpen) this.sendAgentDetail()
     log.event('agent-answered', { chars: text.length, failed, unread: this.agentUnread })
+    // WHAT THE USER NOW SEES, AND WHERE. The card carries only the first line,
+    // so the line itself is recorded — a report of "it said something odd" is
+    // otherwise unanswerable once the chat has moved on.
+    log.ui('agent-card', {
+      says: this.agentLine?.text,
+      cardChars: this.agentLine?.text.length ?? 0,
+      fullChars: text.length,
+      clipped: (this.agentLine?.text.length ?? 0) < text.length,
+      failed,
+      position: this.agentUnread ? 'front' : 'back',
+      why: failed ? 'the turn failed'
+        : this.agentOpen ? 'answered while you were reading it — stays where it is'
+          : 'unread, so it comes to the front',
+      turns: this.agentBlocks.length,
+    })
     this.reconcile()
   }
 
@@ -1703,11 +1750,16 @@ export class NotchController {
    * saying what it says when there is nothing to say.
    */
   agentPurged(): void {
+    const had = this.agentBlocks.length
     this.agentBlocks = []
     this.agentLine = null
     this.agentUnread = false
     this.agentBusy = false
     if (this.agentOpen) this.sendAgentDetail()
+    log.ui('agent-card', {
+      says: 'Ask me anything', position: 'back', turns: 0, dropped: had,
+      why: 'the conversation was purged — the model is starting fresh too',
+    })
     this.reconcile()
   }
 
