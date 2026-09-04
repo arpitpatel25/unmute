@@ -186,3 +186,15 @@ test('Codex defaults to headless while the shared rollback still selects the old
   assert.ok(headless.createProcess() instanceof CodexHeadlessProcess)
   assert.ok(repl.createProcess() instanceof ExecutorBackedAgentProcess)
 })
+
+test('a mode added for Claude must never drop Codex onto the PTY', () => {
+  // `codex exec` has no streaming input, so there is no warm driver to pick —
+  // but "no persistent driver" must mean HEADLESS, not REPL. Spelled as an
+  // equality check against 'headless', the persistent mode silently selected
+  // the PTY here and would have shipped as an unexplained return of the hangs
+  // the headless rewrite removed.
+  assert.ok(new CodexCliProvider({ runtime: 'persistent' }).createProcess()
+    instanceof CodexHeadlessProcess)
+  assert.ok(new CodexCliProvider({ runtime: 'headless' }).createProcess()
+    instanceof CodexHeadlessProcess)
+})

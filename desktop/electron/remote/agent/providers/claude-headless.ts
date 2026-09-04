@@ -26,16 +26,35 @@ import type {
  * provider contract suite runs against either.
  */
 
-export type AgentRuntimeMode = 'headless' | 'repl'
+export type AgentRuntimeMode = 'persistent' | 'headless' | 'repl'
 
 /**
- * The revert switch. `UNMUTE_AGENT_RUNTIME=repl` puts the Agent back on the
- * PTY driver with no code change and no rebuild — set it, relaunch, done.
- * Anything unrecognised keeps the default, so a typo cannot silently drop you
- * onto the path that hangs.
+ * THREE DRIVERS, AND THE DEFAULT MOVED.
+ *
+ *   persistent  ONE process for the whole conversation, fed turn by turn over
+ *               stdin as stream-json. The default.
+ *   headless    one process PER TURN — what persistent replaced. Kept as the
+ *               step back that changes one thing, for bisecting a regression.
+ *   repl        the PTY driver. Kept for completeness; see the header above for
+ *               why it is not the default and should not be.
+ *
+ * WHY PERSISTENT IS NOT A RETURN TO THE REPL. The three failures that removed
+ * the PTY driver all come from driving a TUI: outcomes learned from a side
+ * channel that could produce nothing, a paste landing one Enter short, and an
+ * interactive permission prompt with nobody there to answer it. None of them
+ * are properties of a LONG-LIVED PROCESS — they are properties of a terminal
+ * interface. Streaming input has no terminal: turns go in as JSON, results come
+ * out as JSON on stdout, and `-p` still resolves permissions from flags. The
+ * process stays warm and every safety property of the headless rewrite holds.
+ *
+ * What it buys is the ~4s spawn per turn, which is most of what made the Agent
+ * feel like a command rather than a conversation.
  */
 export function agentRuntimeMode(env: NodeJS.ProcessEnv = process.env): AgentRuntimeMode {
-  return env.UNMUTE_AGENT_RUNTIME?.trim().toLowerCase() === 'repl' ? 'repl' : 'headless'
+  const raw = env.UNMUTE_AGENT_RUNTIME?.trim().toLowerCase()
+  if (raw === 'repl') return 'repl'
+  if (raw === 'headless') return 'headless'
+  return 'persistent'
 }
 
 /**
@@ -129,6 +148,9 @@ export function headlessArgv(
   launch: AgentProcessLaunch,
   systemPrompt: string,
   allowedTools: string = AGENT_TOOL_ALLOWLIST,
+  /** Streaming input: the process stays up and reads turns as JSON from stdin
+   *  instead of one prompt followed by EOF. */
+  streamingInput = false,
 ): string[] {
   // Confine the Agent to its own intercom. Without --strict-mcp-config the
   // flag ADDS to whatever the user has registered at user scope — which in the
@@ -139,6 +161,9 @@ export function headlessArgv(
   return [
     '-p',
     '--output-format', 'stream-json',
+    // THE ONE FLAG THAT MAKES THE PROCESS PERSISTENT. Without it print mode
+    // reads a single prompt to EOF and exits, which is the per-turn driver.
+    ...(streamingInput ? ['--input-format', 'stream-json'] : []),
     '--verbose',
     '--append-system-prompt', systemPrompt,
     '--allowedTools', allowedTools,
@@ -363,6 +388,159 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
     // An answer already given is not rewritten by however the process ended.
     if (this.interrupted && !this.completed) {
       this.completed = true
+      this.queue.emit({ type: 'completion', outcome: 'interrupted' })
+    }
+    this.queue.emit({ type: 'exit', exitCode: code ?? 0 })
+  }
+}
+
+/**
+ * ONE PROCESS FOR THE WHOLE CONVERSATION.
+ *
+ * Same argv, same stdout parser, same event contract as the per-turn driver —
+ * the only differences are that stdin is not closed after the first prompt, and
+ * that a `result` ends a TURN rather than the process.
+ *
+ * THE PROCESS IS SPAWNED LAZILY, on the first turn rather than at start(). A
+ * warm `claude` holds a model connection; spawning one the moment the app
+ * launches would pay for an Agent the user may never speak to today.
+ *
+ * IT IS ALSO DISPOSABLE. If the process dies — crash, OOM, the user quitting
+ * something underneath it — the next turn spawns a fresh one and resumes by
+ * session id. A warm process is an optimisation, never the system of record;
+ * the session id is.
+ */
+export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
+  private readonly queue = new EventQueue()
+  readonly events: AsyncIterable<AgentProcessEvent> = this.queue
+  private readonly spawn: HeadlessSpawner
+  private readonly readSystemPrompt: (path: string) => Promise<string>
+  private readonly allowedTools: string
+  private pending: AgentProcessLaunch | null = null
+  private child: HeadlessChild | null = null
+  private interrupted = false
+  private closed = false
+  /** The id this conversation resumes by, learned from the `system/init` line.
+   *  Survives the process it was learned from — that is the entire point. */
+  private sessionId: string | null = null
+
+  constructor(options: HeadlessAgentProcessOptions = {}) {
+    this.spawn = options.spawn ?? defaultSpawner
+    this.readSystemPrompt = options.readSystemPrompt ?? ((path) => fs.readFile(path, 'utf8'))
+    this.allowedTools = options.allowedTools ?? AGENT_TOOL_ALLOWLIST
+  }
+
+  async start(launch: AgentProcessLaunch): Promise<void> {
+    this.pending = launch
+    if (launch.session.id) {
+      this.sessionId = launch.session.id
+      this.queue.emit({ type: 'handle', sessionId: launch.session.id })
+    }
+  }
+
+  async submitUserTurn(text: string): Promise<void> {
+    const launch = this.pending
+    if (!launch) throw new Error('not started')
+    if (this.closed) throw new Error('closed')
+    this.interrupted = false
+    await this.ensureChild(launch)
+    // The user turn, in the shape stream-json input expects. One line, one turn.
+    this.child?.writePrompt(`${JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text }] },
+    })}\n`)
+  }
+
+  /**
+   * SIGINT ends the TURN, and takes the process with it.
+   *
+   * There is no way to cancel one turn of a streaming session without ending
+   * the process, and pretending otherwise would leave a half-answered turn in
+   * a session we then went on using. Killing it is honest and costs one respawn
+   * — the session id is kept, so the conversation itself is not lost.
+   */
+  async interrupt(): Promise<void> {
+    if (!this.child || this.closed) return
+    this.interrupted = true
+    try { this.child.kill('SIGINT') } catch { /* it may already be gone */ }
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    this.dropChild('SIGKILL')
+    this.queue.end()
+  }
+
+  /** Spawn if there is nothing alive. Idempotent by construction. */
+  private async ensureChild(launch: AgentProcessLaunch): Promise<void> {
+    if (this.child) return
+    const systemPrompt = await this.readSystemPrompt(launch.systemContext.path)
+    // RESUME BY WHAT WE LEARNED, not by what we were told at start. A process
+    // that died mid-conversation must come back into the SAME session, and the
+    // id from `system/init` is the only one that reflects turns already taken.
+    const resumed: AgentProcessLaunch = this.sessionId
+      ? { ...launch, argv: ['--resume', this.sessionId] }
+      : launch
+    const child = this.spawn(
+      headlessArgv(resumed, systemPrompt, this.allowedTools, true),
+      { binary: launch.binary, cwd: launch.cwd, env: launch.environment },
+    )
+    this.child = child
+    liveTurns.add(child)
+    void this.readStdout(child)
+    void this.readStderr(child)
+    child.onExit((code) => { this.onExit(code) })
+  }
+
+  private dropChild(signal: NodeJS.Signals): void {
+    const child = this.child
+    this.child = null
+    if (!child) return
+    liveTurns.delete(child)
+    try { child.kill(signal) } catch { /* it may already be gone */ }
+  }
+
+  private async readStdout(child: HeadlessChild): Promise<void> {
+    try {
+      for await (const line of lines(child.stdout)) {
+        if (this.closed || this.child !== child) return
+        let parsed: unknown
+        try { parsed = JSON.parse(line) } catch { continue }
+        for (const event of headlessEvents(parsed)) {
+          // Learn the id once and keep it for the life of the conversation —
+          // a resumed process re-announces the same one, and taking it again is
+          // harmless. What must not happen is losing it on a respawn.
+          if (event.type === 'handle') this.sessionId = event.sessionId
+          this.queue.emit(event)
+        }
+      }
+    } catch { /* exit is the backstop */ }
+  }
+
+  private async readStderr(child: HeadlessChild): Promise<void> {
+    if (!child.stderr) return
+    try {
+      for await (const chunk of child.stderr) {
+        if (this.closed || this.child !== child) return
+        this.queue.emit({ type: 'terminal-output', chunk: chunk.toString() })
+      }
+    } catch { /* best-effort */ }
+  }
+
+  /**
+   * A PROCESS EXITING IS NOT A TURN ENDING — normally.
+   *
+   * In the per-turn driver exit is the backstop that guarantees a completion.
+   * Here it is a fault: the process should have stayed up. So it emits a
+   * completion only if a turn was actually in flight, and either way clears the
+   * child so the next turn respawns and resumes.
+   */
+  private onExit(code: number | null): void {
+    this.dropChild('SIGKILL')
+    if (this.closed) return
+    if (this.interrupted) {
+      this.interrupted = false
       this.queue.emit({ type: 'completion', outcome: 'interrupted' })
     }
     this.queue.emit({ type: 'exit', exitCode: code ?? 0 })

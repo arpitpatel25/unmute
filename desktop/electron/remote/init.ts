@@ -87,7 +87,7 @@ import { ClaudeCodeProvider } from './agent/providers/claude'
 import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-headless'
 import { reapCodexHeadlessTurns } from './agent/providers/codex-headless'
 import { agentConstitution } from './agent/constitution'
-import { MAX_CAPTION_LENGTH, presentAnswer } from './agent/caption'
+import { loadPersona } from './agent/persona'
 import { nextConversation, type Conversation } from './agent/continuity'
 import { HandoffCapability } from './agent/capabilities/handoff'
 import { ProviderHealth } from './agent/providerHealth'
@@ -1126,9 +1126,21 @@ async function initializeUnmuteAgent(): Promise<void> {
     // ~44,000 session files a day, spending the user's own CLI plan on work
     // that produced nothing. The Agent now reads transcripts directly, exactly
     // as a bare Claude Code session does.
+    // THE PROMPT COMES FROM THE USER'S FILE, not from the constant.
+    //
+    // unmute-agent.md is seeded from AGENT_PRINCIPLES on first run and is the
+    // prompt from then on — see persona.ts for why it lives in the user's
+    // directory rather than in the bundle. The constant remains the default and
+    // is still what the eval harness exercises.
+    //
+    // `constitution.md` stays as the file every provider is pointed at, so the
+    // shape of the handoff to the CLI is unchanged: one path, read at spawn.
+    const persona = await loadPersona(join(root, 'agent'))
+    log.event('unmute-agent-persona', { source: persona.source, chars: persona.text.length })
     const constitutionPath = join(root, 'runtime', 'constitution.md')
     mkdirSync(dirname(constitutionPath), { recursive: true, mode: 0o700 })
-    writeFileSync(constitutionPath, AGENT_CONSTITUTION, { encoding: 'utf8', mode: 0o600 })
+    writeFileSync(constitutionPath, agentConstitution(SESSION_PREAMBLE, persona.text),
+      { encoding: 'utf8', mode: 0o600 })
     // hookEvents/executor are consumed only by the REPL driver; they stay wired
     // so UNMUTE_AGENT_RUNTIME=repl is a pure environment change. Which driver
     // is live is logged because the two fail in completely different ways.
@@ -2594,6 +2606,11 @@ export function registerIntentCleanupLLM(fn: CompleteFn): void {
 // routes to it DETERMINISTICALLY (see the short-circuit below) — the offer-never-move
 // spine: the user can SEE where their voice lands before they speak.
 let orchestrateFocusId: string | null = null
+/** THE VOICE IS POINTED AT THE AGENT — its card is the one in front of you in
+ *  the pocket, or its chat is open. Set by the notch controller, which is the
+ *  only thing that knows what the pocket is showing. Deliberately NOT folded
+ *  into orchestrateFocusId: that names a task, and the Agent is not one. */
+let orchestrateAgentAddressed = false
 /** The voice lifecycle, observed (never driven) for the wall's listening surface:
  *  listening (key held) → transcribing (key up, STT running) → routing (deciding
  *  where it lands) → idle (landed; taskId says where). PURELY ADDITIVE — a
@@ -3743,7 +3760,13 @@ async function dispatchFromCaptureInner(
   //
   // Pressing the Agent key is a statement about WHO you are talking to. A task
   // being on screen is not.
-  const addressedToAgent = options.route === 'agent' || options.destination === 'unmute-agent'
+  // THREE WAYS TO BE TALKING TO THE AGENT, and they are one statement made
+  // three ways: its own key, the scratchpad's Agent button, or its card being
+  // the one in front of you in the pocket. The third is new and is the same
+  // rule every task already follows — you address what you can see.
+  const addressedToAgent = options.route === 'agent'
+    || options.destination === 'unmute-agent'
+    || orchestrateAgentAddressed
   const addressedTaskId = addressedToAgent ? null : (targetTaskId ?? orchestrateFocusId)
   if (addressedTaskId && manager.list().some((t) => t.id === addressedTaskId)) {
     const fid = addressedTaskId
@@ -3858,9 +3881,18 @@ async function dispatchFromCaptureInner(
         ? { priorRunId: options.priorAgentRunId }
         : (() => {
           const decision = nextConversation(lastAgentConversation, Date.now())
+          // ONE CLOCK FOR BOTH HALVES. Not resuming means the model is starting
+          // fresh, so the chat the user can still read must go with it — a
+          // conversation on screen that the Agent has forgotten is worse than
+          // an empty one. This is the purge, and it is deliberately the same
+          // decision rather than a second timer that could disagree with it.
+          if (!decision.resume) notchController?.agentPurged()
           return decision.resume ? { priorRunId: decision.runId } : {}
         })()),
     }
+    // The question goes up before the turn runs, so a failure still leaves it
+    // visible above the error rather than losing what was asked.
+    notchController?.agentAsked(transcript)
     // `route === 'agent'` means the user pressed (or switched to) the Agent's
     // own key. An explicit `destination` covers the scratchpad's Agent button,
     // which is the same statement made with a different gesture. Either way a
@@ -3881,28 +3913,21 @@ async function dispatchFromCaptureInner(
       // actually did is to hunt for session files by modification time.
       providerSessionId: result.providerSessionId ?? null,
     })
-    // THE AGENT SPEAKS IN ONE LINE. The notch carries progress while a turn
-    // runs; the caption carries the conclusion. Two surfaces, never competing:
-    // one live, one final.
+    // THE AGENT SPEAKS INTO ITS OWN CHAT.
+    //
+    // It used to speak in a caption: one line, a few seconds, gone. That shape
+    // is what forced the 200-character cap, the instruction never to write a
+    // long answer, and the standing question of where a long answer should go
+    // instead — the clipboard, a file, a task. All of it was a workaround for
+    // having nowhere to put words.
+    //
+    // The Agent is an element of the pocket now. Its card carries the opening
+    // line and the card opens into the whole exchange, so the answer is simply
+    // said, at the length it takes, and read where it was said.
     const spoken = result.outcome === 'completed'
       ? (result.text?.trim() || 'Done.')
       : (result.error?.message || 'That did not land.')
-    // THE SURFACE FOLLOWS THE ANSWER. A short one is a caption, as it always
-    // was. A long one is no longer clipped to an ellipsis — it is the same
-    // caption held open, because "summarise that note" has an answer that is
-    // the deliverable and a clipped deliverable is a broken promise.
-    const shown = presentAnswer(spoken)
-    if (shown.surface === 'reader') {
-      log.event('agent-answer-held', { chars: spoken.length, cap: MAX_CAPTION_LENGTH })
-    }
-    if (shown.text) {
-      notchClient?.send({
-        type: 'caption',
-        text: shown.text,
-        dwellMs: shown.dwellMs,
-        ...(shown.surface === 'reader' ? { hold: true } : {}),
-      })
-    }
+    notchController?.agentAnswered(spoken, result.outcome !== 'completed')
     // Remember where this conversation got to, so the next utterance can tell
     // a follow-up from a new subject.
     if (result.agentRunId) {
@@ -4707,6 +4732,29 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // Auto-expand is controller state, not a helper command — the decision to
       // open the task surface is made here, before anything is sent.
       const applyAutoExpand = () => notchController?.setAutoExpand(settings.get('notchAutoExpand') !== false)
+      // THE PURGE RUNS ON A CLOCK, NOT ON THE NEXT THING YOU SAY.
+      //
+      // Checked lazily — only when the next utterance arrives — it would be
+      // correct about the MODEL and wrong about the SCREEN: the Agent starts
+      // fresh, but until you happen to speak, its card is still showing
+      // yesterday's answer and its chat still holds a conversation that no
+      // longer exists anywhere else. The clock closes that gap.
+      //
+      // Five minutes against a six-hour window is far more often than needed
+      // and still costs nothing: with no conversation it returns immediately.
+      const agentPurgeTimer = setInterval(() => {
+        if (!lastAgentConversation) return
+        if (nextConversation(lastAgentConversation, Date.now()).resume) return
+        log.event('agent-conversation-purged', {
+          runId: lastAgentConversation.runId,
+          turns: lastAgentConversation.turns,
+          idleMs: Date.now() - lastAgentConversation.endedAt,
+        })
+        lastAgentConversation = null
+        notchController?.agentPurged()
+      }, 5 * 60_000)
+      agentPurgeTimer.unref?.()
+
       notchController = new NotchController(notchClient, mgr, {
         // task runtime — same calls as remote:list/answer/kill/remove/resume/…
         listTasks: () => mgr.list().map(serializeTask),
@@ -4755,6 +4803,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // per push, so a focus change has to announce itself or the
           // "Add to <task>" button never appears on an already-open pad.
           try { broadcastScratchpad() } catch { /* nothing showing */ }
+        },
+        agentSend: (text) => { void dispatchFromCapture(text, [], null, { destination: 'unmute-agent' }) },
+        addressAgent: (on) => {
+          if (orchestrateAgentAddressed === on) return
+          orchestrateAgentAddressed = on
+          log.event('agent-addressed', { on })
+          voiceTargetMoved()
         },
         opened: (id) => mgr.opened(id),
         remoteKey: () => getRemoteKey(),

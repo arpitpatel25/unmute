@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   HeadlessAgentProcess,
+  PersistentHeadlessAgentProcess,
   agentRuntimeMode,
   headlessArgv,
   headlessEvents,
@@ -188,7 +189,9 @@ class FakeChild implements HeadlessChild {
   }
   readonly stderr = undefined
 
-  writePrompt(text: string): void { this.written = text }
+  /** Every turn written to stdin, in order. A persistent process takes many. */
+  readonly prompts: string[] = []
+  writePrompt(text: string): void { this.written = text; this.prompts.push(text) }
   kill(signal: NodeJS.Signals): void { this.killed.push(signal) }
   onExit(cb: (code: number | null) => void): void { this.exit = cb }
 
@@ -212,7 +215,7 @@ class FakeChild implements HeadlessChild {
   }
 }
 
-function collect(driver: HeadlessAgentProcess): AgentProcessEvent[] {
+function collect(driver: { events: AsyncIterable<AgentProcessEvent> }): AgentProcessEvent[] {
   const seen: AgentProcessEvent[] = []
   void (async () => { for await (const event of driver.events) seen.push(event) })()
   return seen
@@ -366,9 +369,12 @@ test('stderr is reported as terminal output and never completes a turn', async (
 // Headless is the default because the REPL path's turn-completion signal is an
 // out-of-band hook POST that was observed never arriving. The switch back must
 // stay a one-word environment change, with no code edit and no rebuild.
-test('headless is the default runtime', () => {
-  assert.equal(agentRuntimeMode({}), 'headless')
-  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: '' }), 'headless')
+test('persistent is the default runtime', () => {
+  // It was headless-per-turn. One process for the whole conversation is the
+  // same driver without the spawn — see agentRuntimeMode for why that is not a
+  // return to the PTY.
+  assert.equal(agentRuntimeMode({}), 'persistent')
+  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: '' }), 'persistent')
 })
 
 test('one environment variable reverts to the REPL', () => {
@@ -378,7 +384,7 @@ test('one environment variable reverts to the REPL', () => {
 
 // A typo must not quietly land you on the path that hangs.
 test('an unrecognised value keeps the default rather than guessing', () => {
-  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'ptty' }), 'headless')
+  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'ptty' }), 'persistent')
 })
 
 test('the chosen runtime is the driver that actually gets built', () => {
@@ -583,4 +589,165 @@ test('reaping kills every live turn', async () => {
   assert.deepEqual(a.killed, ['SIGKILL'])
   assert.deepEqual(b.killed, ['SIGKILL'])
   assert.equal(liveHeadlessTurns(), 0)
+})
+
+// ── the persistent driver: one process, many turns ────────────────────────
+//
+// THE POINT OF IT is the ~4s spawn per turn, which is most of what made the
+// Agent feel like a command rather than a conversation. What must NOT come back
+// with it are the three failures that removed the PTY driver — and none of them
+// can, because all three are properties of driving a TUI rather than of a
+// long-lived process. There is no terminal here: turns go in as JSON, results
+// come out as JSON.
+
+function persistentWith(child: FakeChild, systemPrompt = 'CONSTITUTION') {
+  let spawns = 0
+  const seen: string[][] = []
+  const driver = new PersistentHeadlessAgentProcess({
+    spawn: (argv) => { spawns += 1; seen.push(argv); return child },
+    readSystemPrompt: async () => systemPrompt,
+  })
+  return { driver, spawnCount: () => spawns, argvs: seen }
+}
+
+test('streaming input is the one flag that keeps the process alive', () => {
+  const argv = headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'C', 'mcp__unmute', true)
+  const i = argv.indexOf('--input-format')
+  assert.ok(i > 0)
+  assert.equal(argv[i + 1], 'stream-json')
+  // Without it, print mode reads one prompt to EOF and exits — the per-turn
+  // driver — so its absence is exactly as load-bearing as its presence.
+  assert.ok(!headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'C').includes('--input-format'))
+})
+
+test('two turns share one process', async () => {
+  const child = new FakeChild()
+  const { driver, spawnCount } = persistentWith(child)
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('first')
+  await driver.submitUserTurn('second')
+  assert.equal(spawnCount(), 1, 'the whole point: no respawn between turns')
+  assert.deepEqual(child.prompts.map((p) => JSON.parse(p).message.content[0].text),
+    ['first', 'second'])
+})
+
+test('a turn is one JSON line, in the shape stream-json input expects', async () => {
+  const child = new FakeChild()
+  const { driver } = persistentWith(child)
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('what is on my plate?')
+  assert.ok(child.prompts[0].endsWith('\n'), 'one line, terminated')
+  assert.deepEqual(JSON.parse(child.prompts[0]), {
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: 'what is on my plate?' }] },
+  })
+})
+
+test('a result ends the TURN, not the conversation', async () => {
+  const child = new FakeChild()
+  const { driver, spawnCount } = persistentWith(child)
+  const seen = collect(driver)
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('first')
+  child.say({ type: 'result', subtype: 'success', result: 'Eleven open.' })
+  await settled()
+  assert.deepEqual(seen.filter((e) => e.type === 'completion'),
+    [{ type: 'completion', outcome: 'completed', finalText: 'Eleven open.' }])
+  await driver.submitUserTurn('and the blocked ones?')
+  assert.equal(spawnCount(), 1, 'the process is still up and still ours')
+})
+
+test('a process that dies is respawned INTO THE SAME SESSION', async () => {
+  // A warm process is an optimisation. The session id is the system of record,
+  // and it is the one learned from init — the one that reflects turns already
+  // taken, not the one we were handed at start.
+  const child = new FakeChild()
+  let current = child
+  let spawns = 0
+  const argvs: string[][] = []
+  const driver = new PersistentHeadlessAgentProcess({
+    spawn: (argv) => { spawns += 1; argvs.push(argv); return current },
+    readSystemPrompt: async () => 'C',
+  })
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('first')
+  child.say({ type: 'system', subtype: 'init', session_id: 'learned-id' })
+  await settled()
+  child.finish(1)                       // it crashed
+  await settled()
+
+  current = new FakeChild()
+  await driver.submitUserTurn('second')
+  assert.equal(spawns, 2, 'the next turn brings it back')
+  assert.deepEqual(argvs[1].slice(-2), ['--resume', 'learned-id'],
+    'back into the conversation it was in, not a fresh one')
+})
+
+test('an exit while nothing is in flight is a fault, not an answer', async () => {
+  // In the per-turn driver, exit is the backstop that guarantees a completion.
+  // Here it must never invent one: a process that fell over between turns has
+  // not answered anything.
+  const child = new FakeChild()
+  const { driver } = persistentWith(child)
+  const seen = collect(driver)
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('first')
+  child.finish(0)
+  await settled()
+  assert.equal(seen.filter((e) => e.type === 'completion').length, 0)
+  assert.ok(seen.some((e) => e.type === 'exit'))
+})
+
+test('an interrupt ends the turn and says so', async () => {
+  const child = new FakeChild()
+  const { driver } = persistentWith(child)
+  const seen = collect(driver)
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('first')
+  await driver.interrupt()
+  assert.deepEqual(child.killed, ['SIGINT'])
+  child.finish(null)
+  await settled()
+  assert.deepEqual(seen.filter((e) => e.type === 'completion'),
+    [{ type: 'completion', outcome: 'interrupted' }])
+})
+
+test('nothing is spawned until there is something to say', async () => {
+  // A warm `claude` holds a model connection. Spawning one at launch would pay
+  // for an Agent the user may never speak to today.
+  const child = new FakeChild()
+  const { driver, spawnCount } = persistentWith(child)
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  assert.equal(spawnCount(), 0)
+  await driver.submitUserTurn('now')
+  assert.equal(spawnCount(), 1)
+})
+
+test('a live turn is reaped with the app', async () => {
+  const child = new FakeChild()
+  const { driver } = persistentWith(child)
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  const before = liveHeadlessTurns()
+  await driver.submitUserTurn('first')
+  assert.equal(liveHeadlessTurns(), before + 1, 'a warm process must not outlive the app')
+  reapHeadlessTurns()
+  assert.equal(liveHeadlessTurns(), 0)
+  await driver.close()
+})
+
+test('persistent is the default, and both steps back are still reachable', () => {
+  assert.equal(agentRuntimeMode({}), 'persistent')
+  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'headless' }), 'headless')
+  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'repl' }), 'repl')
+  // A typo must not silently drop you onto a different driver.
+  assert.equal(agentRuntimeMode({ UNMUTE_AGENT_RUNTIME: 'headles' }), 'persistent')
+})
+
+test('the provider builds the persistent driver by default', () => {
+  assert.ok(new ClaudeCodeProvider({ runtime: 'persistent' }).createProcess()
+    instanceof PersistentHeadlessAgentProcess)
+  assert.ok(new ClaudeCodeProvider({ runtime: 'headless' }).createProcess()
+    instanceof HeadlessAgentProcess)
+  assert.ok(new ClaudeCodeProvider({ runtime: 'repl' }).createProcess()
+    instanceof ExecutorBackedAgentProcess)
 })

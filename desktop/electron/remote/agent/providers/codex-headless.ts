@@ -55,6 +55,21 @@ export function codexHeadlessArgv(launch: AgentProcessLaunch, systemPrompt: stri
   ]
 }
 
+/**
+ * WHY CODEX DOES NOT GET A WARM PROCESS.
+ *
+ * Claude's print mode accepts `--input-format stream-json`, which keeps one
+ * process up and takes turns over stdin — that is what
+ * PersistentHeadlessAgentProcess is. `codex exec` has no equivalent: it reads
+ * one prompt and exits.
+ *
+ * So the two providers give the user the same CONVERSATION and a different
+ * spawn cost. Codex resumes by thread id (`exec resume <id>`, see codex.ts),
+ * which is what makes the chat persistent, and pays a process launch per turn.
+ * The asymmetry is in the CLIs, not in this design, and it is worth stating
+ * here so the missing streaming path reads as absent rather than forgotten.
+ */
+
 /** Stateful because Codex sends the final answer before the turn completion. */
 export class CodexHeadlessEventParser {
   private finalText = ''

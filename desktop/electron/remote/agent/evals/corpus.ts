@@ -65,7 +65,7 @@ export const CORPUS: EvalCase[] = [
   {
     name: 'several tasks means several tasks',
     because: 'Asked for five sessions with five different prompts, one task_create is a '
-      + 'quiet 80% failure — and the caption would still read as success.',
+      + 'quiet 80% failure — and the answer would still read as success.',
     utterance: 'Create three separate Claude Code tasks: one to audit the STT arbiter, '
       + 'one to review the notch sizing code, and one to check the billing migrations.',
     check: (calls) => {
@@ -87,9 +87,11 @@ export const CORPUS: EvalCase[] = [
     },
   },
   {
-    name: 'the reply fits a caption',
-    because: 'The answer is rendered as one short line low on the screen, for a few seconds. '
-      + 'One run answered with a heading, a blockquote and 1,300 characters of document.',
+    name: 'the answer leads with the answer',
+    because: 'The card shows the FIRST LINE and the chat holds the rest, so the opening line '
+      + 'has to carry the substance on its own. It is no longer a length limit — the answer '
+      + 'may run as long as the answer runs — it is a limit on preamble. A reply that opens '
+      + 'by restating the question spends the only line the user sees before they tap.',
     utterance: 'What did I save about my coffee preference?',
     behaviour: {
       searchResults: [{
@@ -98,7 +100,13 @@ export const CORPUS: EvalCase[] = [
       }],
       getRecord: { id: 'memory-1', title: 'Coffee', kind: 'note', content: 'Prefers oat milk.' },
     },
-    check: (_calls, reply) => reply.length <= 200 ? null : `reply ${reply.length} chars, over the caption cap`,
+    check: (_calls, reply) => {
+      const first = reply.trim().split(/\n{2,}/)[0]?.trim() ?? ''
+      if (!first) return 'no opening line at all'
+      if (first.length > 200) return `opening line ${first.length} chars — the card shows one line`
+      // The substance, not a promise of it below.
+      return /oat/i.test(first) ? null : `opening line does not answer: ${JSON.stringify(first)}`
+    },
   },
   {
     name: 'outside work becomes a task, and is not claimed as done',
@@ -307,7 +315,7 @@ export const CORPUS: EvalCase[] = [
   {
     name: 'a new section is created and linked, not refused',
     because: 'A section the user names but has not made is cheap and reversible. Asking for '
-      + 'permission to create one costs a turn the caption cannot afford.',
+      + 'permission to create one costs a turn the exchange cannot afford.',
     utterance: 'Put that under a new Creatives section in the Meta ads project.',
     behaviour: {
       map: { total: 6, ungrouped: 1, groups: [{ id: 'g-meta', title: 'Meta ads', memberCount: 3 }] },

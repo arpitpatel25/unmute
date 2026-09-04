@@ -93,9 +93,16 @@ struct PocketRowMetrics {
         let title = slot?.title ?? "Nothing in your pocket"
         let saying = PocketFace.saying(for: slot)
 
+        // THE AGENT WEARS THE UNMUTE MARK AND NO NAME. The mark IS the word, so
+        // drawing "Unmute" beside it would print the same thing twice — and the
+        // one identity a card never has to explain is this app's own.
         var left = cardPadX + dotSize + cardGap
-            + ProviderMark.width(size: markSize, terminal: slot?.terminal ?? true)
-            + cardGap + measure(title, titleFont) + cardPadX + slack
+        if PocketFace.isAgent(slot) {
+            left += UnMark.width(for: markSize) + cardPadX + slack
+        } else {
+            left += ProviderMark.width(size: markSize, terminal: slot?.terminal ?? true)
+                + cardGap + measure(title, titleFont) + cardPadX + slack
+        }
         left += BarContent.inset + BarContent.gap
 
         var card = cardPadX + (listening ? chip : measure(saying, askFont))
@@ -172,6 +179,11 @@ enum PocketFace {
     static func status(for slot: PocketSlotP?) -> String {
         Theme.statusLabel(resolved(for: slot))
     }
+
+    /// The Agent is an element of the pocket, not a task in it — see
+    /// PocketSlotKind on the wire. Absent means task, which is what every
+    /// payload written before the Agent had a card says.
+    static func isAgent(_ slot: PocketSlotP?) -> Bool { slot?.kind == "agent" }
 
     static func count(for pocket: PocketP) -> String {
         "\(min(pocket.at + 1, pocket.slots.count))/\(pocket.slots.count)"
@@ -282,13 +294,17 @@ struct PocketRow: View {
                 Dot(status: quiet ? .done : PocketFace.resolved(for: slot),
                     size: PocketRowMetrics.dotSize)
                 Spacer().frame(width: PocketRowMetrics.cardGap)
-                ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true,
-                             size: PocketRowMetrics.markSize)
-                Spacer().frame(width: PocketRowMetrics.cardGap)
-                Text(slot?.title ?? "Nothing in your pocket")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundColor(quiet ? Theme.textDim : Theme.text)
-                    .lineLimit(1).truncationMode(.tail)
+                if PocketFace.isAgent(slot) {
+                    UnMark(height: PocketRowMetrics.markSize)
+                } else {
+                    ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true,
+                                 size: PocketRowMetrics.markSize)
+                    Spacer().frame(width: PocketRowMetrics.cardGap)
+                    Text(slot?.title ?? "Nothing in your pocket")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(quiet ? Theme.textDim : Theme.text)
+                        .lineLimit(1).truncationMode(.tail)
+                }
             }
             .contentShape(Rectangle())
             .onTapGesture { if slot != nil { model.emit(.pocketExpand) } }
@@ -372,8 +388,12 @@ struct PocketShoulderRow: View {
             HStack(spacing: PocketRowMetrics.cardGap) {
                 Spacer(minLength: 0)
                 Dot(status: quiet ? .done : PocketFace.resolved(for: slot), size: PocketRowMetrics.dotSize)
-                ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true,
-                             size: PocketRowMetrics.markSize)
+                if PocketFace.isAgent(slot) {
+                    UnMark(height: PocketRowMetrics.markSize)
+                } else {
+                    ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true,
+                                 size: PocketRowMetrics.markSize)
+                }
             }
             .padding(.trailing, BarContent.gap)
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -467,12 +487,19 @@ struct PocketCard: View {
             if !headerInShoulders {
                 Dot(status: quiet ? .done : PocketFace.resolved(for: slot),
                     size: 8)
-                ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true, size: 14)
+                if PocketFace.isAgent(slot) {
+                    UnMark(height: 14)
+                } else {
+                    ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true, size: 14)
+                }
             }
-            Text(slot?.title ?? "Nothing in your pocket")
-                .font(.system(size: 13.5, weight: .semibold))
-                .foregroundColor(quiet ? Theme.textDim : Theme.text)
-                .lineLimit(1).truncationMode(.tail)
+            // The mark already says "Unmute"; the title would say it again.
+            if !PocketFace.isAgent(slot) || headerInShoulders {
+                Text(slot?.title ?? "Nothing in your pocket")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundColor(quiet ? Theme.textDim : Theme.text)
+                    .lineLimit(1).truncationMode(.tail)
+            }
             Spacer(minLength: 0)
         }
         // The two controls own this corner — unless they have moved up to the

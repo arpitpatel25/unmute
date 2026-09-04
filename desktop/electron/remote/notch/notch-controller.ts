@@ -21,6 +21,7 @@ import { ALWAYS_PRESENT, type PresenceLike } from '../presence'
 import { createLogger } from '../log'
 import { devEvent } from '../curator-devlog'
 import { nextFocusedComposer, type ComposerFocusEvent } from './composerFocus'
+import { AGENT_CHAT_MAX_TURNS, conciseLine } from '../agent/conversation'
 
 const log = createLogger('notch-controller')
 
@@ -128,6 +129,14 @@ export interface NotchControllerDeps {
   setShelved(id: string, on: boolean): void
   setNote(id: string, note: string): void
   focus(id: string | null): void
+  /** Run an Agent turn from typed text — the chat's composer. Optional: a host
+   *  that does not wire it leaves the Agent voice-only. */
+  agentSend?(text: string): void
+  /** THE VOICE IS POINTED AT THE AGENT (its card is in front, or its chat is
+   *  open). Separate from `focus`, which names a task and must never be handed
+   *  an id the task runtime cannot resolve. Optional: a host that does not wire
+   *  it simply keeps the Agent on its own key. */
+  addressAgent?(on: boolean): void
   /** The user opened this card (tap / cockpit stage). Revives a persistent
    *  session whose PTY the quit switch closed — see TaskManager.opened. Optional
    *  so a host that doesn't wire it simply keeps the manual Resume button. */
@@ -419,6 +428,33 @@ export class NotchController {
    *  So after a restart the pocket is newest-dispatch-first and still stable —
    *  it can be wrong about the order, never restless in it. */
   private addressedStamp = new Map<string, number>()
+
+  // ── The Agent, which is an ELEMENT of the pocket and not a task in it ──────
+  //
+  // The pocket holds kinds of thing. Tasks are one kind and keep their queue
+  // and their ordering exactly as they were. The Agent is a second kind: always
+  // present (even with no tasks at all), never sorted against them, and holding
+  // one of exactly two positions relative to the whole task block.
+  //
+  //     it has something for you   ->  in front of everything
+  //     you have read it           ->  behind everything
+  //
+  // Two positions, not a rank. Which is why none of the queue's machinery —
+  // demanding(), the frozen order, the user's clock — needs an exception for
+  // it: the Agent never enters any of them.
+  /** The concise line its card shows, and the full chat behind that card. */
+  private agentLine: { text: string; at: number; failed: boolean } | null = null
+  /** The whole conversation, as chat blocks, for the expanded card. */
+  private agentBlocks: Block[] = []
+  /** True while it is thinking, so the card can say so. */
+  private agentBusy = false
+  /** UNREAD IS THE WHOLE RULE. Set when it answers, cleared the moment the user
+   *  has actually seen the answer — which is opening the card, not passing it. */
+  private agentUnread = false
+  /** The chat is the expanded surface right now. */
+  private agentOpen = false
+  /** What is typed into the chat's composer and not yet sent. */
+  private agentDraft = ''
   /** The pocket's order, nailed down for the duration of a visit. Null when
    *  the pocket is closed, so the next open re-sorts to what you last worked in. */
   private frozenOrder: string[] | null = null
@@ -564,6 +600,11 @@ export class NotchController {
       else this.scheduleReconcile()
     })
     on('setDraftText', (e) => {
+      const draft = e as { id: string; text: string }
+      // THE AGENT'S DRAFT IS THE CONTROLLER'S, not the task runtime's. Handing
+      // a draft store keyed by task id something that is not a task is how a
+      // surface ends up writing into a record nothing owns.
+      if (draft.id === NotchController.AGENT_SLOT) { this.agentDraft = draft.text; return }
       const { id, text } = e as { id: string; text: string }
       devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'setDraftText', textChars: text.length })
       this.deps.setDraftText?.(id, text)
@@ -600,6 +641,12 @@ export class NotchController {
     })
     on('sendDraft', (e) => {
       const { id } = e as { id: string }
+      if (id === NotchController.AGENT_SLOT) {
+        const text = this.agentDraft.trim()
+        this.agentDraft = ''
+        if (text) this.deps.agentSend?.(text)
+        return
+      }
       devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'sendDraft' })
       void Promise.resolve(this.deps.sendDraft?.(id)).then((accepted) => {
         devEvent(log, 'task-reply-ui-event-result', { taskId: id, event: 'sendDraft', accepted: accepted === true })
@@ -962,6 +1009,52 @@ export class NotchController {
     return held
   }
 
+  /** The id the Agent element answers to. Not a task id, and deliberately not
+   *  shaped like one: nothing may look it up in the task runtime. */
+  static readonly AGENT_SLOT = 'unmute-agent'
+
+  /**
+   * The Agent's card.
+   *
+   * `demanding` is TRUE ONLY WHILE UNREAD, and that is the same fact that puts
+   * it at the front — one flag, so the card's weight and its position can never
+   * disagree. It is filtered out of the badge separately (see reconcile): the
+   * Agent is always present, so counting it would add a permanent +1 to a
+   * number whose whole meaning is "things waiting on you".
+   */
+  private agentSlot(): PocketSlotP {
+    const ask = this.agentBusy
+      ? 'Thinking…'
+      : this.agentLine?.text || 'Ask me anything'
+    return {
+      id: NotchController.AGENT_SLOT,
+      kind: 'agent',
+      title: 'Unmute',
+      ask,
+      status: this.agentBusy ? 'processing' : this.agentLine?.failed ? 'failed' : 'ready',
+      demanding: this.agentUnread,
+      // No backend mark: the card wears the Unmute mark, because the Agent is
+      // Unmute rather than a thing Unmute started. Which model happens to be
+      // behind it is not what the user is addressing.
+      terminal: false,
+    }
+  }
+
+  /**
+   * WHAT THE POCKET ACTUALLY SHOWS: the task queue, plus the Agent, in one of
+   * two arrangements.
+   *
+   * Every reader indexes THIS — the payload, `front()`, the carousel, the voice
+   * target — so the index the user is on and the thing it addresses cannot
+   * drift apart. The task half is `crankSlots()` verbatim; nothing about the
+   * queue's ordering is touched here.
+   */
+  private pocketSlots(): PocketSlotP[] {
+    const tasks = this.crankSlots()
+    const agent = this.agentSlot()
+    return this.agentUnread ? [agent, ...tasks] : [...tasks, agent]
+  }
+
   private crankSlots(): PocketSlotP[] {
     const byId = new Map(this.pocketList().map((t) => [t.id, t]))
     return this.pocketOrder()
@@ -969,6 +1062,11 @@ export class NotchController {
       .filter((t): t is TaskLite => !!t)
       .map((t) => ({
         id: t.id,
+        // SAID, NOT INFERRED. The pocket holds kinds of thing, and a slot that
+        // does not say which kind it is leaves every reader to guess from the
+        // fields it happens to carry — which is the drift `terminal` and
+        // `backend` were made explicit to end.
+        kind: 'task' as const,
         title: t.name ?? truncate(t.intent),
         // Same ranking as headlineFor: what it PRODUCED beats what it was doing.
         // The pocket used to go question → step and stop, so a finished task
@@ -1091,13 +1189,17 @@ export class NotchController {
     // to be `queue.length` and matched `waiting` only because two independent
     // filters happened to agree, which is how "3 waiting" shipped beside a
     // crank of one.
-    const slots = this.crankSlots()
+    const slots = this.pocketSlots()
     // The pocket rides along on every pass: tasks in it can finish or be killed
     // by anything, and a carousel offering a dead address would aim the voice
     // at nothing. sendPocket is a no-op when the payload has not changed.
     this.sendPocket(slots)
     const front = this.front(slots)
-    const attention = slots.filter((sl) => sl.demanding).length
+    // THE BADGE COUNTS TASKS, NOT ELEMENTS. The Agent is always in the pocket,
+    // so counting it would put a permanent +1 on a number that means "things
+    // waiting on you" — and the one moment it IS waiting on you, it is already
+    // saying so in front of everything else, which is louder than a digit.
+    const attention = slots.filter((sl) => sl.demanding && sl.kind !== 'agent').length
     this.lastWaiting = attention
     const working = this.deps.listTasks().filter((t) => t.state === 'processing').length
 
@@ -1209,8 +1311,16 @@ export class NotchController {
     // OPEN IS AIMED, CLOSED IS THE ROUTER. The pocket only ever opens because
     // the user opened it, so "is it open" is a decision they made, not a state
     // that happened to them.
-    const id = this.pocketMode === 'open' ? this.pocketOrder()[this.pocketAt] : undefined
-    this.setFocus(id ?? null)
+    //
+    // THE AGENT IS AIMED AT THE SAME WAY ANYTHING ELSE IS. Its card being the
+    // one in front means your voice goes to it — the rule is "you address what
+    // you can see", and the Agent is now something you can see. It is said
+    // through a separate channel rather than through focus because focus means
+    // a TASK, and handing the task runtime an id it cannot resolve is how a
+    // surface ends up addressing nothing at all.
+    const slot = this.pocketMode === 'open' ? this.pocketSlots()[this.pocketAt] : undefined
+    this.deps.addressAgent?.(this.agentAddressed())
+    this.setFocus(slot && slot.kind !== 'agent' ? slot.id : null)
   }
 
   /**
@@ -1228,9 +1338,9 @@ export class NotchController {
    * around, and never re-answer downstream. If you find yourself recomputing
    * one of these, that is the bug — not the thing you were about to fix.
    */
-  private sendPocket(slots: PocketSlotP[] = this.crankSlots()): void {
+  private sendPocket(slots: PocketSlotP[] = this.pocketSlots()): void {
     this.clampPocket(slots.length)
-    const waiting = slots.filter((sl) => sl.demanding).length
+    const waiting = slots.filter((sl) => sl.demanding && sl.kind !== 'agent').length
     const data: PocketP = {
       mode: this.pocketMode, at: this.pocketAt, waiting, slots,
       remoteKey: this.deps.remoteKey?.() ?? 'right-option',
@@ -1318,8 +1428,11 @@ export class NotchController {
    * open in front of you. Leaving or closing puts it straight back.
    */
   private onPocketExpand(): void {
-    const slot = this.crankSlots()[this.pocketAt]
+    const slot = this.pocketSlots()[this.pocketAt]
     if (!slot) return
+    // THE AGENT EXPANDS INTO ITS CHAT, not into a task panel — there is no task
+    // behind it to open, and everything below this line is about one.
+    if (slot.kind === 'agent') { this.openAgent(); return }
     const id = slot.id
     // COMING BACK MEANS COMING BACK HERE. Expanding used to close the pocket
     // outright, so Escape dropped you onto the bare notch and you had to reopen
@@ -1338,12 +1451,57 @@ export class NotchController {
     this.setPocketMode('closed')
   }
 
+  /**
+   * OPENING THE CARD IS READING IT.
+   *
+   * That is the whole of the front/back rule: unread puts the Agent in front,
+   * and the only thing that clears unread is actually looking at the answer.
+   * Passing the card on the carousel does not — glancing at one line is not
+   * reading the reply, and demoting it for a glance is how you lose an answer
+   * you asked for.
+   */
+  private openAgent(): void {
+    this.cameFromPocket = this.pocketMode === 'open'
+    this.agentUnread = false
+    this.engaged = 'task'
+    // NOT setFocus: focus means a TASK, and handing the task runtime an id it
+    // cannot resolve is how a surface ends up addressing nothing. The Agent is
+    // addressed as itself — see applyVoiceTarget.
+    this.setFocus(null)
+    this.agentOpen = true
+    log.event('agent-opened', { turns: this.agentBlocks.length })
+    this.sendAgentDetail()
+    this.client.send({ type: 'setState', state: 'task', attention: this.lastWaiting, working: 0 })
+    this.setPocketMode('closed')
+    this.applyVoiceTarget()
+  }
+
+  /** The Agent's chat, in the same payload every other backend renders into. */
+  private sendAgentDetail(): void {
+    const detail: TaskDetailP = {
+      id: NotchController.AGENT_SLOT,
+      title: 'Unmute',
+      origin: 'unmute-agent',
+      status: this.agentBusy ? 'processing' : this.agentLine?.failed ? 'failed' : 'ready',
+      kind: 'session',
+      alive: true,
+      // No terminal and nothing to kill: this is not a process the user started.
+      terminal: false,
+      owned: false,
+      resumable: false,
+      blocks: this.agentBlocks,
+      draft: { text: this.agentDraft, attachments: [] },
+      ...(this.agentBusy ? { activity: 'Thinking' } : {}),
+    }
+    this.client.send({ type: 'showTask', task: detail })
+  }
+
   private onPocketMove(e: { delta?: number; to?: number }): void {
     // Walking HOLDS THE ORDER (see pocketOrder). Released when the pocket
     // closes, so the next visit re-sorts to what you last worked in. Browsing
     // itself never re-ranks anything.
     this.holdOrder()
-    const n = this.crankSlots().length
+    const n = this.pocketSlots().length
     if (n <= 1) return
     this.pocketAt = typeof e.to === 'number'
       ? Math.max(0, Math.min(n - 1, e.to))
@@ -1498,9 +1656,74 @@ export class NotchController {
     // getting right.
     this.frozenOrder = null
     this.pocketAt = 0
-    log.event('pocket-chord', { did: 'open', slots: this.crankSlots().length })
+    log.event('pocket-chord', { did: 'open', slots: this.pocketSlots().length })
     this.setPocketMode('open')
     this.reconcile()
+  }
+
+  // ── The Agent element's feed ──────────────────────────────────────────────
+  //
+  // Four calls, from the one place that runs an Agent turn. The controller owns
+  // what the pocket does with them; init.ts owns nothing about presentation,
+  // which is why the caption path could be deleted rather than rerouted.
+
+  /** The user said something to the Agent. */
+  agentAsked(text: string): void {
+    this.agentBusy = true
+    this.agentBlocks = [...this.agentBlocks,
+      { kind: 'message', role: 'user', text: text.trim(), at: Date.now() }]
+    this.trimAgentBlocks()
+    if (this.agentOpen) this.sendAgentDetail()
+    this.reconcile()
+  }
+
+  /** It answered. `failed` marks a turn that did not land. */
+  agentAnswered(raw: string, failed = false): void {
+    const at = Date.now()
+    const text = raw.trim()
+    this.agentBusy = false
+    this.agentLine = { text: conciseLine(text), at, failed }
+    this.agentBlocks = [...this.agentBlocks, failed
+      ? { kind: 'error', message: text }
+      : { kind: 'message', role: 'assistant', text, at }]
+    this.trimAgentBlocks()
+    // UNREAD ONLY IF THEY ARE NOT ALREADY LOOKING AT IT. Coming to the front of
+    // the pocket is how the Agent gets your attention; it does not need to when
+    // it already has it, and marking it unread under an open chat would put a
+    // card in front of the very thing it is a card for.
+    if (!this.agentOpen) this.agentUnread = true
+    if (this.agentOpen) this.sendAgentDetail()
+    log.event('agent-answered', { chars: text.length, failed, unread: this.agentUnread })
+    this.reconcile()
+  }
+
+  /**
+   * The conversation was purged — the same decision that makes the provider
+   * start a fresh session (continuity.ts). The card stays; it goes back to
+   * saying what it says when there is nothing to say.
+   */
+  agentPurged(): void {
+    this.agentBlocks = []
+    this.agentLine = null
+    this.agentUnread = false
+    this.agentBusy = false
+    if (this.agentOpen) this.sendAgentDetail()
+    this.reconcile()
+  }
+
+  /** Is the Agent the thing the voice is currently addressing? */
+  agentAddressed(): boolean {
+    if (this.agentOpen) return true
+    if (this.pocketMode !== 'open') return false
+    return this.pocketSlots()[this.pocketAt]?.kind === 'agent'
+  }
+
+  /** A chat is not a log: the oldest turns fall off the front, which is the end
+   *  nobody is reading. */
+  private trimAgentBlocks(): void {
+    if (this.agentBlocks.length > AGENT_CHAT_MAX_TURNS) {
+      this.agentBlocks = this.agentBlocks.slice(-AGENT_CHAT_MAX_TURNS)
+    }
   }
 
   /** Live-settable from Settings → Appearance & notch. */
@@ -1557,6 +1780,33 @@ export class NotchController {
    * lands in reach, one press away.
    */
   private seenThenClose(opts: { collapse?: boolean } = {}): void {
+    // THE CHAT CLOSES LIKE ANYTHING ELSE. Without this the controller goes on
+    // believing the Agent is the expanded surface — so the voice stays pointed
+    // at it after you have left, and a later answer never marks itself unread
+    // because it thinks you are looking at it.
+    if (this.agentOpen) {
+      this.agentOpen = false
+      // Coming back from the Agent lands in the pocket, exactly as coming back
+      // from a task does — you were in the pocket when you opened it.
+      if (this.cameFromPocket) {
+        this.cameFromPocket = false
+        this.engaged = 'none'
+        // COME BACK TO THE CARD, NOT TO THE POSITION. Reading the Agent is
+        // exactly what moves it from the front of the pocket to the back, so
+        // the index you left on now points at some other card entirely. Follow
+        // the thing you were looking at.
+        const back = this.pocketSlots().findIndex((sl) => sl.kind === 'agent')
+        if (back >= 0) this.pocketAt = back
+        this.setPocketMode('open')
+        this.applyVoiceTarget()
+        this.reconcile()
+        return
+      }
+      this.engaged = 'none'
+      this.applyVoiceTarget()
+      this.reconcile()
+      return
+    }
     const id = this.focusedId
     const t = id ? this.deps.getTask(id) : undefined
     if (t && this.demanding(t)) {

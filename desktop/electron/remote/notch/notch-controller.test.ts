@@ -1270,6 +1270,18 @@ test('Open dashboard lands on the WALL, not the task you just left', () => {
 // ── the pocket ──────────────────────────────────────────────────────────────
 
 function pocketOf(h: Harness) { return h.client.last('pocket')?.data }
+/**
+ * THE TASK HALF OF THE POCKET.
+ *
+ * The pocket is a container of element KINDS now: the task queue, plus the
+ * Agent, which is always present and is never in that queue. A test about the
+ * task ORDER is asking about the task half, so it says so — rather than
+ * counting an element it is not talking about and calling the difference a
+ * failure. The Agent's own position has its own tests.
+ */
+function taskSlots(h: Harness) {
+  return (pocketOf(h)?.slots ?? []).filter((sl) => sl.kind !== 'agent')
+}
 
 test('leaving pockets the expanded task — not muted, not dequeued', () => {
   // Changing window IS the signal: you went to look at something in order to
@@ -1285,8 +1297,8 @@ test('leaving pockets the expanded task — not muted, not dequeued', () => {
   assert.equal(p.mode, 'closed', 'it goes to the notch, not to a floating card')
   // Tasks and nothing else: "let the router decide" is not a member of a list
   // of tasks, it is what happens when the list is not on screen.
-  assert.equal(p.slots.length, 1)
-  assert.equal(p.slots[0].id, 'a')
+  assert.equal(taskSlots(h).length, 1)
+  assert.equal(taskSlots(h)[0].id, 'a')
   // Still your move: in the crank, unmuted, and still announced.
   assert.equal(h.client.last('setState')!.attention, 1, 'still in the queue')
   assert.deepEqual(h.calls.focus?.at(-1), [null], 'and no longer the voice address')
@@ -1335,11 +1347,11 @@ test('a dead pocketed task cannot stay as an address', () => {
   h.client.fire({ type: 'tap' })
   h.client.fire({ type: 'userLeft', reason: 'blur' })
   h.flush()
-  assert.equal(pocketOf(h)!.slots.length, 1)
+  assert.equal(taskSlots(h).length, 1)
   h.tasks.delete('a')
   h.events.emit('removed', { id: 'a' })
   h.flush()
-  assert.equal(pocketOf(h)!.slots.length, 0, 'the carousel drops it')
+  assert.equal(taskSlots(h).length, 0, 'the carousel drops it')
 })
 
 test('closing a blocked task pockets and acknowledges it; closing a READY one also quiets it', () => {
@@ -1348,7 +1360,7 @@ test('closing a blocked task pockets and acknowledges it; closing a READY one al
   h.client.fire({ type: 'tap' })
   h.client.fire({ type: 'closeStage' })
   h.flush()
-  assert.equal(pocketOf(h)!.slots.length, 1, 'blocked → pocketed')
+  assert.equal(taskSlots(h).length, 1, 'blocked → pocketed')
   assert.equal(h.client.last('setState')!.attention, 0, 'the unchanged attention episode is acknowledged')
 
   const h2 = setup()
@@ -1645,7 +1657,7 @@ test('the pocket runs demanding first, then what you have worked in', () => {
   h.client.fire({ type: 'closeStage' })
   put(h, makeTask({ id: 'blocked', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
   h.client.fire({ type: 'pocketOpen' })
-  const slots = pocketOf(h)!.slots
+  const slots = taskSlots(h)
   assert.deepEqual(slots.map((sl) => sl.id), ['blocked', 'errand'],
     'waiting on you first, then the rest — and no divider between them')
   assert.equal(slots[0].demanding, true)
@@ -1684,7 +1696,7 @@ test('the pocket orders by when YOU last talked to a task', () => {
   put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B',
                     createdAt: t0 - 60_000, updatedAt: t0 - 60_000 }))
   h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['b', 'a'],
+  assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['b', 'a'],
     'never talked to since dispatch: most recently dispatched leads')
 
   // THE AGENT MOVING IS NOT YOU MOVING.
@@ -1692,7 +1704,7 @@ test('the pocket orders by when YOU last talked to a task', () => {
   h.tasks.get('a')!.updatedAt = Date.now()
   h.events.emit('updated', h.tasks.get('a')); h.flush()
   h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['b', 'a'],
+  assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['b', 'a'],
     'output arriving on its own must not reorder your pocket')
 
   // You answer A. Now it is the one you last talked to, so it is card 1.
@@ -1700,7 +1712,7 @@ test('the pocket orders by when YOU last talked to a task', () => {
   h.client.fire({ type: 'answerText', id: 'a', text: 'carry on' })
   h.flush()
   h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['a', 'b'])
+  assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['a', 'b'])
 })
 
 test('opening a card counts as talking to it', () => {
@@ -1717,8 +1729,140 @@ test('opening a card counts as talking to it', () => {
   // the next fresh visit re-sorts.
   h.client.fire({ type: 'pocketRelease' })
   h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['a', 'b'],
+  assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['a', 'b'],
     'the one you just had open is the one at hand')
+})
+
+// ── the Agent: an ELEMENT of the pocket, never a task in its queue ─────────
+
+test('the Agent is always in the pocket, even with no tasks at all', () => {
+  const h = setup()
+  h.client.fire({ type: 'pocketOpen' })
+  const slots = pocketOf(h)!.slots
+  assert.equal(slots.length, 1, 'an empty desk still has the Agent on it')
+  assert.equal(slots[0].kind, 'agent')
+  assert.equal(slots[0].title, 'Unmute')
+})
+
+test('it sits BEHIND the tasks until it has something to say', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B' }))
+  h.client.fire({ type: 'pocketOpen' })
+  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.kind), ['task', 'task', 'agent'])
+})
+
+test('answering brings it in FRONT of everything, and reading puts it back', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  h.controller.agentAsked('what is on my plate?')
+  h.controller.agentAnswered('Eleven open, four blocked on you.')
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })
+  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.kind), ['agent', 'task'],
+    'an unread answer is the one thing that puts it in front')
+
+  // Reading it is opening the card. Passing it on the carousel is not.
+  h.client.fire({ type: 'pocketMove', delta: 1 })
+  h.flush()
+  assert.equal(pocketOf(h)!.slots[0].kind, 'agent', 'a glance is not reading')
+
+  h.client.fire({ type: 'pocketMove', delta: -1 })   // back onto the Agent
+  h.client.fire({ type: 'pocketExpand' })            // and into it
+  h.flush()
+  h.client.fire({ type: 'pocketRelease' })
+  h.client.fire({ type: 'pocketOpen' })
+  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.kind), ['task', 'agent'],
+    'read once, it is not a priority any more')
+})
+
+test('the Agent never counts toward the attention badge', () => {
+  // It is always present, so counting it would be a permanent +1 on a number
+  // whose whole meaning is "things waiting on you".
+  const h = setup()
+  h.controller.agentAsked('anything?')
+  h.controller.agentAnswered('Two things.')
+  h.flush()
+  assert.equal(h.client.last('setState')!.attention, 0)
+  assert.equal(pocketOf(h)!.waiting, 0)
+})
+
+test('expanding the Agent shows the conversation, not a task', () => {
+  const h = setup()
+  h.controller.agentAsked('list the repos')
+  h.controller.agentAnswered('Three: unmute-cloud, monitor, BoloAI.')
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketExpand' })
+  h.flush()
+  const shown = h.client.last('showTask')!.task
+  assert.equal(shown.id, 'unmute-agent')
+  assert.equal(shown.origin, 'unmute-agent')
+  assert.equal(shown.terminal, false, 'there is no process behind it to open')
+  assert.deepEqual(shown.blocks!.map((b: { kind: string }) => b.kind), ['message', 'message'])
+  assert.equal((shown.blocks![1] as { text: string }).text,
+    'Three: unmute-cloud, monitor, BoloAI.', 'the WHOLE answer, not the card line')
+})
+
+test('the card shows the concise line; the chat holds the whole answer', () => {
+  const h = setup()
+  const long = `Here is the first line of it.\n\n${'and more detail. '.repeat(40)}`
+  h.controller.agentAsked('summarise')
+  h.controller.agentAnswered(long)
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })
+  const card = pocketOf(h)!.slots.find((sl) => sl.kind === 'agent')!
+  assert.equal(card.ask, 'Here is the first line of it.')
+  h.client.fire({ type: 'pocketExpand' })
+  h.flush()
+  const shown = h.client.last('showTask')!.task
+  assert.equal((shown.blocks![1] as { text: string }).text, long.trim())
+})
+
+test('the voice aims at the Agent when its card is the one in front', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  h.client.fire({ type: 'pocketOpen' })
+  assert.equal(h.controller.agentAddressed(), false, 'a task is in front')
+  h.client.fire({ type: 'pocketMove', delta: 1 })   // onto the Agent
+  assert.equal(h.controller.agentAddressed(), true)
+})
+
+test('escaping the chat returns to the pocket and releases the voice', () => {
+  // Without this the controller goes on believing the Agent is the expanded
+  // surface: the voice stays pointed at it after you have left, and a later
+  // answer never marks itself unread because it thinks you are looking at it.
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  h.controller.agentAnswered('Two things.')
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })      // the Agent is in front, unread
+  h.client.fire({ type: 'pocketExpand' })    // into the chat
+  h.flush()
+  assert.equal(h.controller.agentAddressed(), true, 'the chat is open; you are talking to it')
+
+  h.client.fire({ type: 'collapsed' })
+  h.flush()
+  assert.equal(pocketOf(h)!.mode, 'open', 'back to the pocket you came from')
+  h.client.fire({ type: 'pocketMove', delta: 1 })   // onto the task
+  assert.equal(h.controller.agentAddressed(), false, 'the aim came back with you')
+
+  // And a later answer can mark itself unread again.
+  h.controller.agentAnswered('One more.')
+  h.flush()
+  assert.equal(pocketOf(h)!.slots[0].kind, 'agent')
+})
+
+test('purging clears the chat and leaves the card', () => {
+  const h = setup()
+  h.controller.agentAsked('anything?')
+  h.controller.agentAnswered('Two things.')
+  h.controller.agentPurged()
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })
+  const card = pocketOf(h)!.slots.find((sl) => sl.kind === 'agent')!
+  assert.equal(card.ask, 'Ask me anything', 'the card stays; it just has nothing to say')
+  assert.equal(card.demanding, false)
 })
 
 // ── the pocket chord — one gesture, one rung deeper each press ─────────────
@@ -1764,11 +1908,11 @@ test('the order is held while you walk it, and released when you close it', () =
   h.client.fire({ type: 'pocketMove', delta: 1 })     // walking — order now held
   h.controller.notifyCapturePhase('idle', 'a')        // you speak to A underneath you
   h.flush()
-  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['b', 'a'],
+  assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['b', 'a'],
     'the list you are reading must not reshuffle under your thumb')
   h.client.fire({ type: 'pocketRelease' })
   h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['a', 'b'], 'released on close')
+  assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['a', 'b'], 'released on close')
 })
 
 // ── presence: the one thing allowed to open the surface ────────────────────
@@ -2162,17 +2306,36 @@ test('INVARIANT: everything demanding is reachable, and the count matches', () =
   h.tasks.delete('blocked'); h.events.emit('removed', { id: 'blocked' }); h.flush(); check('after a task vanished')
 })
 
-test('INVARIANT: every slot resolves to a task the voice can actually reach', () => {
+test('INVARIANT: every TASK slot resolves to a task the voice can actually reach', () => {
+  // Scoped to the task half deliberately. The Agent is the pocket's other
+  // element kind and has no task behind it by construction — that is what
+  // makes it an element rather than a task — so the invariant that matters for
+  // it is a different one, asserted directly below.
   const h = setup()
   put(h, makeTask({ id: 'a', state: 'needs-user', question: { text: 'q' } }))
   put(h, makeTask({ id: 'b', state: 'done', kind: 'session', alive: false }))
   put(h, makeTask({ id: 'gone', state: 'done', kind: 'oneoff', alive: false }))
   h.client.fire({ type: 'pocketOpen' })
-  for (const sl of pocketOf(h)!.slots) {
+  for (const sl of taskSlots(h)) {
     const t = h.tasks.get(sl.id)
     assert.ok(t, `slot ${sl.id} has no task behind it`)
     assert.ok(!t!.shelved, `slot ${sl.id} is shelved`)
   }
+})
+
+test('INVARIANT: there is exactly one Agent element, whatever else happens', () => {
+  const h = setup()
+  const agents = () => (pocketOf(h)?.slots ?? []).filter((sl) => sl.kind === 'agent')
+  const check = (when: string) => assert.equal(agents().length, 1, `two Agents ${when}`)
+  h.client.fire({ type: 'pocketOpen' })
+  check('on an empty desk')
+  put(h, makeTask({ id: 'a', state: 'needs-user', question: { text: 'q' } }))
+  h.flush(); check('with a task waiting')
+  h.controller.agentAnswered('Something.'); h.flush(); check('after it answered')
+  h.controller.agentAnswered('Again.'); h.flush(); check('after it answered twice')
+  h.controller.agentPurged(); h.flush(); check('after a purge')
+  for (let i = 0; i < 8; i++) h.client.fire({ type: 'pocketMove', delta: 1 })
+  h.flush(); check('after walking the whole ring')
 })
 
 test('closing the pocket AFTER expanding a task still releases the voice', () => {

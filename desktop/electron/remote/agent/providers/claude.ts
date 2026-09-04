@@ -11,7 +11,12 @@ import {
   type ProbeBinary,
   type ProviderEventObserver,
 } from '../provider'
-import { HeadlessAgentProcess, agentRuntimeMode, type AgentRuntimeMode } from './claude-headless'
+import {
+  HeadlessAgentProcess,
+  PersistentHeadlessAgentProcess,
+  agentRuntimeMode,
+  type AgentRuntimeMode,
+} from './claude-headless'
 
 export interface ClaudeCodeProviderOptions {
   binary?: string
@@ -50,8 +55,12 @@ export class ClaudeCodeProvider extends CliProviderRuntime {
     // An explicitly injected factory always wins: the contract fakes depend on
     // it, and they must never be dragged onto a real process by an env var.
     const runtime = options.runtime ?? agentRuntimeMode()
+    // ONE PROCESS FOR THE CONVERSATION by default; one per turn on request; the
+    // PTY only if someone explicitly asks for it. See agentRuntimeMode.
     const processFactory = options.processFactory
-      ?? (runtime === 'headless' ? () => new HeadlessAgentProcess() : replFactory)
+      ?? (runtime === 'persistent' ? () => new PersistentHeadlessAgentProcess()
+        : runtime === 'headless' ? () => new HeadlessAgentProcess()
+          : replFactory)
     super({
       id: 'claude',
       binary,

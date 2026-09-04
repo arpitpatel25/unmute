@@ -18,11 +18,6 @@ final class AppController: NSObject, NotchResizing {
     // already covers the pill.
     private let pillModel = PillModel()
     private var pillWindow: PillWindow!
-    /// The Agent's caption. Its own window, deliberately not the notch — a
-    /// surface descending from the top of the display reads as the notch
-    /// talking rather than the computer.
-    private var captionWindow: CaptionWindow?
-    private var captionTimer: Timer?
     private var pillHost: NSHostingView<AnyView>!
     // The pad — held work, waiting for a destination. It is drawn INSIDE the
     // pill's panel, as one more element in the cluster's row (PillView.pad), so
@@ -618,9 +613,6 @@ final class AppController: NSObject, NotchResizing {
             NotchLog.log("CMD scratchpad enabled=\(payload.enabled) armed=\(payload.armed) delivering=\(payload.delivering) entries=\(payload.pad?.entries.count ?? 0)")
             scratchModel.state = payload
             reconcileSurfaces()
-
-        case let .caption(text, dwellMs, hold):
-            showCaption(text: text, dwellMs: dwellMs, hold: hold)
 
         case .collapse:
             model.focusedId = nil
@@ -1806,61 +1798,5 @@ final class AppController: NSObject, NotchResizing {
         NotchLog.log("geometry recomputed (\(reason)): screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) → window=\(NotchLog.rect(r.frame))")
     }
 
-    // ─── The caption ────────────────────────────────────────────────────
-    //
-    // EXACTLY ONE ON SCREEN, EVER. Concurrency is deliberately deferred, and
-    // this constraint is what keeps it deferrable: a second answer replaces
-    // the first rather than stacking, so there is never a queue to reason
-    // about and never two captions competing for the same eye.
-
-    /// A HELD caption is never left on screen forever.
-    ///
-    /// It has no dwell because the point is to read it slowly, but a surface
-    /// with no clock and no owner is how the notch process once outlived the
-    /// app that started it. Ten minutes is far past reading and far short of
-    /// abandonment.
-    private static let heldCaptionCeiling: TimeInterval = 600
-
-    private func showCaption(text: String, dwellMs: Int, hold: Bool = false) {
-        captionTimer?.invalidate()
-        captionTimer = nil
-
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A held answer carries no dwell, so only the empty text means "down".
-        guard !trimmed.isEmpty, hold || dwellMs > 0 else {
-            dismissCaption()
-            return
-        }
-
-        let window = captionWindow ?? CaptionWindow()
-        captionWindow = window
-        let host = NSHostingView(rootView: CaptionView(text: trimmed, holding: hold) { [weak self] in
-            self?.dismissCaption()
-        })
-        host.setFrameSize(host.fittingSize)
-        window.contentView = host
-        window.setContentSize(host.fittingSize)
-        // Held open, the body scrolls, so it must accept the clicks a caption
-        // deliberately refuses.
-        window.ignoresMouseEvents = false
-        window.positionOnActiveScreen()
-        window.orderFrontRegardless()
-
-        // Dwell is computed by the sender from the text length: video captions
-        // are timed to speech, and these have no clock.
-        captionTimer = Timer.scheduledTimer(
-            withTimeInterval: hold ? Self.heldCaptionCeiling : Double(dwellMs) / 1000.0,
-            repeats: false
-        ) { [weak self] _ in
-            self?.dismissCaption()
-        }
-        NotchLog.log("caption shown chars=\(trimmed.count) dwellMs=\(dwellMs) hold=\(hold)")
-    }
-
-    private func dismissCaption() {
-        captionTimer?.invalidate()
-        captionTimer = nil
-        captionWindow?.orderOut(nil)
-    }
 
 }

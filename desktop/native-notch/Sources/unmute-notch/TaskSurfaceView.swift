@@ -230,11 +230,17 @@ struct TaskSurfaceView: View {
                 }
             }
             Spacer(minLength: 0)
-            // This drops OUR card; it has never touched the agent's session. For
-            // a Codex thread — which lives on until you delete it in Codex —
-            // "kill" claims something we do not do and would not want to.
-            KeyButton(label: t.isOwned ? "Kill" : "Remove",
-                      danger: true, symbol: "trash") { model.emit(.remove(id: t.id)) }
+            // NOT FOR THE AGENT. It is an element of the pocket, not work you
+            // dispatched: there is no process to kill and no card to drop. The
+            // conversation ends by being purged on its own clock, which is a
+            // different thing and is not a button.
+            if t.agentOriginPresentation == nil {
+                // This drops OUR card; it has never touched the agent's session. For
+                // a Codex thread — which lives on until you delete it in Codex —
+                // "kill" claims something we do not do and would not want to.
+                KeyButton(label: t.isOwned ? "Kill" : "Remove",
+                          danger: true, symbol: "trash") { model.emit(.remove(id: t.id)) }
+            }
         }
         .padding(.top, 11)
     }
@@ -244,17 +250,25 @@ struct TaskSurfaceView: View {
             QuietButton(label: "Open dashboard", symbol: "square.grid.2x2") {
                 model.emit(.openDashboard)
             }
-            // Episode-mute: out of the attention strip + crank until you interact
-            // with it or its state changes again. Still on the cockpit wall.
-            QuietButton(label: "Mute", symbol: "bell.slash", color: Theme.textFaint) {
-                model.emit(.mute(id: t.id))
+            // MUTE AND THE CRANK ARE THE TASK QUEUE'S, and the Agent is not in
+            // it. Muting something that is always present would have to mean
+            // something new, and cranking from the chat would walk you into
+            // tasks by a control that looks like it moves within this one.
+            if t.agentOriginPresentation == nil {
+                // Episode-mute: out of the attention strip + crank until you interact
+                // with it or its state changes again. Still on the cockpit wall.
+                QuietButton(label: "Mute", symbol: "bell.slash", color: Theme.textFaint) {
+                    model.emit(.mute(id: t.id))
+                }
+                .help("Don't show again — returns when it changes or you open it")
             }
-            .help("Don't show again — returns when it changes or you open it")
             Spacer(minLength: 0)
             SurfaceSizeControls(model: model)
-            KeyButton(label: "Prev", symbol: "arrow.left") { model.emit(.prev) }
-            // THE ONE TINTED PRIMARY — the crank.
-            ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
+            if t.agentOriginPresentation == nil {
+                KeyButton(label: "Prev", symbol: "arrow.left") { model.emit(.prev) }
+                // THE ONE TINTED PRIMARY — the crank.
+                ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
+            }
         }
         .padding(.top, 10)
     }

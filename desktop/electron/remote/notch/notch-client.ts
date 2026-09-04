@@ -56,9 +56,24 @@ export type PocketMode = 'closed' | 'open'
  * it turned a boundary you should SEE into one you had to press through. The
  * cards carry the boundary now — `demanding` ones render loud, the rest quiet.
  */
+/**
+ * THE POCKET IS A CONTAINER, NOT A LIST OF TASKS.
+ *
+ * Inside it are element KINDS. Tasks are one kind, with their own queue and
+ * their own ordering. The Agent is a second kind: always present, never in that
+ * queue, and holding one of exactly two positions relative to the whole task
+ * block — front when it has something for you, back once you have read it.
+ * More kinds will follow, and they will be more of these rather than more
+ * exceptions inside the task ordering.
+ */
+export type PocketSlotKind = 'task' | 'agent'
+
 export interface PocketSlotP {
   id: string
   title: string
+  /** Absent means 'task' — an older helper binary reads the pocket exactly as
+   *  it did before this existed. */
+  kind?: PocketSlotKind
   /** The pending ask, or what it produced. The surface clamps it to two lines. */
   ask?: string
   status?: TaskStatusName
@@ -363,7 +378,6 @@ export type NotchCommand =
    * answer that IS the deliverable rather than a pointer to one. Still not the
    * notch — the notch stays independent of anything the Agent says.
    */
-  | { type: 'caption'; text: string; dwellMs: number; hold?: boolean }
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
   | { type: 'surfaceFill'; fill: number }
