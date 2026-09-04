@@ -93,7 +93,9 @@ export type AgentProcessEvent =
   | { type: 'completion'; outcome: AgentCompletion['outcome']; finalText?: string }
   | { type: 'observer-failure' }
   | { type: 'terminal-output'; chunk: string }
-  | { type: 'exit'; exitCode: number }
+  /** `stderrTail` is the process's last words. Optional because only the
+   *  persistent driver keeps them, and because a clean exit has nothing to say. */
+  | { type: 'exit'; exitCode: number; stderrTail?: readonly string[] }
 
 export interface AgentProcessLaunch {
   provider: AgentProviderId

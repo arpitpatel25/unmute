@@ -1362,6 +1362,11 @@ async function initializeUnmuteAgent(): Promise<void> {
       journal,
       selectedProvider: () => resolveAgentProvider(),
       maxActiveProcesses: settings.get('unmuteAgentMaxProcesses'),
+      // WITHOUT THIS THE DIAGNOSTIC IS A NO-OP. The supervisor takes its sink
+      // injected because the agent package stays free of electron; leaving it
+      // unset is exactly the state that let two identical `provider-crashed`
+      // failures reach the user with no cause recorded anywhere.
+      log: (event, data) => log.event(event, data),
     })
     pendingSupervisor = supervisor
     const controller = new UnmuteAgentController({

@@ -107,6 +107,16 @@ export interface AgentRunSupervisorOptions {
   tokenTtlMs?: number
   sweepIntervalMs?: number
   timers?: AgentSupervisorTimers
+  /**
+   * WHERE A CRASH GETS TO SAY WHY.
+   *
+   * This package is deliberately dependency-free so it can be tested without
+   * Electron, which is why it had no logger — and why `provider-crashed` was
+   * reported to the user with the cause thrown away by a bare `catch`. Two
+   * identical failures in the field produced no exit code, no stderr and no
+   * message anywhere. Injected rather than imported, like every other seam here.
+   */
+  log?: (event: string, data: Record<string, unknown>) => void
 }
 
 interface LiveTurn {
@@ -473,7 +483,19 @@ export class AgentRunSupervisor {
     let completion: SupervisedAgentCompletion
     try {
       completion = await turn.session.completion
-    } catch {
+    } catch (cause) {
+      // THE ONE PLACE THAT KNOWS WHY, AND IT USED TO THROW IT AWAY.
+      //
+      // A bare `catch` here turned every provider death into the same opaque
+      // sentence on screen. Whatever the provider rejected with is the only
+      // account of the failure that exists — the process is already gone — so
+      // it is recorded before being collapsed into a code.
+      this.options.log?.('agent-provider-crashed', {
+        runId: run.id,
+        provider: run.provider,
+        message: cause instanceof Error ? cause.message : String(cause),
+        stack: cause instanceof Error ? cause.stack?.split('\n').slice(0, 4).join('\n') : undefined,
+      })
       completion = { outcome: 'failed', errorCode: 'provider-crashed' }
     }
     if (turn.released) {

@@ -518,12 +518,23 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
     } catch { /* exit is the backstop */ }
   }
 
+  /**
+   * KEEP THE LAST WORDS. When the CLI refuses to start — a bad flag, expired
+   * auth, a model it does not have — stderr is the ONLY place it says so, and
+   * this forwarded it to the transcript for display and kept nothing. A crash
+   * then reported `provider-crashed` with no account of itself anywhere.
+   */
+  private stderrTail: string[] = []
+
   private async readStderr(child: HeadlessChild): Promise<void> {
     if (!child.stderr) return
     try {
       for await (const chunk of child.stderr) {
         if (this.closed || this.child !== child) return
-        this.queue.emit({ type: 'terminal-output', chunk: chunk.toString() })
+        const text = chunk.toString()
+        const trimmed = text.trim()
+        if (trimmed) this.stderrTail = [...this.stderrTail, trimmed].slice(-6)
+        this.queue.emit({ type: 'terminal-output', chunk: text })
       }
     } catch { /* best-effort */ }
   }
@@ -543,7 +554,10 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
       this.interrupted = false
       this.queue.emit({ type: 'completion', outcome: 'interrupted' })
     }
-    this.queue.emit({ type: 'exit', exitCode: code ?? 0 })
+    // The tail rides the exit so whatever consumed this process can say WHY
+    // it went, not merely that it did.
+    this.queue.emit({ type: 'exit', exitCode: code ?? 0, stderrTail: this.stderrTail.slice(-3) })
+    this.stderrTail = []
   }
 }
 
