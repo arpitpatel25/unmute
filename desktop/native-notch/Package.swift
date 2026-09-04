@@ -106,6 +106,17 @@ let package = Package(
             name: "HoverStateSupport",
             path: "Sources/HoverStateSupport"
         ),
+        // The swipe arithmetic, split out for the usual reason: the thresholds
+        // ARE the feel of the gesture, and a wrong one is invisible in a diff.
+        .target(
+            name: "PocketSwipeSupport",
+            path: "Sources/PocketSwipeSupport"
+        ),
+        .testTarget(
+            name: "PocketSwipeSupportTests",
+            dependencies: ["PocketSwipeSupport"],
+            path: "Tests/PocketSwipeSupportTests"
+        ),
         .testTarget(
             name: "HoverStateSupportTests",
             dependencies: ["HoverStateSupport"],
@@ -152,6 +163,7 @@ let package = Package(
                 "StageSupport",
                 "WallPresentationSupport",
                 "HoverStateSupport",
+                "PocketSwipeSupport",
                 "LevelMeterSupport",
                 "ComposerSupport",
                 "SurfaceSizeSupport",

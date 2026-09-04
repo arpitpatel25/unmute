@@ -246,22 +246,32 @@ struct NotchView: View {
                 // The card clears the housing instead of working around it: see
                 // `pocketTopPad` and `NotchGeometry.pocketTopInset`, which are
                 // the same number so the window and the padding cannot disagree.
-                if model.hasNotch {
-                    // SHOULDERS, THEN THE BODY. The row fills the housing's own
-                    // line — identity left of the camera, controls right of it —
-                    // and everything you read hangs below. Off-notch the same
-                    // three slots sit in one unsplit header, which is the whole
-                    // point: one layout, not two.
-                    VStack(spacing: 0) {
-                        PocketShoulderRow(model: model, listening: model.captureAimed)
-                        pocketPlane {
-                            PocketCard(model: model, listening: model.captureAimed,
-                                       headerInShoulders: true)
+                Group {
+                    if model.hasNotch {
+                        // SHOULDERS, THEN THE BODY. The row fills the housing's own
+                        // line — identity left of the camera, controls right of it —
+                        // and everything you read hangs below. Off-notch the same
+                        // three slots sit in one unsplit header, which is the whole
+                        // point: one layout, not two.
+                        VStack(spacing: 0) {
+                            PocketShoulderRow(model: model, listening: model.captureAimed)
+                            pocketPlane {
+                                PocketCard(model: model, listening: model.captureAimed,
+                                           headerInShoulders: true)
+                            }
                         }
+                    } else {
+                        pocketPlane { PocketCard(model: model, listening: model.captureAimed) }
                     }
-                } else {
-                    pocketPlane { PocketCard(model: model, listening: model.captureAimed) }
                 }
+                // SWIPE THE POCKET, THE WHOLE POCKET. Two fingers left or right
+                // anywhere over the open surface walks the same carousel the ‹ ›
+                // do — the arrows are for the pointer that would rather click.
+                // Attached to the WHOLE arrangement, not to the card, because
+                // "hover the pocket" means the shoulders too on a notched Mac.
+                .background(PocketSwipeArea(enabled: model.pocket.slots.count > 1) { delta in
+                    model.emit(.pocketMove(delta: delta))
+                })
             }
             else { barRow }
         }
