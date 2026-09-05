@@ -48,36 +48,8 @@ struct StageView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let t {
                 header(t)
-                if stageMode(t) == .terminal {
-                    // ONE EXCEPTION TO "TERMINAL ONLY": AN ASK YOU MUST ANSWER.
-                    // Codex CLI approvals arrive over the App Server, so the TUI
-                    // never shows them — hiding the block would leave a terminal
-                    // stalled at a prompt with no visible question.
-                    if t.status == .needsUser, let q = t.question {
-                        QuestionBlock(model: model, taskId: t.id, question: q,
-                                      terminalOpen: stageTerminalBinding).padding(.top, 10)
-                    }
-                    // TERMINAL MODE — THE TERMINAL IS THE PANEL.
-                    //
-                    // Nothing renders above it but the header, and nothing below
-                    // it but its own controls. Everything that used to stack here
-                    // — the where-you-left-off strip, the note row, the exchange
-                    // strip capped at 190pt, the composer — was competing with
-                    // the one thing you opened this view to look at, and on a
-                    // task with little to say it left a band of empty space
-                    // above a squashed terminal.
-                    //
-                    // A message view and a terminal view are two ways of reading
-                    // the SAME session, not two halves of one screen. Hiding the
-                    // terminal gives you the messages; showing it gives you the
-                    // terminal.
-                    TerminalPanel(model: model, taskId: t.id,
-                                  tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 8)
-                } else {
-                    messagesMode(t)
-                }
+                ChatStatusView(model: model, task: t)
+                messagesMode(t)
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -88,16 +60,6 @@ struct StageView: View {
     }
 
 
-    /// Is the terminal the whole panel right now?
-    ///
-    /// `hasTerminal` comes from the provider registry via the engine — a backend
-    /// with no PTY has no terminal to show and no toggle to offer.
-    private func stageMode(_ t: TaskDetail) -> StageBodyMode {
-        stageBodyMode(hasTerminal: t.hasTerminal,
-                      terminalRequested: model.stageTerminalOpen,
-                      alive: t.alive,
-                      resuming: t.resuming ?? false)
-    }
 
     /// Has this task actually finished for good?
     ///
@@ -135,7 +97,7 @@ struct StageView: View {
         // was given, which is the other half of the empty-band problem.
         ConversationPanel(rows: model.stageConversationRows, id: t.id,
                           blocks: model.stageBlocks, usage: model.stageUsage,
-                          running: t.status == .processing)
+                          running: t.status == .processing, history: t.history)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.top, 10)
         if t.status == .needsUser, let q = t.question {
@@ -147,17 +109,15 @@ struct StageView: View {
         } else if let reason = t.resumeError, !reason.isEmpty {
             SessionNotRunning(model: model, taskId: t.id, reason: reason)
                 .padding(.top, 9)
-        } else if t.hasTerminal && !t.alive {
-            SessionNotRunning(model: model, taskId: t.id, reason: nil)
+        } else if !(t.canCompose ?? t.alive) {
+            SessionNotRunning(model: model, taskId: t.id, reason: t.canResume ? nil : "This connected session cannot resume in chat. Start an Unmute-managed conversation.", canResume: t.canResume)
                 .padding(.top, 9)
-        } else if ended(t) {
-            DeadPanel(model: model, t: t).padding(.top, 10)
         } else {
             StageComposer(placeholder: "Reply — or hold right ⌥ and speak",
                           model: model, taskId: t.id,
                           deliveryError: t.deliveryError,
                           modelLabel: t.modelLabel, sending: t.sending ?? false,
-                          draft: t.draft)
+                          draft: t.draft, config: t.chatConfig, followup: t.followup, composerMode: t.composerMode, question: t.question)
                 .padding(.top, 9)
         }
     }
@@ -255,8 +215,8 @@ struct StageView: View {
                         Text("Relaunching…").font(Theme.fCap).foregroundColor(Theme.textDim)
                     }
                     .padding(.horizontal, 8)
-                } else if t.alive {
-                    KeyButton(label: "Kill", danger: true, symbol: "stop.circle") {
+                } else if t.isOwned && t.alive && (t.status == .processing || t.status == .needsUser) {
+                    KeyButton(label: "Stop", danger: true, symbol: "stop.circle") {
                         model.emit(.kill(id: t.id))
                     }
                 } else if t.canResume {
@@ -273,13 +233,6 @@ struct StageView: View {
             }
             .padding(.leading, 6)
             // 4 · VIEW
-            if t.hasTerminal && t.alive {
-                KeyButton(label: model.stageTerminalOpen ? "Hide terminal" : "Terminal",
-                          symbol: model.stageTerminalOpen ? "text.bubble" : "terminal") {
-                    model.setStageTerminalVisible(!model.stageTerminalOpen)
-                }
-                .padding(.leading, 6)
-            }
             KeyButton(label: model.stageFull ? "Split" : "Full",
                       symbol: model.stageFull ? "rectangle.split.2x1" : "rectangle") {
                 model.stageFull = stageFullState(current: model.stageFull, action: .toggle)
@@ -326,6 +279,7 @@ struct StageView: View {
     private var miniRail: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 3) {
+                NewConversationButton(model: model).padding(.horizontal, 8).padding(.bottom, 8)
                 let all = (model.cockpit?.groups ?? []).flatMap(\.cards)
                 SectionLabel(text: "Sessions · \(all.count)")
                     .padding(.horizontal, 8).padding(.bottom, 4)
@@ -382,23 +336,48 @@ struct QuestionBlock: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 240)
-            } else {
-                Text(question.text)
-                    .font(.system(size: 13.5)).foregroundColor(Theme.text)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if terminalOnly {
                 terminalHandoff
-            } else if let choices = question.choices, !choices.isEmpty {
-                FlowChips(choices: choices) { idx in
-                    model.emit(.chooseOption(id: taskId, index: idx))
-                }
             } else {
-                HStack(spacing: 5) {
-                    Image(systemName: "mic").font(.system(size: 9.5))
-                    Text("Reply below, or hold the Remote key to add your answer").font(.system(size: 11))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text(question.text)
+                            .font(.system(size: 13.5)).foregroundColor(Theme.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                        if let details = question.details {
+                            OutputBox(tag: "proposed action and scope", text: details)
+                        }
+                        if question.details == nil, let choices = question.choices, !choices.isEmpty {
+                            FlowChips(choices: choices) { idx in
+                                if model.beginQuestion(taskId, question) {
+                                    model.emit(.chooseOption(id: taskId, index: idx, reference: question.reference))
+                                }
+                            }
+                            .disabled(model.questionBusy(taskId, question))
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .foregroundColor(Theme.textFaint)
+                .frame(maxHeight: question.details == nil ? 210 : 105)
+                if question.details != nil, let choices = question.choices, !choices.isEmpty {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 130))], alignment: .leading, spacing: 6) {
+                        ForEach(Array(choices.enumerated()), id: \.offset) { index, label in
+                            ChoiceChip(index: index, label: label) {
+                                if model.beginQuestion(taskId, question) { model.emit(.chooseOption(id: taskId, index: index, reference: question.reference)) }
+                            }
+                        }
+                    }.disabled(model.questionBusy(taskId, question))
+                }
+                if model.questionBusy(taskId, question) {
+                    Text(model.questionSubmissions[taskId]?.state == "accepted" || question.acknowledgment == "accepted" ? "Answer accepted" : "Sending answer…")
+                        .font(.caption).foregroundColor(Theme.textFaint)
+                }
+                if question.choices?.isEmpty ?? true {
+                    HStack(spacing: 5) {
+                        Image(systemName: "mic").font(.system(size: 9.5))
+                        Text("Reply below, or hold the Remote key to add your answer").font(.system(size: 11))
+                    }
+                    .foregroundColor(Theme.textFaint)
+                }
             }
         }
         .padding(13)
@@ -416,14 +395,9 @@ struct QuestionBlock: View {
         HStack(spacing: 7) {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
                 .font(.system(size: 9.5))
-            Text(terminalOpen
-                 ? "Choose in the terminal below — Unmute can't drive this picker."
-                 : "This one has to be answered in the terminal.")
+            Text("This connected session cannot answer this request in chat. Start an Unmute-managed conversation to use supported controls.")
                 .font(.system(size: 11))
                 .fixedSize(horizontal: false, vertical: true)
-            if !terminalOpen {
-                ActButton(label: "Open terminal", go: true) { terminalOpen = true }
-            }
         }
         .foregroundColor(Theme.textFaint)
     }

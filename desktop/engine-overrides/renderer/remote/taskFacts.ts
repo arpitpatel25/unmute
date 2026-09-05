@@ -49,7 +49,8 @@ export const LEGACY_AGENT: Record<string, { label: string; mark: string }> = {
 
 /** Is there live scrollback to show? False ⇒ the ticket shows the conversation
  *  projection and a door into the app instead of a terminal. */
-export const hasTerminal = (t: RemoteTask): boolean => t.provider?.hasTerminal ?? true
+export const hasTerminal = (t: RemoteTask): boolean => t.provider?.hasTerminal ?? false
+export const isDesktopTask = (t: RemoteTask): boolean => t.provider?.surface === 'desktop' || (!t.provider && (t.agent === 'codex-desktop' || t.agent === 'claude-code-desktop'))
 /** Can this task be brought back? False ⇒ NO Resume button at all — not a
  *  greyed-out one. A dead control is worse than an absent one. */
 export const canResume = (t: RemoteTask): boolean => t.provider?.canResume ?? true

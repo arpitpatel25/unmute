@@ -35,16 +35,16 @@ test('ABSENT agent resolves to Claude Code CLI — the whole legacy contract', (
 test('transport says who owns the process', () => {
   // 'pty' = Unmute spawns and owns it. 'driver' = an app we drive; there is no
   // executor to build, which is what isExternalAgent() now reads.
-  assert.equal(providerOf('claude').transport, 'pty')
-  assert.equal(providerOf('codex').transport, 'pty')
+  assert.equal(providerOf('claude').transport, 'structured')
+  assert.equal(providerOf('codex').transport, 'structured')
   assert.equal(providerOf('codex-desktop').transport, 'driver')
 })
 
 test('capability flags reproduce the behaviour they replaced, exactly', () => {
   // hasTerminal replaces the Swift `desktopBackends` set (notch sizing: a live
   // terminal gets 80% of the screen, a conversation 60%).
-  assert.equal(providerOf('claude').hasTerminal, true)
-  assert.equal(providerOf('codex').hasTerminal, true)
+  assert.equal(providerOf('claude').hasTerminal, false)
+  assert.equal(providerOf('codex').hasTerminal, false)
   assert.equal(providerOf('codex-desktop').hasTerminal, false)
 
   // canResume replaces `task.agent !== 'codex-desktop'` in TaskRow/OverlayApp.

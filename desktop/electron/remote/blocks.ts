@@ -35,7 +35,25 @@ export interface PlanStep {
   status: 'todo' | 'active' | 'done'
 }
 
+export type ToolStatus = 'running' | 'succeeded' | 'failed' | 'denied' | 'cancelled'
+export type TurnOutcome = 'completed' | 'failed' | 'cancelled'
+export type FileChange = { path: string; verb: 'Added' | 'Edited' | 'Deleted'; added: number; removed: number; diff?: string }
+/** Provider status takes precedence over absent exit codes. */
+export function toolStatus(value: unknown, fallback: ToolStatus = 'succeeded'): ToolStatus {
+  const status = String(value ?? '').toLowerCase().replace(/[_-]/g, '')
+  if (['inprogress', 'running', 'pending'].includes(status)) return 'running'
+  if (['cancelled', 'canceled', 'interrupted', 'shutdown'].includes(status)) return 'cancelled'
+  if (['denied', 'declined', 'rejected'].includes(status)) return 'denied'
+  if (['failed', 'error', 'errored'].includes(status)) return 'failed'
+  return fallback
+}
+export function fullContent(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
 export type Block =
+  | { kind: 'attachment'; path: string; name: string; mimeType: string; bytes?: number }
   | { kind: 'message'; role: 'user' | 'assistant'; text: string; at?: number }
   | { kind: 'reasoning'; text: string; streaming?: boolean }
   | {
@@ -47,14 +65,14 @@ export type Block =
       exitCode?: number
       output?: string
       durationMs?: number
-      status: 'running' | 'ok' | 'failed'
+      status: 'running' | 'ok' | 'failed' | 'denied' | 'cancelled'
     }
-  | { kind: 'fileChange'; path: string; verb: 'Added' | 'Edited' | 'Deleted'; added: number; removed: number }
-  | { kind: 'mcpCall'; server: string; tool: string; args?: string; durationMs?: number; ok?: boolean; readOnly?: boolean }
+  | ({ kind: 'fileChange'; changes?: FileChange[]; status?: ToolStatus } & FileChange)
+  | { kind: 'mcpCall'; server: string; tool: string; args?: string; durationMs?: number; ok?: boolean; readOnly?: boolean; output?: string; error?: string; status?: ToolStatus }
   | { kind: 'fileRead'; path: string; lines?: number }
   | { kind: 'search'; query: string; results: Source[] }
-  | { kind: 'plan'; steps: PlanStep[] }
-  | { kind: 'subAgent'; name: string; status: 'running' | 'done' | 'failed' }
+  | { kind: 'plan'; steps: PlanStep[]; turnId?: string }
+  | { kind: 'subAgent'; name: string; output?: string; status: 'running' | 'done' | 'failed' | 'denied' | 'cancelled' }
   | { kind: 'denied'; what: string; reason?: string }
   | { kind: 'error'; message: string }
   | { kind: 'compaction'; before?: number; after?: number; trigger?: string }
@@ -69,12 +87,13 @@ export type Block =
    * the agent reported once the turn ended.
    */
   | { kind: 'turnStart'; startedAt: number }
-  | { kind: 'turnEnd'; durationMs?: number }
+  | { kind: 'turnEnd'; durationMs?: number; outcome?: TurnOutcome }
   | { kind: 'unknown'; raw: string }
 
 export type BlockKind = Block['kind']
 
 const KNOWN: ReadonlySet<string> = new Set<BlockKind>([
+  'attachment',
   'message', 'reasoning', 'command', 'fileChange', 'mcpCall', 'fileRead',
   'search', 'plan', 'subAgent', 'denied', 'error', 'compaction',
   'turnStart', 'turnEnd', 'unknown',
@@ -106,7 +125,7 @@ function safeStringify(v: unknown): string {
 
 /** Everything a turn's header needs. Derived, never stored twice. */
 export interface TurnMeta {
-  status: 'running' | 'done' | 'failed'
+  status: 'running' | 'done' | 'failed' | 'denied' | 'cancelled'
   durationMs?: number
   /** Epoch ms the turn began, so a running header can count. */
   startedAt?: number
@@ -141,28 +160,39 @@ const isMessage = (b: Block): b is Extract<Block, { kind: 'message' }> => b.kind
  */
 export function turnMetaOf(work: Block[], durationMs?: number): TurnMeta {
   let files = 0, added = 0, removed = 0, steps = 0
-  let running = false, failed = false
+  let running = false, failed = false, cancelled = false, denied = false
+  let outcome: TurnOutcome | undefined
   let plan: TurnMeta['plan']
   let startedAt: number | undefined
   let reported: number | undefined
 
   for (const b of work) {
-    if (isMessage(b)) continue          // a reply is not a step
+    if (isMessage(b) || b.kind === 'attachment') continue // submitted context is not agent work
     // The clock markers bound the turn; they are not work the user did.
     if (b.kind === 'turnStart') { startedAt = b.startedAt; continue }
-    if (b.kind === 'turnEnd') { reported = b.durationMs; continue }
+    if (b.kind === 'turnEnd') { reported = b.durationMs; outcome = b.outcome; continue }
     steps++
     switch (b.kind) {
       case 'fileChange':
-        files++; added += b.added; removed += b.removed
+        for (const c of b.changes ?? [b]) { files++; added += c.added; removed += c.removed }
+        break
+      case 'mcpCall':
+        if (b.status === 'running') running = true
+        if (b.status === 'failed' || b.status === undefined && b.ok === false) failed = true
+        if (b.status === 'cancelled') cancelled = true
+        if (b.status === 'denied') denied = true
         break
       case 'command':
         if (b.status === 'running') running = true
         if (b.status === 'failed') failed = true
+        if (b.status === 'cancelled') cancelled = true
+        if (b.status === 'denied') denied = true
         break
       case 'subAgent':
         if (b.status === 'running') running = true
         if (b.status === 'failed') failed = true
+        if (b.status === 'cancelled') cancelled = true
+        if (b.status === 'denied') denied = true
         break
       case 'reasoning':
         if (b.streaming) running = true
@@ -183,7 +213,7 @@ export function turnMetaOf(work: Block[], durationMs?: number): TurnMeta {
 
   // Running beats failed: a turn that hit an error and kept going is still
   // working, and calling it failed would settle a card that is still moving.
-  const status: TurnMeta['status'] = running ? 'running' : failed ? 'failed' : 'done'
+  const status: TurnMeta['status'] = outcome === 'cancelled' ? 'cancelled' : outcome === 'failed' ? 'failed' : running && !outcome ? 'running' : failed ? 'failed' : cancelled ? 'cancelled' : denied ? 'denied' : 'done'
   // The turn's own reported wall time wins over anything the caller guessed.
   const ms = reported ?? durationMs
   return {
@@ -220,7 +250,7 @@ export function groupIntoTurns(blocks: Block[]): Turn[] {
       // unanswered turn is a real state (interrupted, or still thinking when
       // the user typed again) and must keep its own work rather than donating
       // it to the next turn.
-      close()
+      if (prompt || !work.every(b => b.kind === 'turnStart')) close()
       prompt = b
       continue
     }

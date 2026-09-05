@@ -22,12 +22,30 @@
 
 import type { TaskState, TaskQuestion } from '../status-file'
 import { activityFromCodexItem, clampLabel, type Activity } from '../activity'
-import type { Block } from '../blocks'
+import { fullContent, type Block, type TurnOutcome } from '../blocks'
+
+export type HistoryState = { phase: 'empty' | 'loading' | 'missing' | 'partial' | 'failed' | 'ready'; reason?: string; canRetry?: boolean }
+export type McpStatus = { name: string; status: string; error?: string; remedy?: string }
+function exposedError(error: unknown, fallback: string): string {
+  const value = obj(error)
+  const detail = Object.fromEntries(Object.entries(value).filter(([key, member]) => key !== 'message' && member != null))
+  return [s(value.message) ?? fallback, Object.keys(detail).length ? fullContent(detail) : undefined].filter(Boolean).join('\n\n')
+}
+export type ApprovalCap = { roots: string[]; fullAccessAllowed: boolean; readOnly?: boolean }
+export function approvalCapReason(method: string, params: Record<string, unknown>, cap?: ApprovalCap): string | undefined {
+  if (!cap || cap.fullAccessAllowed && !cap.roots.length && !cap.readOnly) return undefined
+  const networkOnly = method === 'item/permissions/requestApproval' && !obj(params.permissions).fileSystem
+  if (networkOnly) return undefined
+  return `Filesystem/command escalation is unavailable under this session's ${cap.readOnly ? 'read-only policy' : cap.roots.length ? `enforced roots (${cap.roots.join(', ')})` : 'full-access consent cap'}. The provider approval protocol does not guarantee these grants preserve that boundary. No broader permission will be granted.`
+}
 
 /** What one event changes. Absent keys mean "unchanged" — this is a patch, not
  *  a state, so a stream of events can be applied in order without each one
  *  having to restate everything it did not touch. */
 export interface CodexPatch {
+  turnOutcome?: TurnOutcome | null
+  history?: HistoryState
+  mcpStatus?: McpStatus
   state?: TaskState
   /** null CLEARS the activity — the work stopped, which is different from
    *  "unchanged". An absent key would leave a finished task claiming to be
@@ -95,7 +113,7 @@ export function reduceAppServerEvent(e: AppServerEvent): CodexPatch | null {
       // A NEW TURN CLEARS A FINISHED ONE. Without this, replying to a done
       // session left the card showing the previous turn's result while the new
       // one ran.
-      return { state: 'processing', activity: null, clearQuestion: true }
+      return { state: 'processing', activity: { kind: 'lifecycle', label: 'Working' }, turnOutcome: null, clearQuestion: true, errorReason: '' }
 
     case 'turn/completed': {
       const turn = obj(p.turn)
@@ -105,9 +123,9 @@ export function reduceAppServerEvent(e: AppServerEvent): CodexPatch | null {
       // demand the user's attention.
       if (status === 'failed') {
         const err = obj(turn.error)
-        return { state: 'failed', activity: null, errorReason: s(err.message) ?? 'the turn failed' }
+        return { state: 'failed', activity: null, turnOutcome: 'failed', errorReason: exposedError(err, 'the turn failed') }
       }
-      return { state: 'done', activity: null, clearQuestion: true }
+      return { state: 'done', activity: null, clearQuestion: true, errorReason: '', turnOutcome: status === 'interrupted' || status === 'cancelled' ? 'cancelled' : 'completed' }
     }
 
     case 'thread/status/changed': {
@@ -145,8 +163,17 @@ export function reduceAppServerEvent(e: AppServerEvent): CodexPatch | null {
       return { activity: null }
     }
 
-    case 'error':
-      return { state: 'failed', activity: null, errorReason: s(p.message) ?? 'Codex reported an error' }
+    case 'error': {
+      const reason = exposedError(p.error, s(p.message) ?? 'Codex reported an error')
+      return p.willRetry === true
+        ? { state: 'processing', activity: { kind: 'lifecycle', label: 'Retrying' }, turnOutcome: null, errorReason: `Retrying: ${reason}` }
+        : { state: 'failed', activity: null, turnOutcome: 'failed', errorReason: reason }
+    }
+
+    case 'mcpServer/startupStatus/updated':
+      return { mcpStatus: { name: s(p.name) ?? 'MCP server', status: s(p.status) ?? 'unknown',
+        ...(s(p.error) ? { error: s(p.error) } : {}),
+        ...(p.failureReason === 'reauthenticationRequired' ? { remedy: 'Reauthenticate this MCP connection in the provider, then retry.' } : {}) } }
 
     default:
       return null
@@ -163,9 +190,27 @@ export function reduceAppServerEvent(e: AppServerEvent): CodexPatch | null {
  * — answering a patch approval as if it were a command is how a dialog is left
  * open while the task reports itself unblocked.
  */
-export function questionFromApproval(method: string, params: unknown): TaskQuestion | null {
+export function questionFromApproval(method: string, params: unknown, item?: Block, cap?: ApprovalCap): TaskQuestion | null {
   const p = obj(params)
   const reason = s(p.reason)
+  const options = approvalOptions(method, p, cap)
+  if (options) {
+    const details = [reason, approvalCapReason(method, p, cap), p.command !== undefined ? `Command\n${Array.isArray(p.command) ? p.command.join(' ') : p.command}` : undefined,
+      p.cwd ? `Working directory\n${p.cwd}` : undefined,
+      p.permissions ? `Requested permissions\n${fullContent(p.permissions)}` : undefined,
+      p.additionalPermissions ? `Additional permissions\n${fullContent(p.additionalPermissions)}` : undefined,
+      p.fileChanges ? `Proposed file changes\n${fullContent(p.fileChanges)}` : undefined,
+      p.networkApprovalContext ? `Network scope\n${fullContent(p.networkApprovalContext)}` : undefined,
+      p.grantRoot ? `Requested session write root\n${p.grantRoot}\nThe provider marks honoring this root as uncertain.` : undefined,
+      method === 'item/fileChange/requestApproval' ? item?.kind === 'fileChange'
+        ? (item.changes ?? [item]).map(c => `${c.verb}: ${c.path}\n${c.diff ?? 'Patch not exposed by provider.'}`).join('\n\n')
+        : 'File details have not been exposed for this pending item yet.' : undefined,
+      Array.isArray(p.availableDecisions) && p.availableDecisions.some(d => typeof d === 'object') || p.proposedExecpolicyAmendment || p.proposedNetworkPolicyAmendments
+        ? 'Persistent/global policy amendments are unavailable here. Session approval does not change global defaults.' : undefined,
+    ].filter(Boolean).join('\n\n')
+    return { text: method === 'item/fileChange/requestApproval' || method === 'applyPatchApproval' ? 'Apply these file changes?' : method === 'item/permissions/requestApproval' ? 'Grant these permissions?' : 'Run this command?',
+      kind: 'confirm', details, choices: options.map(o => o.label) }
+  }
   switch (method) {
     case 'execCommandApproval':
     case 'item/commandExecution/requestApproval': {
@@ -187,6 +232,37 @@ export function questionFromApproval(method: string, params: unknown): TaskQuest
     default:
       return null
   }
+}
+
+/** Generated Codex 0.153.2 v2 unions define turn/session grants. An explicit
+ * availableDecisions list narrows that union. Policy amendment objects have no
+ * guaranteed session-only scope, so they are deliberately unavailable. */
+export function approvalOptions(method: string, params: Record<string, unknown>, cap?: ApprovalCap): Array<{ label: string; response: unknown }> | null {
+  const restricted = !!approvalCapReason(method, params, cap)
+  // Legacy adapters retain their existing one-shot wire vocabulary, but may
+  // not bypass the same immutable ceiling used by modern requests.
+  if (restricted && (method === 'execCommandApproval' || method === 'applyPatchApproval')) {
+    return [{ label: 'Deny', response: { decision: 'denied' } }]
+  }
+  if (method === 'item/permissions/requestApproval') {
+    const requested = obj(params.permissions)
+    const permissions = Object.fromEntries(Object.entries(requested).filter(([, value]) => value != null))
+    return [...(restricted ? [] : [{ label: 'Allow for turn', response: { permissions, scope: 'turn' } },
+      { label: 'Allow for session', response: { permissions, scope: 'session' } },
+    ]),
+      { label: 'Deny', response: { permissions: {}, scope: 'turn' } }]
+  }
+  if (method !== 'item/commandExecution/requestApproval' && method !== 'item/fileChange/requestApproval') return null
+  const labels: Record<string, string> = { accept: 'Allow once', acceptForSession: 'Allow for session', decline: 'Deny', cancel: 'Cancel turn' }
+  const decisions = Array.isArray(params.availableDecisions) ? params.availableDecisions : ['accept', 'acceptForSession', 'decline', 'cancel']
+  return decisions.flatMap(decision => typeof decision === 'string' && labels[decision] && (!restricted || decision === 'decline' || decision === 'cancel') ? [{ label: labels[decision], response: { decision } }] : [])
+}
+
+export function responseForApproval(method: string, params: Record<string, unknown>, answer: string, cap?: ApprovalCap): unknown | undefined {
+  const options = approvalOptions(method, params, cap)
+  // Older clients used Approve for one-shot acceptance. It is never a session grant.
+  const label = answer === 'Approve' ? method === 'item/permissions/requestApproval' ? 'Allow for turn' : 'Allow once' : answer
+  return options?.find(option => option.label === label)?.response
 }
 
 function ask(text: string, detail?: string): TaskQuestion {

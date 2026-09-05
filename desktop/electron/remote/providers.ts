@@ -31,12 +31,10 @@ export interface Provider {
   surface: 'cli' | 'desktop'
   /** Human name for the task card. */
   label: string
-  /** Who owns the process. 'pty' = Unmute spawns it and holds the handle.
+  /** Who owns the process. 'structured' = Unmute owns the protocol connection.
    *  'driver' = it lives in another app; there is no executor to build. */
-  transport: 'pty' | 'driver'
-  /** Is there live scrollback to show? Drives the notch surface share (a live
-   *  terminal gets 80% of the screen, a conversation 60%) and whether the task
-   *  panel renders a terminal at all. */
+  transport: 'structured' | 'driver'
+  /** Task sessions are graphical chats, never terminal scrollback. */
   hasTerminal: boolean
   /** Can a finished/interrupted task be brought back? Gates the Resume button. */
   canResume: boolean
@@ -78,8 +76,8 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     vendor: 'Claude',
     surface: 'cli',
     label: 'Claude Code CLI',
-    transport: 'pty',
-    hasTerminal: true,
+    transport: 'structured',
+    hasTerminal: false,
     canResume: true,
     modelSetting: 'model',
     modelSource: 'catalog',
@@ -89,8 +87,8 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     vendor: 'Codex',
     surface: 'cli',
     label: 'Codex CLI',
-    transport: 'pty',
-    hasTerminal: true,
+    transport: 'structured',
+    hasTerminal: false,
     // TRUE because that is what ships today: the checks this replaces were
     // negations of 'codex-desktop', so the Resume button already showed for the
     // Codex CLI. CodexExecutor notes its resume is not really wired — but fixing

@@ -21,11 +21,10 @@
 
 import { useEffect, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
-import { LiveTerminal } from './LiveTerminal'
 import { Markdown } from './Markdown'
 import { ProviderMark } from './ProviderMark'
 import {
-  agentAndModel, canKill, canResume, dirLabel, hasTerminal, openInLabel, vendorMark,
+  agentAndModel, canKill, canResume, dirLabel, isDesktopTask, openInLabel, vendorMark,
 } from './taskFacts'
 
 /** The Orchestrator tab's sub-pages. Mirrors the tab's own union; this panel
@@ -76,9 +75,8 @@ function elapsed(t: RemoteTask): string {
 /* ─── One ticket ─────────────────────────────────────────────────────────────
  *
  * Its buttons ASK THE REGISTRY, never an agent id. Resume renders only where
- * `provider.canResume`; a live terminal only where `provider.hasTerminal`. A
- * backend that has neither gets a door into its own app — not a greyed-out
- * Resume, because a dead control is worse than an absent one.
+ * `provider.canResume`; desktop integrations get a door into their own app.
+ * Owned tasks use the native graphical conversation, never a terminal mirror.
  */
 function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResume }: {
   task: RemoteTask
@@ -92,7 +90,6 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
   onResume: (id: string) => void
 }) {
   const [draft, setDraft] = useState('')
-  const [showTerminal, setShowTerminal] = useState(false)
   const active = task.state === 'processing' || task.state === 'needs-user' || task.state === 'stuck'
   const attention = task.state === 'needs-user'
 
@@ -106,15 +103,8 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
           {STATE_LABEL[task.state]} · {elapsed(task)}
         </div>
 
-        {/* THE FOUR FACTS (launch spec pack-c §4.2): agent · model, the working
-            directory, and permissions.
-            `model` is a historical fact sent by main — when it is absent the
-            agent stands alone, with no default and no placeholder.
-            PERMISSIONS IS THE HONEST EXCEPTION, and says so: `permissionMode` is
-            a single live setting read by the executor factory at spawn time, is
-            never written to the task, and so has no historical value to show.
-            The row states the current setting rather than implying the task ran
-            under it — inventing one would be the same sin as inventing a model. */}
+        {/* Structured tasks show their recorded session policy. Legacy records
+            without it explicitly label the global default instead. */}
         <div className="flex items-center gap-2 mt-2 text-[11px] text-ink-35 min-w-0">
           <ProviderMark task={task} />
           {/* Only the MODEL survives as text — the mark says the rest, and the
@@ -125,11 +115,11 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
           {dirLabel(task) && (
             <span className="truncate" title={task.cwd}>{dirLabel(task)}</span>
           )}
-          {permission && (
+          {(task.sessionPermission || permission) && (
             <span
               className="shrink-0 ml-auto"
-              title="The current Orchestrator setting — permission mode is not recorded per task."
-            >{permission}</span>
+              title={task.sessionPermission ? 'Recorded permission policy for this session' : 'Current global default; this legacy session did not record its policy'}
+            >{task.sessionPermission || `Default: ${permission}`}</span>
           )}
         </div>
 
@@ -245,14 +235,7 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
               {task.resuming ? 'Resuming…' : 'Resume'}
             </button>
           )}
-          {hasTerminal(task) ? (
-            <button
-              className="text-[11px] px-2.5 py-1 rounded-md border border-border hover:bg-cream-mid"
-              onClick={() => setShowTerminal((v) => !v)}
-            >
-              {showTerminal ? 'Hide terminal' : 'View terminal'}
-            </button>
-          ) : (
+          {isDesktopTask(task) ? (
             <button
               // `first-letter`, not `capitalize`: the label is a sentence ("open
               // in Codex"), and `capitalize` would title-case every word of it.
@@ -262,7 +245,7 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
             >
               {openInLabel(task)}
             </button>
-          )}
+          ) : null}
           <button
             className="text-[11px] px-2.5 py-1 rounded-md border border-border text-ink-35 hover:text-ink hover:bg-cream-mid ml-auto"
             title="Erase this task and everything it wrote"
@@ -275,11 +258,6 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
         </div>
       </div>
 
-      {showTerminal && hasTerminal(task) && (
-        <div className="border-t border-border">
-          <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />
-        </div>
-      )}
     </div>
   )
 }

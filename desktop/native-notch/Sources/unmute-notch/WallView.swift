@@ -50,6 +50,7 @@ struct WallView: View {
     var body: some View {
         VStack(spacing: 0) {
             headerChrome
+            NewConversationButton(model: model).padding(.vertical, 6)
             Rectangle().fill(Theme.hairlineSoft).frame(height: 1)
             HStack(alignment: .top, spacing: 0) {
                 workspaceRail

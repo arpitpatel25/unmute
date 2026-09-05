@@ -37,6 +37,14 @@ public struct PlanStep: Codable, Equatable, Sendable {
 /// an unknown case and a throw here would empty the whole panel over one row it
 /// did not know. Every field is optional and the kind is a String, so an
 /// unfamiliar payload costs one degraded row instead of the conversation.
+public struct FileChange: Codable, Equatable, Sendable {
+    public let path: String
+    public let verb: String
+    public let added: Int
+    public let removed: Int
+    public let diff: String?
+}
+
 public struct Block: Codable, Equatable, Sendable, Identifiable {
     public let kind: String
 
@@ -62,6 +70,11 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
     public let verb: String?
     public let added: Int?
     public let removed: Int?
+    public let diff: String?
+    public let changes: [FileChange]?
+    // attachment
+    public let mimeType: String?
+    public let bytes: Int?
 
     // mcpCall
     public let server: String?
@@ -69,6 +82,7 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
     public let args: String?
     public let ok: Bool?
     public let readOnly: Bool?
+    public let error: String?
 
     // fileRead
     public let lines: Int?
@@ -93,6 +107,7 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
 
     // turnStart / turnEnd — the turn's clock, see BlockTurnMeta.startedAt
     public let startedAt: Int?
+    public let outcome: String?
 
     // unknown
     public let raw: String?
@@ -115,7 +130,10 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
                 results: [BlockSource]? = nil, steps: [PlanStep]? = nil, name: String? = nil,
                 what: String? = nil, reason: String? = nil, message: String? = nil,
                 before: Int? = nil, after: Int? = nil, trigger: String? = nil,
-                startedAt: Int? = nil, raw: String? = nil) {
+                startedAt: Int? = nil, raw: String? = nil, mimeType: String? = nil, bytes: Int? = nil,
+                diff: String? = nil, changes: [FileChange]? = nil, error: String? = nil, outcome: String? = nil) {
+        self.diff = diff; self.changes = changes; self.error = error; self.outcome = outcome
+        self.mimeType = mimeType; self.bytes = bytes
         self.startedAt = startedAt
         self.kind = kind; self.role = role; self.text = text; self.streaming = streaming
         self.label = label; self.command = command; self.cwd = cwd; self.exitCode = exitCode
@@ -134,7 +152,7 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
 public enum BlockKind {
     public static let drawable: Set<String> = [
         "message", "reasoning", "command", "fileChange", "mcpCall", "fileRead",
-        "search", "plan", "subAgent", "denied", "error", "compaction",
+        "search", "plan", "subAgent", "denied", "error", "compaction", "attachment",
     ]
     public static func isDrawable(_ kind: String) -> Bool { drawable.contains(kind) }
 }

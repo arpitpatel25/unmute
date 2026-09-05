@@ -369,7 +369,7 @@ struct NotchGeometry: Equatable {
     /// desktop-app case (see TaskDetail.hasTerminal — the one place that rule
     /// is decided).
     func taskSize(terminal: Bool) -> NSSize {
-        expandedSize(fill: terminal ? SurfaceFill.terminalTask : SurfaceFill.desktopTask)
+        ChatSurfaceSize.bound(expandedSize(fill: SurfaceFill.desktopTask), screen: screenFrame.size)
     }
     /// Task, for callers with no task in hand. A PTY is the default backend, so
     /// the terminal size is the honest default.

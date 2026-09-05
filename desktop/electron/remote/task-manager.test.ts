@@ -100,7 +100,7 @@ test('dispatch fails truthfully and never writes the intent when the CLI exits d
     pollMs: 9999,
   })
 
-  const id = await tm.dispatch('research the new feature', { agent: 'codex' })
+  const id = await tm.dispatch('research the new feature', { agent: 'claude' })
 
   assert.deepEqual(writes, [], 'a dead CLI must never receive or claim to dispatch the user prompt')
   assert.equal(tm.get(id)!.state, 'failed', 'the card must not remain falsely Working')
@@ -513,7 +513,7 @@ test('a later hook event must NOT hide a status write (false-stuck regression)',
   tm.kill(id)
 })
 
-test('maintenance sweep hard-erases tasks untouched past purgeAgeMs; keeps recent ones', async () => {
+test('maintenance sweep retires tasks untouched past purgeAgeMs, preserving cwd and recent tasks', async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({
     executorFactory: () => makeFakeExecutor(),
@@ -532,11 +532,12 @@ test('maintenance sweep hard-erases tasks untouched past purgeAgeMs; keeps recen
   assert.equal((r as { id: string }).id, oldId, 'removed event fired for the stale task')
   assert.equal(tm.get(oldId), undefined, 'stale task erased from the map')
   assert.equal(tm.get(freshId)?.id, freshId, 'recent task kept')
-  await assert.rejects(fs.access(oldCwd), 'stale scratch dir was deleted')
+  await fs.access(oldCwd)
+  await tm.rehydrate(); assert.equal(tm.get(oldId), undefined, 'retired record cannot resurface')
   tm.kill(freshId)
 })
 
-test('maintenance sweep also reclaims ORPHAN on-disk dirs from past runs (not in memory)', async () => {
+test('maintenance sweep retires ORPHAN records while preserving unidentified directories', async () => {
   const baseDir = await tmpBase()
   const reaped: string[] = []
   const tm = new TaskManager({
@@ -560,7 +561,7 @@ test('maintenance sweep also reclaims ORPHAN on-disk dirs from past runs (not in
 
   await tm.purgeStale()
 
-  await assert.rejects(fs.access(oldOrphan), 'old orphan dir reclaimed')
+  await fs.access(oldOrphan)
   assert.deepEqual(reaped, ['orphan-old'], 'orphan tmux session reaped by id')
   await fs.access(newOrphan) // recent orphan kept
   await fs.access(tm.get(liveId)!.cwd) // live task untouched
@@ -666,7 +667,7 @@ test('tasksAwaitingUser lists only needs-user tasks, newest first (voice answeri
   tm.kill(a); tm.kill(b)
 })
 
-test('remove kills the session, erases the row, and deletes the scratch dir', async () => {
+test('remove kills the session and retires the row while preserving the legacy project', async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   const id = await tm.dispatch('a task')
@@ -674,7 +675,8 @@ test('remove kills the session, erases the row, and deletes the scratch dir', as
   assert.ok((await fs.stat(dir)).isDirectory())
   await tm.remove(id)
   assert.equal(tm.get(id), undefined)        // gone from the list
-  await assert.rejects(fs.stat(dir))         // scratch dir deleted
+  assert.ok((await fs.stat(dir)).isDirectory())
+  await tm.rehydrate(); assert.equal(tm.get(id), undefined)
 })
 
 test('killAll terminates every session and marks running tasks stopped (PRD §10.4)', async () => {
@@ -812,7 +814,7 @@ test('dispatch persists kind in meta.json; defaults to oneoff with home === cwd'
   tm.killAll()
 })
 
-test('Codex work never touches the App Server hub, even when one is wired — it always gets the persistent PTY path', async () => {
+test('owned Codex tasks use a structured thread without creating a mirror PTY', async () => {
   // THE BUG THIS EXISTS FOR. Routing fresh Codex dispatch through the hub
   // whenever one was available meant every Codex task's terminal depended on
   // the hub's own App Server process — an ordinary child process that dies
@@ -839,6 +841,7 @@ test('Codex work never touches the App Server hub, even when one is wired — it
     },
     async send() { return true },
     threadIdFor() { return undefined },
+    stop() {},
   }
   const agents: Array<AgentKind | undefined> = []
   const tm = new TaskManager({
@@ -850,14 +853,16 @@ test('Codex work never touches the App Server hub, even when one is wired — it
   const persistent = await tm.dispatch('long Codex thread', { agent: 'codex', kind: 'session' })
   const oneoff = await tm.dispatch('quick Codex errand', { agent: 'codex', kind: 'oneoff' })
 
-  assert.equal(hubStarts, 0, 'the hub must never be asked to start a thread for fresh Codex work')
-  assert.deepEqual(agents, ['codex', 'codex'], 'both still spawn a real, owned Codex PTY')
+  assert.equal(hubStarts, 2, 'each task owns an addressable structured thread')
+  assert.deepEqual(agents, [], 'structured sessions must not spawn a second writer')
   assert.equal(tm.get(persistent)!.agent, 'codex')
   assert.equal(tm.get(oneoff)!.agent, 'codex')
   // codexRolloutId is learned later, from the rollout itself, once Codex
   // mints it — never synchronously at dispatch (see pollCodexCli).
-  assert.equal(tm.get(persistent)!.codexRolloutId, undefined)
-  assert.equal(tm.get(oneoff)!.codexRolloutId, undefined)
+  assert.equal(tm.get(persistent)!.codexRolloutId, 'codex-thread-1')
+  assert.equal(tm.get(oneoff)!.codexRolloutId, 'codex-thread-2')
+  const meta = JSON.parse(await fs.readFile(path.join(tm.get(persistent)!.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.codexSessionSettings.cwd, tm.get(persistent)!.cwd)
   tm.killAll()
 })
 
@@ -910,7 +915,9 @@ test('purgeStale never touches persistent sessions — in memory or as on-disk r
     try { return JSON.parse(await fs.readFile(path.join(root, d, 'meta.json'), 'utf8')) } catch { return null }
   }))
   assert.ok(metas.some((m) => m?.kind === 'session' && m.intent === 'past-run task'), 'on-disk session receipt survives')
-  assert.ok(!metas.some((m) => m?.kind === 'oneoff' && m.intent === 'past-run task'), 'on-disk oneoff orphan purged')
+  assert.ok(metas.some((m) => m?.kind === 'oneoff' && m.intent === 'past-run task'), 'on-disk oneoff bytes are retained')
+  await tm.rehydrate()
+  assert.ok(!tm.list().some(t => t.kind === 'oneoff' && t.intent === 'past-run task'), 'orphan retirement prevents rediscovery')
   tm.killAll()
 })
 
@@ -949,7 +956,7 @@ test('purgeStale keeps a TERMINAL one-off past warmMs — only purgeAgeMs delete
   tm.kill(id)
 })
 
-test('purgeStale DOES erase a terminal one-off once purgeAgeMs has passed', async () => {
+test('purgeStale retires a terminal one-off once purgeAgeMs has passed and retains its files', async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({
     executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0,
@@ -964,7 +971,7 @@ test('purgeStale DOES erase a terminal one-off once purgeAgeMs has passed', asyn
   await tm.purgeStale()
 
   assert.equal(tm.get(id), undefined, 'the backstop still collects what nobody came back for')
-  await assert.rejects(fs.access(home))
+  await fs.access(home)
   tm.kill(id)
 })
 
@@ -1055,21 +1062,16 @@ test('project-bound dispatch: spawns in the project dir and pollutes NOTHING the
   await fs.rm(project, { recursive: true, force: true })
 })
 
-test('project-bound dispatch falls back to scratch when the dir is unusable', async () => {
+test('project-bound dispatch refuses an unavailable folder without silently changing workspaces', async () => {
   const baseDir = await tmpBase()
   let spawned: SpawnOpts | null = null
   const tm = new TaskManager({
     executorFactory: () => makeFakeExecutor({ onSpawn: (o) => { spawned = o } }),
     baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
   })
-  const id = await tm.dispatch('a task', { cwd: '/definitely/not/a/real/dir' })
-  const task = tm.get(id)!
-  assert.equal(task.cwd, task.home, 'fell back to the scratch spawn')
-  assert.equal(spawned!.cwd, task.home)
-  // A scratch spawn is now exactly as clean as a project-bound one: no
-  // CLAUDE.md, and the payload is the intent.
-  const inHome = await fs.readdir(task.home)
-  assert.ok(!inHome.includes('CLAUDE.md'), 'scratch spawn still writes a CLAUDE.md')
+  await assert.rejects(tm.dispatch('a task', { cwd: '/definitely/not/a/real/dir' }), /selected project folder is unavailable/)
+  assert.equal(spawned, null, 'no provider launched in an unintended workspace')
+  assert.equal(tm.list().length, 0, 'no replacement task was silently created')
   tm.killAll()
 })
 
@@ -1541,10 +1543,11 @@ test('a discovered Codex rollout handle is persisted for restart reattachment', 
     executorFactory: () => makeFakeExecutor(),
     baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
   })
-  const id = await tm.dispatch('keep this Codex thread attached', { agent: 'codex', kind: 'session' })
+  const id = await tm.dispatch('keep this Codex thread attached', { kind: 'session' })
   t.after(() => tm.killAll())
   const task = tm.get(id)!
   const rolloutId = randomUUID()
+  task.agent = 'codex' // Legacy/imported session, not a newly owned app-server thread.
 
   // Codex mints this identity after spawn. Persisting only state/conversation
   // leaves a surviving tmux process addressable but its structured transcript

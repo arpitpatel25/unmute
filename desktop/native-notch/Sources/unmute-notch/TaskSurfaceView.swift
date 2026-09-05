@@ -20,6 +20,7 @@ struct TaskSurfaceView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let t {
                 header(t)
+                ChatStatusView(model: model, task: t)
 
                 // THE ASK MOVED BELOW THE REASONING (see the strip further
                 // down). It was the FIRST thing on this surface, so a question
@@ -27,41 +28,14 @@ struct TaskSurfaceView: View {
                 // 2,800 characters that made it answerable — one line, a text
                 // box, and no argument. The headline chain keeps its other
                 // branches; only the question left the top.
-                if terminalMode(t) {
-                    // ONE EXCEPTION TO "TERMINAL ONLY": AN ASK YOU MUST ANSWER.
-                    //
-                    // Codex CLI's approvals now arrive over the App Server, which
-                    // means the TUI never renders them — hiding the block here
-                    // would leave a terminal sitting at a prompt with no visible
-                    // question and no way to reply. A demand outranks the layout.
-                    if t.status == .needsUser, let q = t.question {
-                        QuestionBlock(model: model, taskId: t.id, question: q,
-                                      terminalOpen: taskTerminalBinding).padding(.top, 10)
-                    }
-                    // TERMINAL MODE — THE TERMINAL IS THE PANEL.
-                    //
-                    // This surface used to stack the exchange strip (capped at
-                    // 150pt) ABOVE the terminal, so opening the terminal gave you
-                    // both at once and neither properly: messages squeezed into a
-                    // band, the terminal taking what was left.
-                    //
-                    // A message view and a terminal view are two readings of the
-                    // SAME session, not two halves of one screen. The stage was
-                    // fixed first and this one was missed — which is the whole
-                    // reason the redesign looked unimplemented from the outside.
-                    TerminalPanel(model: model, taskId: t.id,
-                                  tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
-                        .id(t.id)   // ties the PTY stream to THIS task across Next/Prev
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 10)
-                } else {
+                Group {
                     // MESSAGE MODE. One transcript for every backend — this was
                     // ConversationPanel for driver backends and ExchangeStrip for
                     // the rest, two components showing the same thing where only
                     // one of them filled the space it was given.
                     ConversationPanel(rows: model.taskConversationRows, id: t.id,
                                       blocks: model.taskBlocks, usage: model.taskUsage,
-                                      running: t.status == .processing)
+                                      running: t.status == .processing, history: t.history)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 10)
                     if t.status == .needsUser, let q = t.question {
@@ -73,14 +47,14 @@ struct TaskSurfaceView: View {
                     // the box through the 8-15 minute parked-warm window when sending
                     // worked, and it showed the box over a dead executor where every
                     // send was silently retained.
-                    switch composerState(alive: t.alive, status: t.status.rawValue, kind: t.kind) {
+                    switch composerState(alive: t.alive, canCompose: t.canCompose, status: t.status.rawValue, kind: t.kind) {
                     case .composable:
-                        CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
+                        StageComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
                                       modelLabel: t.modelLabel, sending: t.sending ?? false,
-                                      draft: t.draft)
+                                      draft: t.draft, config: t.chatConfig, followup: t.followup, composerMode: t.composerMode, question: t.question)
                             .padding(.top, 9)
                     case .notRunning:
-                        SessionNotRunning(model: model, taskId: t.id, reason: t.deliveryError)
+                        SessionNotRunning(model: model, taskId: t.id, reason: t.deliveryError ?? (t.canResume ? nil : "This connected session cannot resume in chat. Start an Unmute-managed conversation."), canResume: t.canResume)
                             .padding(.top, 9)
                     case .finished:
                         EmptyView()
@@ -147,10 +121,6 @@ struct TaskSurfaceView: View {
     }
 
 
-    /// Is the terminal the whole panel right now? `hasTerminal` comes from the
-    /// provider registry via the engine — a backend with no PTY has no terminal
-    /// to show and no toggle to offer.
-    private func terminalMode(_ t: TaskDetail) -> Bool { t.hasTerminal && model.taskTerminalOpen }
 
     private var taskTerminalBinding: Binding<Bool> {
         Binding(get: { model.taskTerminalOpen },
@@ -166,68 +136,17 @@ struct TaskSurfaceView: View {
 
     private func actions(_ t: TaskDetail) -> some View {
         HStack(spacing: 6) {
-            if !t.hasTerminal {
-                // "resume" / "re-run" / "terminal" are PTY concepts and mean
-                // nothing for a thread living in another app. The one thing that
-                // does make sense is a door into it.
-                KeyButton(label: "Open in Codex", symbol: "arrow.up.forward.app") {
-                    model.emit(.openInTerminal(id: t.id))
-                }
-            } else {
-                // STOP ONLY WHAT IS RUNNING — that one genuinely is a question
-                // about the process.
-                if t.alive {
-                    KeyButton(label: "Stop", symbol: "stop.circle") { model.emit(.kill(id: t.id)) }
-                }
-                // THE TERMINAL TOGGLE IS A VIEW CONTROL, NOT A PROCESS CONTROL.
-                //
-                // It used to live inside `else if t.alive`, so the moment a PTY
-                // was parked the button VANISHED — and with the panel now
-                // offering two views, losing the toggle means being stuck in one
-                // of them with no way across. A parked session still has
-                // scrollback worth reading, and opening it is how you get back
-                // to a session you left.
-                if t.hasTerminal {
-                    KeyButton(label: model.taskTerminalOpen ? "Hide terminal" : "Terminal",
-                              symbol: "terminal") {
-                        model.setTaskTerminalVisible(!model.taskTerminalOpen)
-                    }
-                }
-                // Re-run and Resume belong to a task that has STOPPED, which is a
-                // question about the task, not about whether a process happens to
-                // be held right now.
-                if ended(t) {
-                    KeyButton(label: "Re-run", symbol: "arrow.clockwise") { model.emit(.rerun(id: t.id)) }
-                }
-                if !t.alive && t.canResume {
-                    KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
-                }
-                // QUIET, ON DEMAND — the same thing dictation already does to
-                // your speakers for the length of an utterance, offered as a
-                // choice for the length of a card. Reading a task while a
-                // podcast runs is the case: nothing is capturing, so nothing
-                // pauses it for you.
-                //
-                // It is not tied to the dictation SETTING. That preference is
-                // about whether Unmute may pause things on its own; this is a
-                // press, and a press is not a policy.
-                //
-                // Closing the card gives the audio back whether or not it is
-                // pressed again — see the release on `collapsed`. A mute you
-                // can no longer see is a mute you cannot undo.
-                // "Mute" was the wrong verb and said so out loud: nothing is
-                // muted, the player is PAUSED and resumed where it left off —
-                // which is the whole reason this reads state instead of
-                // sending a toggle. And it is BACKGROUND audio, not the task's
-                // and not the microphone's, which on a task card is what the
-                // bare word would have been read as.
-                KeyButton(label: model.backgroundAudioMuted
-                            ? "Resume background audio" : "Pause background audio",
-                          symbol: model.backgroundAudioMuted ? "play.circle" : "pause.circle") {
-                    let next = !model.backgroundAudioMuted
-                    model.backgroundAudioMuted = next
-                    model.emit(.backgroundAudio(muted: next))
-                }
+            if !t.isOwned && !t.foreignAppName.isEmpty {
+                KeyButton(label: "Open in \(t.foreignAppName)", symbol: "arrow.up.forward.app") { model.emit(.openInTerminal(id: t.id)) }
+            } else if t.isOwned && t.alive && (t.status == .processing || t.status == .needsUser) {
+                KeyButton(label: "Stop", symbol: "stop.circle") { model.emit(.kill(id: t.id)) }
+            } else if !t.alive && t.canResume {
+                KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
+            }
+            KeyButton(label: model.backgroundAudioMuted ? "Resume background audio" : "Pause background audio",
+                      symbol: model.backgroundAudioMuted ? "play.circle" : "pause.circle") {
+                model.backgroundAudioMuted.toggle()
+                model.emit(.backgroundAudio(muted: model.backgroundAudioMuted))
             }
             Spacer(minLength: 0)
             // NOT FOR THE AGENT. It is an element of the pocket, not work you
@@ -238,7 +157,7 @@ struct TaskSurfaceView: View {
                 // This drops OUR card; it has never touched the agent's session. For
                 // a Codex thread — which lives on until you delete it in Codex —
                 // "kill" claims something we do not do and would not want to.
-                KeyButton(label: t.isOwned ? "Kill" : "Remove",
+                KeyButton(label: "Remove",
                           danger: true, symbol: "trash") { model.emit(.remove(id: t.id)) }
             }
         }

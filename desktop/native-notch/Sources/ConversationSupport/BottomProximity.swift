@@ -55,3 +55,11 @@ public func isAtBottom(was: Bool, distance: CGFloat) -> Bool {
     let d = max(0, distance)
     return was ? d <= bottomExitThreshold : d <= bottomEnterThreshold
 }
+
+public func proseMeasure(panelWidth: CGFloat) -> CGFloat {
+    min(760, max(0, panelWidth - 96))
+}
+
+public func codeMeasure(panelWidth: CGFloat) -> CGFloat {
+    max(0, panelWidth - 96)
+}

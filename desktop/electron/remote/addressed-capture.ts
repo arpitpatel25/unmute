@@ -1,6 +1,8 @@
 import type { DraftAttachment, TaskDraft, TaskDraftStore } from './task-draft'
+import type { DraftSubmissionRequest, SubmitDraftOutcome } from './task-followup'
+import { randomUUID } from 'node:crypto'
 
-export interface AddressedCaptureDelivery {
+interface AddressedCaptureStaging {
   taskId: string
   text: string
   attachments: readonly string[]
@@ -8,14 +10,38 @@ export interface AddressedCaptureDelivery {
   persistAttachment: (taskId: string, sourcePath: string) => Promise<DraftAttachment | null>
   onStaged?: (taskId: string, draft: TaskDraft) => void
   onAttachmentStageFailed?: (taskId: string, sourcePath: string, error: Error) => void
-  deliver: (taskId: string, draft: TaskDraft) => Promise<boolean>
 }
+export type AddressedCaptureDelivery = AddressedCaptureStaging & { deliver: (taskId: string, draft: TaskDraft) => Promise<boolean>; submitDraft?: never }
+export type QueuedAddressedCaptureDelivery = AddressedCaptureStaging & { submitDraft: (taskId: string, request: DraftSubmissionRequest) => Promise<SubmitDraftOutcome>; deliver?: never }
 
 /** Stage one complete Right Option capture, expose it through the shared task
  * draft, then submit that exact snapshot to the locked voice address. */
-export async function deliverAddressedCapture(input: AddressedCaptureDelivery): Promise<boolean> {
+export function deliverAddressedCapture(input: QueuedAddressedCaptureDelivery): Promise<SubmitDraftOutcome>
+export function deliverAddressedCapture(input: AddressedCaptureDelivery): Promise<boolean>
+export async function deliverAddressedCapture(input: AddressedCaptureDelivery | QueuedAddressedCaptureDelivery): Promise<boolean | SubmitDraftOutcome> {
   const before = input.drafts.get(input.taskId)
   input.drafts.appendText(input.taskId, (before.text ? '\n' : '') + input.text)
+  if (input.submitDraft) {
+    // Register the whole capture at once so Enter cannot overtake an in-flight
+    // image handoff. The shared coordinator owns acknowledgement and clearing.
+    let failed = false
+    const stages = input.attachments.map(sourcePath => input.drafts.stageAttachment(input.taskId, async () => {
+      try {
+        const owned = await input.persistAttachment(input.taskId, sourcePath)
+        if (!owned) throw new Error('attachment persistence was refused')
+        return owned
+      } catch (error) {
+        failed = true
+        input.onAttachmentStageFailed?.(input.taskId, sourcePath, error instanceof Error ? error : new Error(String(error)))
+        throw error
+      }
+    }).catch(() => {}))
+    await Promise.all(stages)
+    const snapshot = input.drafts.snapshot(input.taskId)
+    if (snapshot) input.onStaged?.(input.taskId, snapshot)
+    if (failed || !snapshot) return { kind: 'retained', reason: failed ? 'Capture attachment staging failed. Your draft is kept.' : 'Nothing to send.' }
+    return input.submitDraft(input.taskId, { id: randomUUID(), snapshot })
+  }
   let attachmentStageFailed = false
   for (const sourcePath of input.attachments) {
     try {

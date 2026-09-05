@@ -17,17 +17,26 @@
 // Everything user-observable is logged via log.ui() and every state change via
 // log.event() so the session logs alone reconstruct the experience.
 
-import { basename, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { promises as fs, watch as fsWatch } from 'node:fs'
+import { promises as fs, watch as fsWatch, constants as fsConstants } from 'node:fs'
 import { EventEmitter } from 'node:events'
+import type { FollowupGate, FollowupRecord, NewTurnOutcome, FollowupTurnEnded } from './task-followup'
 import { createLogger, remoteLogDir } from './log'
 import { writeFileAtomic } from './atomic-file'
 import { reconstructTaskMeta } from './meta-reconstruct'
 import { tapPty } from './pty-tap'
 import { ReconcileScheduler } from './reconcile-scheduler'
 import { AppendFileCache } from './append-file-cache'
+
+function sessionOwnership(meta: Record<string, unknown>): 'unmute' | 'external' | 'unknown' {
+  if (meta.importedFromCli || meta.sessionOwnership === 'external') return 'external'
+  if (meta.sessionOwnership === 'unmute' || meta.claudeSessionSettings || meta.codexSessionSettings) return 'unmute'
+  // Legacy launch receipts carried these fields; legacy adoption receipts did not.
+  if (Array.isArray(meta.injectedRecipes) && typeof meta.sessionId === 'string' && typeof meta.lastUserInputAt === 'number') return 'unmute'
+  return 'unknown'
+}
 
 /** Tap a task's PTY bytes next to the run logs. No-op unless the tap is on. */
 function tapPtyForTask(taskId: string, dir: 'in' | 'out', bytes: Buffer, atMs: number): void {
@@ -75,6 +84,11 @@ import { deriveStatus, isAnswerable, selfContinuationDelaySeconds, type HookEven
 import { readTranscript, hadSideEffects, readLatestExchange, parseTurns } from './transcript'
 import type { Block } from './blocks'
 import { blocksFromClaudeTranscript } from './blocks-claude'
+import { ClaudeTaskSession, type ClaudeTaskOptions } from './claude/task-session'
+import { ClaudeTaskChannel } from './claude/task-channel'
+import { readClaudeHistory, retainClaudeHistoryDisplay } from './claude/chat-history'
+import { isDeepStrictEqual } from 'node:util'
+import type { TaskInput } from './task-input'
 import { blocksFromRollout } from './codex/blocks-rollout'
 
 /**
@@ -103,9 +117,11 @@ import type { AgentExecutor, ExecutorFactory } from './executor'
 import { settleRepl } from './repl-settle'
 import { type AgentKind, isExternalAgent } from './codex-executor'
 import type { CodexDesktopDriver } from './codex/driver'
-import type { CodexHub, HubPatch } from './codex/hub'
+import type { CodexHub, HubPatch, StartThreadOpts } from './codex/hub'
 import type { Activity } from './activity'
-import { codexPosture, type PermissionMode } from './codex/posture'
+import { codexPosture } from './codex/posture'
+import { ManagedProjects, validateProject, type NewChatOptions, type ChatPreview } from './managed-project'
+import { sameQuestion, type QuestionReference, type AnswerContext } from './question-reference'
 import type { ClaudeDesktopDriver } from './claude-desktop/driver'
 import type { ClaudeDesktopAx, ClaudeSidebarRow } from './claude-desktop/ax'
 import { statusForTitle, readState as readAxState, readSidebarRows as readAxSidebar } from './claude-desktop/ax'
@@ -157,8 +173,8 @@ export interface Task {
    *  `--session-id`). A stable handle to THE session this task drives — used for
    *  resume, reading Claude's session store, and future orchestration. */
   sessionId: string
-  /** Species (Orchestrate). 'oneoff' = today's fire-and-forget errand: scratch
-   *  cwd, warm-window idle-kill, 24h purge. 'session' = a persistent working
+  /** Species (Orchestrate). 'oneoff' = an errand with a warm-window idle-kill
+   *  and 24h conversation retirement. Its project survives. 'session' = a persistent working
    *  session (often multi-day, often project-bound): NEVER idle-killed, NEVER
    *  auto-purged — it lives until the user explicitly kills/removes it, and
    *  survives app restarts as interrupted-but-resumable (`--continue` restores
@@ -207,6 +223,15 @@ export interface Task {
    *  after spawn (Codex assigns its own), then pinned — it is both where state
    *  is read from and what `codex resume <id>` takes. */
   codexRolloutId?: string
+  /** Present only for sessions created and owned through the structured API. */
+  codexSessionSettings?: StartThreadOpts
+  managedProjectId?: string
+  permissionReason?: string
+  history?: import('./codex/app-server-events').HistoryState
+  turnOutcome?: import('./blocks').TurnOutcome
+  mcpStatuses?: import('./codex/app-server-events').McpStatus[]
+  questionAcknowledgment?: { reference: QuestionReference; state: 'pending' | 'accepted' }
+  claudeSessionSettings?: Pick<ClaudeTaskOptions, 'model' | 'effort' | 'permissionMode' | 'addDirs' | 'chrome'>
   /** The id Codex's SIDEBAR uses for this thread, when it differs from the
    *  durable one. A not-yet-persisted thread is labelled
    *  `local:client-new-thread:<unrelated-uuid>` and nothing on the row joins the
@@ -301,6 +326,11 @@ export interface Task {
    *  vocabulary — spec 2026-08-16-chat-view-blocks. `conversation` above stays
    *  only for tasks rehydrated from a meta.json written before the upgrade. */
   blocks?: Block[]
+  /** An empty GUI conversation has not submitted a provider turn yet. */
+  chatUnstarted?: boolean
+  claudeForkFromSessionId?: string
+  importedFromCli?: boolean
+  sessionOwnership?: 'unmute' | 'external' | 'unknown'
   /** Token usage for the panel footer, when the provider reports it. */
   usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number }
   /**
@@ -351,14 +381,11 @@ export interface Task {
   state: UiTaskState
   createdAt: number
   updatedAt: number
-  /** Where the agent RUNS. For oneoffs this is the scratch dir (=== home). For
-   *  project-bound sessions this is the user's real project directory — which
-   *  Unmute must treat as READ-ONLY territory (no meta/status/contract files). */
+  /** Where the agent runs: a durable managed project or an existing selected
+   *  folder. Legacy tasks may run inside home; either location is retained. */
   cwd: string
-  /** The Unmute-OWNED dir for this task (~/.unmute/remote/<u>/<id>): meta.json,
-   *  status.json, recipe.json, attachments. Always ours to create/delete; cwd may
-   *  equal it (scratch oneoff) or point elsewhere (project session). Deletion
-   *  paths MUST use home, never cwd. */
+  /** Session receipt location. Legacy homes can contain deliverables, nested
+   *  projects, or symlinks to them. Conversation removal must not delete it. */
   home: string
   statusPath: string
   recipeScratchPath: string
@@ -441,6 +468,10 @@ export interface Task {
 }
 
 export interface TaskManagerOpts {
+  /** Session-scoped credentials/configuration, rebuilt on resume; never persisted. */
+  claudeSessionOptions?: (task: Task) => Promise<Omit<ClaudeTaskOptions, 'onEvent' | 'resume'>>
+  claudeTaskFactory?: (options: ClaudeTaskOptions) => ClaudeTaskSession
+  claudeChoice?: (context?: { cwd: string; home: string; managedProjectId?: string }) => NonNullable<Task['claudeSessionSettings']>
   /** Creates a fresh executor per task (default: ClaudeCodeExecutor). */
   executorFactory: ExecutorFactory
   /** The durable vocabulary of workspace streams (group-registry.ts). Absent ⇒
@@ -547,8 +578,8 @@ export interface TaskManagerOpts {
   /** Recipe librarian (PRD §9). When set, a 'done' task that proposed a recipe
    *  suggestion is submitted for curation. Optional. */
   librarian?: Librarian
-  /** Auto-purge: a task untouched (by updatedAt) for this long is hard-erased on
-   *  the maintenance sweep — session killed, OUR scratch dir deleted, row removed.
+  /** Auto-purge: a task untouched (by updatedAt) for this long is retired on
+   *  the maintenance sweep — session stopped, row hidden, project bytes retained.
    *  Keeps the user from accumulating hundreds of Unmute-spun Claude/tmux sessions.
    *  NEVER touches ~/.claude (Claude cleans its own transcripts on its own clock).
    *  Default 24h ("gone by end of day"). */
@@ -604,7 +635,49 @@ function cleanTranscriptTail(raw: string, maxChars = 4000): string {
 }
 
 export class TaskManager extends EventEmitter {
+  private followupGenerations = new WeakMap<ClaudeTaskSession, number>()
+  private followupNextGeneration = 0
+  followupScope(id: string): { provider: 'claude' | 'codex'; sessionId: string } | undefined {
+    const t = this.tasks.get(id)
+    if (!t || t.origin === 'unmute-agent' || t.sessionOwnership !== 'unmute' || t.importedFromCli || !t.sessionId) return undefined
+    if (t.claudeSessionSettings) return { provider: 'claude', sessionId: t.sessionId }
+    if (t.codexSessionSettings) return { provider: 'codex', sessionId: t.codexRolloutId ?? t.sessionId }
+    return undefined
+  }
+  followupGate(id: string): FollowupGate {
+    const scope = this.followupScope(id), task = this.tasks.get(id)
+    if (!scope || !task || this.shuttingDown) return { kind: 'unavailable', reason: 'This task is not an owned chat.' }
+    if (task.chatUnstarted) return { kind: 'idle', sessionId: scope.sessionId, generation: 0, blocked: false }
+    if ((task.claudeSessionSettings?.permissionMode === 'bypassPermissions' || task.codexSessionSettings?.sandbox === 'danger-full-access') && !this.chatFullAccessAllowed(id)) return { kind: 'unavailable', reason: 'Session permissions exceed the current policy.' }
+    if (scope.provider === 'codex') return this.opts.codexHub?.followupGate(id) ?? { kind: 'unavailable', reason: 'Codex is unavailable.' }
+    const r = this.claudeTasks.get(id)
+    if (!r || r.driver.followupUnavailable) return { kind: 'unavailable', reason: 'Claude is connecting or its acceptance is uncertain. Reconnect before sending.' }
+    const generation = this.followupGenerations.get(r.driver) ?? 0, blocked = !!r.channel.pending || r.driver.followupBlocked
+    return r.driver.activeSubmissionId ? { kind: 'active', fence: { sessionId: scope.sessionId, generation, turnId: r.driver.activeSubmissionId }, blocked }
+      : { kind: 'idle', sessionId: scope.sessionId, generation, blocked }
+  }
+  async deliverQueuedDraft(id: string, record: FollowupRecord, expected: { sessionId: string; generation: number }): Promise<NewTurnOutcome> {
+    const gate = this.followupGate(id), scope = this.followupScope(id), task = this.tasks.get(id)
+    if (!task || !scope || scope.sessionId !== record.sessionId || scope.provider !== record.provider || gate.kind !== 'idle' || gate.blocked
+      || gate.sessionId !== expected.sessionId || gate.generation !== expected.generation) return { kind: 'not-sent', reason: 'The conversation changed. Follow-up saved.' }
+    const text = record.input.flatMap(p => p.type === 'text' ? [p.text] : []).join('')
+    let result: NewTurnOutcome
+    if (scope.provider === 'codex') result = await this.opts.codexHub!.sendNewTurn(id, text, record.input, expected)
+    else {
+      const r = this.claudeTasks.get(id)!, submissionId = record.attemptId ?? randomUUID()
+      r.channel.expectSubmission(submissionId, record.input)
+      result = await r.driver.sendNewTurn(text, record.input.flatMap(p => p.type === 'image' ? [p.path] : []), submissionId, record.input)
+    }
+    if (result.kind === 'accepted') { this.noteUserInput(task, 'queued-chat-send'); this.noteFollowUp(task); task.deliveryError = undefined }
+    else task.deliveryError = result.reason
+    this.emit('updated', task)
+    return result
+  }
   private tasks = new Map<string, Task>()
+  private claudeTasks = new Map<string, { driver: ClaudeTaskSession; channel: ClaudeTaskChannel }>()
+  private claudeHistoryWrites = new Map<string, Promise<void>>()
+  private claudeStarting = new Map<string, Promise<void>>()
+  private chatStopVersion = new Map<string, number>()
   private executors = new Map<string, AgentExecutor>()
   /** One heartbeat for every task. Provider events use trigger() and the
    * heartbeat only repairs missed events / sleep gaps. */
@@ -679,13 +752,21 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>
+    Required<Omit<TaskManagerOpts, 'claudeSessionOptions' | 'claudeTaskFactory' | 'claudeChoice' | 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>> &
+    Pick<TaskManagerOpts, 'claudeSessionOptions' | 'claudeTaskFactory' | 'claudeChoice' | 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>
 
   constructor(opts: TaskManagerOpts) {
     super()
+    opts.codexHub?.onFollowup?.(e => {
+      if (!this.followupScope(e.type === 'ended' ? e.event.taskId : e.taskId)) return
+      if (e.type === 'ended') this.emit('followup-turn-ended', e.event)
+      else this.emit(e.type === 'disarm' ? 'followup-disarm' : 'followup-ready', { taskId: e.taskId })
+    })
     this.opts = {
       executorFactory: opts.executorFactory,
+      claudeSessionOptions: opts.claudeSessionOptions,
+      claudeTaskFactory: opts.claudeTaskFactory,
+      claudeChoice: opts.claudeChoice,
       codexHub: opts.codexHub,
       sandboxRoots: opts.sandboxRoots,
       codexFullAccess: opts.codexFullAccess,
@@ -975,23 +1056,10 @@ export class TaskManager extends EventEmitter {
       case 'codex-desktop':
         return (intent, opts) => this.dispatchCodexDesktop(intent, opts ?? {})
       case 'codex':
-        // ALWAYS the PTY + rollout path now — never the hub, even when one is
-        // wired. That path was originally just the fallback for a Codex too
-        // old for `app-server`; it is a complete, already-proven implementation
-        // (tmux-wrapped, settleRepl-navigated, rollout-polled, verified-composer
-        // delivery — the same mechanism Claude and every reply/attachment
-        // already use), so it is now the ONLY path. The hub/App Server process
-        // is an ordinary child process that dies with the app on every quit,
-        // taking the Codex process with it a moment later — which meant every
-        // fresh Codex task, one-off or session, was the only kind of task that
-        // never survived a restart. See dispatchCodexCli's doc comment for what
-        // the hub protocol still buys (`answer()`/attachments still use it for
-        // as long as a hub thread happens to exist — e.g. a task imported from
-        // elsewhere); it is simply never CREATED for fresh dispatch anymore.
-        return null
+        return (intent, opts) => this.dispatchCodexCli(intent, opts ?? {})
       case 'claude':
       case undefined:
-        return null                       // the owned-PTY path below, deliberately
+        return this.opts.claudeSessionOptions ? (intent, opts) => this.dispatchClaudeChat(intent, opts ?? {}) : null
       default: {
         // A backend in the registry with no route. Loud, because the
         // alternative is running it as Claude.
@@ -1000,6 +1068,183 @@ export class TaskManager extends EventEmitter {
         return null
       }
     }
+  }
+
+  private managedProjects?: ManagedProjects
+  private projects(): ManagedProjects {
+    return this.managedProjects ??= new ManagedProjects(join(this.opts.baseDir, '.managed-projects', this.opts.userKey ?? 'local'))
+  }
+
+  newChatPolicy(provider: 'claude' | 'codex', permission?: string) {
+    const roots = (this.opts.sandboxRoots?.() ?? []).filter(r => r.trim())
+    const fullAllowed = this.providerFullAccessAllowed(provider)
+    if (permission && !['maximum', 'full', 'ask', ...(provider === 'claude' ? ['plan'] : ['read'])].includes(permission)) throw new Error('Unsupported session permission')
+    if (permission === 'full' && !fullAllowed) throw new Error('Full access exceeds the configured roots or Codex consent cap')
+    const maximum = !permission || permission === 'maximum' || permission === 'full'
+    const posture = codexPosture({ permissionMode: maximum ? 'auto-approve' : 'prompt', sandboxRoots: roots, fullAccessAllowed: this.opts.codexFullAccess?.() === true })
+    return {
+      permission: maximum ? fullAllowed ? 'full' : provider === 'codex' ? 'workspace' : 'ask' : permission!,
+      permissionReason: maximum && !fullAllowed ? roots.length ? 'Full access is limited by the configured sandbox roots.' : 'Full filesystem access requires Codex full-access consent; this session can work in its workspace without approval prompts.' : undefined,
+      claude: { permissionMode: (permission === 'plan' ? 'plan' : maximum && fullAllowed ? 'bypassPermissions' : 'manual') as NonNullable<Task['claudeSessionSettings']>['permissionMode'], addDirs: roots },
+      codex: { approvalPolicy: posture.approvalPolicy, sandbox: permission === 'read' ? 'read-only' : posture.sandbox, writableRoots: posture.addDirs },
+    }
+  }
+
+  async previewChat(options: NewChatOptions): Promise<ChatPreview> {
+    if (!['claude', 'codex'].includes(options.provider)) throw new Error('Unsupported conversation provider')
+    const allocation = await this.projects().preview(options.provider)
+    const policy = this.newChatPolicy(options.provider, options.permission)
+    return { ...allocation, permission: policy.permission, permissionReason: policy.permissionReason }
+  }
+
+  private async projectFor(options: NewChatOptions): Promise<{ cwd: string; managedProjectId?: string }> {
+    if (options.cwd) {
+      if (options.allocationId) throw new Error('Choose either an existing folder or the previewed managed project')
+      await validateProject(options.cwd)
+      return { cwd: options.cwd }
+    }
+    return this.projects().create(options.provider, options.allocationId)
+  }
+
+  /** Allocate a durable project and a separate conversation receipt. */
+  async createChat(options: NewChatOptions): Promise<string> {
+    if (!['claude', 'codex'].includes(options.provider)) throw new Error('Unsupported conversation provider')
+    const policy = this.newChatPolicy(options.provider, options.permission)
+    const id = randomUUID(), now = this.clock()
+    const home = join(this.opts.baseDir, this.opts.userKey!, id)
+    const project = await this.projectFor(options), { cwd } = project
+    await fs.mkdir(home, { recursive: true, mode: 0o700 })
+    const task: Task = {
+      ...project, permissionReason: policy.permissionReason,
+      id, intent: 'New conversation', sessionId: options.provider === 'claude' ? randomUUID() : '',
+      agent: options.provider, home, cwd, kind: 'session', state: 'done', chatUnstarted: true, sessionOwnership: 'unmute',
+      createdAt: now, updatedAt: now, lastHeartbeatMs: now, lastMtimeMs: now,
+      statusPath: join(home, 'status.json'), recipeScratchPath: join(home, 'recipe.json'),
+      mode: 'managed', injectedRecipes: [],
+      ...(options.provider === 'claude' ? { claudeSessionSettings: { ...this.opts.claudeChoice?.({ ...project, home }), ...policy.claude } }
+        : { codexSessionSettings: { ...this.opts.codexCliChoice?.(), cwd, ...policy.codex } }),
+    }
+    await writeFileAtomic(join(home, 'meta.json'), JSON.stringify(task))
+    this.tasks.set(id, task)
+    this.emit('created', task)
+    return id
+  }
+
+  private async connectClaude(task: Task, resume: boolean): Promise<void> {
+    await validateProject(task.cwd)
+    resume = resume && !task.chatUnstarted
+    if (task.claudeSessionSettings?.permissionMode === 'bypassPermissions' && !this.chatFullAccessAllowed(task.id)) throw new Error('Recorded full access exceeds the configured sandbox roots. Select Ask for approval before resuming.')
+    if (this.claudeTasks.get(task.id)?.driver.alive) return
+    const pending = this.claudeStarting.get(task.id)
+    if (pending) return pending
+    const starting = (async () => {
+      if (!this.opts.claudeSessionOptions) throw new Error('Claude structured transport is unavailable')
+      const historyPath = join(task.home, 'chat-frames.json')
+      await this.claudeHistoryWrites.get(task.id)
+      let restoredFrames: Array<Record<string, any>> | undefined
+      const channel = new ClaudeTaskChannel(p => {
+        if (this.shuttingDown || this.claudeTasks.get(task.id)?.channel !== channel) return
+        task.lastHeartbeatMs = this.clock()
+        this.applyHubPatch({ taskId: task.id, ...p })
+      }, frames => {
+        if (this.claudeTasks.get(task.id)?.channel !== channel) return
+        const data = JSON.stringify(frames)
+        const writes = (this.claudeHistoryWrites.get(task.id) ?? Promise.resolve()).then(() => writeFileAtomic(historyPath, data)).catch(error => {
+          task.deliveryError = `Could not save chat history: ${(error as Error).message}`
+          this.emit('updated', task)
+        })
+        this.claudeHistoryWrites.set(task.id, writes)
+      })
+      if (resume || task.claudeForkFromSessionId) {
+        const recovered = await readClaudeHistory({ ...task, sessionId: task.claudeForkFromSessionId ?? task.sessionId, chatUnstarted: false })
+        restoredFrames = recovered.frames
+        task.history = recovered.history
+        if (recovered.history.phase !== 'ready') {
+          const retained = task.blocks?.length ? task.blocks : (task.conversation ?? []).map(m => ({ kind: 'message', role: m.role, text: m.text }))
+          if (retained.length) {
+            const projection = blocksFromClaudeTranscript(ClaudeTaskChannel.displayTranscript(restoredFrames))
+            // Only a matching whole projection establishes that a pending
+            // raw call owns a retained row. Never guess from a similar label.
+            const pendingTools = isDeepStrictEqual(projection.blocks, retained) ? projection.pendingTools : undefined
+            restoredFrames = retainClaudeHistoryDisplay(restoredFrames, retained as Block[], pendingTools)
+          }
+        }
+      }
+      const options = await this.opts.claudeSessionOptions(task)
+      if (task.claudeSessionSettings?.chrome === undefined) {
+        task.claudeSessionSettings = { ...task.claudeSessionSettings, chrome: options.chrome ?? false }
+        this.mergeMeta(task, { claudeSessionSettings: task.claudeSessionSettings }, 'record-browser-choice')
+        await this.metaChains.get(task.id)
+      }
+      const driver = (this.opts.claudeTaskFactory ?? (o => new ClaudeTaskSession(o)))({
+        ...options, ...task.claudeSessionSettings, sessionId: task.sessionId, cwd: task.cwd, resume,
+        ...(!resume && task.claudeForkFromSessionId ? { forkFromSessionId: task.claudeForkFromSessionId } : {}),
+        onEvent: e => {
+          const live = this.claudeTasks.get(task.id)
+          if (!live || live.channel !== channel) return
+          channel.event(e)
+          if (!this.followupScope(task.id)) return
+          if (e.type === 'error' || e.type === 'closed') this.emit('followup-disarm', { taskId: task.id })
+          else if (e.type === 'result' && e.submissionId) {
+            const generation = this.followupGenerations.get(live.driver) ?? 0
+            const stopVersion = this.chatStopVersion.get(task.id) ?? 0
+            void Promise.resolve(live.driver.submissionFinished).then(() => {
+              if (this.claudeTasks.get(task.id) !== live || live.driver.followupUnavailable || (this.chatStopVersion.get(task.id) ?? 0) !== stopVersion) return
+              this.emit('followup-turn-ended', { taskId: task.id, fence: { sessionId: task.sessionId, generation, turnId: e.submissionId! },
+                outcome: !e.message.is_error && e.message.subtype === 'success' ? 'completed' : 'failed' } satisfies FollowupTurnEnded)
+            })
+          } else this.emit('followup-ready', { taskId: task.id })
+        },
+      })
+      this.followupGenerations.set(driver, ++this.followupNextGeneration)
+      this.emit('followup-disarm', { taskId: task.id })
+      this.claudeTasks.set(task.id, { driver, channel })
+      if (restoredFrames) channel.restore(restoredFrames)
+      await driver.start()
+    })().finally(() => this.claudeStarting.delete(task.id))
+    this.claudeStarting.set(task.id, starting)
+    return starting
+  }
+
+  private async dispatchClaudeChat(intent: string, opts: NonNullable<Parameters<TaskManager['dispatch']>[1]>): Promise<string> {
+    const id = randomUUID(), sessionId = randomUUID(), now = this.clock()
+    const home = join(this.opts.baseDir, this.opts.userKey!, id)
+    const project = await this.projectFor({ provider: 'claude', cwd: opts.cwd }), { cwd } = project
+    const policy = this.newChatPolicy('claude')
+    await fs.mkdir(home, { recursive: true, mode: 0o700 })
+    const task: Task = {
+      ...project, permissionReason: policy.permissionReason,
+      id, sessionId, intent, home, cwd, agent: 'claude', sessionOwnership: 'unmute',
+      claudeSessionSettings: { ...this.opts.claudeChoice?.({ ...project, home }), ...policy.claude },
+      ...(opts.forkFromSessionId ? { claudeForkFromSessionId: opts.forkFromSessionId } : {}),
+      kind: opts.kind ?? 'oneoff', runtimePinned: opts.kind === 'session',
+      state: 'processing', createdAt: now, updatedAt: now, lastHeartbeatMs: now, lastMtimeMs: now,
+      statusPath: join(home, 'status.json'), recipeScratchPath: join(home, 'recipe.json'),
+      surface: opts.surface ?? detectSurface(intent), mode: opts.mode ?? 'managed', injectedRecipes: [],
+      lastUserInputAt: now, spawnedBy: opts.spawnedBy, model: opts.model,
+      codexActivity: { kind: 'lifecycle', label: 'Starting' }, ...(opts.unrouted ? { unrouted: true } : {}),
+    }
+    this.tasks.set(id, task)
+    this.emit('created', task)
+    try {
+      await scaffoldStatusFile(task.statusPath)
+      await writeFileAtomic(join(home, 'meta.json'), JSON.stringify(task))
+      if (opts.forkFromSessionId) {
+        const source = [...this.tasks.values()].find(t => t.sessionId === opts.forkFromSessionId)
+        if (source) await fs.copyFile(join(source.home, 'chat-frames.json'), join(home, 'chat-frames.json')).catch(error => {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        })
+      }
+      await this.connectClaude(task, false)
+      if (this.chatStopVersion.has(id)) throw new Error('Stopped before submission')
+      const runtime = this.claudeTasks.get(id)!, submissionId = randomUUID()
+      runtime.channel.expectSubmission(submissionId, [{ type: 'text', text: intent }, ...(opts.attachments ?? []).map(path => ({ type: 'image' as const, path }))])
+      await runtime.driver.send(intent, [...(opts.attachments ?? [])], submissionId)
+    } catch (error) {
+      this.transition(id, 'failed', { state: 'failed', error: { reason: (error as Error).message } })
+      if (opts.attachments?.length) throw error
+    }
+    return id
   }
 
   async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[]; unrouted?: boolean } = {}): Promise<string> {
@@ -1038,13 +1283,9 @@ export class TaskManager extends EventEmitter {
     // back to the scratch spawn rather than failing the dispatch.
     let runCwd = dir
     if (opts.cwd) {
-      try {
-        const st = await fs.stat(opts.cwd)
-        if (st.isDirectory()) runCwd = opts.cwd
-        else tlog.warn('dispatch: cwd is not a directory — falling back to scratch', { cwd: opts.cwd })
-      } catch {
-        tlog.warn('dispatch: cwd does not exist — falling back to scratch', { cwd: opts.cwd })
-      }
+      const st = await fs.stat(opts.cwd).catch(() => null)
+      if (!st?.isDirectory()) throw new Error(`The selected project folder is unavailable: ${opts.cwd}`)
+      runCwd = opts.cwd
     }
     const external = runCwd !== dir
 
@@ -1411,6 +1652,7 @@ export class TaskManager extends EventEmitter {
   onHookEvent(event: HookEvent): void {
     const task = this.taskForSession(event.sessionId, event.cwd)
     if (!task) return
+    if (task.claudeSessionSettings) return // structured stream owns state; hooks are telemetry only
     const tlog = log.child({ taskId: task.id })
     const at = this.clock()
 
@@ -1703,11 +1945,7 @@ export class TaskManager extends EventEmitter {
    * to parse — the thread pushes state, activity and replies over JSON-RPC, and
    * `applyHubPatch` folds them in.
    *
-   * A PTY IS STILL SPAWNED, and it is a TUI attached to the same thread
-   * (`codex resume <threadId> --remote <url>`), not a second conversation. That
-   * is what gives this backend both views: hide the terminal and you are
-   * reading the event stream, show it and you are looking at Codex's own
-   * interface onto the very same thread.
+   * The app-server is the sole writer. No mirror TUI or PTY is spawned.
    *
    * PERMISSIONS TRAVEL WITH THE THREAD (posture.ts), so the user's path fence
    * is honoured per task rather than being a global posture we set once and
@@ -1727,35 +1965,27 @@ export class TaskManager extends EventEmitter {
     const kind = opts.kind ?? 'oneoff'
     await fs.mkdir(dir, { recursive: true }).catch(() => {})
 
-    // The task runs in the user's project when there is one, exactly as the PTY
-    // path decides it — a Codex thread with a real cwd sees their git and their
-    // tooling. Falls back to our scratch dir, never fails the dispatch.
-    let runCwd = dir
-    if (opts.cwd) {
-      try { if ((await fs.stat(opts.cwd)).isDirectory()) runCwd = opts.cwd } catch { /* keep scratch */ }
-    }
-
-    const posture = codexPosture({
-      permissionMode: (this.opts.permissionMode?.() === 'auto-approve' ? 'auto-approve' : 'prompt') as PermissionMode,
-      sandboxRoots: this.opts.sandboxRoots?.() ?? [],
-      fullAccessAllowed: this.opts.codexFullAccess?.() === true,
-    })
+    const project = await this.projectFor({ provider: 'codex', cwd: opts.cwd })
+    const runCwd = project.cwd, policy = this.newChatPolicy('codex')
     // WIRE VALUES, never the display record. `opts.model` is the sentence a
     // card shows; this is the id Codex is asked to run.
     const wire = this.opts.codexCliChoice?.() ?? {}
-    const { threadId, url } = await hub.startThread(id, {
+    const sessionSettings: StartThreadOpts = {
       cwd: runCwd, model: wire.model, effort: wire.effort,
-      approvalPolicy: posture.approvalPolicy, sandbox: posture.sandbox,
-    })
+      ...policy.codex,
+    }
 
     const task: Task = {
+      ...project, permissionReason: policy.permissionReason,
       id,
       intent,
-      sessionId: threadId,          // `codex resume <threadId>` — the same handle
+      sessionId: '',               // Filled only after thread/start acknowledges.
       agent: 'codex',
-      codexRolloutId: threadId,     // the thread id IS the rollout id on disk
+      sessionOwnership: 'unmute',
+      codexSessionSettings: sessionSettings,
       kind,
       state: 'processing',
+      codexActivity: { kind: 'lifecycle', label: 'Starting' },
       createdAt: now,
       updatedAt: now,
       cwd: runCwd,
@@ -1771,39 +2001,21 @@ export class TaskManager extends EventEmitter {
       ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
     } as Task
     this.tasks.set(id, task)
+    this.emit('created', task)
+    try {
+    const { threadId } = await hub.startThread(id, sessionSettings)
+    task.sessionId = threadId
+    task.codexRolloutId = threadId
     await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({
       id, intent, sessionId: threadId, kind, createdAt: now, surface, mode: 'managed',
-      agent: 'codex', codexRolloutId: threadId, state: 'processing', updatedAt: now,
+      agent: 'codex', sessionOwnership: 'unmute', codexRolloutId: threadId, state: 'processing', updatedAt: now,
+      ...project, permissionReason: policy.permissionReason, codexSessionSettings: sessionSettings,
       ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
       ...(task.model ? { model: task.model } : {}),
-    })).catch(() => {})
-    this.emit('created', task)
+    }))
+    this.emit('updated', task)
 
-    // THE TERMINAL VIEW. A TUI on the SAME thread — never a fresh one, which is
-    // why this is `resume <threadId>` and not a bare `codex`. Non-fatal by
-    // construction: the App Server owns the conversation, so a terminal that
-    // fails to attach costs the second view and nothing else.
-    try {
-      const ex = this.opts.executorFactory(false, 'codex', { browser: false, codexRemote: { url, threadId } })
-      this.executors.set(id, ex)
-      this.outputBuffers.set(id, '')
-      ex.onData((chunk) => guardPtyCallback(id, () => {
-        this.notePtyLiveness(id)
-        const cur = (this.outputBuffers.get(id) ?? '') + chunk
-        this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
-        this.emit('output', { taskId: id, chunk })
-      }))
-      // `resume <threadId>` — codexArgs turns resumeSessionId into the
-      // subcommand, and --remote (from the factory) points it at our server.
-      await ex.spawn({ cwd: runCwd, env: process.env, taskId: id, resumeSessionId: threadId })
-    } catch (e) {
-      tlog.warn('codex-cli terminal view unavailable — the thread is unaffected', { error: (e as Error).message })
-    }
-
-    // THE PROMPT GOES OVER THE PROTOCOL, not typed into the PTY. Typing into a
-    // TUI is how the Claude path has to work and it is the source of every
-    // paste race and trust-prompt dance in this file; here the thread takes the
-    // message directly and the terminal simply shows it arriving.
+    // The prompt goes directly over the structured protocol.
     // THE ASK IS PART OF THE CONVERSATION. Without this the transcript opens on
     // an answer to a question it never shows — `intent` lives on the task and
     // the card's title, but the chat view reads `conversation`.
@@ -1819,9 +2031,14 @@ export class TaskManager extends EventEmitter {
     }
     tlog.event('codex-cli-dispatched', {
       threadId, cwd: runCwd, model: wire.model ?? null, effort: wire.effort ?? null,
-      approvalPolicy: posture.approvalPolicy, sandbox: posture.sandbox, fullAccess: posture.fullAccess,
+      approvalPolicy: policy.codex.approvalPolicy, sandbox: policy.codex.sandbox, fullAccess: policy.codex.sandbox === 'danger-full-access',
     })
     return id
+    } catch (error) {
+      this.transition(id, 'failed', { state: 'failed', error: { reason: (error as Error).message } })
+      if (opts.attachments?.length) throw error
+      return id
+    }
   }
 
   /**
@@ -1845,8 +2062,15 @@ export class TaskManager extends EventEmitter {
     // duplicate every block that arrived before this notification.
     if (p.blocks) task.blocks = p.blocks
     if (p.usage) task.usage = p.usage
+    if (p.history) task.history = p.history
+    if ('turnOutcome' in p) task.turnOutcome = p.turnOutcome ?? undefined
+    if (p.mcpStatus) task.mcpStatuses = [...(task.mcpStatuses ?? []).filter(s => s.name !== p.mcpStatus!.name), p.mcpStatus]
     if ('activity' in p) task.codexActivity = p.activity ?? undefined
     if (p.clearQuestion) task.question = undefined
+    if (p.errorReason !== undefined) {
+      task.error = p.errorReason ? { reason: p.errorReason } : undefined
+      if (p.state === 'needs-user' || !p.errorReason) task.deliveryError = p.errorReason || undefined
+    }
 
     // A STATE CHANGE IS THE ONLY THING THAT TRANSITIONS. Everything above is
     // detail about a task that is already where it is; routing it through
@@ -1883,7 +2107,7 @@ export class TaskManager extends EventEmitter {
         // diff landing changes nothing about the task's STATE, and everything
         // about what an open chat view should be showing. Emit without
         // transitioning, so the card updates and the wall does not re-sort.
-        if (p.blocks) this.emit('updated', task)
+        if (p.blocks || p.errorReason !== undefined || 'activity' in p || 'turnOutcome' in p || p.history || p.mcpStatus) this.emit('updated', task)
         if (learnedRolloutId) void this.persistState(task)
         return
       }
@@ -1907,7 +2131,8 @@ export class TaskManager extends EventEmitter {
       void writeStatusFile(task.statusPath, status).catch(() => {})
       return
     }
-    task.updatedAt = this.clock()
+    // Streaming blocks update the open view, not the task's ordering timestamp.
+    if (p.assistantText) task.updatedAt = this.clock()
     this.emit('updated', task)
     if (learnedRolloutId || p.assistantText) void this.persistState(task)
   }
@@ -2552,9 +2777,55 @@ export class TaskManager extends EventEmitter {
    * first time it is looked at. Safe to call repeatedly: blocksChanged() makes a
    * re-read with nothing new a no-op.
    */
-  async loadBlocksFor(id: string): Promise<void> {
+  private historyLoads = new Map<string, Promise<void>>()
+  async loadBlocksFor(id: string, retry = false): Promise<void> {
     const task = this.tasks.get(id)
     if (!task) return
+    if (this.historyLoads.has(id)) return this.historyLoads.get(id)
+    if (!retry && task.history && task.history.phase !== 'empty' && task.history.phase !== 'loading') return
+    if (task.chatUnstarted) {
+      if (task.history?.phase !== 'empty') { task.history = { phase: 'empty' }; this.emit('updated', task) }
+      return
+    }
+    const load = Promise.resolve().then(async () => {
+      task.history = { phase: 'loading' }; this.emit('updated', task)
+      try { await this.loadTaskHistory(task, retry) }
+      catch (error) { task.history = { phase: task.blocks?.length || task.conversation?.length ? 'partial' : 'failed', reason: (error as Error).message, canRetry: true } }
+      if (task.history?.phase === 'loading') task.history = task.blocks?.length ? { phase: 'ready' } : { phase: 'missing', reason: 'No readable history was found for this session.', canRetry: true }
+      this.emit('updated', task)
+    }).finally(() => this.historyLoads.delete(id))
+    this.historyLoads.set(id, load)
+    return load
+  }
+
+  private async loadTaskHistory(task: Task, retry: boolean): Promise<void> {
+    const id = task.id
+    if (task.claudeSessionSettings) {
+      await this.claudeHistoryWrites.get(id)
+      const recovered = await readClaudeHistory(task)
+      task.history = recovered.history
+      if (recovered.frames.some(f => f.type === 'user' || f.type === 'assistant')) {
+        const live = this.claudeTasks.get(id)?.channel
+        if (live) live.mergeHistory(recovered.frames)
+        else {
+          const parsed = blocksFromClaudeTranscript(ClaudeTaskChannel.displayTranscript(recovered.frames))
+          // Block-only legacy/local display has no UUIDs to reconcile safely.
+          // Keep it intact until complete history can replace it; partial raw
+          // recovery remains available for the next exact-session retry.
+          if (recovered.history.phase === 'ready' || !task.blocks?.length && !task.conversation?.length) task.blocks = parsed.blocks
+          if (parsed.usage) task.usage = parsed.usage
+        }
+      }
+      if (task.history.phase === 'missing' && (task.blocks?.length || task.conversation?.length)) task.history = { ...task.history, phase: 'partial' }
+      return
+    }
+    if (task.codexSessionSettings) {
+      if (task.sessionId && this.opts.codexHub) {
+        await validateProject(task.cwd)
+        await this.opts.codexHub.resumeThread(id, task.sessionId, task.codexSessionSettings, retry)
+      }
+      return
+    }
     if (task.agent === 'codex' || isExternalAgent(task.agent)) {
       await this.refreshCodexBlocks(task)
       return
@@ -2979,6 +3250,7 @@ export class TaskManager extends EventEmitter {
 
   private async poll(id: string): Promise<void> {
     const task = this.tasks.get(id)
+    if (task?.claudeSessionSettings || task?.codexSessionSettings) return
     // External backends have no status file — their state comes from elsewhere,
     // and (unlike a PTY task) a `ready` one is still worth watching because the
     // user can continue the thread in the other app. pollCodexDesktop owns its
@@ -3167,7 +3439,7 @@ export class TaskManager extends EventEmitter {
         // written still works for this run, it just forgets across a restart.
         // (Inherited from the `ready` case when the two merged — a finish is a
         // finish, and it is exactly the transition worth persisting.)
-        if (task.agent === 'codex' || isExternalAgent(task.agent)) void this.persistState(task)
+        if (task.claudeSessionSettings || task.agent === 'codex' || isExternalAgent(task.agent)) void this.persistState(task)
         break
       case 'failed': {
         // PRD §13.4 #4: surface WHY.
@@ -3237,6 +3509,16 @@ export class TaskManager extends EventEmitter {
     // exists in the app). followUpCodexDesktop already does the send, the
     // consent clock, and the optimistic transition.
     const target = this.tasks.get(id)
+    if (target && !target.claudeSessionSettings && !target.codexSessionSettings && !isExternalAgent(target.agent) && this.opts.claudeSessionOptions) {
+      target.deliveryError = target.importedFromCli ? 'Externally owned sessions are read-only here. Start a new conversation.' : 'Resume this legacy conversation in graphical chat before sending.'
+      this.emit('updated', target)
+      return false
+    }
+    if (target?.claudeSessionSettings || target?.codexSessionSettings) {
+      target.deliveryError = 'Use the conversation composer or the current question controls. This legacy input path cannot acknowledge a structured answer.'
+      this.emit('updated', target)
+      return false
+    }
     // Claude desktop FIRST. isExternalAgent is true for every driver backend,
     // so without this a Claude Desktop reply fell into the Codex path below and
     // was dropped by its `!codexThreadId` guard — the user types, nothing
@@ -3256,7 +3538,7 @@ export class TaskManager extends EventEmitter {
       target.conversation = [...(target.conversation ?? []), { role: 'user', text: userAnswer }]
       this.noteUserInput(target, 'codex-cli-answer')
       this.noteFollowUp(target) // graduation (§5)
-      void this.opts.codexHub.send(id, userAnswer, { effort: this.opts.codexCliChoice?.().effort }).then((ok) => {
+      void this.opts.codexHub.send(id, userAnswer, { effort: target.codexSessionSettings?.effort ?? this.opts.codexCliChoice?.().effort }).then((ok) => {
         if (!ok) tlog.warn('codex-cli reply not delivered', {})
       })
       return true
@@ -3418,39 +3700,53 @@ export class TaskManager extends EventEmitter {
   /** Merge the observed provider identity, state, timestamp and conversation
    *  into the task's meta.json. */
   private async persistState(task: Task): Promise<void> {
-    const path = join(task.home, 'meta.json')
-    try {
-      const raw = await fs.readFile(path, 'utf8')
-      const meta = JSON.parse(raw) as Record<string, unknown>
-      const convo = task.conversation ?? []
-      const sameConvo = JSON.stringify(meta.conversation ?? []) === JSON.stringify(convo)
-      const sameRolloutId = meta.codexRolloutId === task.codexRolloutId
-      const sameSessionId = meta.sessionId === task.sessionId
-      if (meta.state === task.state && meta.updatedAt === task.updatedAt && sameConvo && sameRolloutId && sameSessionId) return
-      // THE CONVERSATION HAS TO SURVIVE A RESTART. It lived only in memory, so
-      // every relaunch emptied the chat strip for every existing task and left
-      // the short status line standing where the exchange should be — which is
-      // exactly what a surface meant to replace reading the terminal cannot do.
-      // status.json already persists; this is the other half.
-      await writeFileAtomic(path, JSON.stringify({
-        ...meta, state: task.state, updatedAt: task.updatedAt,
-        ...(task.sessionId ? { sessionId: task.sessionId } : {}),
-        ...(task.codexRolloutId ? { codexRolloutId: task.codexRolloutId } : {}),
-        ...(convo.length ? { conversation: convo } : {}),
-      }))
-    } catch { /* absent or unreadable — nothing to keep in sync */ }
+    // Share the per-task queue with configuration and draft lifecycle updates;
+    // concurrent read/merge/write operations must not restore stale settings.
+    this.mergeMeta(task, {
+      state: task.state, updatedAt: task.updatedAt,
+      ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+      ...(task.codexRolloutId ? { codexRolloutId: task.codexRolloutId } : {}),
+      conversation: task.conversation ?? [],
+      turnOutcome: task.turnOutcome,
+    }, 'state')
+    await this.metaChains.get(task.id)
   }
 
   /** Instant kill (PRD §10.4). Closes the session; marks failed if not terminal. */
   /** Explicit user stop (PRD §10.4). Hard-kills the session immediately. */
   kill(id: string): void {
+    if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
     const tlog = log.child({ taskId: id })
     tlog.ui('task-row.killed', {})
     const task = this.tasks.get(id)
+    if (task?.claudeSessionSettings) {
+      this.chatStopVersion.set(id, (this.chatStopVersion.get(id) ?? 0) + 1)
+      const runtime = this.claudeTasks.get(id)
+      runtime?.channel.requestStop()
+      task.codexActivity = { kind: 'lifecycle', label: 'Cancelling' }
+      this.emit('updated', task)
+      if (runtime?.driver.busy) void runtime.driver.interrupt().catch(error => {
+        task.codexActivity = undefined
+        task.deliveryError = `Could not stop Claude: ${(error as Error).message}`
+        this.emit('updated', task)
+      })
+      else this.transition(id, 'failed', { state: 'failed', error: { reason: 'Stopped before the session connected' } })
+      return
+    }
     // A stopped task must stop asking. Leaving the request on disk would keep
     // re-blocking a card the user just killed, and would hold the Codex hook
     // waiting for an answer that is never coming.
     if (task?.codexThreadId) { this.surfacedApprovals.delete(task.codexThreadId); void clearApproval(task.codexThreadId) }
+    if (task?.codexSessionSettings) {
+      void this.opts.codexHub?.interrupt(id).then((ok) => {
+        if (!ok) {
+          task.deliveryError = 'Could not stop Codex. Reconnect and try again.'
+          task.codexActivity = undefined
+          this.emit('updated', task)
+        }
+      })
+      return
+    }
     if (task && !SETTLED.includes(task.state)) {
       task.state = 'failed'
       task.error = { reason: 'Stopped by you' }
@@ -3462,16 +3758,18 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
-   * Kill/Delete (PRD §10.4 hard erase). Terminates the session, removes the task
-   * from the list ENTIRELY, and deletes its scratch dir. This is the destructive
-   * "nuke it" the user confirms — distinct from kill()/Stop which keeps the row.
-   * The scratch dir holds only status/recipe + the session cwd, never the user's
-   * real deliverables (those land wherever Claude put them).
+   * Remove a conversation: terminate its session and retire its visible record.
+   * Project and legacy receipt trees stay in place; their contents are not
+   * disposable merely because they were produced inside a task home.
    */
   async remove(id: string): Promise<void> {
+    if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
     const tlog = log.child({ taskId: id })
     tlog.ui('task-row.removed', {})
     const task = this.tasks.get(id)
+    // A durable external tombstone precedes removal. Legacy homes may contain
+    // user projects (including files named like receipts); preserve all bytes.
+    if (task) await this.retireRecord(id)
     if (task?.codexThreadId) { this.surfacedApprovals.delete(task.codexThreadId); void clearApproval(task.codexThreadId) }
     // Remember the dismissal BEFORE the task leaves the map, or the adoption
     // sweep puts this conversation straight back (see claudeDismissed).
@@ -3482,14 +3780,8 @@ export class TaskManager extends EventEmitter {
     this.hardKill(id) // terminate session (PTY + tmux kill-session)
     this.tasks.delete(id)
     this.outputBuffers.delete(id)
-    if (task) {
-      // Delete HOME (our scratch/receipt dir), NEVER cwd: for a project-bound
-      // session cwd is the user's real project directory — rm'ing it would
-      // destroy their repo. home === cwd for scratch oneoffs (same behavior).
-      try { await fs.rm(task.home, { recursive: true, force: true }) } catch (e) {
-        tlog.warn('remove: scratch dir delete failed', { error: (e as Error).message })
-      }
-    }
+    // Retained homes cannot resurface through receipt reconstruction. Cleanup
+    // never guesses which bytes in a legacy project are disposable metadata.
     this.emit('removed', { id } as unknown as Task)
     tlog.event('task-removed', {})
   }
@@ -3512,6 +3804,7 @@ export class TaskManager extends EventEmitter {
     let restored = 0
     for (const id of ids) {
       if (this.tasks.has(id)) continue
+      if (await this.recordRetired(id)) continue
       const dir = join(root, id)
       let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result'] }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { meta = {} }
@@ -3676,7 +3969,10 @@ export class TaskManager extends EventEmitter {
       // receipt because status.json is only their launch scaffold. Codex
       // one-offs use status.json to repair completed historical receipts.
       const persistedState = normalizeState(meta.state) as UiTaskState | undefined
-      const recoveredState = meta.agent === 'codex' && isSession
+      const structured = Boolean((meta as Task).claudeSessionSettings || (meta as Task).codexSessionSettings)
+      const recoveredState = structured
+        ? (terminal ? status!.state : persistedState === 'done' || persistedState === 'failed' ? persistedState : 'failed')
+        : meta.agent === 'codex' && isSession
         ? persistedState ?? (terminal ? status!.state : 'done')
         : terminal
           ? status!.state
@@ -3696,13 +3992,22 @@ export class TaskManager extends EventEmitter {
         // Claude. Only genuinely old receipts take the compatibility default.
         agent: meta.agent ?? 'claude',
         ...(meta.codexRolloutId ? { codexRolloutId: meta.codexRolloutId } : {}),
+        ...((meta as { codexSessionSettings?: StartThreadOpts }).codexSessionSettings
+          ? { codexSessionSettings: (meta as { codexSessionSettings: StartThreadOpts }).codexSessionSettings } : {}),
+        ...((meta as Task).claudeSessionSettings ? { claudeSessionSettings: (meta as Task).claudeSessionSettings } : {}),
+        ...((meta as Task).managedProjectId ? { managedProjectId: (meta as Task).managedProjectId } : {}),
+        ...((meta as Task).permissionReason ? { permissionReason: (meta as Task).permissionReason } : {}),
         ...(meta.model ? { model: meta.model } : {}),
+        ...((meta as Task).chatUnstarted ? { chatUnstarted: true } : {}),
+        ...((meta as Task).importedFromCli ? { importedFromCli: true } : {}),
+        sessionOwnership: sessionOwnership(meta as Record<string, unknown>),
         kind: meta.kind ?? 'oneoff',
         followUps: meta.followUps,
         // A non-terminal task whose session died with the app is, to the user,
         // interrupted — surface it as failed (still resumable) rather than a
         // forever-spinning 'processing'. Sessions get `ready` instead (above).
         state: recoveredState,
+        turnOutcome: (meta as Task).turnOutcome,
         createdAt: meta.createdAt ?? now,
         updatedAt: (await statusMtimeMs(statusPath)) ?? meta.createdAt ?? now,
         // Project-bound sessions ran in the user's real dir (meta.cwd); resume
@@ -3715,8 +4020,10 @@ export class TaskManager extends EventEmitter {
         lastHeartbeatMs: now,
         category: status?.category,
         result: status?.result,
-        error: terminal ? status?.error : (isSession ? undefined : { reason: 'Interrupted by an app restart — resume to continue' }),
-        question: status?.question,
+        error: structured
+          ? (recoveredState === 'failed' ? { reason: 'Session disconnected — resume to continue' } : undefined)
+          : terminal ? status?.error : (isSession ? undefined : { reason: 'Interrupted by an app restart — resume to continue' }),
+        question: structured ? undefined : status?.question,
         surface: meta.surface,
         mode: meta.mode ?? 'managed',
         injectedRecipes: meta.injectedRecipes ?? [],
@@ -3730,6 +4037,18 @@ export class TaskManager extends EventEmitter {
         note: meta.note || undefined,
         spawnedBy: meta.spawnedBy || undefined,
         ...this.groupFromMeta(meta),
+      }
+      if (task.claudeSessionSettings) {
+        const recovered = await readClaudeHistory(task)
+        task.history = recovered.history
+        const parsed = blocksFromClaudeTranscript(ClaudeTaskChannel.displayTranscript(recovered.frames))
+        if (recovered.history.phase === 'ready' || !task.conversation?.length) task.blocks = parsed.blocks
+        if (parsed.usage) task.usage = parsed.usage
+        if (task.history.phase === 'missing' && task.conversation?.length) task.history = { ...task.history, phase: 'partial' }
+      }
+      if (await fs.lstat(join(task.home, 'attachments')).catch(() => null)) {
+        try { await this.prepareAttachmentStorage(task) }
+        catch (error) { task.deliveryError = `Could not secure attachment storage: ${(error as Error).message}` }
       }
       this.tasks.set(id, task)
       this.emit('created', task)
@@ -4058,10 +4377,10 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
-   * Hard-erase every task untouched for >= purgeAgeMs (ANY state — this also
+   * Retire every one-off task untouched for >= purgeAgeMs (ANY state — this also
    * reaps a still-alive session left behind by an abandoned needs-user/stuck
-   * task, which otherwise never gets its warm-timeout). Scoped to OUR scratch dir
-   * via remove(); NEVER touches ~/.claude. Public so it can be unit-tested.
+   * task, which otherwise never gets its warm-timeout). Preserves project data
+   * through remove(); never touches provider transcript stores.
    */
   async purgeStale(): Promise<void> {
     // THE READY-DECAY VALVE LIVED HERE, and it is gone with the state it
@@ -4106,12 +4425,12 @@ export class TaskManager extends EventEmitter {
     // — so a task went from finished to permanently deleted in one window.
     // armWarmTimer no longer erases either; it stops the runtime and leaves the
     // record, and this is the same change on the sweep's side. purgeAgeMs is
-    // what deletes, and it is the only thing that deletes.
+    // what retires the record. Project bytes survive that retirement too.
     const oneoffCutoff = cutoff
     // 1. IN-MEMORY tasks that have aged out — remove() kills the live session too.
     //    PERSISTENT SESSIONS ARE EXEMPT: a multi-day working session is untouched
-    //    "by updatedAt" for days by design — auto-purging it would delete the
-    //    user's living workspace. Sessions die only by explicit kill/remove.
+    //    "by updatedAt" for days by design. Explicit Remove retires its record;
+    //    it does not delete the workspace.
     //    SHELVED tasks are exempt too — shelving IS the "keep this" gesture.
     const stale = [...this.tasks.values()].filter((t) => {
       if (t.kind === 'session' || t.shelved) return false
@@ -4130,6 +4449,19 @@ export class TaskManager extends EventEmitter {
     await this.purgeOrphanDirs(cutoff)
   }
 
+  private retirementPath(id: string): string {
+    return join(this.opts.baseDir, '.retired-conversations', this.opts.userKey ?? 'local', encodeURIComponent(id) + '.json')
+  }
+  private async recordRetired(id: string): Promise<boolean> {
+    try { await fs.lstat(this.retirementPath(id)); return true }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
+  }
+  private async retireRecord(id: string): Promise<void> {
+    const path = this.retirementPath(id)
+    await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 })
+    await writeFileAtomic(path, JSON.stringify({ id, retiredAt: this.clock() }))
+  }
+
   private async purgeOrphanDirs(cutoff: number): Promise<void> {
     const root = join(this.opts.baseDir, this.opts.userKey ?? 'local')
     let ids: string[]
@@ -4137,6 +4469,7 @@ export class TaskManager extends EventEmitter {
     let removed = 0
     for (const id of ids) {
       if (this.tasks.has(id)) continue // active in memory — handled in pass 1
+      if (await this.recordRetired(id)) continue
       const dir = join(root, id)
       let mtimeMs: number
       try {
@@ -4149,11 +4482,12 @@ export class TaskManager extends EventEmitter {
       // pass 1): if one isn't in memory (e.g. this sweep ran before rehydrate),
       // deleting it would erase a multi-day session behind the user's back.
       try {
-        const meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) as { kind?: string }
-        if (meta.kind === 'session') continue
-      } catch { /* junk/pre-receipt dir — purgeable as before */ }
-      try { this.opts.reapSession?.(id) } catch { /* best-effort */ }
-      try { await fs.rm(dir, { recursive: true, force: true }) } catch { /* ignore */ }
+        const meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) as { kind?: string; origin?: string }
+        if (meta.kind === 'session' || meta.origin === 'unmute-agent') continue
+      } catch { /* unidentified data is retained too */ }
+      await this.retireRecord(id)
+      try { this.opts.reapSession?.(id) } catch { /* best-effort orphan runtime cleanup */ }
+      // No recursive deletion: even incomplete receipts can accompany projects.
       removed++
     }
     if (removed) log.event('purge-orphan-dirs', { removed })
@@ -4165,10 +4499,12 @@ export class TaskManager extends EventEmitter {
    * history. Guarantees no Claude/tmux session is left orphaned.
    */
   killAll(): void {
+    // Invalidate queued delivery before any state change or transport teardown.
+    for (const id of this.tasks.keys()) if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
     // Union of PTY-backed and external-backend tasks. Keying on `executors`
     // alone leaked the poll interval of every codex-desktop task (no executor
     // ⇒ never visited ⇒ setInterval outlived the manager).
-    const ids = [...new Set([...this.executors.keys(), ...this.scheduler.keys()])]
+    const ids = [...new Set([...this.tasks.keys(), ...this.executors.keys(), ...this.scheduler.keys()])]
     for (const id of ids) {
       const task = this.tasks.get(id)
       if (task && !SETTLED.includes(task.state)) {
@@ -4180,13 +4516,20 @@ export class TaskManager extends EventEmitter {
       }
       this.hardKill(id)
     }
+    this.opts.codexHub?.stop()
     log.event('kill-all', { count: ids.length })
   }
 
   /** App shutdown is not the UI's destructive Kill All. Every live terminal
    * runtime detaches and continues; `kind` only controls its later retention. */
   shutdown(): void {
+    for (const id of this.tasks.keys()) if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
     this.shuttingDown = true
+    for (const [id, runtime] of this.claudeTasks) {
+      this.chatStopVersion.set(id, (this.chatStopVersion.get(id) ?? 0) + 1)
+      runtime.driver.close()
+    }
+    this.claudeTasks.clear()
     this.stopMaintenance()
     const ids = [...new Set([...this.tasks.keys(), ...this.executors.keys(), ...this.scheduler.keys()])]
     let detached = 0
@@ -4321,6 +4664,62 @@ export class TaskManager extends EventEmitter {
     return true
   }
 
+  /** Apply choices to this owned conversation only. A provider/cwd is identity,
+   * never a mutable setting. Persist only after the provider accepts setup. */
+  async configureChat(id: string, change: { model?: string; effort?: string; permission?: string }): Promise<void> {
+    const task = this.tasks.get(id)
+    if (!task) throw new Error('This conversation no longer exists')
+    if (task.importedFromCli || task.sessionOwnership === 'external') throw new Error('This session is externally owned; its settings are managed in the original application')
+    if (task.state === 'processing' || task.state === 'needs-user') throw new Error('Finish or stop the current turn before changing session settings')
+    if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
+    const full = change.permission === 'full' || change.permission === undefined && (task.claudeSessionSettings?.permissionMode === 'bypassPermissions' || task.codexSessionSettings?.sandbox === 'danger-full-access')
+    if (full && !this.chatFullAccessAllowed(id)) throw new Error('Full access is unavailable under the configured sandbox roots or full-access consent cap. Update the applicable settings before selecting it for this conversation.')
+    if (task.claudeSessionSettings) {
+      const previous = task.claudeSessionSettings
+      const modes = { full: 'bypassPermissions', ask: 'manual', plan: 'plan' } as const
+      if (change.permission && !(change.permission in modes)) throw new Error('Unsupported Claude permission mode')
+      const next = { ...previous,
+        ...(change.model !== undefined ? { model: change.model || undefined } : {}),
+        ...(change.effort !== undefined ? { effort: change.effort || undefined } : {}),
+        ...(change.permission ? { permissionMode: modes[change.permission as keyof typeof modes] } : {}),
+      }
+      this.claudeTasks.get(id)?.driver.close()
+      this.claudeTasks.delete(id)
+      task.claudeSessionSettings = next
+      try { if (!task.chatUnstarted) await this.connectClaude(task, true) }
+      catch (error) { task.claudeSessionSettings = previous; throw error }
+      this.mergeMeta(task, { claudeSessionSettings: next }, 'chat-config')
+    } else if (task.codexSessionSettings && this.opts.codexHub) {
+      const modes = { full: { approvalPolicy: 'never', sandbox: 'danger-full-access' }, workspace: { approvalPolicy: 'never', sandbox: 'workspace-write' }, ask: { approvalPolicy: 'on-request', sandbox: 'workspace-write' }, read: { approvalPolicy: 'on-request', sandbox: 'read-only' } }
+      if (change.permission && !(change.permission in modes)) throw new Error('Unsupported Codex permission mode')
+      const next = { ...task.codexSessionSettings,
+        ...(change.model !== undefined ? { model: change.model || undefined } : {}),
+        ...(change.effort !== undefined ? { effort: change.effort || undefined } : {}),
+        ...(change.permission ? modes[change.permission as keyof typeof modes] : {}),
+      }
+      if (!task.chatUnstarted) await this.opts.codexHub.resumeThread(id, task.sessionId, next, true)
+      task.codexSessionSettings = next
+      this.mergeMeta(task, { codexSessionSettings: next }, 'chat-config')
+    } else throw new Error('Settings for this externally owned session are managed in its original application')
+    if (change.model !== undefined) task.model = change.model || undefined
+    if (change.permission) { task.permissionReason = undefined; this.mergeMeta(task, { permissionReason: undefined }, 'chat-policy-reason') }
+    task.deliveryError = undefined
+    this.mergeMeta(task, { model: task.model }, 'chat-config-label')
+    this.emit('updated', task)
+  }
+
+  /** The settings UI and session updates share the same enforced cap. */
+  chatFullAccessAllowed(id: string): boolean {
+    const task = this.tasks.get(id)
+    if (!task || task.importedFromCli || task.sessionOwnership === 'external') return false
+    // permissionMode supplies a default, not a prohibition on an explicit
+    // per-session choice. The configured fence and Codex consent remain caps.
+    return this.providerFullAccessAllowed(task.agent)
+  }
+  private providerFullAccessAllowed(provider: Task['agent']): boolean {
+    return !(this.opts.sandboxRoots?.() ?? []).some(root => root.trim()) && (provider !== 'codex' || this.opts.codexFullAccess?.() === true)
+  }
+
   /** Change a task's species. Promotion (oneoff → session) CANCELS any armed
    *  warm-kill timer — the whole point is that the session now outlives idle
    *  windows. Demotion re-arms lifecycle on the next park. Persists to meta so
@@ -4353,6 +4752,12 @@ export class TaskManager extends EventEmitter {
   }): Promise<string | null> {
     for (const t of this.tasks.values()) {
       if (t.sessionId !== input.sessionId) continue
+      const durable = JSON.parse(await fs.readFile(join(t.home, 'meta.json'), 'utf8').catch(() => '{}')) as Record<string, unknown>
+      const ownership = sessionOwnership(durable)
+      t.sessionOwnership = ownership === 'unmute' ? 'unmute' : 'external'
+      if (t.sessionOwnership === 'external') t.importedFromCli = true
+      this.mergeMeta(t, { sessionOwnership: t.sessionOwnership, ...(t.importedFromCli ? { importedFromCli: true } : {}) }, 'cli-rediscovery-provenance')
+      await this.metaChains.get(t.id)
       // ALREADY OURS — but possibly with a BROKEN PATH.
       //
       // Imports made before the cwd fix stored a reconstructed path, which is
@@ -4404,6 +4809,8 @@ export class TaskManager extends EventEmitter {
       name: input.title,
       sessionId: input.sessionId,
       agent: input.agent ?? 'claude',
+      importedFromCli: true,
+      sessionOwnership: 'external',
       // Codex resumes by the id it minted, which IS the rollout id.
       ...(input.agent === 'codex' ? { codexRolloutId: input.sessionId } : {}),
       // A thread the user owns elsewhere is persistent by nature: never
@@ -4434,7 +4841,7 @@ export class TaskManager extends EventEmitter {
       kind: 'session', agent: input.agent ?? 'claude', state: 'done',
       ...(input.group ? { group: input.group } : {}),
       createdAt: task.createdAt, updatedAt: task.updatedAt,
-      cwd: input.cwd, mode: 'managed', importedFromCli: true,
+      cwd: input.cwd, mode: 'managed', importedFromCli: true, sessionOwnership: 'external',
     }, null, 2)).catch((e) => tlog.warn('adopt-cli-session meta write failed', { error: (e as Error).message }))
 
     tlog.event('cli-session-adopted', { sessionId: input.sessionId, cwd: input.cwd, group: input.group ?? null })
@@ -4715,11 +5122,80 @@ export class TaskManager extends EventEmitter {
 
   /** Deliver an attachment-bearing draft through the provider's native image
    * channel. Filesystem paths are never rendered into the user's message. */
-  async deliverDraft(id: string, text: string, attachments: readonly string[], inputTrace?: TaskReplyTrace): Promise<boolean> {
+  async answerQuestion(id: string, text: string, reference: QuestionReference): Promise<boolean> {
+    const task = this.tasks.get(id)
+    if (!task || task.sessionOwnership === 'external' || task.importedFromCli || !sameQuestion(task.question?.reference, reference)
+      || sameQuestion(task.questionAcknowledgment?.reference, reference)) return false
+    task.questionAcknowledgment = { reference: { ...reference }, state: 'pending' }
+    task.question = { ...task.question!, acknowledgment: 'pending' }
+    this.emit('updated', task)
+    let accepted = false
+    try {
+      if (task.claudeSessionSettings) {
+        const runtime = this.claudeTasks.get(id)
+        if (runtime) accepted = await runtime.channel.answer(text, runtime.driver, reference)
+      } else if (task.codexSessionSettings) accepted = this.opts.codexHub?.answer(id, text, reference) ?? false
+      return accepted
+    } catch (error) { task.deliveryError = (error as Error).message; return false }
+    finally {
+      if (sameQuestion(task.questionAcknowledgment?.reference, reference)) {
+        task.questionAcknowledgment = accepted ? { reference: { ...reference }, state: 'accepted' } : undefined
+      }
+      if (sameQuestion(task.question?.reference, reference)) task.question = { ...task.question!, acknowledgment: accepted ? 'accepted' : undefined }
+      if (!accepted) task.deliveryError ||= 'This answer was not accepted. The request may have expired; review the current question and retry.'
+      else task.deliveryError = undefined
+      this.emit('updated', task)
+    }
+  }
+
+  async deliverDraft(id: string, text: string, attachments: readonly string[], inputTrace?: TaskReplyTrace, ordered?: TaskInput[], context: AnswerContext = null): Promise<boolean> {
     const task = this.tasks.get(id)
     if (!task) {
       if (inputTrace) emitTaskReplyStep(log, inputTrace, 'delivery-preflight', 'failed', { reason: 'task-no-longer-exists' })
       return false
+    }
+    if (context) {
+      if (attachments.length) return false
+      return this.answerQuestion(id, text, context)
+    }
+    if (!task.claudeSessionSettings && !task.codexSessionSettings && !isExternalAgent(task.agent) && this.opts.claudeSessionOptions) {
+      task.deliveryError = task.importedFromCli ? 'Externally owned sessions are read-only here. Start a new conversation.' : 'Resume this legacy conversation in graphical chat before sending. Your draft is saved.'
+      this.emit('updated', task)
+      return false
+    }
+    if ((task.claudeSessionSettings || task.codexSessionSettings) && /^\/(clear|compact|model|permissions|resume|quit)\s*$/i.test(text)) {
+      task.deliveryError = 'Use the conversation controls for settings or New conversation for a fresh context. Terminal-only commands are not sent as agent instructions.'
+      this.emit('updated', task)
+      return false
+    }
+    if (task.claudeSessionSettings) {
+      const stopVersion = this.chatStopVersion.get(id) ?? 0
+      try {
+        await this.connectClaude(task, true)
+        if ((this.chatStopVersion.get(id) ?? 0) !== stopVersion) throw new Error('Stopped before submission')
+        const runtime = this.claudeTasks.get(id)!
+        if (runtime.channel.pending) {
+          throw new Error('A request is waiting. Review the current question before sending an answer; this new-turn draft is saved.')
+        }
+        if (runtime.driver.busy) throw new Error('Claude is still working. Your draft is saved; send it after this turn finishes or stop the turn.')
+        const submissionId = randomUUID()
+        runtime.channel.expectSubmission(submissionId, ordered ?? [{ type: 'text', text }, ...attachments.map(path => ({ type: 'image' as const, path }))])
+        await runtime.driver.send(text, [...attachments], submissionId, ordered)
+        if (task.chatUnstarted) {
+          task.chatUnstarted = false
+          task.intent = text.trim().slice(0, 180) || 'Attachment conversation'
+          this.mergeMeta(task, { chatUnstarted: false, intent: task.intent }, 'first-chat-send')
+        }
+        task.deliveryError = undefined
+        this.noteUserInput(task, 'claude-chat-send')
+        this.noteFollowUp(task)
+        this.emit('updated', task)
+        return true
+      } catch (error) {
+        task.deliveryError = (error as Error).message
+        this.emit('updated', task)
+        return false
+      }
     }
     // Graduation (§5) — once here, regardless of which backend branch below
     // ends up handling delivery. This was the actual bug behind a task
@@ -4816,16 +5292,31 @@ export class TaskManager extends EventEmitter {
 
     // Codex app-server has a first-class localImage input. This is the native
     // structured transport and does not involve the PTY view at all.
+    if (task.codexSessionSettings && !(await this.resume(id))) {
+      task.deliveryError = 'Could not reconnect to this Codex conversation'
+      this.emit('updated', task)
+      return outcome(false, 'codex-resume-failed', { draftRetained: true })
+    }
     if (task.agent === 'codex' && this.opts.codexHub?.threadIdFor(id)) {
       selected('codex-app-server', { hubThreadId: this.opts.codexHub.threadIdFor(id) })
       emitTaskReplyStep(tlog, trace, 'provider-call', 'started', { operation: 'turn/start', localImages: attachments.length })
       const ok = await this.opts.codexHub.send(id, text, {
-        effort: this.opts.codexCliChoice?.().effort,
+        newTurnOnly: true,
+        effort: task.codexSessionSettings?.effort ?? this.opts.codexCliChoice?.().effort,
+        ordered,
         attachments,
       })
       if (!ok) {
-        task.deliveryError = 'Could not deliver Codex attachments'
+        task.deliveryError = this.opts.codexHub.validationErrorFor?.(id) ?? task.deliveryError ?? 'Codex did not accept this message. Your draft is saved.'
         this.emit('updated', task)
+      } else {
+        task.deliveryError = undefined
+        this.emit('updated', task)
+      }
+      if (ok && task.chatUnstarted) {
+        task.chatUnstarted = false
+        task.intent = text.trim().slice(0, 180) || 'Attachment conversation'
+        this.mergeMeta(task, { chatUnstarted: false, intent: task.intent }, 'first-chat-send')
       }
       return outcome(ok, ok ? 'codex-app-server-accepted-turn' : 'codex-app-server-refused-turn', { draftRetained: !ok })
     }
@@ -4985,6 +5476,62 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     const task = this.tasks.get(id)
     if (!task) { tlog.warn('resume: no such task'); return false }
+    if (task.importedFromCli || task.sessionOwnership === 'external') {
+      task.resumeError = 'This session is owned outside Unmute and is read-only here. Start a new conversation to avoid simultaneous writers.'
+      this.emit('updated', task)
+      return false
+    }
+    if (!task.claudeSessionSettings && !task.codexSessionSettings && !isExternalAgent(task.agent) && this.opts.claudeSessionOptions) {
+      try {
+        if (task.importedFromCli) throw new Error('This session is owned outside Unmute and is read-only here. Start a new conversation to avoid simultaneous writers.')
+        if (task.sessionOwnership !== 'unmute') throw new Error('Ownership of this legacy session is not verified. It is read-only here to avoid simultaneous writers; start a new conversation.')
+        const live = await this.opts.listLiveRuntimeIds?.()
+        if (this.executors.get(id)?.alive || live?.has(id)) throw new Error('Stop the existing legacy runtime before resuming this conversation in graphical chat.')
+        if (!(await fs.stat(task.cwd).catch(() => null))?.isDirectory()) throw new Error(`Project folder is unavailable: ${task.cwd}`)
+        if (task.agent === 'codex') {
+          const posture = codexPosture({ permissionMode: this.opts.permissionMode?.() === 'auto-approve' ? 'auto-approve' : 'prompt', sandboxRoots: this.opts.sandboxRoots?.() ?? [], fullAccessAllowed: this.opts.codexFullAccess?.() === true })
+          task.codexSessionSettings = { ...this.opts.codexCliChoice?.(), cwd: task.cwd, approvalPolicy: posture.approvalPolicy, sandbox: posture.sandbox, writableRoots: posture.addDirs }
+        } else {
+          const transcript = await findTranscriptById(task.cwd, task.sessionId)
+          if (transcript) {
+            const frames = (await fs.readFile(transcript, 'utf8')).split('\n').filter(Boolean).flatMap(line => { try { return [JSON.parse(line)] } catch { return [] } })
+            await writeFileAtomic(join(task.home, 'chat-frames.json'), JSON.stringify(frames))
+          }
+          task.claudeSessionSettings = this.opts.claudeChoice?.(task) ?? { permissionMode: 'manual' }
+        }
+        this.mergeMeta(task, { claudeSessionSettings: task.claudeSessionSettings, codexSessionSettings: task.codexSessionSettings }, 'structured-migration')
+        await this.metaChains.get(id)
+      } catch (error) { task.resumeError = (error as Error).message; this.emit('updated', task); return false }
+    }
+    if (task.claudeSessionSettings) {
+      try { await this.connectClaude(task, true); return true }
+      catch (error) {
+        task.deliveryError = `Could not resume Claude: ${(error as Error).message}`
+        this.emit('updated', task)
+        return false
+      }
+    }
+    if (task.codexSessionSettings) {
+      if (!this.opts.codexHub) return false
+      try {
+        await validateProject(task.cwd)
+        if (task.codexSessionSettings.sandbox === 'danger-full-access' && !this.chatFullAccessAllowed(id)) throw new Error('Recorded full access exceeds the configured sandbox roots or consent cap. Select Ask for approval before resuming.')
+        if (!task.sessionId && task.chatUnstarted) {
+          const { threadId } = await this.opts.codexHub.startThread(id, task.codexSessionSettings)
+          task.sessionId = threadId
+          task.codexRolloutId = threadId
+          await this.persistState(task)
+        } else {
+          if (!task.sessionId) throw new Error('Session creation was not acknowledged. Start a new conversation.')
+          await this.opts.codexHub.resumeThread(id, task.codexRolloutId ?? task.sessionId, task.codexSessionSettings)
+        }
+        return true
+      } catch (error) {
+        task.deliveryError = `Could not resume Codex: ${(error as Error).message}`
+        this.emit('updated', task)
+        return false
+      }
+    }
 
     // A CODEX TASK IS NOT A PTY, AND RESUMING IT MUST NOT SPAWN ONE.
     //
@@ -5170,6 +5717,7 @@ export class TaskManager extends EventEmitter {
   opened(id: string): void {
     const task = this.tasks.get(id)
     if (!task || (task.kind ?? 'oneoff') !== 'session') return
+    if (task.chatUnstarted || (!task.claudeSessionSettings && !task.codexSessionSettings && this.opts.claudeSessionOptions)) return
     if (isExternalAgent(task.agent)) return
     if (this.executors.get(id)?.alive) return
     if (this.resuming.has(id) || this.opening.has(id)) return
@@ -5267,12 +5815,33 @@ export class TaskManager extends EventEmitter {
       return null
     }
     const safeExt = (ext || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
-    const dir = join(task.home, 'attachments')
-    await fs.mkdir(dir, { recursive: true })
-    const file = join(dir, `attachment-${this.clock()}.${safeExt}`)
-    await fs.writeFile(file, data)
+    const dir = await this.prepareAttachmentStorage(task)
+    const file = join(dir, `attachment-${randomUUID()}.${safeExt}`)
+    await fs.writeFile(file, data, { mode: 0o600, flag: 'wx' })
     tlog.event('file-attached', { file, bytes: data.byteLength })
     return file
+  }
+
+  private async prepareAttachmentStorage(task: Task): Promise<string> {
+    const expected = join(this.opts.baseDir, this.opts.userKey ?? 'local', task.id)
+    if (resolve(task.home) !== resolve(expected)) throw new Error('Attachment storage is not an owned task directory')
+    const root = await fs.realpath(join(this.opts.baseDir, this.opts.userKey ?? 'local'))
+    if (await fs.realpath(task.home) !== join(root, task.id)) throw new Error('Attachment storage cannot follow a redirected task directory')
+    const protectDirectory = async (path: string) => {
+      const handle = await fs.open(path, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
+      try { await handle.chmod(0o700) } finally { await handle.close() }
+    }
+    await protectDirectory(task.home)
+    const dir = join(task.home, 'attachments')
+    await fs.mkdir(dir, { mode: 0o700, recursive: true })
+    await protectDirectory(dir)
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue
+      const handle = await fs.open(join(dir, entry.name), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+      try { const info = await handle.stat(); if (info.isFile() && info.nlink === 1) await handle.chmod(0o600) }
+      finally { await handle.close() }
+    }
+    return dir
   }
 
   /** Forward RAW keystrokes from the live terminal into the session's PTY
@@ -5368,6 +5937,8 @@ export class TaskManager extends EventEmitter {
 
   /** Is the task's PTY still alive (running or parked-warm)? */
   isAlive(id: string): boolean {
+    if (this.tasks.get(id)?.claudeSessionSettings) return this.claudeTasks.get(id)?.driver.alive === true
+    if (this.tasks.get(id)?.codexSessionSettings) return !!this.opts.codexHub?.threadIdFor(id) && this.opts.codexHub.running
     return this.executors.get(id)?.alive === true
   }
 
@@ -5424,6 +5995,11 @@ export class TaskManager extends EventEmitter {
     // user can continue that thread inside Codex and the task has to re-open
     // here rather than going quiet forever.
     const parked = this.tasks.get(id)
+    if (parked?.claudeSessionSettings || parked?.codexSessionSettings) {
+      this.stopPolling(id)
+      if (parked.kind !== 'session' && this.warmMsFor(id) > 0) this.armWarmTimer(id, this.warmMsFor(id))
+      return
+    }
     if (parked && isExternalAgent(parked.agent)) {
       log.child({ taskId: id }).event('parked-external', { backend: parked.agent, note: 'still watching the thread' })
       return
@@ -5547,6 +6123,8 @@ export class TaskManager extends EventEmitter {
 
   /** Hard close: stop polling, cancel warm timer, kill the PTY (PRD §4.5). */
   private hardKill(id: string): void {
+    this.claudeTasks.get(id)?.driver.close()
+    this.claudeTasks.delete(id)
     this.stopPolling(id)
     const wt = this.warmTimers.get(id)
     if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }

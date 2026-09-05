@@ -116,7 +116,7 @@ test('a user message is never mistaken for the agent speaking', () => {
 
 test('noise is ignored, and ignoring it is explicit', () => {
   for (const m of ['thread/tokenUsage/updated', 'account/rateLimits/updated',
-    'mcpServer/startupStatus/updated', 'fuzzyFileSearch/sessionUpdated', 'remoteControl/status/changed']) {
+    'fuzzyFileSearch/sessionUpdated', 'remoteControl/status/changed']) {
     assert.equal(reduceAppServerEvent({ method: m, params: {} }), null, m)
   }
 })
@@ -128,7 +128,7 @@ test('all seven blocking requests become one answerable question', () => {
     ['execCommandApproval', { command: 'rm -rf build' }, 'rm -rf build'],
     ['item/commandExecution/requestApproval', { command: 'npm i' }, 'npm i'],
     ['applyPatchApproval', { fileChanges: { 'a.ts': {}, 'b.ts': {} } }, '2 files'],
-    ['item/fileChange/requestApproval', { fileChanges: { 'a.ts': {} } }, '1 file'],
+    ['item/fileChange/requestApproval', { itemId: 'pending' }, 'not been exposed'],
     ['item/permissions/requestApproval', { reason: 'network access' }, 'network access'],
     ['mcpServer/elicitation/request', { message: 'Pick a database' }, 'Pick a database'],
     ['item/tool/requestUserInput', { prompt: 'Which branch?' }, 'Which branch?'],
@@ -136,8 +136,8 @@ test('all seven blocking requests become one answerable question', () => {
   for (const [method, params, needle] of cases) {
     const q = questionFromApproval(method, params)
     assert.ok(q, `${method} produced no question`)
-    assert.ok(q!.text.includes(needle), `${method}: ${q!.text}`)
-    assert.deepEqual(q!.choices, ['Approve', 'Deny'])
+    assert.ok((q!.text + (q!.details ?? '')).includes(needle), `${method}: ${q!.text}`)
+    assert.deepEqual(q!.choices, method === 'item/permissions/requestApproval' ? ['Allow for turn', 'Allow for session', 'Deny'] : method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval' ? ['Allow once', 'Allow for session', 'Deny', 'Cancel turn'] : ['Approve', 'Deny'])
     assert.equal(q!.kind, 'confirm')
   }
   assert.equal(questionFromApproval('account/chatgptAuthTokens/refresh', {}), null)

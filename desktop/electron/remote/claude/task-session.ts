@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
+import type { TaskInput } from '../task-input'
 
 type Json = Record<string, any>
+export interface ClaudeTaskModel { id: string; label: string; description?: string; efforts: string[] }
 export type ClaudePermissionMode = 'acceptEdits' | 'auto' | 'bypassPermissions' | 'manual' | 'dontAsk' | 'plan'
 export type ClaudeTaskEvent =
   | { type: 'message'; message: Json }
@@ -21,6 +23,8 @@ export interface ClaudeTaskOptions {
   cwd: string
   sessionId?: string
   resume?: boolean
+  /** Fork this source conversation into sessionId (or a newly generated UUID). */
+  forkFromSessionId?: string
   model?: string
   effort?: string
   permissionMode?: ClaudePermissionMode
@@ -49,7 +53,20 @@ export interface ClaudeTaskAnswer {
  * claude-agent-sdk-python Query control protocol. No PTY or global settings.
  * `send` acknowledges a successful stdin write, not model completion. */
 export class ClaudeTaskSession {
+  private acceptancePending = false
+  private acceptanceUncertain = false
+  private writeAttempted = false
+  submissionFinished?: Promise<void>
+  get activeSubmissionId(): string | undefined { return this.active }
+  get followupBlocked(): boolean { return this.requests.size > 0 }
+  get followupUnavailable(): boolean { return this.acceptancePending || this.acceptanceUncertain || !this.alive }
+  async sendNewTurn(text: string, imagePaths: string[], submissionId: string, ordered?: TaskInput[]): Promise<import('../task-followup').NewTurnOutcome> {
+    if (this.followupUnavailable || this.busy || this.requests.size) return { kind: 'not-sent', reason: 'Claude is not ready for a new turn.' }
+    try { await this.send(text, imagePaths, submissionId, ordered, true); return { kind: 'accepted', submissionId } }
+    catch (error) { return { kind: this.acceptanceUncertain ? 'uncertain' : 'not-sent', reason: (error as Error).message } }
+  }
   readonly sessionId: string
+  models: ClaudeTaskModel[] = []
   private child?: ChildProcessWithoutNullStreams
   private starting?: Promise<void>
   private closed = false
@@ -59,7 +76,7 @@ export class ClaudeTaskSession {
   private submitted = new Set<string>()
   private requests = new Map<string, Json>()
   private answering = new Set<string>()
-  private controls = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+  private controls = new Map<string, { resolve: (response: Json) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   private decoder = new StringDecoder('utf8')
   private buffer = ''
   private stderr = ''
@@ -67,6 +84,7 @@ export class ClaudeTaskSession {
   constructor(private readonly options: ClaudeTaskOptions) {
     if (options.resume && !options.sessionId) throw new Error('Resuming Claude requires a session ID')
     this.sessionId = options.sessionId ?? randomUUID()
+    if (options.forkFromSessionId === this.sessionId) throw new Error('A Claude fork requires a distinct child session ID')
   }
   get alive(): boolean { return !!this.child && !this.closed }
   get busy(): boolean { return this.active !== undefined }
@@ -79,7 +97,10 @@ export class ClaudeTaskSession {
 
   private async launch(): Promise<void> {
     const o = this.options
-    const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', o.permissionMode ?? 'manual', o.resume ? '--resume' : '--session-id', this.sessionId]
+    const identityArgs = o.forkFromSessionId
+      ? ['--resume', o.forkFromSessionId, '--fork-session', '--session-id', this.sessionId]
+      : [o.resume ? '--resume' : '--session-id', this.sessionId]
+    const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', o.permissionMode ?? 'manual', ...identityArgs]
     for (const [flag, value] of [['--model', o.model], ['--effort', o.effort], ['--system-prompt-file', o.systemPromptFile], ['--append-system-prompt-file', o.appendSystemPromptFile], ['--settings', o.settingsFile], ['--mcp-config', o.mcpConfigFile]]) if (value) args.push(flag!, value)
     for (const directory of o.addDirs ?? []) args.push('--add-dir', directory)
     if (o.chrome !== undefined) args.push(o.chrome ? '--chrome' : '--no-chrome')
@@ -104,7 +125,13 @@ export class ClaudeTaskSession {
         const detail = this.stderr.trim()
         this.fail(new Error(`Claude exited (${signal ?? code ?? 'unknown'})${detail ? `: ${detail}` : this.busy ? ' before returning a result. Resume this session to continue.' : '. Resume this session to continue.'}`))
       })
-      await this.control({ subtype: 'initialize', hooks: null })
+      const initialized = await this.control({ subtype: 'initialize', hooks: null })
+      this.models = Array.isArray(initialized.models) ? initialized.models.flatMap((m: Json) =>
+        m && typeof m.value === 'string' && typeof m.displayName === 'string' ? [{
+          id: m.value, label: m.displayName,
+          ...(typeof m.description === 'string' ? { description: m.description } : {}),
+          efforts: m.supportsEffort === true && Array.isArray(m.supportedEffortLevels) ? m.supportedEffortLevels.filter((v: unknown): v is string => typeof v === 'string') : [],
+        }] : []) : []
       this.ready = true
     } catch (error) {
       this.fail(error instanceof Error ? error : new Error(String(error)))
@@ -112,11 +139,14 @@ export class ClaudeTaskSession {
     }
   }
 
-  async send(text: string, imagePaths: string[] = [], submissionId: string = randomUUID()): Promise<{ submissionId: string; sessionId: string }> {
-    if (this.busy) throw new Error('A Claude turn is already in progress')
+  async send(text: string, imagePaths: string[] = [], submissionId: string = randomUUID(), ordered?: TaskInput[], newTurnOnly = false): Promise<{ submissionId: string; sessionId: string }> {
+    if (this.busy || this.acceptancePending || this.acceptanceUncertain) throw new Error('A Claude turn is in progress or its acceptance is uncertain. Reconnect before sending again.')
     if (this.submitted.has(submissionId)) throw new Error('This submission has already been accepted')
     if (!text.trim() && !imagePaths.length) throw new Error('Enter a message or attach an image')
     this.active = submissionId // Reserve before async startup or image loading.
+    this.acceptancePending = true; this.writeAttempted = false
+    let finishSubmission!: () => void
+    this.submissionFinished = new Promise(resolve => { finishSubmission = resolve })
     let cancel!: () => void
     let wasCancelled = false
     const cancellationError = new Error('Claude submission cancelled before acceptance')
@@ -126,8 +156,11 @@ export class ClaudeTaskSession {
     try {
       await Promise.race([this.start(), cancelled])
       if (wasCancelled) throw cancellationError
-      const content: Json[] = text ? [{ type: 'text', text }] : []
-      for (const path of imagePaths) {
+      const content: Json[] = []
+      const parts: TaskInput[] = ordered ?? [...(text ? [{ type: 'text' as const, text }] : []), ...imagePaths.map(path => ({ type: 'image' as const, path }))]
+      for (const part of parts) {
+        if (part.type === 'text') { content.push({ type: 'text', text: part.text }); continue }
+        const path = part.path
         const mediaType = ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' } as Record<string, string>)[extname(path).toLowerCase()]
         if (!mediaType) throw new Error(`Unsupported image format: ${path}. Use PNG, JPEG, GIF, or WebP.`)
         const bytes = await Promise.race([(this.options.readImage ?? readFile)(path), cancelled])
@@ -136,15 +169,19 @@ export class ClaudeTaskSession {
         content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: bytes.toString('base64') } })
       }
       if (this.closed) throw new Error('Claude session closed before submission')
+      if (newTurnOnly && this.requests.size) throw new Error('Answer the pending request before sending a new turn')
       // No await between leaving preparation and writing input: interrupts now
       // target an actual submitted CLI turn instead of racing future input.
       this.preparing = undefined
+      this.writeAttempted = true
       await this.write({ type: 'user', uuid: submissionId, session_id: this.sessionId, parent_tool_use_id: null, message: { role: 'user', content } })
       this.submitted.add(submissionId)
-      this.emit({ type: 'turn-start', submissionId, sessionId: this.sessionId })
+      // Stdout may deliver completion before stdin's callback. Never revive a
+      // completed/closed turn (or overwrite a newer turn) with late acceptance.
+      if (this.active === submissionId && !this.closed) this.emit({ type: 'turn-start', submissionId, sessionId: this.sessionId })
       return { submissionId, sessionId: this.sessionId }
-    } catch (error) { if (this.active === submissionId) this.active = undefined; throw error }
-    finally { if (this.preparing === preparation) this.preparing = undefined }
+    } catch (error) { if (this.writeAttempted) this.acceptanceUncertain = true; if (this.active === submissionId) this.active = undefined; throw error }
+    finally { this.acceptancePending = false; finishSubmission(); if (this.preparing === preparation) this.preparing = undefined }
   }
 
   async answer(requestId: string, decision: ClaudeTaskAnswer): Promise<void> {
@@ -206,7 +243,7 @@ export class ClaudeTaskSession {
       })
     })
   }
-  private control(request: Json): Promise<void> {
+  private control(request: Json): Promise<Json> {
     const requestId = randomUUID()
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -241,7 +278,7 @@ export class ClaudeTaskSession {
       if (pending) {
         clearTimeout(pending.timer); this.controls.delete(response.request_id)
         if (response.subtype === 'error') pending.reject(new Error(String(response.error ?? 'Claude control request failed')))
-        else pending.resolve()
+        else pending.resolve(response.response ?? {})
       }
       return
     }

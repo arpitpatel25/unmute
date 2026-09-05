@@ -9,11 +9,13 @@
 // handlers call. Pure orchestration over injected deps — unit-testable without
 // a TaskManager, window, or child process.
 import type { EventEmitter } from 'node:events'
+import { sameQuestion, type QuestionReference, type AnswerContext } from '../question-reference'
 import { describeActivity, type Activity } from '../activity'
 import type {
   NotchCommand, NotchEvent, NotchStateName, TaskStatusName,
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
   ScratchpadPayloadP, PocketP, PocketSlotP, PocketMode, TurnP, Block,
+  ChatConfigP, ChatConfigChangeP, DraftInsertionP,
 } from './notch-client'
 import type { TaskDraft } from '../task-draft'
 import { providerOf, type ProviderId } from '../providers'
@@ -81,9 +83,16 @@ export interface TaskLite {
   updatedAt?: number
   result?: { summary: string; detail?: string; artifacts?: Array<{ type: 'url' | 'path'; value: string }> } | null
   error?: { reason: string; detail?: string } | null
-  question?: { text: string; kind?: string; choices?: string[]; irreversible?: boolean } | null
+  question?: import('./notch-client').QuestionP | null
+  questionAcknowledgment?: { reference: QuestionReference; state: 'pending' | 'accepted' }
+  history?: import('../codex/app-server-events').HistoryState
+  turnOutcome?: import('../blocks').TurnOutcome
+  mcpStatuses?: import('../codex/app-server-events').McpStatus[]
   mcpGap?: { integration?: string; fixCommand: string; message: string } | null
   alive?: boolean
+  chatWritable?: boolean
+  chatResumable?: boolean
+  chatOwned?: boolean
 }
 
 export interface ProposalLite {
@@ -109,11 +118,29 @@ export interface NotchControllerDeps {
   /** False when the answer was REFUSED — an open picker Unmute will not drive.
    *  The task is still blocked, so the crank must not move off it. */
   answer(id: string, text: string): boolean
+  answerAsync?(id: string, text: string, reference?: QuestionReference): Promise<boolean>
   getDraft?(id: string): TaskDraft
-  setDraftText?(id: string, text: string): void
-  addDraftImage?(id: string, path: string, mimeType: string, name: string): Promise<void> | void
+  setDraftText?(id: string, text: string, clientRevision?: number): void
+  addDraftImage?(id: string, path: string, mimeType: string, name: string, insertion?: DraftInsertionP): Promise<void> | void
+  reserveDraftAttachment?(id: string, operationId: string, name: string, insertion: DraftInsertionP): void
+  failDraftAttachment?(id: string, operationId: string, error: string): void
+  getChatConfig?(id: string): ChatConfigP | undefined
+  configureChat?(id: string, change: ChatConfigChangeP): Promise<void> | void
+  toggleDraftDictation?(id: string, insertion?: DraftInsertionP): void
+  cancelDraftDictation?(id: string): void
+  createChat?(options: import('../managed-project').NewChatOptions): Promise<string>
+  previewChat?(options: import('../managed-project').NewChatOptions): Promise<import('../managed-project').ChatPreview>
   removeDraftAttachment?(id: string, attachmentId: string): Promise<void> | void
-  sendDraft?(id: string): Promise<boolean> | boolean
+  restoreDraftAttachment?(id: string, attachmentId: string): Promise<void> | void
+  undoDraftAttachment?(id: string, attachmentId: string): Promise<void> | void
+  redoDraftAttachment?(id: string, attachmentId: string): Promise<void> | void
+  sendDraft?(id: string, context?: AnswerContext): Promise<import('../task-followup').SubmitDraftOutcome | boolean> | import('../task-followup').SubmitDraftOutcome | boolean
+  getFollowup?(id: string): import('../task-followup').FollowupP | undefined
+  getComposerMode?(id: string): 'queue' | 'full' | 'answer' | 'send' | 'locked' | undefined
+  draftSubmitting?(id: string): boolean
+  cancelTaskFollowup?(id: string, queueId: string): Promise<boolean> | boolean
+  restoreTaskFollowup?(id: string, queueId: string, confirmUncertain?: boolean): Promise<boolean> | boolean
+  queueSavedTaskFollowup?(id: string, queueId: string): Promise<boolean> | boolean
   kill(id: string): void
   /** Hold background audio quiet, and give it back. Optional: a build without
    *  the media adapter simply never supplies these, and the control is inert
@@ -159,7 +186,7 @@ export interface NotchControllerDeps {
   listSkills(): Promise<SkillItemP[]>
   listProjects(): Promise<Array<{ name: string; path: string }>>
   pinSkill(name: string, on: boolean): Promise<void> | void
-  tapSkill(taskId: string, name: string): void
+  tapSkill(taskId: string, name: string): boolean | Promise<boolean>
   openProject(path: string, name: string): void
   // curator
   listProposals(): Promise<ProposalLite[]>
@@ -188,7 +215,7 @@ export interface NotchControllerDeps {
   scratchpadDeliver?(dest: 'cursor' | 'newTask' | 'openTask'): void
   /** Read a task's chat view from the agent's own source, whatever its state —
    *  see the call in sendDetail. */
-  loadBlocks?(taskId: string): Promise<void>
+  loadBlocks?(taskId: string, retry?: boolean): Promise<void>
   scratchpadDiscard?(): void
 }
 
@@ -374,6 +401,7 @@ export class NotchController {
   // Rails cache (skills/projects/proposals) — refreshed on cockpit open + 5min.
   private skills: SkillItemP[] = []
   private projects: Array<{ name: string; path: string }> = []
+  private creatingChat = false
   private proposals: ProposalLite[] = []
   /** The import rail. Cached like the other rails: it hits the filesystem, and
    *  reconcile runs on every task event. */
@@ -515,6 +543,7 @@ export class NotchController {
     // finishes, it quietly joins today.
     events.on('done', onT)
     events.on('removed', (t: { id: string }) => {
+      this.answerStates.delete(t.id)
       this.dequeue(t.id)
       this.demandStamp.delete(t.id)
       this.stateSeen.delete(t.id); this.demandSeen.delete(t.id)
@@ -578,9 +607,10 @@ export class NotchController {
     on('pocketExpand', () => this.onPocketExpand())
     on('importSession', (e) => void this.onImportSession((e as { sessionId: string }).sessionId))
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
+    on('reloadHistory', (e) => { const id = (e as { id: string }).id; if (this.deps.getTask(id)) void this.deps.loadBlocks?.(id, true).catch(() => {}) })
     on('mute', (e) => this.onMute((e as { id: string }).id))
     on('answerText', (e) => {
-      const { id, text } = e as { id: string; text: string }
+      const { id, text, reference } = e as { id: string; text: string; reference?: QuestionReference }
       // Advancing the crank is only right when this WAS the blocking question.
       // The Codex composer is always available, so a plain reply must not fling
       // the user onto whatever unrelated task happens to be queued next.
@@ -593,11 +623,7 @@ export class NotchController {
       // open, `answer` sends nothing and the task stays blocked — cranking to
       // the next task there would carry the user away from the very question
       // they still have to go answer, and away from the card explaining why.
-      this.attentionAcknowledged.delete(id) // speaking starts a fresh episode
-      this.addressed(id)
-      const landed = this.deps.answer(id, text)
-      if (wasBlocking && landed) this.advanceAfterAnswer(id)
-      else this.scheduleReconcile()
+      this.submitAnswer(id, text, wasBlocking, reference)
     })
     on('setDraftText', (e) => {
       const draft = e as { id: string; text: string }
@@ -605,15 +631,91 @@ export class NotchController {
       // a draft store keyed by task id something that is not a task is how a
       // surface ends up writing into a record nothing owns.
       if (draft.id === NotchController.AGENT_SLOT) { this.agentDraft = draft.text; return }
-      const { id, text } = e as { id: string; text: string }
+      const { id, text, clientRevision } = e as { id: string; text: string; clientRevision?: number }
       devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'setDraftText', textChars: text.length })
-      this.deps.setDraftText?.(id, text)
+      this.deps.setDraftText?.(id, text, clientRevision)
+      this.scheduleReconcile()
+    })
+    on('reserveDraftAttachment', (e) => {
+      const { id, operationId, name, ...insertion } = e as { id: string; operationId: string; name: string } & DraftInsertionP
+      this.deps.reserveDraftAttachment?.(id, operationId, name, { ...insertion, operationId })
+      this.scheduleReconcile()
+    })
+    on('failDraftAttachment', (e) => {
+      const { id, operationId, error } = e as { id: string; operationId: string; error: string }
+      this.deps.failDraftAttachment?.(id, operationId, error)
       this.scheduleReconcile()
     })
     on('addDraftImage', (e) => {
-      const { id, path, mimeType, name } = e as { id: string; path: string; mimeType: string; name: string }
+      const { id, path, mimeType, name, ...insertion } = e as { id: string; path: string; mimeType: string; name: string } & DraftInsertionP
       devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'addDraftImage', path, mimeType, name })
-      void Promise.resolve(this.deps.addDraftImage?.(id, path, mimeType, name)).then(() => this.scheduleReconcile())
+      void Promise.resolve(this.deps.addDraftImage?.(id, path, mimeType, name, insertion))
+        .catch(error => {
+          const message = error instanceof Error ? error.message : String(error)
+          if (insertion.operationId) this.client.send({ type: 'draftAttachmentError', id, operationId: insertion.operationId, error: message })
+          this.toast(`Could not attach file: ${message}`)
+        })
+        .finally(() => this.scheduleReconcile())
+      this.scheduleReconcile()
+    })
+    on('configureChat', (e) => {
+      const { id, change } = e as { id: string; change: ChatConfigChangeP }
+      void Promise.resolve(this.deps.configureChat?.(id, change))
+        .catch(error => this.toast(`Could not update chat settings: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => this.scheduleReconcile())
+    })
+    on('toggleDraftDictation', (e) => {
+      const { id, insertion } = e as { id: string; insertion?: DraftInsertionP }
+      this.deps.toggleDraftDictation?.(id, insertion)
+      this.scheduleReconcile()
+    })
+    on('cancelDraftDictation', (e) => {
+      this.deps.cancelDraftDictation?.((e as {id: string}).id)
+      this.scheduleReconcile()
+    })
+    on('previewChat', (e) => {
+      const { token, ...options } = e as Extract<NotchEvent, { type: 'previewChat' }>
+      if (typeof token !== 'string') return
+      void Promise.resolve().then(() => {
+        if (!this.deps.previewChat) throw new Error('Project preview is unavailable')
+        return this.deps.previewChat(options)
+      }).then(preview => this.client.send({ type: 'newChatPreview', token, preview }))
+        .catch(error => this.client.send({ type: 'newChatPreview', token, error: (error as Error).message }))
+    })
+    on('newChat', (e) => {
+      if (this.creatingChat) return
+      const {provider, cwd, allocationId, permission} = e as Extract<NotchEvent, {type: 'newChat'}>
+      this.creatingChat = true
+      this.client.send({type: 'newChatStatus', pending: true})
+      void (async () => {
+        try {
+          if (!this.deps.createChat) throw new Error('New conversations are unavailable in this build.')
+          if (!cwd && !allocationId) throw new Error('Preview the managed project location before creating the conversation.')
+          const id = await this.deps.createChat({provider, cwd, allocationId, permission})
+          this.onFocusTask(id)
+          this.client.send({type: 'newChatStatus', pending: false})
+        } catch (error) {
+          this.client.send({type: 'newChatStatus', pending: false, error: error instanceof Error ? error.message : String(error)})
+        } finally { this.creatingChat = false; this.scheduleReconcile() }
+      })()
+    })
+    on('restoreDraftAttachment', (e) => {
+      const { id, attachmentId } = e as { id: string; attachmentId: string }
+      void Promise.resolve(this.deps.restoreDraftAttachment?.(id, attachmentId))
+        .catch(error => this.toast(`Could not restore attachment: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => this.scheduleReconcile())
+    })
+    on('undoDraftAttachment', (e) => {
+      const { id, attachmentId } = e as { id: string; attachmentId: string }
+      void Promise.resolve(this.deps.undoDraftAttachment?.(id, attachmentId))
+        .catch(error => this.toast(`Could not undo attachment: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => this.scheduleReconcile())
+    })
+    on('redoDraftAttachment', (e) => {
+      const { id, attachmentId } = e as { id: string; attachmentId: string }
+      void Promise.resolve(this.deps.redoDraftAttachment?.(id, attachmentId))
+        .catch(error => this.toast(`Could not redo attachment: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => this.scheduleReconcile())
     })
     // WHICH TEXT BOX IS UNMUTE'S OWN, RIGHT NOW.
     //
@@ -640,19 +742,31 @@ export class NotchController {
       void Promise.resolve(this.deps.removeDraftAttachment?.(id, attachmentId)).then(() => this.scheduleReconcile())
     })
     on('sendDraft', (e) => {
-      const { id } = e as { id: string }
+      const { id, reference } = e as { id: string; reference?: QuestionReference }
       if (id === NotchController.AGENT_SLOT) {
         const text = this.agentDraft.trim()
         this.agentDraft = ''
         if (text) this.deps.agentSend?.(text)
         return
       }
+      if (reference && !this.acceptsReference(id, reference)) { this.rejectReference(id, reference); return }
+      if (reference) this.answerStatus(id, reference, 'pending')
       devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'sendDraft' })
-      void Promise.resolve(this.deps.sendDraft?.(id)).then((accepted) => {
-        devEvent(log, 'task-reply-ui-event-result', { taskId: id, event: 'sendDraft', accepted: accepted === true })
-        if (accepted === true) this.addressed(id)
+      void Promise.resolve(this.deps.sendDraft?.(id, reference ?? null)).then((result) => {
+        const accepted = result === true || !!result && typeof result === 'object' && result.kind === 'accepted'
+        if (reference) this.answerStatus(id, reference, accepted ? 'accepted' : 'rejected')
+        devEvent(log, 'task-reply-ui-event-result', { taskId: id, event: 'sendDraft', accepted, outcome: typeof result === 'object' ? result.kind : undefined })
+        if (accepted) this.addressed(id)
         this.scheduleReconcile()
-      })
+      }).catch(error => { if (reference) this.answerStatus(id, reference, 'rejected'); this.toast(`Could not send: ${(error as Error).message}`) })
+    })
+    for (const event of ['cancelTaskFollowup', 'restoreTaskFollowup', 'queueSavedTaskFollowup', 'recoverUncertainFollowup'] as const) on(event, e => {
+      const { id, queueId } = e as { id: string; queueId: string }
+      if (id === NotchController.AGENT_SLOT || !this.deps.getTask(id) || typeof queueId !== 'string') return
+      const result = event === 'cancelTaskFollowup' ? this.deps.cancelTaskFollowup?.(id, queueId)
+        : event === 'queueSavedTaskFollowup' ? this.deps.queueSavedTaskFollowup?.(id, queueId)
+          : this.deps.restoreTaskFollowup?.(id, queueId, event === 'recoverUncertainFollowup')
+      void Promise.resolve(result).then(ok => { if (!ok) this.toast('Follow-up unchanged. Keep or send your current draft before restoring; delivery may already have started.'); this.scheduleReconcile() })
     })
     on('kill', (e) => this.deps.kill((e as { id: string }).id))
     on('backgroundAudio', (e) => {
@@ -685,7 +799,7 @@ export class NotchController {
     on('rename', (e) => { const { id, name } = e as { id: string; name: string }; this.deps.setName(id, name); this.scheduleReconcile() })
     on('setNote', (e) => { const { id, note } = e as { id: string; note: string }; this.deps.setNote(id, note); this.scheduleReconcile() })
     on('pinSkill', (e) => { const { name, pinned } = e as { name: string; pinned: boolean }; void this.onPinSkill(name, pinned) })
-    on('tapSkill', (e) => this.onTapSkill((e as { name: string }).name))
+    on('tapSkill', (e) => { void this.onTapSkill((e as { name: string }).name) })
     on('openProject', (e) => { const { path, name } = e as { path: string; name: string }; this.deps.openProject(path, name) })
     on('clearFinished', () => { this.clearedAt = Date.now(); this.reconcile() })
     // Temporary, and deliberately not persisted: "show all" lasts as long as
@@ -1832,6 +1946,7 @@ export class NotchController {
   /** Re-publish the currently visible detail after main-owned draft state
    * changes outside a native UI event (for example, Right Option capture). */
   refresh(): void { this.reconcile() }
+  openTask(id: string): void { this.onFocusTask(id) }
 
   private setFocus(id: string | null): void {
     this.focusedId = id
@@ -1947,13 +2062,53 @@ export class NotchController {
     this.reconcile()
   }
 
-  private onChoose({ id, index }: { id: string; index: number }): void {
+  private onChoose({ id, index, reference }: { id: string; index: number; reference?: QuestionReference }): void {
     const t = this.deps.getTask(id)
+    if (!this.acceptsReference(id, reference)) { if (reference) this.rejectReference(id, reference); return }
+    if (!Number.isInteger(index) || index < 0 || index >= (t?.question?.choices?.length ?? 0)) { if (reference) this.rejectReference(id, reference); return }
     const label = t?.question?.choices?.[index]
     if (label == null) return
-    this.addressed(id)
-    if (!this.deps.answer(id, label)) { this.scheduleReconcile(); return }
-    this.advanceAfterAnswer(id)
+    this.submitAnswer(id, label, true, reference)
+  }
+
+  private answerStates = new Map<string, { reference: QuestionReference; state: 'pending' | 'accepted' }>()
+  private rejectReference(id: string, reference: QuestionReference): void {
+    const state = this.answerStates.get(id) ?? this.deps.getTask(id)?.questionAcknowledgment
+    this.client.send({ type: 'questionAnswerStatus', id, reference, state: sameQuestion(state?.reference, reference) ? state!.state : 'rejected' })
+  }
+  private acceptsReference(id: string, reference?: QuestionReference): boolean {
+    const t = this.deps.getTask(id), current = t?.question?.reference
+    if (!current && !reference) return !!t // legacy paths retain their existing refusal behavior
+    const acknowledgment = this.answerStates.get(id)
+    return sameQuestion(current, reference) && !sameQuestion(acknowledgment?.reference, reference)
+      && !sameQuestion(t?.questionAcknowledgment?.reference, reference)
+      && !t?.question?.acknowledgment
+  }
+  private answerStatus(id: string, reference: QuestionReference, state: 'pending' | 'accepted' | 'rejected'): void {
+    if (state === 'rejected') {
+      if (sameQuestion(this.answerStates.get(id)?.reference, reference) && this.answerStates.get(id)?.state !== 'accepted') this.answerStates.delete(id)
+    } else if (state === 'pending' || !this.answerStates.has(id) || sameQuestion(this.answerStates.get(id)?.reference, reference)) this.answerStates.set(id, { reference, state })
+    this.client.send({ type: 'questionAnswerStatus', id, reference, state })
+    this.scheduleReconcile()
+  }
+  private answeringIds = new Set<string>()
+  private submitAnswer(id: string, text: string, advance: boolean, reference?: QuestionReference): void {
+    if (!this.acceptsReference(id, reference)) { if (reference) this.rejectReference(id, reference); return }
+    if (!this.deps.answerAsync) {
+      if (reference) { this.answerStatus(id, reference, 'rejected'); this.toast('Structured answers are unavailable in this build.'); return }
+      if (this.deps.answer(id, text)) { this.addressed(id); if (reference) this.answerStatus(id, reference, 'accepted'); if (advance) this.advanceAfterAnswer(id) }
+      else this.scheduleReconcile()
+      return
+    }
+    if (this.answeringIds.has(id)) { if (reference) this.rejectReference(id, reference); return }
+    this.answeringIds.add(id)
+    if (reference) this.answerStatus(id, reference, 'pending')
+    void this.deps.answerAsync(id, text, reference).then(accepted => {
+      if (reference) this.answerStatus(id, reference, accepted ? 'accepted' : 'rejected')
+      if (accepted) this.addressed(id)
+      if (accepted && advance && this.deps.getTask(id)?.state !== 'needs-user') this.advanceAfterAnswer(id)
+    }).catch(error => { if (reference) this.answerStatus(id, reference, 'rejected'); this.toast(`Could not send answer: ${(error as Error).message}`) })
+      .finally(() => { this.answeringIds.delete(id); this.scheduleReconcile() })
   }
 
   /** Throughput loop: answering advances to the next queued your-move task. */
@@ -1983,15 +2138,18 @@ export class NotchController {
   }
 
   /** Tap-to-invoke: types `/name ` unsubmitted into the FOCUSED, ALIVE task. */
-  private onTapSkill(name: string): void {
+  private async onTapSkill(name: string): Promise<void> {
     const id = this.focusedId
     const t = id ? this.deps.getTask(id) : undefined
-    if (!id || !t?.alive) {
-      this.client.send({ type: 'toast', text: 'focus a live task first — then tap a skill to type /' + name })
+    if (!id || !t) {
+      this.client.send({ type: 'toast', text: 'Open a task first to add /' + name + ' to its draft' })
       return
     }
-    this.deps.tapSkill(id, name)
-    this.client.send({ type: 'toast', text: `typed /${name} — press Enter in the terminal to run` })
+    const accepted = await Promise.resolve(this.deps.tapSkill(id, name)).catch(() => false)
+    this.client.send({ type: 'toast', text: accepted
+      ? `Added /${name} to draft`
+      : `Can't add /${name}: open an Unmute-managed chat first` })
+    this.scheduleReconcile()
   }
 
   private async onOfferAccept(newTaskId: string): Promise<void> {
@@ -2220,13 +2378,14 @@ export class NotchController {
       // silently mis-answers for the next backend to arrive — which is exactly
       // how the Codex CLI model picker shipped empty. The registry already
       // knows; it just was not being told to the view.
-      resumable: providerOf(t.agent).canResume,
+      resumable: providerOf(t.agent).canResume && t.chatResumable !== false,
       resuming: t.resuming ?? false,
       ...(t.resumeError ? { resumeError: t.resumeError } : {}),
       /** True when Unmute spawned the process — so killing it is ours to do.
        *  A driver-backed task has nothing of ours to kill; the card offers
        *  Remove instead, which forgets it without touching the user's app. */
-      owned: providerOf(t.agent).transport === 'pty',
+      owned: providerOf(t.agent).transport === 'structured' && t.chatOwned !== false,
+      canCompose: providerOf(t.agent).transport === 'structured' && t.chatWritable !== false,
       // THE CONVERSATION IS SENT FOR EVERY BACKEND NOW.
       //
       // It used to be gated on `external`, because it was conceived as "what a
@@ -2263,7 +2422,7 @@ export class NotchController {
       // A delivery problem belongs next to the composer, where the retry is —
       // and unlike `error` it must never be read as "the work failed".
       deliveryError: t.deliveryError ?? undefined,
-      sending: t.sending ?? undefined,
+      sending: (t.sending || this.deps.draftSubmitting?.(t.id)) ?? undefined,
       // What this thread runs on. Shown in the composer because "which model is
       // this" is part of writing the next message.
       //
@@ -2275,10 +2434,17 @@ export class NotchController {
       modelLabel: t.codexModelLabel || t.model || undefined,
       activity: headlineFor(t),
       question: t.question ?? undefined,
+      history: t.history ?? { phase: t.blocks?.length ? 'ready' : 'loading' },
+      turnOutcome: t.turnOutcome,
+      mcpStatuses: t.mcpStatuses,
+      questionAcknowledgment: t.questionAcknowledgment ?? this.answerStates.get(t.id),
       result: t.result ?? undefined,
       error: t.error ?? undefined,
       mcpGap: t.mcpGap ? { message: t.mcpGap.message, fixCommand: t.mcpGap.fixCommand } : undefined,
       draft: this.deps.getDraft?.(t.id),
+      followup: this.deps.getFollowup?.(t.id),
+      composerMode: this.deps.getComposerMode?.(t.id),
+      chatConfig: this.deps.getChatConfig?.(t.id),
     }
   }
 
@@ -2494,6 +2660,7 @@ export class NotchController {
       doorbell: this.deps.getDoorbell(),
       routeOffer: this.routeOffer,
       tmuxAvailable: this.deps.tmuxAvailable(),
+      projects: this.projects,
     }
   }
 

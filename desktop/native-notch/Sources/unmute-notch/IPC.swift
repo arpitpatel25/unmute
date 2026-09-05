@@ -34,8 +34,19 @@ enum TaskStatus: String, Codable {
 
 struct ArtifactP: Codable { let type: String; let value: String } // "url" | "path"
 
+typealias QuestionReferenceP = ChatQuestionReference
+typealias QuestionAcknowledgmentP = ChatQuestionAcknowledgment
+struct ChatPreviewP: Codable {
+    let allocationId: String
+    let path: String
+    let permission: String
+    let permissionReason: String?
+}
 struct QuestionP: Codable {
+    let reference: QuestionReferenceP?
+    let acknowledgment: String?
     let text: String
+    var details: String? = nil
     /// "free_text" | "choice" | "confirm" | "terminal_only".
     /// `terminal_only` is a REFUSAL: a picker we have not proven we can drive is
     /// open in the session, so the card shows the whole ask and offers no reply.
@@ -94,8 +105,22 @@ struct PocketP: Codable, Equatable {
 struct ResultP: Codable { let summary: String; let detail: String?; let artifacts: [ArtifactP]? }
 struct ErrorP: Codable { let reason: String; let detail: String? }
 struct McpGapP: Codable { let message: String; let fixCommand: String }
-struct DraftAttachmentP: Codable { let id: String; let path: String; let mimeType: String; let name: String }
-struct TaskDraftP: Codable { let text: String; let attachments: [DraftAttachmentP] }
+struct DraftAttachmentP: Codable { let id: String; let path: String; let mimeType: String; let name: String; var reservationOrder: Int? = nil }
+struct FollowupP: Codable {
+    let id: String; let phase: String; let label: String; let preview: String
+    let attachments: [DraftAttachmentP]
+    let canCancel: Bool; let canRestore: Bool; let canQueueAgain: Bool
+}
+struct DraftOperationP: Codable { let id: String; let name: String; let phase: String; let error: String?; let order: Int? }
+struct TaskDraftP: Codable { let text: String; let attachments: [DraftAttachmentP]; let clientRevision: Int?; var stagingCount: Int? = nil; var error: String? = nil; var operations: [DraftOperationP]? = nil }
+struct ChatChoiceP: Codable { let id: String; let label: String; let description: String? }
+struct ChatConfigP: Codable {
+    let provider: String; let providerLabel: String; let model: String; let modelLabel: String
+    let providers: [ChatChoiceP]; let models: [ChatChoiceP]; let efforts: [ChatChoiceP]; let effort: String?
+    let permissions: [ChatChoiceP]; let permission: String?; let permissionScope: String?
+    let cwd: String; let mutable: Bool; let busy: Bool; let error: String?
+    let dictation: String?; let dictationError: String?
+}
 
 /// Full detail for the fronted task (task surface) or the focused Stage.
 struct TaskDetail: Codable {
@@ -114,6 +139,10 @@ struct TaskDetail: Codable {
     let note: String?
     let activity: String?      // question.text ‖ error.reason ‖ step ‖ result.summary
     let question: QuestionP?
+    var questionAcknowledgment: QuestionAcknowledgmentP? = nil
+    var history: ChatHistoryState? = nil
+    var turnOutcome: String? = nil
+    var mcpStatuses: [ChatMcpStatus]? = nil
     let result: ResultP?
     let error: ErrorP?
     let mcpGap: McpGapP?
@@ -137,6 +166,10 @@ struct TaskDetail: Codable {
     /// Codex project name, for the header.
     let project: String?
     let draft: TaskDraftP?
+    var followup: FollowupP? = nil
+    var composerMode: String? = nil
+    var chatConfig: ChatConfigP? = nil
+    var canCompose: Bool? = nil
 
     /// Does this task have a live terminal? SENT by the engine, which resolves it
     /// from the one provider registry (electron/remote/providers.ts). This is
@@ -189,7 +222,7 @@ struct TaskDetail: Codable {
         switch backend {
         case "codex-desktop":       return "Codex"
         case "claude-code-desktop": return "Claude"
-        default:                    return "the app"
+        default:                    return ""
         }
     }
     var isOwned: Bool {
@@ -324,6 +357,7 @@ struct RouteOfferP: Codable { let newTaskId: String; let altTaskId: String; let 
 
 /// The whole wall.
 struct CockpitData: Codable {
+    var projects: [ProjectP]? = nil
     let groups: [GroupP]
     /// Cards folded away across the whole wall.
     let hiddenTotal: Int?
@@ -377,6 +411,10 @@ enum Command {
     case capturePhase(phase: String, target: String?)
     case pocket(PocketP)                       // what your next words could land on
     case toast(String)                         // transient message (e.g. accept error)
+    case newChatStatus(pending: Bool, error: String?)
+    case newChatPreview(token: String, preview: ChatPreviewP?, error: String?)
+    case questionAnswerStatus(id: String, reference: QuestionReferenceP, state: String)
+    case draftAttachmentError(id: String, operationId: String, error: String)
     case notchGeometry(hasNotch: Bool, x: Double, y: Double, w: Double, h: Double)
     /// Surface material preference, from unmute Settings. "system" (default)
     /// honours System Settings → Accessibility → Reduce Transparency; "glass"
@@ -515,6 +553,16 @@ enum Command {
             return .pocket(sub("data", PocketP.self) ?? .empty)
         case "toast":
             return .toast(obj["text"] as? String ?? "")
+        case "newChatStatus":
+            return .newChatStatus(pending: obj["pending"] as? Bool ?? false, error: obj["error"] as? String)
+        case "newChatPreview":
+            return .newChatPreview(token: obj["token"] as? String ?? "", preview: sub("preview", ChatPreviewP.self), error: obj["error"] as? String)
+        case "questionAnswerStatus":
+            guard let reference = sub("reference", QuestionReferenceP.self), let id = obj["id"] as? String else { return .unknown }
+            return .questionAnswerStatus(id: id, reference: reference, state: obj["state"] as? String ?? "rejected")
+        case "draftAttachmentError":
+            guard let id = obj["id"] as? String, let operation = obj["operationId"] as? String else { return .unknown }
+            return .draftAttachmentError(id: id, operationId: operation, error: obj["error"] as? String ?? "Could not prepare attachment")
         case "notchGeometry":
             return .notchGeometry(hasNotch: obj["hasNotch"] as? Bool ?? false,
                                   x: (obj["x"] as? NSNumber)?.doubleValue ?? 0,
@@ -552,9 +600,9 @@ enum Event {
     /// Back to the FULL task. The pocket is a glance, not a destination:
     /// it exists because the panel is large, not because it is wrong.
     case pocketExpand
-    case chooseOption(id: String, index: Int)
-    case answerText(id: String, text: String)      // free-text / confirm answer
-    case setDraftText(id: String, text: String)
+    case chooseOption(id: String, index: Int, reference: QuestionReferenceP? = nil)
+    case answerText(id: String, text: String, reference: QuestionReferenceP? = nil)
+    case setDraftText(id: String, text: String, clientRevision: Int = 0)
     /// The composer gained or lost first responder. Dictation uses this to hand
     /// captured images straight to the focused text box instead of posting a
     /// synthetic ⌘V that may not reach this app — see registerComposerImageSink.
@@ -563,12 +611,27 @@ enum Event {
     /// resignFirstResponder fires only for focus moves inside one window, so
     /// clicking away to another app produced no composerFocus(false) at all.
     case windowUnfocused
-    case addDraftImage(id: String, path: String, mimeType: String, name: String)
+    case addDraftImage(id: String, path: String, mimeType: String, name: String, insertionOffset: Int? = nil, selectedLength: Int? = nil, clientRevision: Int? = nil, insertionText: String? = nil, operationId: String? = nil)
+    case reserveDraftAttachment(id: String, operationId: String, name: String, insertionOffset: Int, selectedLength: Int, clientRevision: Int, insertionText: String)
+    case failDraftAttachment(id: String, operationId: String, error: String)
+    case configureChat(id: String, field: String, value: String)
+    case toggleDraftDictation(id: String, insertionOffset: Int? = nil, selectedLength: Int? = nil, clientRevision: Int? = nil, insertionText: String? = nil)
+    case cancelDraftDictation(id: String)
+    case newChat(provider: String, cwd: String?, allocationId: String? = nil, permission: String? = nil)
+    case previewChat(token: String, provider: String, permission: String)
     case removeDraftAttachment(id: String, attachmentId: String)
-    case sendDraft(id: String)
+    case restoreDraftAttachment(id: String, attachmentId: String)
+    case undoDraftAttachment(id: String, attachmentId: String)
+    case redoDraftAttachment(id: String, attachmentId: String)
+    case sendDraft(id: String, reference: QuestionReferenceP? = nil)
+    case cancelTaskFollowup(id: String, queueId: String)
+    case restoreTaskFollowup(id: String, queueId: String)
+    case queueSavedTaskFollowup(id: String, queueId: String)
+    case recoverUncertainFollowup(id: String, queueId: String)
     case mute(id: String)                          // drop from attention/crank this episode
     case kill(id: String)
     case resume(id: String)
+    case reloadHistory(id: String)
     case rerun(id: String)                         // re-run fresh from intent
     case remove(id: String)
     case killAll
@@ -629,17 +692,59 @@ enum Event {
         case .pocketOpen: return ["type": "pocketOpen"]
         case .pocketRelease: return ["type": "pocketRelease"]
         case .pocketExpand: return ["type": "pocketExpand"]
-        case .chooseOption(let id, let index): return ["type": "chooseOption", "id": id, "index": index]
-        case .answerText(let id, let text): return ["type": "answerText", "id": id, "text": text]
-        case .setDraftText(let id, let text): return ["type": "setDraftText", "id": id, "text": text]
+        case .chooseOption(let id, let index, let reference):
+            var payload: [String: Any] = ["type": "chooseOption", "id": id, "index": index]
+            if let reference { payload["reference"] = reference.payload }; return payload
+        case .answerText(let id, let text, let reference):
+            var payload: [String: Any] = ["type": "answerText", "id": id, "text": text]
+            if let reference { payload["reference"] = reference.payload }; return payload
+        case .setDraftText(let id, let text, let revision): return ["type": "setDraftText", "id": id, "text": text, "clientRevision": revision]
         case .composerFocus(let id, let focused): return ["type": "composerFocus", "id": id, "focused": focused]
         case .windowUnfocused: return ["type": "windowUnfocused"]
-        case .addDraftImage(let id, let path, let mimeType, let name): return ["type": "addDraftImage", "id": id, "path": path, "mimeType": mimeType, "name": name]
+        case .addDraftImage(let id, let path, let mimeType, let name, let offset, let length, let revision, let text, let operation):
+            var payload: [String: Any] = ["type": "addDraftImage", "id": id, "path": path, "mimeType": mimeType, "name": name]
+            if let offset { payload["insertionOffset"] = offset }
+            if let length { payload["selectedLength"] = length }
+            if let revision { payload["clientRevision"] = revision }
+            if let text { payload["insertionText"] = text }
+            if let operation { payload["operationId"] = operation }
+            return payload
+        case .reserveDraftAttachment(let id, let operation, let name, let offset, let length, let revision, let text):
+            return ["type": "reserveDraftAttachment", "id": id, "operationId": operation, "name": name,
+                    "insertionOffset": offset, "selectedLength": length, "clientRevision": revision, "insertionText": text]
+        case .failDraftAttachment(let id, let operation, let error):
+            return ["type": "failDraftAttachment", "id": id, "operationId": operation, "error": error]
+        case .configureChat(let id, let field, let value): return ["type": "configureChat", "id": id, "change": [field: value]]
+        case .toggleDraftDictation(let id, let offset, let length, let revision, let text):
+            var insertion: [String: Any] = [:]
+            if let offset { insertion["insertionOffset"] = offset }
+            if let length { insertion["selectedLength"] = length }
+            if let revision { insertion["clientRevision"] = revision }
+            if let text { insertion["insertionText"] = text }
+            return ["type": "toggleDraftDictation", "id": id, "insertion": insertion]
+        case .cancelDraftDictation(let id): return ["type": "cancelDraftDictation", "id": id]
+        case .newChat(let provider, let cwd, let allocationId, let permission):
+            var result: [String: Any] = ["type": "newChat", "provider": provider]
+            if let cwd { result["cwd"] = cwd }
+            if let allocationId { result["allocationId"] = allocationId }
+            if let permission { result["permission"] = permission }
+            return result
+        case .previewChat(let token, let provider, let permission): return ["type": "previewChat", "token": token, "provider": provider, "permission": permission]
         case .removeDraftAttachment(let id, let attachmentId): return ["type": "removeDraftAttachment", "id": id, "attachmentId": attachmentId]
-        case .sendDraft(let id): return ["type": "sendDraft", "id": id]
+        case .restoreDraftAttachment(let id, let attachmentId): return ["type": "restoreDraftAttachment", "id": id, "attachmentId": attachmentId]
+        case .undoDraftAttachment(let id, let attachmentId): return ["type": "undoDraftAttachment", "id": id, "attachmentId": attachmentId]
+        case .redoDraftAttachment(let id, let attachmentId): return ["type": "redoDraftAttachment", "id": id, "attachmentId": attachmentId]
+        case .sendDraft(let id, let reference):
+            var payload: [String: Any] = ["type": "sendDraft", "id": id]
+            if let reference { payload["reference"] = reference.payload }; return payload
+        case .cancelTaskFollowup(let id, let queueId): return ["type": "cancelTaskFollowup", "id": id, "queueId": queueId]
+        case .restoreTaskFollowup(let id, let queueId): return ["type": "restoreTaskFollowup", "id": id, "queueId": queueId]
+        case .queueSavedTaskFollowup(let id, let queueId): return ["type": "queueSavedTaskFollowup", "id": id, "queueId": queueId]
+        case .recoverUncertainFollowup(let id, let queueId): return ["type": "recoverUncertainFollowup", "id": id, "queueId": queueId]
         case .mute(let id): return ["type": "mute", "id": id]
         case .kill(let id): return ["type": "kill", "id": id]
         case .resume(let id): return ["type": "resume", "id": id]
+        case .reloadHistory(let id): return ["type": "reloadHistory", "id": id]
         case .rerun(let id): return ["type": "rerun", "id": id]
         case .remove(let id): return ["type": "remove", "id": id]
         case .killAll: return ["type": "killAll"]

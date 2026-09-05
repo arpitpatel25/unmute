@@ -43,8 +43,8 @@ public enum ComposerState: Equatable {
 }
 
 /// Decide from what the detail payload already carries.
-public func composerState(alive: Bool, status: String, kind: String) -> ComposerState {
-    if alive { return .composable }
+public func composerState(alive: Bool, canCompose: Bool? = nil, status: String, kind: String) -> ComposerState {
+    if canCompose ?? alive { return .composable }
     let terminal = status == "done" || status == "failed"
     // A session is never "over" — it is waiting for your next line, and a dead
     // executor is a thing to restart rather than a thing to hide.

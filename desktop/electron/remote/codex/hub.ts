@@ -23,17 +23,96 @@
  */
 
 import { CodexAppServer, type ServerRequest } from './app-server-client'
-import { CodexBlockStream } from './blocks-app-server'
+import { CodexBlockStream, type CodexInputMetadata } from './blocks-app-server'
+export type { CodexInputMetadata } from './blocks-app-server'
 import {
-  reduceAppServerEvent, questionFromApproval, approvalDecision,
+  reduceAppServerEvent, questionFromApproval, approvalDecision, approvalOptions, responseForApproval,
   type CodexPatch,
 } from './app-server-events'
 import { createLogger } from '../log'
+import { sameQuestion, type QuestionReference } from '../question-reference'
+import type { TaskInput } from '../task-input'
+import type { FollowupGate, FollowupTurnEnded, NewTurnOutcome } from '../task-followup'
+import { randomUUID } from 'node:crypto'
 
 const log = createLogger('codex-hub')
 
 /** What the task layer receives. A patch plus the task it belongs to. */
 export interface HubPatch extends CodexPatch { taskId: string }
+interface HistoryTurn { id: string; status?: string; startedAt?: number; durationMs?: number; itemsView?: string; items?: Record<string, unknown>[] }
+interface ResumeHistory {
+  thread?: { id?: string; turns?: HistoryTurn[] }
+  turnsBackwardsCursor?: string | null
+  itemsBackwardsCursor?: string | null
+}
+interface FormField { id: string; title: string; required: boolean; schema: Record<string, unknown>; options?: Array<{ label: string; value: string }> }
+function validRfc3339(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/.exec(value)
+  if (!m) return false
+  const [, y, mo, d, h, mi, sec, zone] = m
+  const year = +y, month = +mo, day = +d
+  const days = [31, year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  if (month < 1 || month > 12 || day < 1 || day > days[month - 1] || +h > 23 || +mi > 59 || +sec > 60) return false
+  if (!/^[Zz]$/.test(zone) && (+zone.slice(1, 3) > 23 || +zone.slice(4) > 59)) return false
+  if (+sec === 60) {
+    const before = new Date(`${y}-${mo}-${d}T${h}:${mi}:59${zone.toUpperCase()}`)
+    const next = new Date(before.getTime() + 1000)
+    return before.getUTCHours() === 23 && before.getUTCMinutes() === 59 && next.getUTCDate() === 1
+  }
+  return true
+}
+const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+function enumOptions(schema: Record<string, unknown>): Array<{ label: string; value: string }> | undefined {
+  if (Array.isArray(schema.enum) && schema.enum.every(v => typeof v === 'string')) return schema.enum.map((v, i) => ({ value: v, label: Array.isArray(schema.enumNames) && typeof schema.enumNames[i] === 'string' ? schema.enumNames[i] : v }))
+  const choices = schema.oneOf ?? schema.anyOf
+  if (Array.isArray(choices) && choices.every(v => typeof object(v).const === 'string')) return choices.map(v => ({ value: object(v).const as string, label: String(object(v).title ?? object(v).const) }))
+  return undefined
+}
+function formFields(params: Record<string, unknown>): FormField[] {
+  const schema = object(params.requestedSchema)
+  if (!['form', 'openai/form', 'openaiForm'].includes(String(params.mode)) || schema.type !== 'object' || !schema.properties || typeof schema.properties !== 'object') throw new Error('Only primitive MCP forms are supported; URL and unknown forms require another client')
+  if (Object.keys(schema).some(k => !['type', 'properties', 'required', '$schema', 'additionalProperties'].includes(k))) throw new Error('Unsupported MCP object constraint')
+  const properties = object(schema.properties)
+  const required = schema.required ?? []
+  if (!Array.isArray(required) || required.some(k => typeof k !== 'string' || !Object.hasOwn(properties, k))) throw new Error('Malformed MCP required fields')
+  const supported = (s: Record<string, unknown>, nested = false): boolean => {
+    if (Object.keys(s).some(k => !['type', 'title', 'description', 'default', 'enum', 'enumNames', 'oneOf', 'anyOf', 'items', 'minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems', 'uniqueItems', 'format'].includes(k))) return false
+    for (const key of ['minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems']) if (s[key] !== undefined && s[key] !== null && (typeof s[key] !== 'number' || !Number.isFinite(s[key]))) return false
+    const options = enumOptions(s)
+    if ((s.enum || s.oneOf || s.anyOf) && !options?.length) return false
+    if (options && new Set(options.map(o => o.label)).size !== options.length) return false
+    if (s.type === 'array') return !nested && supported(object(s.items), true)
+    if (!['string', 'number', 'integer', 'boolean'].includes(String(s.type)) && !(nested && options)) return false
+    if (s.format && !['email', 'uri', 'date', 'date-time'].includes(String(s.format))) return false
+    return true
+  }
+  return Object.entries(properties).map(([id, raw]) => {
+    const field = object(raw)
+    if (!supported(field)) throw new Error(`Unsupported MCP field schema: ${id}`)
+    return { id, title: String(field.title ?? id), required: required.includes(id), schema: field, options: enumOptions(field) }
+  })
+}
+function validateFormValue(value: unknown, schema: Record<string, unknown>): void {
+  const options = enumOptions(schema)
+  if (options && !options.some(o => o.value === value)) throw new Error('Choose one of the listed values')
+  if (schema.type === 'array') {
+    if (!Array.isArray(value)) throw new Error('Enter a JSON array')
+    if (typeof schema.minItems === 'number' && value.length < schema.minItems || typeof schema.maxItems === 'number' && value.length > schema.maxItems) throw new Error('Array length is outside the allowed range')
+    if (schema.uniqueItems === true && new Set(value.map(v => JSON.stringify(v))).size !== value.length) throw new Error('Array values must be unique')
+    for (const entry of value) validateFormValue(entry, object(schema.items))
+  } else if (schema.type === 'string') {
+    if (typeof value !== 'string') throw new Error('Enter text')
+    if (typeof schema.minLength === 'number' && [...value].length < schema.minLength || typeof schema.maxLength === 'number' && [...value].length > schema.maxLength) throw new Error('Text length is outside the allowed range')
+    if (schema.format === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw new Error('Enter an email address')
+    if (schema.format === 'uri') { try { new URL(value) } catch { throw new Error('Enter an absolute URL') } }
+    if (schema.format === 'date' && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value)) throw new Error('Enter a valid YYYY-MM-DD date')
+    if (schema.format === 'date-time' && !validRfc3339(value)) throw new Error('Enter an RFC 3339 date and time with a timezone, such as 2026-09-05T12:30:00+05:30')
+  } else if (schema.type === 'boolean' && typeof value !== 'boolean') throw new Error('Choose true or false')
+  else if (schema.type === 'number' || schema.type === 'integer') {
+    if (typeof value !== 'number' || !Number.isFinite(value) || schema.type === 'integer' && !Number.isInteger(value)) throw new Error('Enter a valid number')
+    if (typeof schema.minimum === 'number' && value < schema.minimum || typeof schema.maximum === 'number' && value > schema.maximum) throw new Error('Number is outside the allowed range')
+  }
+}
 
 export interface StartThreadOpts {
   cwd: string
@@ -45,6 +124,24 @@ export interface StartThreadOpts {
   approvalPolicy: string
   /** 'read-only' | 'workspace-write' | 'danger-full-access' */
   sandbox: string
+  writableRoots?: string[]
+  config?: Record<string, unknown>
+}
+
+interface PendingRequest {
+  choicesSignature?: string
+  identity: string
+  id: number | string
+  method: string
+  resolve: (v: unknown) => void
+  params: Record<string, unknown>
+  questions: Array<{ id: string; question: string; options?: Array<{ label: string }> }>
+  answers: Record<string, { answers: string[] }>
+  index: number
+  respond?: ServerRequest['respond']
+  awaitingReplay?: boolean
+  form?: { fields: FormField[]; content: Record<string, unknown> }
+  validationError?: string
 }
 
 interface ThreadState {
@@ -54,7 +151,15 @@ interface ThreadState {
    *  answer can be routed to the right JSON-RPC id — an approval answered
    *  against the wrong id leaves Codex blocked forever while the card reports
    *  itself unblocked. */
-  pending: { id: number | string; method: string; resolve: (v: unknown) => void } | null
+  pending: PendingRequest | null
+  pendingQueue?: PendingRequest[]
+  turnId?: string
+  submitting?: boolean
+  disconnected?: boolean
+  submissionFinished?: Promise<void>
+  stopping?: boolean
+  completedTurns?: Set<string>
+  options?: StartThreadOpts
   /** The chat view for this thread, built as the notifications arrive. This is
    *  the RICHEST source any lane has — reasoning, commands with exit codes,
    *  diffs and a live plan, streamed rather than read back off disk. */
@@ -62,19 +167,64 @@ interface ThreadState {
 }
 
 export interface CodexHubDeps {
+  approvalCap?: (taskId: string) => import('./app-server-events').ApprovalCap
+  loadPlans?: (taskId: string, threadId: string) => Promise<Array<Extract<import('../blocks').Block, { kind: 'plan' }>>>
+  savePlans?: (taskId: string, threadId: string, plans: Array<Extract<import('../blocks').Block, { kind: 'plan' }>>) => Promise<void>
   /** Resolves the `codex` binary. Injected so the hub owns no PATH logic. */
   resolveBin: () => Promise<string | null>
   /** Where patches go. */
   onPatch: (p: HubPatch) => void
   /** For tests. */
   makeServer?: (bin: string) => CodexAppServer
+  /** Fresh per-task instructions and MCP credentials; never persisted. */
+  threadConfig?: (taskId: string) => Promise<Record<string, unknown>>
+  loadInputMetadata?: (taskId: string, threadId: string) => Promise<CodexInputMetadata[]>
+  /** Upsert by record.id before delivery, then correlate turnId after acknowledgement. */
+  saveInputMetadata?: (taskId: string, threadId: string, record: CodexInputMetadata) => Promise<void>
 }
 
 export class CodexHub {
+  private followupListeners = new Set<(event: { type: 'ended'; event: FollowupTurnEnded } | { type: 'changed' | 'disarm'; taskId: string }) => void>()
+  private generations = new WeakMap<ThreadState, number>()
+  private nextGeneration = 0
+  onFollowup(listener: (event: { type: 'ended'; event: FollowupTurnEnded } | { type: 'changed' | 'disarm'; taskId: string }) => void): () => void {
+    this.followupListeners.add(listener); return () => this.followupListeners.delete(listener)
+  }
+  private generation(st: ThreadState): number {
+    if (!this.generations.has(st)) this.generations.set(st, ++this.nextGeneration)
+    return this.generations.get(st)!
+  }
+  private followupChanged(taskId: string, disarm = false): void { for (const cb of this.followupListeners) cb({ type: disarm ? 'disarm' : 'changed', taskId }) }
+  followupGate(taskId: string): FollowupGate {
+    const st = this.byTask.get(taskId)
+    if (!st || st.disconnected || !this.server?.running || st.stopping || st.submitting) return { kind: 'unavailable', reason: 'Codex is connecting or its delivery state is uncertain.' }
+    const blocked = !!st.pending || !!st.pendingQueue?.length
+    const generation = this.generation(st)
+    return st.turnId ? { kind: 'active', fence: { sessionId: st.threadId, generation, turnId: st.turnId }, blocked }
+      : { kind: 'idle', sessionId: st.threadId, generation, blocked }
+  }
+  async sendNewTurn(taskId: string, text: string, input: TaskInput[], expected: { sessionId: string; generation: number }): Promise<NewTurnOutcome> {
+    const gate = this.followupGate(taskId)
+    if (gate.kind !== 'idle' || gate.blocked || gate.sessionId !== expected.sessionId || gate.generation !== expected.generation) return { kind: 'not-sent', reason: 'Codex is not ready for this queued turn.' }
+    return this.sendAttempt(taskId, text, input.length ? { ordered: input } : {})
+  }
   private server: CodexAppServer | null = null
   private byThread = new Map<string, ThreadState>()
   private byTask = new Map<string, ThreadState>()
+  private mcpStatuses = new Map<string, import('./app-server-events').McpStatus>()
+  private planWrites = new Map<string, Promise<void>>()
   private starting: Promise<CodexAppServer> | null = null
+  private registrations = 0
+  private earlyNotifications: Array<{ method: string; params?: Record<string, unknown> }> = []
+  private earlyRequests: Array<{ req: ServerRequest; source: CodexAppServer | null; resolve: (value: unknown) => void; reject: (reason: unknown) => void }> = []
+
+  private finishRegistration(): void {
+    this.registrations--
+    if (this.registrations) return
+    for (const m of this.earlyNotifications.splice(0)) this.onNotification(m)
+    for (const r of this.earlyRequests.splice(0)) this.onServerRequest(r.req, r.source).then(r.resolve, r.reject)
+    for (const st of this.byTask.values()) for (const mcpStatus of this.mcpStatuses.values()) this.deps.onPatch({ taskId: st.taskId, mcpStatus })
+  }
 
   constructor(private deps: CodexHubDeps) {}
 
@@ -88,11 +238,15 @@ export class CodexHub {
     if (this.server?.running) return this.server
     if (this.starting) return this.starting
     this.starting = (async () => {
+      // A new server has no loaded threads. Old mappings cannot make resume
+      // mistakenly succeed against this unrelated connection.
       const bin = await this.deps.resolveBin()
       if (!bin) throw new Error('CODEX_NOT_FOUND')
+      this.server?.stop()
       const srv = this.deps.makeServer ? this.deps.makeServer(bin) : new CodexAppServer({ bin })
-      srv.on('*', (m) => this.onNotification(m as { method: string; params?: Record<string, unknown> }))
-      srv.onRequest((r) => this.onServerRequest(r))
+      this.server = srv
+      srv.on('*', (m) => { if (this.server === srv) this.onNotification(m as { method: string; params?: Record<string, unknown> }) })
+      srv.onRequest((r) => this.onServerRequest(r, srv))
       await srv.start()
       this.server = srv
       return srv
@@ -110,6 +264,7 @@ export class CodexHub {
    */
   async startThread(taskId: string, o: StartThreadOpts): Promise<{ threadId: string; url: string }> {
     const srv = await this.ensure()
+    const config = { ...o.config, ...await this.deps.threadConfig?.(taskId) }
     // A MODEL ID IS NEVER A SENTENCE.
     //
     // 'gpt-5.6-terra high' — the display record, model and effort joined for a
@@ -125,69 +280,182 @@ export class CodexHub {
     if (o.model && !model) {
       log.error('refused a model id containing whitespace — that is a label, not an id', { taskId, got: o.model })
     }
+    this.registrations++
+    try {
     const res = await srv.request<Record<string, unknown>>('thread/start', {
       cwd: o.cwd,
       approvalPolicy: o.approvalPolicy,
       sandbox: o.sandbox,
+      config,
       ...(model ? { model } : {}),
     })
     const threadId = String(res?.threadId ?? (res?.thread as { id?: string } | undefined)?.id ?? res?.id ?? '')
     if (!threadId) throw new Error('thread/start returned no thread id')
-    const st: ThreadState = { taskId, threadId, pending: null, blocks: new CodexBlockStream() }
+    const { config: _config, ...options } = o
+    const st: ThreadState = { taskId, threadId, pending: null, blocks: new CodexBlockStream(), options: { ...options, model } }
     this.byThread.set(threadId, st)
     this.byTask.set(taskId, st)
     log.event('codex-thread-started', { taskId, threadId, cwd: o.cwd, model: o.model ?? null, effort: o.effort ?? null, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox })
     return { threadId, url: srv.url }
+    } finally { this.finishRegistration() }
   }
 
   /** Send a message — the first prompt or a reply. Starts a turn. */
-  async send(taskId: string, text: string, opts: { effort?: string; attachments?: readonly string[] } = {}): Promise<boolean> {
+  async send(taskId: string, text: string, opts: { effort?: string; attachments?: readonly string[]; ordered?: TaskInput[]; newTurnOnly?: boolean } = {}): Promise<boolean> {
     const st = this.byTask.get(taskId)
-    if (!st) { log.warn('send: no thread for task', { taskId }); return false }
+    if (st?.pending && !st.disconnected && this.server?.running) {
+      if (opts.newTurnOnly || opts.attachments?.length) return false
+      return this.answer(taskId, text)
+    }
+    return (await this.sendAttempt(taskId, text, opts)).kind === 'accepted'
+  }
+
+  /** Certainty and identity belong to this attempt, never a later task mapping. */
+  private async sendAttempt(taskId: string, text: string, opts: { effort?: string; attachments?: readonly string[]; ordered?: TaskInput[] } = {}): Promise<NewTurnOutcome> {
+    const st = this.byTask.get(taskId)
+    if (!st) { log.warn('send: no thread for task', { taskId }); return { kind: 'not-sent', reason: 'No Codex thread for this task.' } }
+    if (st.disconnected || !this.server?.running) return { kind: 'not-sent', reason: 'Codex is disconnected.' }
     // AN OUTSTANDING APPROVAL IS ANSWERED, NOT TALKED OVER. Typing "yes" as a
     // new turn would leave Codex blocked on the original request and add a
     // stray message to the thread.
     if (st.pending) {
-      // Attachments can never be approval answers. Refuse the complete draft
-      // instead of consuming its text and silently dropping its files.
-      if (opts.attachments?.length) return false
-      return this.answer(taskId, text)
+      return { kind: 'not-sent', reason: 'Answer the pending request before sending a new turn.' }
     }
+    if (st.turnId || st.submitting || st.stopping) return { kind: 'not-sent', reason: 'Codex is not ready for a new turn.' }
+    st.submitting = true
+    let finishSubmission!: () => void
+    st.submissionFinished = new Promise(resolve => { finishSubmission = resolve })
+    let submissionAttempted = false
     try {
-      await this.server!.request('turn/start', {
+      const ordered: TaskInput[] = opts.ordered ?? [ ...(text ? [{ type: 'text' as const, text }] : []), ...(opts.attachments ?? []).map(path => ({ type: 'image' as const, path })) ]
+      let metadata: CodexInputMetadata | undefined
+      let registered: { turnId?: string } | undefined
+      if (ordered.some(p => p.type === 'image' || p.attachment)) {
+        metadata = { id: randomUUID(), input: ordered }
+        await this.deps.saveInputMetadata?.(taskId, st.threadId, metadata)
+        registered = st.blocks.registerInputMetadata(ordered)
+      }
+      if (st.pending || st.pendingQueue?.length || st.disconnected || st.stopping || this.byTask.get(taskId) !== st) return { kind: 'not-sent', reason: 'Codex changed before submission.' }
+      submissionAttempted = true
+      const result = await this.server!.request<{ turn?: { id?: string } }>('turn/start', {
         threadId: st.threadId,
-        input: [
+        input: opts.ordered?.map(p => p.type === 'image' ? { type: 'localImage', path: p.path } : { type: 'text', text: p.text }) ?? [
           ...(text ? [{ type: 'text', text }] : []),
           ...(opts.attachments ?? []).map((path) => ({ type: 'localImage', path })),
         ],
         ...(opts.effort ? { effort: opts.effort } : {}),
+        ...(st.options?.model ? { model: st.options.model } : {}),
+        ...(st.options ? { approvalPolicy: st.options.approvalPolicy,
+          sandboxPolicy: st.options.sandbox === 'danger-full-access' ? { type: 'dangerFullAccess' }
+            : st.options.sandbox === 'read-only' ? { type: 'readOnly' }
+            : { type: 'workspaceWrite', writableRoots: [st.options.cwd, ...(st.options.writableRoots ?? [])], networkAccess: true },
+        } : {}),
       })
-      return true
+      if (typeof result.turn?.id !== 'string' || !result.turn.id) {
+        st.disconnected = true
+        throw new Error('turn/start returned no turn id; acceptance is uncertain. Reconnect before sending again')
+      }
+      if (!st.completedTurns?.has(result.turn.id)) st.turnId = result.turn.id
+      if (metadata && result.turn?.id) {
+        metadata = { ...metadata, turnId: result.turn.id }
+        if (registered) registered.turnId = result.turn.id
+        try { await this.deps.saveInputMetadata?.(taskId, st.threadId, metadata) }
+        catch { this.deps.onPatch({ taskId, errorReason: 'Codex accepted the message, but attachment display metadata could not be updated. Do not resend the message.' }) }
+      }
+      return { kind: 'accepted', submissionId: result.turn.id, turnId: result.turn.id }
     } catch (e) {
+      if (submissionAttempted) st.disconnected = true
       log.warn('turn/start failed', { taskId, error: (e as Error).message })
-      return false
-    }
+      this.deps.onPatch({ taskId, state: 'failed', errorReason: `Could not confirm Codex submission: ${(e as Error).message}. Check the conversation before retrying.` })
+      return { kind: submissionAttempted ? 'uncertain' : 'not-sent', reason: submissionAttempted ? 'Codex acceptance is uncertain. Check the conversation before sending again.' : 'Codex did not start this turn.' }
+    } finally { st.submitting = false; finishSubmission(); this.followupChanged(taskId, !!st.disconnected) }
   }
 
   /** Answer a blocking approval. Returns false if nothing was waiting. */
-  answer(taskId: string, text: string): boolean {
+  answer(taskId: string, text: string, expected?: QuestionReference): boolean {
     const st = this.byTask.get(taskId)
-    if (!st?.pending) return false
+    if (!st?.pending || st.disconnected || st.pending.awaitingReplay) return false
+    if (expected && !sameQuestion(expected, { requestId: st.pending.identity, stepId: String(st.pending.index) })) return false
+    if (st.turnId && typeof st.pending.params.turnId === 'string' && st.pending.params.turnId !== st.turnId) return false
     const decision = approvalDecision(text)
-    const { resolve, method } = st.pending
+    const pending = st.pending
+    const { resolve, method } = pending
+    const cap = this.approvalCap(st)
+    const modernOptions = approvalOptions(method, pending.params, cap)
+    const modernResponse = modernOptions ? responseForApproval(method, pending.params, text, cap) : undefined
+    if (modernOptions && modernResponse === undefined) { this.presentRequest(st); return false }
+    let formResponse: unknown
+    if (pending.form) {
+      if (text.trim() === '/cancel') formResponse = { action: 'cancel' }
+      else {
+        const field = pending.form.fields[pending.index]
+        if (field) {
+          try {
+            if (text.trim() === '/skip' && !field.required) { /* explicit optional omission */ }
+            else {
+              if (!text.trim()) throw new Error('Enter a value; optional fields can use /skip')
+              const selected = field.options?.find(o => o.label === text || o.value === text)
+              let value: unknown = selected?.value ?? text
+              if (field.schema.type === 'boolean') value = text.trim() === 'true' ? true : text.trim() === 'false' ? false : text
+              if (['number', 'integer', 'array'].includes(String(field.schema.type))) { try { value = JSON.parse(text) } catch { throw new Error('Enter a valid JSON number or array') } }
+              validateFormValue(value, field.schema)
+              Object.defineProperty(pending.form.content, field.id, { value, enumerable: true, configurable: true, writable: true })
+            }
+          } catch (error) {
+            pending.validationError = `${field.title}: ${(error as Error).message}`
+            this.deps.onPatch({ taskId, state: 'needs-user', errorReason: pending.validationError })
+            return false
+          }
+          pending.validationError = undefined
+          this.deps.onPatch({ taskId, state: 'needs-user', errorReason: '' })
+          pending.index++
+          this.presentRequest(st)
+          return true
+        }
+        if (!/^(approve|allow|yes|accept|deny|decline|no)$/i.test(text.trim())) return false
+        formResponse = /^(approve|allow|yes|accept)$/i.test(text.trim()) ? { action: 'accept', content: pending.form.content } : { action: 'decline' }
+      }
+    }
+    if (method === 'item/tool/requestUserInput') {
+      const question = pending.questions[pending.index]
+      if (!question || !text.trim()) return false
+      pending.answers[question.id] = { answers: [text] }
+      pending.index++
+      if (pending.index < pending.questions.length) {
+        this.presentRequest(st)
+        return true
+      }
+    }
+    const response = pending.form ? formResponse : method === 'item/tool/requestUserInput' ? { answers: pending.answers }
+      : modernResponse ?? this.approvalResponse(method, decision === 'approved', pending.params)
+    try { pending.respond?.(response) } catch (error) {
+      if (method === 'item/tool/requestUserInput') pending.index = Math.max(0, pending.index - 1)
+      this.deps.onPatch({ taskId, state: 'needs-user', errorReason: `Codex answer was not delivered: ${(error as Error).message}` })
+      return false
+    }
     st.pending = null
     log.event('codex-approval-answered', { taskId, method, decision })
-    resolve({ decision })
-    this.deps.onPatch({ taskId, clearQuestion: true, state: 'processing' })
+    resolve(response)
+    st.pending = st.pendingQueue?.shift() ?? null
+    if (st.pending) this.presentRequest(st)
+    else this.deps.onPatch({ taskId, clearQuestion: true, state: 'processing' })
+    this.followupChanged(taskId)
     return true
   }
 
   /** Stop the current turn. The thread survives — this is Esc, not a kill. */
   async interrupt(taskId: string): Promise<boolean> {
     const st = this.byTask.get(taskId)
-    if (!st || !this.server) return false
-    try { await this.server.request('turn/interrupt', { threadId: st.threadId }); return true }
-    catch (e) { log.warn('turn/interrupt failed', { taskId, error: (e as Error).message }); return false }
+    if (!st || !this.server || st.disconnected || st.stopping) return false
+    st.stopping = true
+    this.deps.onPatch({ taskId, activity: { kind: 'lifecycle', label: 'Cancelling' } })
+    try {
+      await st.submissionFinished
+      if (!st.turnId) return false
+      await this.server.request('turn/interrupt', { threadId: st.threadId, turnId: st.turnId }); return true
+    }
+    catch (e) { this.deps.onPatch({ taskId, activity: null, errorReason: `Could not stop Codex: ${(e as Error).message}` }); log.warn('turn/interrupt failed', { taskId, error: (e as Error).message }); return false }
+    finally { st.stopping = false }
   }
 
   /** Name the thread — a real task title, from Codex's own naming. */
@@ -199,6 +467,116 @@ export class CodexHub {
   }
 
   threadIdFor(taskId: string): string | undefined { return this.byTask.get(taskId)?.threadId }
+  validationErrorFor(taskId: string): string | undefined { return this.byTask.get(taskId)?.pending?.validationError }
+
+  private async loadHistory(srv: CodexAppServer, threadId: string, result: ResumeHistory): Promise<HistoryTurn[]> {
+    const pages = async <T>(method: string, cursor: string | null | undefined, params: Record<string, unknown>, fromStart = false): Promise<T[]> => {
+      const data: T[] = []
+      const visited = new Set<string>()
+      while (cursor || fromStart) {
+        fromStart = false
+        const key = cursor ?? '<start>'
+        if (visited.has(key)) throw new Error(`Codex history pagination repeated a cursor (${method}); history is incomplete`)
+        visited.add(key)
+        const page = await srv.request<{ data: T[]; nextCursor?: string | null }>(method, { threadId, ...params, ...(cursor ? { cursor } : {}) })
+        if (!Array.isArray(page.data)) throw new Error(`Codex returned malformed history (${method})`)
+        data.push(...page.data)
+        cursor = page.nextCursor
+      }
+      return data
+    }
+    const older = (await pages<HistoryTurn>('thread/turns/list', result.turnsBackwardsCursor, { sortDirection: 'desc', itemsView: 'full' })).reverse()
+    const turns = new Map<string, HistoryTurn>()
+    const mergeItems = (...groups: Array<Record<string, unknown>[]>) => {
+      const merged = new Map<string, Record<string, unknown>>()
+      for (const items of groups) for (const item of items) {
+        if (typeof item.id !== 'string') throw new Error('Codex history item has no stable identity')
+        merged.set(item.id, item)
+      }
+      return [...merged.values()]
+    }
+    for (const turn of [...older, ...(result.thread?.turns ?? [])]) {
+      const previous = turns.get(turn.id)
+      const items = previous?.itemsView === 'full' && turn.itemsView && turn.itemsView !== 'full'
+        ? mergeItems(turn.items ?? [], previous.items ?? []) : mergeItems(previous?.items ?? [], turn.items ?? [])
+      turns.set(turn.id, { ...previous, ...turn, items,
+        itemsView: previous?.itemsView === 'full' || turn.itemsView === 'full' ? 'full' : turn.itemsView })
+    }
+    const entries = (await pages<{ turnId: string; item: Record<string, unknown> }>('thread/items/list', result.itemsBackwardsCursor, { sortDirection: 'desc' })).reverse()
+    const olderItems = new Map<string, Record<string, unknown>[]>()
+    for (const entry of entries) {
+      const items = olderItems.get(entry.turnId) ?? []
+      items.push(entry.item)
+      olderItems.set(entry.turnId, items)
+    }
+    const missing: HistoryTurn[] = []
+    for (const [id, items] of olderItems) {
+      const turn = turns.get(id)
+      if (turn) turn.items = mergeItems(items, turn.items ?? [])
+      else missing.push({ id, items: mergeItems(items) })
+    }
+    const ordered = [...missing, ...turns.values()]
+    for (const turn of ordered) {
+      if (turn.itemsView === 'summary' || turn.itemsView === 'notLoaded') {
+        const full = await pages<{ turnId: string; item: Record<string, unknown> }>('thread/items/list', null, { turnId: turn.id, sortDirection: 'asc' }, true)
+        turn.items = mergeItems(full.map(entry => entry.item))
+      }
+    }
+    return ordered
+  }
+
+  /** Reattach the persisted conversation without creating a new thread or
+   * replaying the user's last prompt. Process lifetime is not session lifetime. */
+  async resumeThread(taskId: string, threadId: string, o: StartThreadOpts, force = false): Promise<void> {
+    if (!force && this.byTask.has(taskId) && !this.byTask.get(taskId)?.disconnected && this.server?.running) return
+    this.deps.onPatch({ taskId, history: { phase: 'loading' } })
+    const previous = this.byTask.get(taskId)
+    this.registrations++
+    try {
+    const srv = await this.ensure()
+    const config = { ...o.config, ...await this.deps.threadConfig?.(taskId) }
+    const result = await srv.request<ResumeHistory>('thread/resume', {
+      threadId, cwd: o.cwd, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox,
+      ...(o.model ? { model: o.model } : {}),
+      config,
+    })
+    if (result.thread?.id && result.thread.id !== threadId) throw new Error('Codex resumed a different thread')
+    const blocks = new CodexBlockStream()
+    for (const record of await this.deps.loadInputMetadata?.(taskId, threadId) ?? []) blocks.registerInputMetadata(record.input, record.turnId)
+    const turns = await this.loadHistory(srv, threadId, result)
+    await this.planWrites.get(taskId)
+    const plans = await this.deps.loadPlans?.(taskId, threadId) ?? previous?.blocks.snapshot().blocks.filter(b => b.kind === 'plan') ?? []
+    for (const turn of turns) {
+      blocks.push({ method: 'turn/started', params: { threadId, turn } })
+      const plan = plans.find(p => p.turnId === turn.id)
+      const pushPlan = () => { if (plan) blocks.push({ method: 'turn/plan/updated', params: { turnId: turn.id, plan: plan.steps } }) }
+      if (!(turn.items ?? []).some(item => item.type === 'userMessage')) pushPlan()
+      for (const item of turn.items ?? []) {
+        blocks.push({ method: 'item/completed', params: { threadId, turnId: turn.id, item } })
+        if (item.type === 'userMessage') pushPlan()
+      }
+      if (turn.status && turn.status !== 'inProgress') blocks.push({ method: 'turn/completed', params: { threadId, turn } })
+    }
+    const { config: _config, ...options } = o
+    const preservePending = previous?.threadId === threadId
+    const st: ThreadState = { taskId, threadId, pending: preservePending ? previous.pending : null,
+      pendingQueue: preservePending ? previous.pendingQueue : [], blocks, options,
+      completedTurns: new Set([...(preservePending ? previous.completedTurns ?? [] : []), ...turns.filter(t => ['completed', 'interrupted', 'failed'].includes(t.status ?? '')).map(t => t.id)]) }
+    this.retireCompletedRequests(st)
+    st.turnId = turns.find(turn => turn.status === 'inProgress')?.id
+    this.byThread.set(threadId, st)
+    this.byTask.set(taskId, st)
+    const snapshot = blocks.snapshot()
+    if (snapshot.blocks.length) this.deps.onPatch({ taskId, blocks: snapshot.blocks })
+    const lastStatus = turns.at(-1)?.status
+    this.deps.onPatch({ taskId, state: st.pending ? 'needs-user' : st.turnId ? 'processing' : lastStatus === 'failed' ? 'failed' : 'done', activity: null,
+      turnOutcome: st.turnId ? null : lastStatus === 'interrupted' ? 'cancelled' : lastStatus === 'failed' ? 'failed' : 'completed', history: { phase: 'ready' } })
+    if (st.pending) this.presentRequest(st)
+    } catch (error) {
+      this.deps.onPatch({ taskId, history: { phase: previous?.blocks.snapshot().blocks.length ? 'partial' : 'failed', reason: `Could not load complete Codex history: ${(error as Error).message}`, canRetry: true } })
+      throw error
+    } finally { this.finishRegistration() }
+  }
 
   /**
    * PROVE THE TRANSPORT WORKS, IN THIS BUILD, BEFORE A TASK DEPENDS ON IT.
@@ -242,15 +620,19 @@ export class CodexHub {
   release(taskId: string): void {
     const st = this.byTask.get(taskId)
     if (!st) return
+    this.followupChanged(taskId, true)
     // A RELEASED TASK WITH A BLOCKED TURN MUST NOT LEAVE CODEX HANGING. Nothing
     // will ever answer it now, and Codex has no timeout of its own.
-    if (st.pending) { st.pending.resolve({ decision: 'denied' }); st.pending = null }
+    for (const pending of [st.pending, ...(st.pendingQueue ?? [])]) {
+      if (pending) pending.resolve(this.approvalResponse(pending.method, false, pending.params))
+    }
+    st.pending = null
     this.byTask.delete(taskId)
     this.byThread.delete(st.threadId)
   }
 
   stop(): void {
-    for (const [, st] of this.byThread) st.pending?.resolve({ decision: 'denied' })
+    for (const st of [...this.byThread.values()]) this.release(st.taskId)
     this.byThread.clear()
     this.byTask.clear()
     this.server?.stop()
@@ -260,10 +642,44 @@ export class CodexHub {
   // ── the stream ────────────────────────────────────────────────────────────
 
   private onNotification(m: { method: string; params?: Record<string, unknown> }): void {
+    if (m.method === 'mcpServer/startupStatus/updated' && !m.params?.threadId) {
+      const mcpStatus = reduceAppServerEvent(m)?.mcpStatus
+      if (mcpStatus) {
+        this.mcpStatuses.set(mcpStatus.name, mcpStatus)
+        for (const st of this.byTask.values()) this.deps.onPatch({ taskId: st.taskId, mcpStatus })
+      }
+      return
+    }
+    if (m.method === 'transport/disconnected') {
+      for (const st of this.byTask.values()) {
+        st.disconnected = true
+        this.followupChanged(st.taskId, true)
+        for (const pending of [st.pending, ...(st.pendingQueue ?? [])]) if (pending) pending.awaitingReplay = true
+        this.deps.onPatch({ taskId: st.taskId, state: 'failed', activity: null,
+          errorReason: 'Codex connection lost; submission and turn status are uncertain. Reconnect to recover the conversation before retrying.' })
+      }
+      return
+    }
     const threadId = typeof m.params?.threadId === 'string' ? m.params.threadId : undefined
     // thread/started is the one notification that ARRIVES with the id we are
     // about to learn; every other one must already be routable.
     const st = threadId ? this.byThread.get(threadId) : undefined
+    const liveTurn = st?.turnId
+    if (this.registrations && (!st || m.method !== 'transport/disconnected')) {
+      this.earlyNotifications.push(m)
+      return
+    }
+    if (st && m.method === 'turn/started') {
+      const turn = m.params?.turn as { id?: string } | undefined
+      if (turn?.id) st.turnId = turn.id
+    }
+    if (st && m.method === 'turn/completed') {
+      const id = (m.params?.turn as { id?: string } | undefined)?.id
+      if (id) (st.completedTurns ??= new Set()).add(id)
+      this.retireCompletedRequests(st)
+      if (!id || st.turnId === id) st.turnId = undefined
+      else if (st.turnId) return
+    }
 
     // THE CHAT VIEW IS FED FIRST, AND FROM EVERY NOTIFICATION.
     //
@@ -283,11 +699,30 @@ export class CodexHub {
       return
     }
     const snap = blocksChanged ? st.blocks.snapshot() : null
+    if (m.method === 'turn/plan/updated' && snap && this.deps.savePlans) {
+      const plans = snap.blocks.filter(b => b.kind === 'plan')
+      const write = (this.planWrites.get(st.taskId) ?? Promise.resolve()).then(() => this.deps.savePlans!(st.taskId, st.threadId, plans))
+        .catch(error => this.deps.onPatch({ taskId: st.taskId, history: { phase: 'partial', reason: `Could not save turn plans: ${(error as Error).message}`, canRetry: true } }))
+      this.planWrites.set(st.taskId, write)
+      void write.finally(() => { if (this.planWrites.get(st.taskId) === write) this.planWrites.delete(st.taskId) })
+    }
     this.deps.onPatch({
       taskId: st.taskId,
       ...(patch ?? {}),
       ...(snap ? { blocks: snap.blocks, ...(snap.usage ? { usage: snap.usage } : {}) } : {}),
     })
+    if (st.pending) this.presentRequest(st)
+    this.followupChanged(st.taskId)
+    if (m.method === 'turn/completed' && liveTurn && (m.params?.turn as { id?: string })?.id === liveTurn) {
+      const generation = this.generation(st), server = this.server
+      const status = (m.params?.turn as { status?: string })?.status
+      const outcome = status === 'completed' ? 'completed' : status === 'interrupted' ? 'interrupted' : 'failed'
+      void Promise.resolve(st.submissionFinished).then(() => {
+        if (this.server !== server || this.byTask.get(st.taskId) !== st || st.disconnected || st.submitting) return
+        for (const cb of this.followupListeners) cb({ type: 'ended', event: { taskId: st.taskId,
+          fence: { sessionId: st.threadId, generation, turnId: liveTurn }, outcome } })
+      })
+    }
   }
 
   /**
@@ -298,12 +733,38 @@ export class CodexHub {
    * answers. That is the whole point of the App Server path — an approval that
    * used to require finding a terminal now arrives on the card.
    */
-  private onServerRequest(req: ServerRequest): Promise<unknown> {
+  private onServerRequest(req: ServerRequest, source = this.server): Promise<unknown> {
+    if (source !== this.server) return Promise.reject(new Error('Codex request belongs to a replaced connection'))
     const p = (req.params ?? {}) as Record<string, unknown>
     const threadId = typeof p.threadId === 'string' ? p.threadId
       : typeof p.conversationId === 'string' ? p.conversationId : undefined
     const st = threadId ? this.byThread.get(threadId) : undefined
+    if (this.registrations) return new Promise((resolve, reject) => { this.earlyRequests.push({ req, source, resolve, reject }) })
     const question = questionFromApproval(req.method, req.params)
+
+    const rejectRequest = (reason: string) => {
+      if (st) this.deps.onPatch({ taskId: st.taskId, state: 'failed', activity: null, errorReason: reason })
+      return Promise.reject(new Error(reason))
+    }
+    if (!question) return rejectRequest(`Unsupported Codex request: ${req.method}`)
+    if (req.method === 'item/tool/requestUserInput') {
+      const questions = p.questions as PendingRequest['questions'] | undefined
+      if (!Array.isArray(questions) || !questions.length || questions.some(q => !q || typeof q.id !== 'string' || !q.id || typeof q.question !== 'string' || !q.question ||
+        (q.options !== undefined && (!Array.isArray(q.options) || q.options.some(o => !o || typeof o.label !== 'string')))) || new Set(questions.map(q => q.id)).size !== questions.length) {
+        return rejectRequest('Malformed Codex question set; required question identities or labels are missing.')
+      }
+    }
+    let fields: FormField[] | undefined
+    if (req.method === 'mcpServer/elicitation/request') {
+      try { fields = formFields(p) }
+      catch (error) {
+        if (st) this.deps.onPatch({ taskId: st.taskId, errorReason: `MCP request declined: ${(error as Error).message}` })
+        return Promise.resolve({ action: 'decline' })
+      }
+    }
+    if (st && typeof p.turnId === 'string' && (st.completedTurns?.has(p.turnId) || (st.turnId && p.turnId !== st.turnId))) {
+      return Promise.resolve(this.approvalResponse(req.method, false, p))
+    }
 
     if (!st || !question) {
       // UNROUTABLE OR UNRECOGNISED ⇒ DENY, LOUDLY. Leaving it unanswered hangs
@@ -311,13 +772,78 @@ export class CodexHub {
       // worse. Denial is the only answer that is safe when we do not understand
       // the question.
       log.warn('codex-approval-unroutable', { method: req.method, threadId: threadId ?? null, known: !!st })
-      return Promise.resolve({ decision: 'denied' })
+      return Promise.resolve(this.approvalResponse(req.method, false, p))
     }
 
     log.event('codex-approval-requested', { taskId: st.taskId, method: req.method })
     return new Promise((resolve) => {
-      st.pending = { id: req.id, method: req.method, resolve }
-      this.deps.onPatch({ taskId: st.taskId, state: 'needs-user', question, activity: null })
+      const replay = [st.pending, ...(st.pendingQueue ?? [])].find(pr => pr && pr.awaitingReplay && pr.method === req.method && pr.params.turnId === p.turnId &&
+        JSON.stringify(pr.params) === JSON.stringify(p) && (pr.id === req.id || (typeof p.itemId === 'string' && p.itemId === pr.params.itemId)))
+      if (replay) {
+        replay.resolve(this.approvalResponse(replay.method, false, replay.params))
+        replay.id = req.id; replay.resolve = resolve; replay.respond = req.respond; replay.awaitingReplay = false
+        this.deps.onPatch({ taskId: st.taskId, errorReason: '' })
+        if (st.pending === replay) this.presentRequest(st)
+        return
+      }
+      const pending: PendingRequest = {
+        identity: `${typeof req.id}:${req.id}:${randomUUID()}`,
+        id: req.id, method: req.method, resolve, params: p, respond: req.respond,
+        questions: Array.isArray(p.questions) ? p.questions as PendingRequest['questions'] : [], answers: {}, index: 0,
+        ...(fields ? { form: { fields, content: {} } } : {}),
+      }
+      if (st.pending) (st.pendingQueue ??= []).push(pending)
+      else { st.pending = pending; this.presentRequest(st) }
     })
+  }
+
+  private approvalCap(st: ThreadState): import('./app-server-events').ApprovalCap {
+    const cap = this.deps.approvalCap?.(st.taskId) ?? { fullAccessAllowed: st.options?.sandbox === 'danger-full-access', roots: [] }
+    return { ...cap, roots: [...new Set([...cap.roots, ...(st.options?.writableRoots ?? [])])], readOnly: st.options?.sandbox === 'read-only' }
+  }
+
+  private presentRequest(st: ThreadState): void {
+    const pending = st.pending
+    if (!pending) return
+    const reference = { requestId: pending.identity, stepId: String(pending.index) }
+    if (pending.form) {
+      const field = pending.form.fields[pending.index]
+      const choices = field?.options?.map(o => o.label) ?? (field?.schema.type === 'boolean' ? ['true', 'false'] : undefined)
+      this.deps.onPatch({ taskId: st.taskId, state: 'needs-user', activity: null,
+        question: field ? { reference, text: `${String(pending.params.message ?? 'MCP tool input')}\n\n${field.title}${field.required ? ' (required)' : ' (optional; /skip to omit)'}${field.schema.description ? `\n${field.schema.description}` : ''}\n${field.schema.type === 'array' ? 'Enter a JSON array. ' : ''}/cancel cancels this request.`, kind: choices?.length ? 'choice' : 'free_text', ...(choices ? { choices } : {}) }
+          : { reference, text: `Submit these MCP form answers?\n\n${JSON.stringify(pending.form.content, null, 2)}`, kind: 'confirm', choices: ['Approve', 'Deny'] },
+        ...(pending.awaitingReplay ? { errorReason: 'MCP request is unresolved after reconnect; waiting for provider replay before accepting answers.' } : {}) })
+      return
+    }
+    const item = pending.questions[pending.index]
+    const question = pending.method === 'item/tool/requestUserInput' && item
+      ? { text: item.question, kind: item.options?.length ? 'choice' as const : 'free_text' as const, choices: item.options?.map((o) => o.label) }
+      : questionFromApproval(pending.method, pending.params, st.blocks.item(String(pending.params.itemId ?? '')), this.approvalCap(st))
+    if (question && pending.method !== 'item/tool/requestUserInput') {
+      const signature = JSON.stringify(question.choices)
+      if (pending.choicesSignature !== undefined && pending.choicesSignature !== signature) reference.stepId = String(++pending.index)
+      pending.choicesSignature = signature
+    }
+    if (question) this.deps.onPatch({ taskId: st.taskId, state: 'needs-user', question: { ...question, reference }, activity: null,
+      ...(pending.awaitingReplay ? { errorReason: 'Codex has not replayed this unresolved request after reconnect. Its outcome remains uncertain; answers are disabled until the provider confirms it.' } : {}) })
+  }
+
+  private retireCompletedRequests(st: ThreadState): void {
+    const retained: PendingRequest[] = []
+    for (const request of [st.pending, ...(st.pendingQueue ?? [])]) {
+      if (!request) continue
+      if (typeof request.params.turnId === 'string' && st.completedTurns?.has(request.params.turnId)) request.resolve(this.approvalResponse(request.method, false, request.params))
+      else retained.push(request)
+    }
+    st.pending = retained.shift() ?? null
+    st.pendingQueue = retained
+  }
+
+  private approvalResponse(method: string, allow: boolean, params: Record<string, unknown>): unknown {
+    if (method === 'item/tool/requestUserInput') return { answers: {} }
+    if (method === 'mcpServer/elicitation/request') return allow ? { action: 'accept', content: {} } : { action: 'decline' }
+    if (method === 'item/permissions/requestApproval') return { permissions: allow ? params.permissions ?? {} : {}, scope: 'turn' }
+    if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval') return { decision: allow ? 'accept' : 'decline' }
+    return { decision: allow ? 'approved' : 'denied' }
   }
 }

@@ -105,12 +105,22 @@ export interface PocketP {
 }
 
 export interface ArtifactP { type: 'url' | 'path'; value: string }
-export interface QuestionP { text: string; kind?: string; choices?: string[]; irreversible?: boolean }
+export interface QuestionP { text: string; details?: string; kind?: string; choices?: string[]; irreversible?: boolean; reference?: import('../question-reference').QuestionReference; acknowledgment?: 'pending' | 'accepted' }
 export interface ResultP { summary: string; detail?: string; artifacts?: ArtifactP[] }
 export interface ErrorP { reason: string; detail?: string }
 export interface McpGapP { message: string; fixCommand: string }
-export interface DraftAttachmentP { id: string; path: string; mimeType: string; name: string }
-export interface TaskDraftP { text: string; attachments: DraftAttachmentP[] }
+export interface DraftAttachmentP { id: string; path: string; mimeType: string; name: string; reservationOrder?: number }
+export interface TaskDraftP { text: string; attachments: DraftAttachmentP[]; clientRevision?: number; stagingCount?: number; error?: string; operations?: { id: string; name: string; phase: string; error?: string; order?: number }[] }
+export interface ChatChoiceP { id: string; label: string; description?: string }
+export interface ChatConfigChangeP { model?: string; effort?: string; permission?: string }
+export interface DraftInsertionP { insertionOffset?: number; selectedLength?: number; clientRevision?: number; insertionText?: string; operationId?: string }
+export interface ChatConfigP {
+  provider: string; providerLabel: string; model: string; modelLabel: string
+  providers: ChatChoiceP[]; models: ChatChoiceP[]; efforts: ChatChoiceP[]; effort?: string
+  permissions: ChatChoiceP[]; permission?: string; permissionScope?: string
+  cwd: string; mutable: boolean; busy: boolean; error?: string
+  dictation?: 'idle' | 'recording' | 'transcribing' | 'error'; dictationError?: string
+}
 
 /** One turn of a GUI-agent conversation — this backend's answer to the terminal. */
 /** One entry of a Codex thread; see codex/rollout.ts CodexTurn for the shapes. */
@@ -150,7 +160,11 @@ export interface TaskDetailP {
   warmup?: string
   note?: string
   activity?: string
+  history?: import('../codex/app-server-events').HistoryState
+  turnOutcome?: import('../blocks').TurnOutcome
+  mcpStatuses?: import('../codex/app-server-events').McpStatus[]
   question?: QuestionP
+  questionAcknowledgment?: { reference: import('../question-reference').QuestionReference; state: 'pending' | 'accepted' }
   result?: ResultP
   error?: ErrorP
   mcpGap?: McpGapP
@@ -185,6 +199,10 @@ export interface TaskDetailP {
   project?: string
   /** One task-scoped unsent draft, shared by every expanded native surface. */
   draft?: TaskDraftP
+  followup?: import('../task-followup').FollowupP
+  composerMode?: 'queue' | 'full' | 'answer' | 'send' | 'locked'
+  chatConfig?: ChatConfigP
+  canCompose?: boolean
 }
 
 export interface CardP {
@@ -255,6 +273,7 @@ export interface ShelfItemP { id: string; name: string }
 export interface RouteOfferP { newTaskId: string; altTaskId: string; altName: string }
 
 export interface CockpitPayload {
+  projects?: Array<{name: string; path: string}>
   groups: GroupP[]
   /** Cards folded away across the whole wall — the reveal control keys off this
    *  so it never depends on one group happening to render. */
@@ -379,6 +398,10 @@ export type NotchCommand =
    * notch — the notch stays independent of anything the Agent says.
    */
   | { type: 'toast'; text: string }
+  | { type: 'newChatStatus'; pending: boolean; error?: string }
+  | { type: 'newChatPreview'; token: string; preview?: import('../managed-project').ChatPreview; error?: string }
+  | { type: 'questionAnswerStatus'; id: string; reference: import('../question-reference').QuestionReference; state: 'pending' | 'accepted' | 'rejected' }
+  | { type: 'draftAttachmentError'; id: string; operationId: string; error: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
   | { type: 'surfaceFill'; fill: number }
   | { type: 'screenCaptureVisibility'; show: boolean }
@@ -420,12 +443,24 @@ export type NotchEvent =
    *  because the panel is large, not because the panel is wrong, so the
    *  trip back has to be one tap or it is a one-way door. */
   | { type: 'pocketExpand' }
-  | { type: 'chooseOption'; id: string; index: number }
-  | { type: 'answerText'; id: string; text: string }
-  | { type: 'setDraftText'; id: string; text: string }
-  | { type: 'addDraftImage'; id: string; path: string; mimeType: string; name: string }
+  | { type: 'chooseOption'; id: string; index: number; reference?: import('../question-reference').QuestionReference }
+  | { type: 'answerText'; id: string; text: string; reference?: import('../question-reference').QuestionReference }
+  | { type: 'reloadHistory'; id: string }
+  | { type: 'setDraftText'; id: string; text: string; clientRevision?: number }
+  | ({ type: 'addDraftImage'; id: string; path: string; mimeType: string; name: string } & DraftInsertionP)
+  | ({ type: 'reserveDraftAttachment'; id: string; operationId: string; name: string } & DraftInsertionP)
+  | { type: 'failDraftAttachment'; id: string; operationId: string; error: string }
+  | { type: 'configureChat'; id: string; change: ChatConfigChangeP }
+  | { type: 'toggleDraftDictation'; id: string; insertion?: DraftInsertionP }
+  | { type: 'cancelDraftDictation'; id: string }
+  | ({ type: 'newChat' } & import('../managed-project').NewChatOptions)
+  | ({ type: 'previewChat'; token: string } & import('../managed-project').NewChatOptions)
   | { type: 'removeDraftAttachment'; id: string; attachmentId: string }
-  | { type: 'sendDraft'; id: string }
+  | { type: 'restoreDraftAttachment'; id: string; attachmentId: string }
+  | { type: 'undoDraftAttachment'; id: string; attachmentId: string }
+  | { type: 'redoDraftAttachment'; id: string; attachmentId: string }
+  | { type: 'sendDraft'; id: string; reference?: import('../question-reference').QuestionReference }
+  | { type: 'cancelTaskFollowup' | 'restoreTaskFollowup' | 'queueSavedTaskFollowup' | 'recoverUncertainFollowup'; id: string; queueId: string }
   | { type: 'mute'; id: string }
   | { type: 'kill'; id: string }
   | { type: 'resume'; id: string }

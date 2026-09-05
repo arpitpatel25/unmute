@@ -1,4 +1,31 @@
 import assert from 'node:assert/strict'
+
+test('new-turn-only Claude submission refuses unresolved requests without writing user input', async () => {
+  const f = fixture(); await f.driver.start()
+  f.emit({ type: 'control_request', request_id: 'queue-approval', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'pwd' } } })
+  const before = f.writes.length
+  assert.equal((await f.driver.sendNewTurn('follow-up', [], 'q')).kind, 'not-sent')
+  assert.equal(f.writes.length, before)
+  f.driver.close()
+})
+
+test('approval arriving during queued image preparation prevents a user frame; attempted write failure is uncertain', async () => {
+  let read!: () => void, began!: () => void
+  const reading = new Promise<void>(resolve => { began = resolve })
+  const f = fixture(false, { readImage: async () => { began(); await new Promise<void>(resolve => { read = resolve }); return Buffer.from('image') } })
+  await f.driver.start()
+  const next = f.driver.sendNewTurn('', ['/tmp/image.png'], 'q')
+  await reading
+  f.emit({ type: 'control_request', request_id: 'late', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: {} } })
+  read(); assert.equal((await next).kind, 'not-sent')
+  assert.equal(f.writes.filter(w => w.type === 'user').length, 0)
+  await f.driver.answer('late', { behavior: 'deny' })
+  f.child.stdin.on('error', () => {})
+  f.child.stdin._write = (_chunk, _encoding, callback) => callback(new Error('write failed'))
+  assert.equal((await f.driver.sendNewTurn('possibly written', [], 'q2')).kind, 'uncertain')
+  assert.equal((await f.driver.sendNewTurn('must not retry', [], 'q3')).kind, 'not-sent')
+  f.driver.close()
+})
 import { test } from 'node:test'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
@@ -8,7 +35,7 @@ import { join } from 'node:path'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { ClaudeTaskSession, type ClaudeTaskEvent } from './task-session'
 
-function fixture(resume = false, extra: Partial<import('./task-session').ClaudeTaskOptions> = {}) {
+function fixture(resume = false, extra: Partial<import('./task-session').ClaudeTaskOptions> = {}, initialization: unknown = {}) {
   const events: ClaudeTaskEvent[] = []
   const writes: any[] = []
   let args: string[] = []
@@ -18,7 +45,7 @@ function fixture(resume = false, extra: Partial<import('./task-session').ClaudeT
   child.stderr = new PassThrough()
   child.stdin = new Writable({ write(chunk, _encoding, callback) {
     const frame = JSON.parse(String(chunk)); writes.push(frame); callback()
-    if (frame.request?.subtype === 'initialize') queueMicrotask(() => emit({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: {} } }))
+    if (frame.request?.subtype === 'initialize') queueMicrotask(() => emit({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: initialization } }))
   } })
   child.kill = () => { queueMicrotask(() => child.emit('close', 0, null)); return true }
   const emit = (frame: unknown) => child.stdout.emit('data', Buffer.from(JSON.stringify(frame) + '\n'))
@@ -38,6 +65,21 @@ test('persistent turns reject concurrency and duplicate submission IDs and resum
   await f.driver.send('next')
   assert.equal(f.writes.filter(w => w.type === 'user').length, 2)
   assert.equal(f.child.stdin.writableEnded, false)
+  f.driver.close()
+})
+
+test('model and effort choices come from initialization capabilities, not screenshot aliases', async () => {
+  const f = fixture(false, {}, { models: [
+    { value: 'default', displayName: 'Provider default', supportsEffort: true, supportedEffortLevels: ['low', 'high', 7] },
+    { value: 'small', displayName: 'Small', supportedEffortLevels: ['max'] },
+    { value: 4 },
+  ] })
+  await f.driver.start()
+  assert.deepEqual(f.driver.models, [
+    { id: 'default', label: 'Provider default', efforts: ['low', 'high'] },
+    { id: 'small', label: 'Small', efforts: [] },
+  ])
+  assert.equal(f.writes.some(w => w.type === 'user'), false)
   f.driver.close()
 })
 
@@ -195,4 +237,39 @@ test('per-session directories and Chrome settings preserve MCP env while removin
   await disabled.driver.start()
   assert.ok(disabled.args().includes('--no-chrome'))
   disabled.driver.close()
+})
+
+test('fork resumes source into a pinned distinct session and validates returned child identity', async () => {
+  const source = '1e4c15ad-258f-4ae0-8910-dbb15858c087'
+  const f = fixture(false, { forkFromSessionId: source })
+  await f.driver.start()
+  assert.equal(f.args()[f.args().indexOf('--resume') + 1], source)
+  assert.ok(f.args().includes('--fork-session'))
+  assert.equal(f.args()[f.args().indexOf('--session-id') + 1], f.driver.sessionId)
+  assert.notEqual(f.driver.sessionId, source)
+  f.emit({ type: 'system', subtype: 'init', session_id: f.driver.sessionId })
+  assert.equal(f.driver.alive, true)
+  f.emit({ type: 'system', subtype: 'init', session_id: source })
+  assert.equal(f.driver.alive, false)
+  assert.throws(() => fixture(false, { forkFromSessionId: source, sessionId: source }), /distinct/)
+})
+
+test('a result before the stdin write callback cannot be followed by a late turn-start', async () => {
+  const f = fixture(); await f.driver.start()
+  let finishWrite!: () => void
+  let didWrite!: () => void
+  const written = new Promise<void>(resolve => { didWrite = resolve })
+  f.child.stdin._write = (_chunk, _encoding, callback) => {
+    finishWrite = () => callback()
+    f.emit({ type: 'result', subtype: 'success', session_id: f.driver.sessionId })
+    didWrite()
+  }
+  const sending = f.driver.send('finish immediately')
+  await written
+  assert.equal(f.driver.busy, false)
+  assert.equal((await f.driver.sendNewTurn('must wait for acceptance', [], 'queue-next')).kind, 'not-sent')
+  finishWrite(); await sending
+  assert.deepEqual(f.events.filter(e => e.type === 'turn-start' || e.type === 'result').map(e => e.type), ['result'])
+  assert.equal(f.driver.busy, false)
+  f.driver.close()
 })

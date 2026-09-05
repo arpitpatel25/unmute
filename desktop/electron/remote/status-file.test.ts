@@ -9,7 +9,19 @@ import {
   isStale,
   statusMtimeMs,
   CURRENT_SCHEMA_VERSION,
+  writeStatusFile,
 } from './status-file.ts'
+
+test('concurrent structured status updates persist the last event without temp-file collisions', async () => {
+  const f = await tmpFile()
+  const results = await Promise.all([
+    writeStatusFile(f, { state: 'processing' }),
+    writeStatusFile(f, { state: 'needs-user', question: { text: 'Allow?' } }),
+    writeStatusFile(f, { state: 'done' }),
+  ])
+  assert.deepEqual(results, [true, true, true])
+  assert.equal((await readStatus(f))?.state, 'done')
+})
 
 async function tmpFile(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'remote-st-'))

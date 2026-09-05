@@ -1,13 +1,13 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert'
 import {
-  agentAndModel, canKill, canResume, dirLabel, hasTerminal, openInLabel,
+  agentAndModel, canKill, canResume, dirLabel, hasTerminal, isDesktopTask, openInLabel,
   providerLabel, vendorMark, UNKNOWN_VENDOR_MARK,
 } from './taskFacts'
 import type { RemoteTask } from './useRemoteTasks'
 
 const PROVIDERS = {
-  claude: { id: 'claude', vendor: 'Claude', surface: 'cli', label: 'Claude Code CLI', transport: 'pty', hasTerminal: true, canResume: true },
+  claude: { id: 'claude', vendor: 'Claude', surface: 'cli', label: 'Claude Code CLI', transport: 'structured', hasTerminal: false, canResume: true },
   codexDesktop: { id: 'codex-desktop', vendor: 'Codex', surface: 'desktop', label: 'Codex desktop', transport: 'driver', hasTerminal: false, canResume: false },
   claudeDesktop: { id: 'claude-code-desktop', vendor: 'Claude', surface: 'desktop', label: 'Claude desktop', transport: 'driver', hasTerminal: false, canResume: false },
 } as const
@@ -26,9 +26,10 @@ describe('capability questions ask the registry, never the id', () => {
     assert.equal(canKill(t), false)
   })
 
-  test('a PTY backend offers all three', () => {
+  test('an owned chat offers stop and resume but no terminal or external-app handoff', () => {
     const t = task({ provider: PROVIDERS.claude as RemoteTask['provider'], agent: 'claude' })
-    assert.equal(hasTerminal(t), true)
+    assert.equal(hasTerminal(t), false)
+    assert.equal(isDesktopTask(t), false)
     assert.equal(canResume(t), true)
     assert.equal(canKill(t), true)
   })
@@ -38,12 +39,12 @@ describe('capability questions ask the registry, never the id', () => {
     // checks. If any survived, this task would lose its buttons.
     const t = task({ provider: PROVIDERS.claude as RemoteTask['provider'], agent: 'codex-desktop' })
     assert.equal(canResume(t), true)
-    assert.equal(hasTerminal(t), true)
+    assert.equal(hasTerminal(t), false)
   })
 
   test('a pre-registry payload (no provider) is treated as the PTY session it was', () => {
     const t = task({ agent: undefined })
-    assert.equal(hasTerminal(t), true)
+    assert.equal(hasTerminal(t), false)
     assert.equal(canResume(t), true)
     assert.equal(canKill(t), true)
   })

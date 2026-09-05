@@ -26,10 +26,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
 import { groupSections } from './groupSections'
-import { LiveTerminal } from './LiveTerminal'
 import { ProviderMark } from './ProviderMark'
 import {
-  agentAndModel, canKill, canResume, dirLabel, hasTerminal, openInLabel,
+  agentAndModel, canKill, canResume, dirLabel, isDesktopTask, openInLabel,
   providerLabel, vendorMark,
 } from './taskFacts'
 
@@ -416,7 +415,7 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
             chat that had never stopped. Resume renders only where
             `provider.canResume`; a backend that cannot resume gets the door into
             its own app instead, not a greyed-out button. */}
-        {!hasTerminal(t) && <Key label={openInLabel(t)} onClick={() => openInApp(t.id)} />}
+        {isDesktopTask(t) && <Key label={openInLabel(t)} onClick={() => openInApp(t.id)} />}
         {canKill(t) && t.alive && (
           <Key label="kill" danger onClick={() => { if (window.confirm('Stop this session?')) onKill(t.id) }} />
         )}
@@ -490,16 +489,10 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
         </div>
       )}
 
-      {/* CHAT BACKEND → where a Claude task shows its terminal, a Codex task
-          shows where its conversation lives. Neither the terminal nor the ended-
-          session panel belongs here: the first does not exist for this backend,
-          the second offered to resume a chat that never stopped.
-          ALIVE → the REAL terminal, painted FRESH (no stale-width replay — the
-          live TUI repaints on SIGWINCH; replaying old-width frames is what
-          garbled the stage). DEAD → never an empty black void: the result/error
-          panel with resume / re-run as the obvious next move. */}
+      {/* A graphical task summary; full structured conversation lives in the
+          notch. Desktop integrations retain their own application handoff. */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        {!hasTerminal(t) ? (
+        {isDesktopTask(t) || t.alive ? (
           <div style={{ height: '100%', overflow: 'auto', padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase' }}>
               {providerLabel(t)} thread · {st.label}
@@ -507,15 +500,13 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
             {t.threadContext && <div style={{ fontSize: 13, color: C.midText, lineHeight: 1.55 }}>{t.threadContext}</div>}
             {t.result?.summary && <div style={{ fontSize: 14, color: C.nameText, lineHeight: 1.55 }}>{t.result.summary}</div>}
             {t.result?.detail && <div style={{ fontSize: 12.5, color: C.midText, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{t.result.detail}</div>}
-            <div style={{ display: 'flex', gap: 9, marginTop: 4 }}>
+            {isDesktopTask(t) && <div style={{ display: 'flex', gap: 9, marginTop: 4 }}>
               <button onClick={() => openInApp(t.id)}
                 style={{ fontFamily: C.mono, fontSize: 12, fontWeight: 700, color: C.bg, background: vendorMark(t), border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer' }}>
                 {openInLabel(t)} — the thread is still there
               </button>
-            </div>
+            </div>}
           </div>
-        ) : t.alive ? (
-          <LiveTerminal taskId={t.id} onClose={onClose} fill />
         ) : (
           <div style={{ height: '100%', overflow: 'auto', padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase' }}>
@@ -723,9 +714,8 @@ export default function OrchestrateWall() {
     const api = (window as unknown as { electronAPI?: { remotePinSkill?: (n: string, on: boolean) => Promise<boolean>; remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean }>> } }).electronAPI
     void api?.remotePinSkill?.(name, on).then(() => api?.remoteListSkills?.().then((s) => setSkills(s ?? [])))
   }, [])
-  // Tap-to-invoke (spec §11, D14): drop `/name ` (unsubmitted) into a live session's
-  // input. NEVER auto-submits — the user presses Enter. Only wired when a task
-  // terminal is actually open (see openTerminalTaskId), so a stray tap can't misfire.
+  // Existing skill shortcuts insert into the selected owned chat draft only.
+  // They never submit a turn or write terminal keystrokes.
   const tapSkill = useCallback((taskId: string, name: string) => {
     curatorDevLog({ kind: 'skill-tap-invoke', skill: name, taskId })
     const api = (window as unknown as { electronAPI?: { curatorTapSkill?: (taskId: string, name: string) => Promise<boolean> } }).electronAPI
@@ -835,9 +825,7 @@ export default function OrchestrateWall() {
 
   const focused = focusedId ? tasks.find((t) => t.id === focusedId) ?? null : null
   const top = queue[0] ?? null
-  // Tap-to-invoke target: a skill can be inserted only when a real terminal is
-  // live on the stage (a focused, alive task). Otherwise unmute-skill rows are inert.
-  const openTerminalTaskId = focused?.alive ? focused.id : null
+  const openDraftTaskId = focused?.chatWritable ? focused.id : null
 
   // NEEDS YOU (spec §3.1): a task waiting on an answer outranks eleven that
   // finished, so it is lifted OUT of its router-assigned group into a band above
@@ -956,14 +944,14 @@ export default function OrchestrateWall() {
   // badge on the row, which still explains the origin without splitting the list.
   const renderSkillRow = (s: (typeof skills)[number]) => {
     const unmute = s.origin === 'unmute'
-    const canTap = unmute && !!openTerminalTaskId
+    const canTap = unmute && !!openDraftTaskId
     return (
       <div
         key={s.name}
         className="ow-row"
         style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 6px', margin: '0 -6px', cursor: unmute ? (canTap ? 'pointer' : 'default') : 'default' }}
-        title={unmute ? (canTap ? `insert /${s.name} into the open terminal — you press Enter` : 'open a task’s terminal to insert this skill') : undefined}
-        onClick={unmute ? () => { if (openTerminalTaskId) tapSkill(openTerminalTaskId, s.name) } : undefined}
+        title={unmute ? (canTap ? `insert /${s.name} into the chat draft — review in the notch before sending` : 'select an owned chat to insert this skill') : undefined}
+        onClick={unmute ? () => { if (openDraftTaskId) tapSkill(openDraftTaskId, s.name) } : undefined}
         onMouseEnter={(e) => {
           const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
           setHoveredSkill({ name: s.name, top: r.top, rightPx: window.innerWidth - r.left + 12 })

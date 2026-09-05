@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  foldAppServerBlocks, blockFromCodexItem, commandLabel, shellCommandOf, toolTitle,
+  foldAppServerBlocks, blockFromCodexItem, commandLabel, shellCommandOf, toolTitle, CodexBlockStream,
 } from './blocks-app-server'
 import type { Block } from '../blocks'
 
@@ -17,6 +17,42 @@ const LIVE = readFileSync(join(__dirname, '__fixtures__', 'app-server-live-turn.
   .map((m) => ({ method: m.method as string, params: m.params }))
 
 const kinds = (bs: Block[]) => bs.map((b) => b.kind)
+
+test('local images remain attachments after combined user text, including image-only messages', () => {
+  const stream = new CodexBlockStream()
+  stream.push({ method: 'item/completed', params: { item: { id: 'u', type: 'userMessage', content: [
+    { type: 'text', text: 'look' }, { type: 'localImage', path: '/tmp/a.png' }, { type: 'text', text: ' here' },
+  ] } } })
+  assert.deepEqual(stream.snapshot().blocks, [ { kind: 'message', role: 'user', text: 'look here' },
+    { kind: 'attachment', path: '/tmp/a.png', name: 'a.png', mimeType: 'image/png' } ])
+})
+
+test('changes to earlier items are reported', () => {
+  const stream = new CodexBlockStream()
+  for (const id of ['a', 'b']) stream.push({ method: 'item/agentMessage/delta', params: { itemId: id, delta: id } })
+  assert.equal(stream.push({ method: 'item/agentMessage/delta', params: { itemId: 'a', delta: ' more' } }), true)
+})
+
+test('submission metadata preserves original file and image names', () => {
+  const stream = new CodexBlockStream()
+  stream.registerInputMetadata([{ type: 'image', path: '/tmp/staged.png', name: 'Original.png', mimeType: 'image/png' },
+    { type: 'text', text: 'full paste', attachment: { path: '/tmp/paste.txt', name: 'Pasted text', mimeType: 'text/x-unmute-paste' } }])
+  stream.push({ method: 'item/completed', params: { item: { id: 'u', type: 'userMessage', content: [
+    { type: 'localImage', path: '/tmp/staged.png' }, { type: 'text', text: 'full paste' },
+  ] } } })
+  assert.deepEqual(stream.snapshot().blocks.filter(b => b.kind === 'attachment').map(b => b.name), ['Original.png', 'Pasted text'])
+})
+
+test('mixed pasted source stays complete in metadata but displays as a collapsed attachment', () => {
+  const stream = new CodexBlockStream()
+  const paste = 'full source\n'.repeat(100)
+  const input = [{ type: 'text' as const, text: 'Review ' }, { type: 'text' as const, text: paste, attachment: { path: '/tmp/paste.txt', name: 'Pasted text', mimeType: 'text/x-unmute-paste' } }, { type: 'text' as const, text: ' please' }]
+  stream.registerInputMetadata(input)
+  stream.push({ method: 'item/completed', params: { item: { id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'Review ' + paste + ' please' }] } } })
+  assert.deepEqual(stream.snapshot().blocks.filter(b => b.kind === 'message').map(b => b.text), ['Review  please'])
+  assert.equal(input[1].text, paste)
+  assert.ok(stream.snapshot().blocks.some(b => b.kind === 'attachment' && b.path === '/tmp/paste.txt'))
+})
 const only = <K extends Block['kind']>(bs: Block[], k: K) =>
   bs.filter((b): b is Extract<Block, { kind: K }> => b.kind === k)
 

@@ -19,7 +19,16 @@
  * `__fixtures__/app-server-live-turn.jsonl` and the tool beside it.
  */
 
-import type { Block, Source } from '../blocks'
+import { toolStatus, fullContent, type Block, type Source, type FileChange } from '../blocks'
+import { basename, extname } from 'node:path'
+import type { TaskInput } from '../task-input'
+
+/** One ordered submission, retained independently even when paths repeat. */
+export interface CodexInputMetadata { id: string; input: TaskInput[]; turnId?: string }
+const inputSignature = (parts: Array<Record<string, unknown>>) => JSON.stringify([
+  parts.map(p => typeof p.text === 'string' ? p.text : '').join(''),
+  parts.filter(p => p.type === 'localImage' || p.type === 'image').map(p => p.path),
+])
 
 /** A notification as it arrives: a method and its params. */
 export interface CodexNotification { method: string; params?: unknown }
@@ -168,13 +177,9 @@ export function commandLabel(command: string): string {
 /**
  * Text Codex injected into the user slot, rather than words the user typed.
  *
- * Matches the WRAPPER, not the content: a real message never begins with an XML
- * tag or an AGENTS.md heading, so a prompt that merely mentions one is safe.
+ * Retained for rollout readers. Formatting cannot establish injection provenance.
  */
-export function isInjectedUserText(text: string): boolean {
-  const t = text.trimStart()
-  return /^<\/?[a-z_][a-z0-9_-]*>/i.test(t) || /^#+\s*AGENTS\.md\b/i.test(t) || /^<!--/.test(t)
-}
+export function isInjectedUserText(_text: string): boolean { return false }
 
 function textOfContent(v: unknown): string {
   if (typeof v === 'string') return v
@@ -219,7 +224,8 @@ export function blockFromCodexItem(raw: unknown): Block | null {
       // WHAT CODEX INJECTS IS NOT WHAT YOU SAID. <environment_context>,
       // <recommended_plugins> and AGENTS.md preambles arrive as USER-role
       // items; shown, they open the panel with a wall of XML nobody typed.
-      if (!text || isInjectedUserText(text)) return null
+      // The wire has no text-injection provenance. Literal formatting is user content.
+      if (!text) return null
       return { kind: 'message', role: 'user', text }
     }
 
@@ -256,7 +262,6 @@ export function blockFromCodexItem(raw: unknown): Block | null {
       const named = commandLabel(raw)
       const exitCode = num(pick(item, 'exitCode', 'exit_code'))
       const status = str(item.status)
-      const running = status === 'inProgress' || status === 'running' || status === 'in_progress'
       return {
         kind: 'command',
         label: named,
@@ -267,18 +272,18 @@ export function blockFromCodexItem(raw: unknown): Block | null {
           ? { output: str(pick(item, 'aggregatedOutput', 'aggregated_output', 'stdout'))! } : {}),
         ...(durationMs(pick(item, 'durationMs', 'duration')) !== undefined
           ? { durationMs: durationMs(pick(item, 'durationMs', 'duration'))! } : {}),
-        status: running ? 'running' : exitCode !== undefined && exitCode !== 0 ? 'failed' : 'ok',
+        status: (() => { const s = toolStatus(status, exitCode !== undefined && exitCode !== 0 ? 'failed' : 'succeeded'); return s === 'succeeded' ? 'ok' : s })(),
       }
     }
 
     case 'fileChange': {
-      const changes = Array.isArray(item.changes) ? item.changes : []
-      const first = obj(changes[0])
-      const path = str(first.path) ?? ''
-      const kindType = str(obj(first.kind).type) ?? str(first.kind) ?? 'modify'
-      const verb = kindType === 'add' ? 'Added' : kindType === 'delete' ? 'Deleted' : 'Edited'
-      const { added, removed } = countChange(str(first.diff) ?? str(first.content) ?? '', verb)
-      return { kind: 'fileChange', path, verb, added, removed }
+      const changes: FileChange[] = (Array.isArray(item.changes) ? item.changes : []).map(raw => {
+        const c = obj(raw), kind = str(obj(c.kind).type) ?? str(c.kind)
+        const verb = kind === 'add' ? 'Added' : kind === 'delete' ? 'Deleted' : 'Edited'
+        const diff = str(c.diff) ?? str(c.content) ?? ''
+        return { path: str(c.path) ?? '', verb, ...countChange(diff, verb), diff }
+      })
+      return { kind: 'fileChange', ...(changes[0] ?? { path: '', verb: 'Edited', added: 0, removed: 0 }), changes, status: toolStatus(item.status) }
     }
 
     case 'mcpToolCall': {
@@ -289,16 +294,24 @@ export function blockFromCodexItem(raw: unknown): Block | null {
       const readOnly = pick(item, 'readOnlyHint', 'read_only_hint')
       return {
         kind: 'mcpCall', server, tool,
-        ...(inv.arguments !== undefined ? { args: JSON.stringify(inv.arguments).slice(0, 300) } : {}),
+        ...(inv.arguments !== undefined ? { args: JSON.stringify(inv.arguments) } : {}),
         ...(d !== undefined ? { durationMs: d } : {}),
         ...(typeof readOnly === 'boolean' ? { readOnly } : {}),
+        status: toolStatus(item.status, item.error ? 'failed' : 'succeeded'),
+        ...(fullContent(item.result ?? item.output) !== undefined ? { output: fullContent(item.result ?? item.output) } : {}),
+        ...(fullContent(item.error) !== undefined ? { error: fullContent(item.error) } : {}),
       }
+    }
+
+    case 'collabAgentToolCall': {
+      const status = toolStatus(item.status)
+      return { kind: 'subAgent', name: str(item.tool) ?? 'Subagent', status: status === 'succeeded' ? 'done' : status, output: fullContent(item.agentsStates) }
     }
 
     case 'extension': {
       // Codex's own wrapper for built-ins. `web.search` is the one with a UI.
       const kindName = str(item.kind) ?? ''
-      if (!kindName.startsWith('web.search')) return { kind: 'unknown', raw: JSON.stringify(item).slice(0, 400) }
+      if (!kindName.startsWith('web.search')) return { kind: 'unknown', raw: JSON.stringify(item) }
       return { kind: 'search', query: str(item.query) ?? '', results: sourcesOf(item.results) }
     }
 
@@ -307,7 +320,7 @@ export function blockFromCodexItem(raw: unknown): Block | null {
 
     default:
       // A Codex item we have never seen. Draw it quietly rather than lose it.
-      return { kind: 'unknown', raw: JSON.stringify(item).slice(0, 400) }
+      return { kind: 'unknown', raw: JSON.stringify(item) }
   }
 }
 
@@ -331,26 +344,35 @@ export interface FoldedThread {
  * upserted by item id. Appending both would double every command on the card.
  */
 export class CodexBlockStream {
+  private inputMetadata: Array<{ signature: string; parts: TaskInput[]; used: boolean; turnId?: string }> = []
+  private metadataByItem = new Map<string, TaskInput[]>()
+  registerInputMetadata(parts: TaskInput[], turnId?: string): { turnId?: string } {
+    const record = { signature: inputSignature(parts), parts, used: false, turnId }
+    this.inputMetadata.push(record)
+    return record
+  }
   private readonly order: string[] = []
   private readonly byId = new Map<string, Block>()
   private readonly deltas = new Map<string, string>()
+  private revision = 0
   private usage: FoldedThread['usage']
   private name: string | undefined
+  private currentTurn: string | undefined
 
   private upsert(id: string, block: Block | null): void {
     if (!block) return
+    if (JSON.stringify(this.byId.get(id)) === JSON.stringify(block)) return
     if (!this.byId.has(id)) this.order.push(id)
     this.byId.set(id, block)
+    this.revision++
   }
 
   /** Apply one notification. Returns true when the thread's blocks changed. */
   push(ev: CodexNotification): boolean {
-    const before = this.byId.size + this.order.length
-    const snapshotBefore = this.order.length ? JSON.stringify(this.byId.get(this.order[this.order.length - 1])) : ''
+    const revision = this.revision
+    const metadata = JSON.stringify([this.usage, this.name])
     this.applyOne(ev)
-    const after = this.byId.size + this.order.length
-    const snapshotAfter = this.order.length ? JSON.stringify(this.byId.get(this.order[this.order.length - 1])) : ''
-    return before !== after || snapshotBefore !== snapshotAfter
+    return revision !== this.revision || metadata !== JSON.stringify([this.usage, this.name])
   }
 
   snapshot(): FoldedThread {
@@ -360,6 +382,9 @@ export class CodexBlockStream {
       ...(this.name ? { name: this.name } : {}),
     }
   }
+
+  /** Pending approval details use the same item the transcript renders. */
+  item(id: string): Block | undefined { return this.byId.get(id) }
 
   private applyOne(ev: CodexNotification): void {
     const p = obj(ev.params)
@@ -380,6 +405,32 @@ export class CodexBlockStream {
           upsert(id, { ...block, text: deltas.get(id)! })
         } else {
           upsert(id, block)
+        }
+        if (item.type === 'userMessage' && Array.isArray(item.content)) {
+          if (!this.metadataByItem.has(id)) {
+            const signature = inputSignature(item.content as Array<Record<string, unknown>>)
+            const matches = this.inputMetadata.filter(r => !r.used && r.signature === signature)
+            const record = matches.find(r => r.turnId && r.turnId === p.turnId) ?? matches.find(r => !r.turnId)
+            if (record) { record.used = true; this.metadataByItem.set(id, record.parts) }
+          }
+          const metadata = this.metadataByItem.get(id)
+          if (metadata) {
+            const prose = metadata.filter(part => part.type === 'text' && !part.attachment).map(part => part.type === 'text' ? part.text : '').join('')
+            if (prose) upsert(id, { kind: 'message', role: 'user', text: prose })
+            else if (byId.delete(id)) { order.splice(order.indexOf(id), 1); this.revision++ }
+            metadata.forEach((part, index) => {
+              const attachment = part.type === 'image' ? { path: part.path, name: part.name ?? basename(part.path), mimeType: part.mimeType ?? 'application/octet-stream', ...(part.bytes !== undefined ? { bytes: part.bytes } : {}) } : part.attachment
+              if (attachment) upsert(`${id}:attachment:${index}`, { kind: 'attachment', ...attachment })
+            })
+            break
+          }
+          item.content.forEach((raw, index) => {
+            const part = obj(raw)
+            if (part.type !== 'localImage' || !str(part.path)) return
+            const path = str(part.path)!
+            const mimeType = ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' } as Record<string, string>)[extname(path).toLowerCase()] ?? 'application/octet-stream'
+            upsert(`${id}:attachment:${index}`, { kind: 'attachment', path, name: basename(path), mimeType })
+          })
         }
         break
       }
@@ -408,8 +459,9 @@ export class CodexBlockStream {
       case 'turn/plan/updated': {
         const steps = Array.isArray(p.plan) ? p.plan : Array.isArray(obj(p.plan).steps) ? obj(p.plan).steps as unknown[] : []
         if (!steps.length) break
-        upsert('plan', {
+        upsert(`plan:${str(p.turnId) ?? this.currentTurn ?? 'unscoped'}`, {
           kind: 'plan',
+          turnId: str(p.turnId) ?? this.currentTurn,
           steps: steps.map((s) => {
             const o = obj(s)
             const st = str(o.status) ?? 'todo'
@@ -446,6 +498,7 @@ export class CodexBlockStream {
       // instead of adding up subprocess times, which under-reports by the
       // minutes the model spends thinking between commands.
       case 'turn/started': {
+        this.currentTurn = str(obj(p.turn).id) ?? `unscoped-${order.length}`
         const startedAt = num(obj(p.turn).startedAt)
         upsert(`turn-start-${str(obj(p.turn).id) ?? order.length}`, {
           kind: 'turnStart',
@@ -460,6 +513,7 @@ export class CodexBlockStream {
         const d = num(t.durationMs)
         upsert(`turn-end-${str(t.id) ?? order.length}`, {
           kind: 'turnEnd', ...(d !== undefined ? { durationMs: d } : {}),
+          ...(t.status ? { outcome: t.status === 'interrupted' || t.status === 'cancelled' ? 'cancelled' : t.status === 'failed' ? 'failed' : 'completed' } : {}),
         })
         break
       }

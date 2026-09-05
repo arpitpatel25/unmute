@@ -20,7 +20,7 @@ import { hasApiKey } from './keyStore'
 import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
 import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 // Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
-import { dispatchFromCapture, hideNativePill, recordCapturedDictation } from './paywall/remote/init'
+import { dispatchFromCapture, hideNativePill, recordCapturedDictation, type ComposerDictationDelivery } from './paywall/remote/init'
 import {
   attachTranscript, beginOwnClipboardSequence, beginSegment, cancelOpenSegment,
   composeWithInserts, endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed,
@@ -174,6 +174,9 @@ interface SessionState {
    *  SUBMIT, not snapshotted at key-down, so moving the pocket mid-utterance
    *  changes where it lands. */
   remoteTargetId: string | null
+  /** Task-composer destination captured at mic start. It must survive the
+   * detached remote queue, which outlives currentSession teardown. */
+  composerDictation?: ComposerDictationDelivery
   /** Which physical key opened this capture. NOT the route — the route moves,
    *  this does not. It exists for exactly one question: whether the selection
    *  grab has to be deferred to key-release. right-Option is held while the
@@ -191,6 +194,11 @@ interface SessionState {
   // and only when a composition actually happened — on the fast path it stays
   // empty and delivery is byte-for-byte what it always was.
   captureAttachments: string[]
+}
+
+export interface SessionEndIdentity {
+  sessionId: string
+  composerDictationToken?: string
 }
 
 /**
@@ -270,7 +278,7 @@ registerDesktopTaskImagePaste((text, images, observe, paste) => {
 // held text. Registered here, not imported there: same inversion as the paste.
 registerFormat((text: string) => formatOutputForUser(text))
 
-class SessionManager {
+export class SessionManager {
   private currentSession: SessionState | null = null
   private authToken: string | null = null
   // ─── Unmute Remote (ADDITIVE, PRD §5) ───
@@ -344,7 +352,10 @@ class SessionManager {
 
   // Called when a session is fully terminated (cancel, Escape, processing done)
   // Used to reset keyboard state so it doesn't get stuck
-  public onSessionEnded: (() => void) | null = null
+  public onSessionEnded: ((identity?: SessionEndIdentity) => void) | null = null
+  /** Fired synchronously when a composer delivery enters remoteDispatchQueue,
+   * before onSessionEnded releases recording UI state. */
+  public onComposerDictationQueued: ((token: string) => void) | null = null
   /** The live capture changed lanes. Wired by the paywall layer so the pill's
    *  chips and the notch's capture label follow — never by this file, which
    *  owns neither surface. */
@@ -368,6 +379,26 @@ class SessionManager {
       this.arbiter?.acceptDraft()
     })
     setStreamPromptProvider((chunkIndex) => this.getPromptTailForChunk(chunkIndex))
+  }
+
+  /** Clear and announce only the session that actually owns the live slot.
+   * Async work from a cancelled capture can resume after its replacement has
+   * started; identity is the boundary that keeps that late finalizer inert. */
+  private endSession(session: SessionState): boolean {
+    if (this.currentSession !== session) {
+      console.log(`[session] ⏭️ stale finalizer ignored for ${session.sessionId} (current: ${this.currentSession?.sessionId ?? 'none'})`)
+      return false
+    }
+    this.currentSession = null
+    this.onSessionEnded?.({
+      sessionId: session.sessionId,
+      ...(session.composerDictation ? { composerDictationToken: session.composerDictation.token } : {}),
+    })
+    return true
+  }
+
+  private isCurrentSession(session: SessionState): boolean {
+    return this.currentSession === session
   }
 
   /** Whether a session is currently being processed (API calls in flight) */
@@ -877,7 +908,7 @@ class SessionManager {
     return this.usePipeline
   }
 
-  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation', remoteTargetId: string | null = null, agentAddressed = false, openedByHeldKey = false): void {
+  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation', remoteTargetId: string | null = null, agentAddressed = false, openedByHeldKey = false, composerDictation?: ComposerDictationDelivery): void {
     console.log('[session] startSession called, mode:', mode, '| kind:', kind, '| isProcessing:', this.isProcessing, '| currentSession:', this.currentSession?.sessionId || 'null')
     if (!this.telemetryReady) {
       this.telemetryReady = true
@@ -956,6 +987,7 @@ class SessionManager {
         agentAddressed,
         route,
         remoteTargetId: kind === 'remote' ? remoteTargetId : null,
+        ...(kind === 'remote' && composerDictation ? { composerDictation } : {}),
         openedByHeldKey,
         captureSegmentId: null,
         captureAttachments: [],
@@ -1061,7 +1093,7 @@ class SessionManager {
   //
   // Set by the keyboard 'remote-start'/'remote-stop' events (main.ts).
 
-  startRemoteCapture(targetTaskId: string | null = null, agentAddressed = false): void {
+  startRemoteCapture(targetTaskId: string | null = null, agentAddressed = false, composerDictation?: ComposerDictationDelivery): void {
     if (this.isProcessing) {
       console.log('[session] ⛔ Remote capture blocked — still processing')
       this.onSessionRejected?.()
@@ -1075,7 +1107,7 @@ class SessionManager {
     //
     // openedByHeldKey: right-Option and right-Command are both physically held
     // through the press that starts them, so both defer the selection grab.
-    this.startSession('dictation', 'remote', targetTaskId, agentAddressed, true)
+    this.startSession('dictation', 'remote', targetTaskId, agentAddressed, true, composerDictation)
   }
 
   /**
@@ -1318,8 +1350,7 @@ class SessionManager {
     this.abortController = null
     this.isProcessing = false
     this.resetChunkState()
-    this.currentSession = null
-    this.onSessionEnded?.()
+    this.endSession(session)
     return true
   }
 
@@ -1328,6 +1359,10 @@ class SessionManager {
     session: SessionState,
     apiTimeout: ReturnType<typeof setTimeout>,
   ): Promise<void> {
+    if (!this.isCurrentSession(session)) {
+      console.log(`[session] ⏭️ stale remote delivery ignored for ${session.sessionId}`)
+      return
+    }
     // Universal capture is unmoded and destination-independent (§2): a link
     // copied while dictating a task belongs in the task, rendered for a task
     // (§6.2 — an image becomes a real reference here rather than being skipped
@@ -1355,10 +1390,15 @@ class SessionManager {
         // AFTER currentSession is nulled, so there is nothing left to ask.
         .then(() => dispatchFromCapture(cmd, session.captureAttachments, session.remoteTargetId, {
           route: session.route,
+          ...(session.composerDictation ? { composerDictation: session.composerDictation } : {}),
         }))
         .catch((e) => {
           console.error('[session] 🛰  REMOTE dispatch failed:', e instanceof Error ? e.message : e)
         })
+      if (session.composerDictation) {
+        try { this.onComposerDictationQueued?.(session.composerDictation.token) }
+        catch (e) { console.warn('[session] composer queue observer failed:', e) }
+      }
     } else {
       console.log('[session] 🛰  REMOTE: empty transcript — nothing to dispatch')
     }
@@ -1372,8 +1412,7 @@ class SessionManager {
     this.isProcessing = false
     this.resetChunkState()
     try { this.onSessionComplete?.(session) } catch { /* ignore */ }
-    this.currentSession = null
-    this.onSessionEnded?.()
+    this.endSession(session)
   }
 
   chainSession(mode: 'dictation' | 'instruction'): void {
@@ -1743,23 +1782,25 @@ class SessionManager {
 
       if (verdict === 'abandoned') {
         // discardSession/cancelSession already showed the user what happened
-        // and ended the session. Ours is only to stop holding the lock.
+        // and released its lock. If a replacement session has since begun,
+        // this stale waiter owns no shared state and must not clear B's lock.
         console.log('[session] ⏭️ grace wait abandoned — session ended while waiting (discarded/cancelled)')
-        this.isProcessing = false
-        this.expectingInstructionAudio = false
-        console.log('[session] 🔓 isProcessing = FALSE (session ended during grace)')
+        if (this.isCurrentSession(session)) {
+          this.isProcessing = false
+          this.expectingInstructionAudio = false
+          console.log('[session] 🔓 isProcessing = FALSE (session ended during grace)')
+        }
         return
       }
 
       if (verdict === 'gave-up') {
         console.log('[session] No audio received after grace period — showing too-short feedback')
-        this.currentSession = null
         this.isProcessing = false
         this.expectingInstructionAudio = false
         console.log('[session] 🔓 isProcessing = FALSE (no audio)')
         sendToWidget('session:too-short')
         this.scheduleAutoHide(1500)
-        this.onSessionEnded?.()
+        this.endSession(session)
         return
       }
       console.log(`[session] ✓ Audio arrived during grace period (${Date.now() - t0}ms), continuing`)
@@ -1781,6 +1822,7 @@ class SessionManager {
       if (!session.instructionAudio) {
         console.log('[session] ⚠️ Instruction audio never arrived after 500ms — proceeding without it')
       }
+      if (!this.isCurrentSession(session)) return
       this.expectingInstructionAudio = false
     }
 
@@ -1835,6 +1877,7 @@ class SessionManager {
           if (arbiter && (mode === 'managed' || mode === 'auto')) {
             const cloudPromise = this.runManagedSTT(session.dictationAudio, 0, session.flowType).then((r) => r?.text ?? null)
             const resolved = await arbiter.submitChunk(0, cloudPromise, this.localSttFactory(session.dictationAudio, 'dictation'))
+            if (!this.isCurrentSession(session)) return
             if (resolved) {
               session.dictationTranscript = resolved.text
               // Snapshot for late-cloud better-take stitching (single-buffer
@@ -1853,6 +1896,7 @@ class SessionManager {
         if (session.instructionAudio && !session.instructionTranscript) {
           const cloudPromise = this.runManagedSTT(session.instructionAudio, 0, 'instruction')
           const raced = await this.raceCloudVsLocalForInstruction(cloudPromise, session.instructionAudio, 'instruction')
+          if (!this.isCurrentSession(session)) return
           if (raced) {
             session.instructionTranscript = raced.text
             if (raced.source === 'local') this.notifyEngineFallback('cloud slow — used on-device whisper')
@@ -1900,6 +1944,7 @@ class SessionManager {
               { sttProvider, sttEndpoint: this.sttEndpoint, sttLanguage: this.getEffectiveSTTLanguage(), onFallback: (r) => this.notifyEngineFallback(r) },
               controller.signal
             )
+            if (!this.isCurrentSession(session)) return
             const tPostFetch = Date.now()
             console.log(`[session] ⏱ Pipeline STT-only returned: ${tPostFetch - tPreFetch}ms`)
 
@@ -1929,12 +1974,12 @@ class SessionManager {
 
               console.log('[session] 🔓 isProcessing = FALSE (pipeline STT-only junk)')
               try { this.onSessionComplete?.(session) } catch { /* ignore */ }
-              this.currentSession = null
-              this.onSessionEnded?.()
+              this.endSession(session)
               return
             }
 
             output = await this.maybeCleanupDictation(output, controller.signal)
+            if (!this.isCurrentSession(session)) return
             output = formatOutputForUser(output)
 
             if (this.quietMiss(session, output)) {
@@ -1947,8 +1992,7 @@ class SessionManager {
               this.isProcessing = false
               this.resetChunkState()
               try { this.onSessionComplete?.(session) } catch { /* ignore */ }
-              this.currentSession = null
-              this.onSessionEnded?.()
+              this.endSession(session)
               return
             }
 
@@ -1964,6 +2008,7 @@ class SessionManager {
             if (this.outputMode === 'paste') {
               console.log('[session] Injecting output via paste...')
               await injectOutput(output, session.captureAttachments)
+              if (!this.isCurrentSession(session)) return
             } else {
               console.log('[session] Copying output to clipboard...')
               copyToClipboard(output)
@@ -1983,8 +2028,7 @@ class SessionManager {
             logTelemetry('output-pasted', { sessionId: session.sessionId, path: 'pipeline-stt-only', engine: this.arbiter?.engineSummary ?? 'n/a', outputChars: output.length, totalMs: totalEnd - pipelineStart })
             console.log('[session] 🔓 isProcessing = FALSE (pipeline STT-only done)')
             try { this.onSessionComplete?.(session) } catch { /* ignore */ }
-            this.currentSession = null
-            this.onSessionEnded?.()
+            this.endSession(session)
             return
           }
 
@@ -2005,6 +2049,7 @@ class SessionManager {
             },
             controller.signal
           )
+          if (!this.isCurrentSession(session)) return
           const tPostFetch = Date.now()
           console.log(`[session] ⏱ Pipeline API returned: ${tPostFetch - tPreFetch}ms`)
 
@@ -2035,8 +2080,7 @@ class SessionManager {
 
               console.log('[session] 🔓 isProcessing = FALSE (pipeline junk)')
               try { this.onSessionComplete?.(session) } catch { /* ignore */ }
-              this.currentSession = null
-              this.onSessionEnded?.()
+              this.endSession(session)
               return
             }
           }
@@ -2073,6 +2117,7 @@ class SessionManager {
           if (this.outputMode === 'paste') {
             console.log('[session] Injecting output via paste...')
             await injectOutput(output, session.captureAttachments)
+            if (!this.isCurrentSession(session)) return
           } else {
             console.log('[session] Copying output to clipboard...')
             copyToClipboard(output)
@@ -2107,11 +2152,11 @@ class SessionManager {
           console.log(`[session]   └─ Cleanup + widget:   ${totalEnd - tCleanupStart}ms`)
           console.log('[session] 🔓 isProcessing = FALSE (pipeline done)')
           try { this.onSessionComplete?.(session) } catch { /* ignore */ }
-          this.currentSession = null
-          this.onSessionEnded?.()
+          this.endSession(session)
           return
 
         } catch (pipelineErr) {
+          if (!this.isCurrentSession(session)) return
           // Quota exceeded — do NOT fall through, show error immediately
           if (pipelineErr instanceof QuotaExceededError) {
             console.log('[session] 🚫 Quota exceeded:', pipelineErr.message)
@@ -2124,8 +2169,7 @@ class SessionManager {
             this.isProcessing = false
             this.resetChunkState()
             console.log('[session] 🔓 isProcessing = FALSE (quota exceeded)')
-            this.currentSession = null
-            this.onSessionEnded?.()
+            this.endSession(session)
             return
           }
 
@@ -2172,6 +2216,7 @@ class SessionManager {
         for (let i = 0; i < 20; i++) {
           if (this.totalChunksExpected !== null) break
           await new Promise(resolve => setTimeout(resolve, 50))
+          if (!this.isCurrentSession(session)) return
         }
         if (this.totalChunksExpected === null) {
           console.warn('[session] ⚠️ totalChunksExpected never set — using chunkTracker size:', this.chunkTracker.size)
@@ -2189,6 +2234,7 @@ class SessionManager {
           }
         }
         await Promise.all(promises)
+        if (!this.isCurrentSession(session)) return
         transcribeMs = Date.now() - t0
 
         // Assemble ordered transcripts
@@ -2244,9 +2290,11 @@ class SessionManager {
         const t0 = Date.now()
         if (useFasterWhisper) {
           session.dictationTranscript = await fasterWhisperManager.transcribe(session.dictationAudio)
+          if (!this.isCurrentSession(session)) return
           setLastEngine('local')
         } else if (useLocalWhisper) {
           session.dictationTranscript = await parakeetManager.transcribe(session.dictationAudio)
+          if (!this.isCurrentSession(session)) return
           setLastEngine('local')
         } else {
           const cloudProvider = useSarvam ? 'sarvam' as const : useCartesia ? 'cartesia' as const : 'groq' as const
@@ -2256,6 +2304,7 @@ class SessionManager {
             sttLanguage: this.getEffectiveSTTLanguage(),
             onFallback: (r) => this.notifyEngineFallback(r),
           }, controller.signal)
+          if (!this.isCurrentSession(session)) return
         }
         transcribeMs += Date.now() - t0
         const sttLabel = useSarvam ? 'sarvam' : useCartesia ? 'cartesia' : useFasterWhisper ? 'faster-whisper' : useLocalWhisper ? 'local' : 'cloud'
@@ -2272,8 +2321,10 @@ class SessionManager {
         const t0 = Date.now()
         if (useFasterWhisper) {
           session.instructionTranscript = await fasterWhisperManager.transcribe(session.instructionAudio)
+          if (!this.isCurrentSession(session)) return
         } else if (useLocalWhisper) {
           session.instructionTranscript = await parakeetManager.transcribe(session.instructionAudio)
+          if (!this.isCurrentSession(session)) return
         } else {
           const cloudProvider = useSarvam ? 'sarvam' as const : useCartesia ? 'cartesia' as const : 'groq' as const
           session.instructionTranscript = await pipelineTranscribe(session.instructionAudio, this.authToken, {
@@ -2281,6 +2332,7 @@ class SessionManager {
             sttEndpoint: this.sttEndpoint,
             sttLanguage: this.getEffectiveSTTLanguage(),
           }, controller.signal)
+          if (!this.isCurrentSession(session)) return
         }
         transcribeMs += Date.now() - t0
         const sttLabel2 = useSarvam ? 'sarvam' : useCartesia ? 'cartesia' : useFasterWhisper ? 'faster-whisper' : useLocalWhisper ? 'local' : 'cloud'
@@ -2289,6 +2341,8 @@ class SessionManager {
       } else {
         console.log('[session] No instruction audio to transcribe')
       }
+
+      if (!this.isCurrentSession(session)) return
 
       // Guard: if all transcripts are empty/junk (e.g. just punctuation from silence),
       // skip the LLM call and treat as no-op to avoid pasting garbage
@@ -2506,6 +2560,8 @@ class SessionManager {
             console.log('[session] Default flow, using raw transcript')
         }
 
+        if (!this.isCurrentSession(session)) return
+
         const transformMs = Date.now() - transformStart
 
         // ─── Scratchpad: armed stop HOLDS instead of delivering ───
@@ -2531,6 +2587,7 @@ class SessionManager {
           if (this.outputMode === 'paste') {
             console.log('[session] Injecting output via paste...')
             await injectOutput(output, session.captureAttachments)
+            if (!this.isCurrentSession(session)) return
           } else {
             console.log('[session] Copying output to clipboard...')
             copyToClipboard(output)
@@ -2554,6 +2611,10 @@ class SessionManager {
       }
 
     } catch (err) {
+      if (!this.isCurrentSession(session)) {
+        console.log(`[session] ⏭️ stale processing failure ignored for ${session.sessionId}`)
+        return
+      }
       const errorMessage = err instanceof Error ? err.message : 'Processing failed'
       console.error('[session] ❌ ERROR:', errorMessage)
       logTelemetry('session-error', { sessionId: session?.sessionId ?? null, error: errorMessage })
@@ -2570,11 +2631,15 @@ class SessionManager {
     } finally {
       // Always clean up processing state
       clearTimeout(apiTimeout)
-      this.isProcessing = false
-      this.abortController = null
-      this.resetChunkState()
-      console.log('[session] 🔓 isProcessing = FALSE')
+      if (this.isCurrentSession(session)) {
+        this.isProcessing = false
+        this.abortController = null
+        this.resetChunkState()
+        console.log('[session] 🔓 isProcessing = FALSE')
+      }
     }
+
+    if (!this.isCurrentSession(session)) return
 
     // Save session and reset
     console.log('[session] Saving session to DB...')
@@ -2588,8 +2653,7 @@ class SessionManager {
       this.onSessionComplete(session)
     }
 
-    this.currentSession = null
-    this.onSessionEnded?.()
+    this.endSession(session)
     console.log('═══════════════════════════════════════════')
   }
 
@@ -2622,14 +2686,14 @@ class SessionManager {
       return
     }
 
-    console.log('[session] Session DISCARDED (too short):', this.currentSession.sessionId)
+    const session = this.currentSession
+    console.log('[session] Session DISCARDED (too short):', session.sessionId)
 
     // Backstop on the consent invariant: whatever route got us here, the mic is
     // cold, so the watchers must be. stopRecording has normally already closed
     // the window — this is idempotent when it has.
     try { cancelOpenSegment(Date.now()) } catch { /* nothing open */ }
 
-    this.currentSession = null
     this.resetChunkState()
     // RELEASE THE LOCK. processSession may already be inside its grace wait
     // (stopRecording → processSession runs in parallel with the renderer's
@@ -2648,24 +2712,26 @@ class SessionManager {
     this.scheduleAutoHide(1500)
 
     this.onRecordingStopped?.()
-    this.onSessionEnded?.()
+    this.endSession(session)
   }
 
   /** Recording blocked because daily quota is exhausted. Show error in HUD. */
   quotaBlocked(): void {
     console.log('[session] 🚫 Recording blocked — daily quota exhausted')
-    this.currentSession = null
+    const session = this.currentSession
     this.resetChunkState()
     setTrayIdle()
     sendToWidget('output:error', "Daily limit reached. Resets at midnight.")
     this.scheduleAutoHide(4000)
     this.onRecordingStopped?.()
-    this.onSessionEnded?.()
+    if (session) this.endSession(session)
+    else this.onSessionEnded?.()
   }
 
   /** Cancel session — simple cancel without undo (used by widget cancel button) */
   cancelSession(): void {
     console.log('[session] Session CANCELLED:', this.currentSession?.sessionId, '| wasProcessing:', this.isProcessing)
+    const session = this.currentSession
     // ESCAPE IS A WAY OUT OF A DICTATION, NOT A WAY TO LOSE YOUR MUSIC.
     // Cancelling is at least as common as submitting — a mistimed capture is
     // escaped, not sent — so every exit from a capture owes the resume, not
@@ -2681,10 +2747,10 @@ class SessionManager {
     // discard() is the only thing that destroys it, and it confirms first.
     try { cancelOpenSegment(Date.now()) } catch { /* nothing open */ }
     console.log('[session] 🔓 isProcessing = FALSE (cancelled)')
-    this.currentSession = null
     setTrayIdle()
     this.onRecordingStopped?.()
-    this.onSessionEnded?.()
+    if (session) this.endSession(session)
+    else this.onSessionEnded?.()
     hideNativePill()
     hideHUD()
   }
@@ -2693,7 +2759,8 @@ class SessionManager {
   cancelSessionWithUndo(): void {
     if (!this.currentSession) return
 
-    console.log('[session] Session CANCELLED with undo window:', this.currentSession.sessionId)
+    const session = this.currentSession
+    console.log('[session] Session CANCELLED with undo window:', session.sessionId)
     resumeAfterCapture()
 
     // Abort any in-flight API calls
@@ -2713,13 +2780,12 @@ class SessionManager {
     try { cancelOpenSegment(Date.now()) } catch { /* nothing open */ }
 
     // Save session state for potential undo
-    this.cancelledSession = this.currentSession
-    this.currentSession = null
+    this.cancelledSession = session
 
     // Notify main to unregister Escape
     this.onRecordingStopped?.()
     // Reset keyboard state — recording ended externally, not via normal Fn toggle
-    this.onSessionEnded?.()
+    this.endSession(session)
 
     // Tell widget to show cancelled state with undo button
     sendToWidget('session:cancelled')

@@ -9,6 +9,7 @@ final class ComposerHeightTests: XCTestCase {
 
     func testWrappedComposerGrowsAndStopsAtTheMultilineCap() {
         XCTAssertEqual(ComposerHeight.resolve(measured: 48), 52)
-        XCTAssertEqual(ComposerHeight.resolve(measured: 120), 76)
+        XCTAssertEqual(ComposerHeight.resolve(measured: 120), 124)
+        XCTAssertEqual(ComposerHeight.resolve(measured: 900), 144)
     }
 }

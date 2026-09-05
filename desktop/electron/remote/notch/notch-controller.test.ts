@@ -6,6 +6,11 @@ import {
   type TaskLite, type NotchClientLike, type NotchControllerDeps, type ProposalLite,
 } from './notch-controller'
 import type { NotchCommand, NotchEvent, CockpitPayload } from './notch-client'
+import { TaskDraftStore } from '../task-draft'
+import { stageTaskDraftAttachment, persistTaskDraftFile } from '../task-draft-attachment'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 class FakeClient extends EventEmitter implements NotchClientLike {
   sent: NotchCommand[] = []
@@ -71,7 +76,7 @@ function makeTask(partial: Partial<TaskLite> & { id: string }): TaskLite {
   }
 }
 
-function setup(opts: { proposals?: ProposalLite[]; getOutput?: (id: string) => string } = {}): Harness {
+function setup(opts: { proposals?: ProposalLite[]; getOutput?: (id: string) => string; answerAsync?: NotchControllerDeps['answerAsync']; createChat?: NotchControllerDeps['createChat']; deps?: Partial<NotchControllerDeps> } = {}): Harness {
   const events = new EventEmitter()
   const client = new FakeClient()
   const tasks = new Map<string, TaskLite>()
@@ -86,6 +91,8 @@ function setup(opts: { proposals?: ProposalLite[]; getOutput?: (id: string) => s
     // True = the answer landed. False is a REFUSAL: the task is still blocked on
     // the same question, so the crank must stay on it.
     answer: (id, text) => { rec('answer')(id, text); return answersLand },
+    answerAsync: opts.answerAsync,
+    createChat: opts.createChat,
     kill: rec('kill'),
     remove: rec('remove'),
     killAll: rec('killAll'),
@@ -127,6 +134,7 @@ function setup(opts: { proposals?: ProposalLite[]; getOutput?: (id: string) => s
     scratchpadRemove: rec('scratchpadRemove'),
     scratchpadDeliver: rec('scratchpadDeliver'),
     scratchpadDiscard: rec('scratchpadDiscard'),
+    ...opts.deps,
   }
   const presence = new FakePresence()
   const controller = new NotchController(client, events, deps, presence)
@@ -148,6 +156,124 @@ function put(h: Harness, t: TaskLite): void {
   h.events.emit('updated', t)
   h.flush()
 }
+
+test('rendered request identity rejects stale chips and composer answers before delivery', async () => {
+  const A = { requestId: 'A', stepId: '0' }, B = { requestId: 'B', stepId: '0' }
+  const sent: unknown[] = []
+  const h = setup({ answerAsync: async (...args) => { sent.push(args); return true }, deps: { sendDraft: async (...args) => { sent.push(args); return true } } })
+  put(h, makeTask({ id: 't', state: 'needs-user', question: { text: 'B?', choices: ['Allow'], reference: B } }))
+  let addressed = 0; h.controller.addressed = () => { addressed++ }
+  h.client.fire({ type: 'chooseOption', id: 't', index: 0, reference: A })
+  h.client.fire({ type: 'answerText', id: 't', text: 'old', reference: A })
+  h.client.fire({ type: 'sendDraft', id: 't', reference: A })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(sent, []); assert.equal(addressed, 0)
+  h.client.fire({ type: 'chooseOption', id: 't', index: 0, reference: B })
+  await new Promise(resolve => setImmediate(resolve))
+  h.client.fire({ type: 'chooseOption', id: 't', index: 0, reference: B })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(sent, [['t', 'Allow', B]]); assert.equal(addressed, 1)
+})
+
+test('pending duplicate cannot clear acknowledgment; rejected answer remains retryable', async () => {
+  const reference = { requestId: 'A', stepId: '0' }
+  let finish!: (accepted: boolean) => void, deliveries = 0
+  const h = setup({ answerAsync: async () => { deliveries++; return new Promise(resolve => { finish = resolve }) } })
+  put(h, makeTask({ id: 't', state: 'needs-user', question: { text: 'A?', choices: ['Allow'], reference } }))
+  let addressed = 0; h.controller.addressed = () => { addressed++ }
+  h.client.fire({ type: 'chooseOption', id: 't', index: 0, reference })
+  h.client.fire({ type: 'chooseOption', id: 't', index: 0, reference })
+  assert.equal(h.client.last('questionAnswerStatus')?.state, 'pending')
+  assert.equal(addressed, 0); assert.equal(deliveries, 1)
+  finish(false); await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.client.last('questionAnswerStatus')?.state, 'rejected')
+  h.client.fire({ type: 'chooseOption', id: 't', index: 0, reference })
+  assert.equal(deliveries, 2)
+  finish(true); await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.client.last('questionAnswerStatus')?.state, 'accepted'); assert.equal(addressed, 1)
+})
+
+test('queued composer acknowledgement leaves pending attention unaddressed and Agent queue actions inert', async () => {
+  let canceled = 0
+  const h = setup({ deps: { sendDraft: async () => ({ kind: 'queued', queueId: 'q' }), cancelTaskFollowup: () => { canceled++; return true } } })
+  put(h, makeTask({ id: 't', state: 'needs-user', question: { text: 'Approve?' } }))
+  let addressed = 0
+  h.controller.addressed = () => { addressed++ }
+  h.client.fire({ type: 'sendDraft', id: 't' })
+  await new Promise(resolve => setImmediate(resolve)); h.flush()
+  assert.equal(addressed, 0)
+  h.client.fire({ type: 'cancelTaskFollowup', id: NotchController.AGENT_SLOT, queueId: 'q' })
+  h.client.fire({ type: 'cancelTaskFollowup', id: 't', queueId: 'q' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(canceled, 1)
+})
+
+test('rejected composer mutations surface readable errors', async () => {
+  const rejected = async () => { throw new Error('draft is locked') }
+  const h = setup({ deps: {
+    addDraftImage: rejected,
+    configureChat: rejected,
+    restoreDraftAttachment: rejected,
+    undoDraftAttachment: rejected,
+    redoDraftAttachment: rejected,
+  } })
+  h.client.fire({ type: 'addDraftImage', id: 'a', path: '/tmp/a', mimeType: 'image/png', name: 'a.png', operationId: 'op-a' })
+  h.client.fire({ type: 'configureChat', id: 'a', change: { field: 'model', value: 'x' } })
+  h.client.fire({ type: 'restoreDraftAttachment', id: 'a', attachmentId: 'x' })
+  h.client.fire({ type: 'undoDraftAttachment', id: 'a', attachmentId: 'x' })
+  h.client.fire({ type: 'redoDraftAttachment', id: 'a', attachmentId: 'x' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(h.client.ofType('toast').map(item => item.text), [
+    'Could not attach file: draft is locked',
+    'Could not update chat settings: draft is locked',
+    'Could not restore attachment: draft is locked',
+    'Could not undo attachment: draft is locked',
+    'Could not redo attachment: draft is locked',
+  ])
+  assert.deepEqual(h.client.last('draftAttachmentError'), { type: 'draftAttachmentError', id: 'a', operationId: 'op-a', error: 'draft is locked' })
+})
+
+test('production attachment bridge propagates errors and refusal, then removing failures permits send', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'unmute-staging-bridge-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const source = join(dir, 'source'); await writeFile(source, 'not image bytes')
+  const drafts = new TaskDraftStore(), logged: string[] = []
+  drafts.setText('t', 'remaining text')
+  let sent = ''
+  const h = setup({ deps: {
+    reserveDraftAttachment: (id, operation, name, insertion) => drafts.reserveAttachment(id, operation, name, insertion),
+    failDraftAttachment: (id, operation, error) => drafts.failAttachment(id, operation, error),
+    addDraftImage: (id, path, mime, name, insertion) => stageTaskDraftAttachment({
+      drafts, persist: async () => (await persistTaskDraftFile(drafts, {
+        get: () => true,
+        attachFile: async (_, bytes) => {
+          if (name === 'copy') await writeFile(join(dir, 'missing-directory', 'owned'), bytes)
+          return null
+        },
+      }, id, path, mime, name))?.attachment ?? null,
+      cleanup: async () => {}, failed: error => { logged.push(String(error)) },
+    }, id, insertion),
+    removeDraftAttachment: (id, op) => { drafts.removeAttachment(id, op) },
+    getDraft: id => drafts.get(id),
+    sendDraft: async id => { if (await drafts.whenSettled(id)) { sent = drafts.get(id).text; return { kind: 'delivered' } }; return { kind: 'refused' } },
+  } })
+  put(h, makeTask({ id: 't' }))
+  for (const op of ['validate', 'copy', 'refuse']) {
+    h.client.fire({ type: 'reserveDraftAttachment', id: 't', operationId: op, name: op })
+    h.client.fire({ type: 'addDraftImage', id: 't', path: source, mimeType: op === 'validate' ? 'image/png' : 'text/plain', name: op, operationId: op })
+    await drafts.whenSettled('t')
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  assert.deepEqual(h.client.ofType('draftAttachmentError').map(e => e.operationId), ['validate', 'copy', 'refuse'])
+  assert.equal(logged.length, 3)
+  h.client.fire({ type: 'removeDraftAttachment', id: 't', attachmentId: 'validate' })
+  h.client.fire({ type: 'removeDraftAttachment', id: 't', attachmentId: 'copy' })
+  assert.equal(await drafts.whenSettled('t'), false)
+  h.client.fire({ type: 'removeDraftAttachment', id: 't', attachmentId: 'refuse' })
+  h.client.fire({ type: 'sendDraft', id: 't' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(sent, 'remaining text')
+})
 
 // ── basics ──────────────────────────────────────────────────────────────────
 
@@ -336,14 +462,60 @@ test('termInput decodes base64 to PTY stdin; termResize passes through', () => {
 
 // ── skills / rails ──────────────────────────────────────────────────────────
 
-test('tapSkill without a focused live task → toast guard; with one → types', () => {
-  const h = setup()
+test('async approval buttons do not duplicate or advance before acceptance', async () => {
+  let resolve!: (ok: boolean) => void, count = 0
+  const h = setup({ answerAsync: async () => { count++; return new Promise<boolean>(r => { resolve = r }) } })
+  put(h, makeTask({ id: 't1', state: 'needs-user', question: { text: 'Allow?', choices: ['Allow once'] } }))
+  h.client.fire({ type: 'focusTask', id: 't1' })
+  h.client.fire({ type: 'chooseOption', id: 't1', index: 0 })
+  h.client.fire({ type: 'chooseOption', id: 't1', index: 0 })
+  assert.equal(count, 1)
+  assert.equal(h.tasks.get('t1')?.state, 'needs-user')
+  resolve(false)
+  await new Promise(r => setImmediate(r))
+  h.client.fire({ type: 'chooseOption', id: 't1', index: 0 })
+  assert.equal(count, 2, 'a rejected answer remains actionable')
+  resolve(false)
+  await new Promise(r => setImmediate(r))
+})
+
+test('native managed creation requires the displayed allocation before creating any project', async () => {
+  let creates = 0
+  const h = setup({ createChat: async () => { creates++; return 'new' } })
+  h.client.fire({ type: 'newChat', provider: 'claude' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(creates, 0)
+  assert.match(h.client.last('newChatStatus')?.error ?? '', /preview/i)
+})
+
+test('new conversation creation is guarded and opens the accepted empty chat', async () => {
+  let resolve!: (id: string) => void, count = 0
+  const h = setup({ createChat: async () => { count++; return new Promise<string>(r => { resolve = r }) } })
+  h.client.fire({ type: 'newChat', provider: 'claude', cwd: '/Project' })
+  h.client.fire({ type: 'newChat', provider: 'claude', cwd: '/Project' })
+  assert.equal(count, 1)
+  assert.equal(h.client.last('newChatStatus')?.pending, true)
+  put(h, makeTask({ id: 'new', state: 'done', alive: false, chatWritable: true }))
+  resolve('new')
+  await new Promise(r => setImmediate(r))
+  assert.equal(h.client.last('newChatStatus')?.pending, false)
+  assert.deepEqual(h.calls.focus?.at(-1), ['new'])
+})
+
+test('tapSkill reports success only when the owned-task guard accepts it', async () => {
+  let accepted = false
+  const h = setup({ deps: { tapSkill: async () => accepted } })
   h.client.fire({ type: 'tapSkill', name: 'gmail-sweep' })
-  assert.ok(h.client.last('toast')!.text.includes('focus a live task'))
+  assert.ok(h.client.last('toast')!.text.includes('Open a task first'))
   put(h, makeTask({ id: 't1', state: 'needs-user', alive: true, question: { text: 'q' } }))
   h.client.fire({ type: 'focusTask', id: 't1' })
   h.client.fire({ type: 'tapSkill', name: 'gmail-sweep' })
-  assert.deepEqual(h.calls.tapSkill?.[0], ['t1', 'gmail-sweep'])
+  await new Promise(resolve => setImmediate(resolve))
+  assert.match(h.client.last('toast')!.text, /can't add|cannot add/i)
+  accepted = true
+  h.client.fire({ type: 'tapSkill', name: 'gmail-sweep' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.client.last('toast')!.text, 'Added /gmail-sweep to draft')
 })
 
 test('openDashboard builds the full cockpit payload', async () => {
@@ -364,12 +536,8 @@ test('openDashboard builds the full cockpit payload', async () => {
   // rails
   assert.equal(cp.skills.length, 1)
   assert.equal(cp.unmuteSkills.length, 1)
-  // projects + suggestions are GONE from the payload. Projects listed
-  // directories with no action attached; Suggestions was the curator's review
-  // inbox and the curator is parked, so it can never fill again. Asserted as
-  // absent rather than deleted, so re-adding either is a test failure and not
-  // a quiet regression.
-  assert.equal((cp as Record<string, unknown>).projects, undefined)
+  // Projects now feed the actionable new-conversation folder picker.
+  assert.deepEqual((cp as Record<string, unknown>).projects, [{ name: 'unmute-cloud', path: '/tools/unmute-cloud' }])
   assert.equal((cp as Record<string, unknown>).suggestions, undefined)
   assert.equal(cp.doorbell, true)
   assert.equal(cp.tmuxAvailable, true)
@@ -598,7 +766,7 @@ test('a pocket slot names its backend too — the surface you live in', () => {
   const pocket = h.client.last('pocket')!.data as { slots: Array<Record<string, unknown>> }
   const slot = pocket.slots.find((s) => s.id === 'x1')!
   assert.equal(slot.backend, 'codex')
-  assert.equal(slot.terminal, true)
+  assert.equal(slot.terminal, false)
 })
 
 test('EVERY card names its backend — absent must not mean "the default one"', () => {
@@ -620,8 +788,8 @@ test('EVERY card names its backend — absent must not mean "the default one"', 
   // …and whether it owns a terminal, so the mark's glyph is a capability
   // rather than a list of backend names the view has to keep up with.
   assert.equal(card('c1').terminal, false)
-  assert.equal(card('x1').terminal, true)
-  assert.equal(card('k1').terminal, true)
+  assert.equal(card('x1').terminal, false)
+  assert.equal(card('k1').terminal, false)
 })
 
 test('Agent origin is provenance only and never suppresses provider capabilities', () => {
@@ -635,12 +803,12 @@ test('Agent origin is provenance only and never suppresses provider capabilities
   const card = cards.find((candidate) => candidate.id === 'agent-codex')!
   assert.equal(card.origin, 'unmute-agent')
   assert.equal(card.backend, 'codex')
-  assert.equal(card.terminal, true)
+  assert.equal(card.terminal, false)
 
   h.client.fire({ type: 'focusTask', id: 'agent-codex' })
   h.flush()
   const detail = h.client.last('stageDetail')!.task
-  assert.equal(detail.terminal, true)
+  assert.equal(detail.terminal, false)
   assert.equal(detail.resumable, true)
   assert.equal(detail.owned, true)
   assert.equal(detail.alive, true)
@@ -1083,7 +1251,7 @@ test('EVERY task names its backend in the detail, keeps its real liveness, and c
   // task has no turns yet — so the stage can render the latest exchange ABOVE
   // the terminal. `terminal` below still says whether there is a PTY to draw.
   assert.deepEqual(d.conversation, [], 'a PTY task carries a (here empty) conversation')
-  assert.equal(d.terminal, true, 'and still has a terminal to draw under it')
+  assert.equal(d.terminal, false, 'conversation is the only task interaction surface')
 })
 
 test('a PTY task with turns sends them, so the stage can show the exchange', () => {
@@ -1100,7 +1268,7 @@ test('a PTY task with turns sends them, so the stage can show the exchange', () 
   const d = h.client.last('stageDetail')!.task
   assert.equal(d.conversation?.length, 2)
   assert.equal(d.conversation?.[1].text, 'Three tiers, and the middle one is new.')
-  assert.equal(d.terminal, true)
+  assert.equal(d.terminal, false)
 })
 
 // ── the scratchpad ──────────────────────────────────────────────────────────

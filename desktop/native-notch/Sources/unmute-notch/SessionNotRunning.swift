@@ -14,6 +14,7 @@ struct SessionNotRunning: View {
     /// task draft submission", "Codex is not connected to Unmute". Preferred over
     /// anything invented here, because it names the actual blocker.
     let reason: String?
+    var canResume = true
 
     var body: some View {
         HStack(spacing: 10) {
@@ -23,9 +24,11 @@ struct SessionNotRunning: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            Button("Resume") { model.emit(.resume(id: taskId)) }
-                .buttonStyle(.borderless)
-                .font(.system(size: 12, weight: .semibold))
+            if canResume {
+                Button("Resume") { model.emit(.resume(id: taskId)) }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 12, weight: .semibold))
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)

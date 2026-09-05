@@ -23,11 +23,19 @@ import Store from 'electron-store'
 import { join, dirname, basename, isAbsolute } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { existsSync, writeFileSync, mkdirSync, statSync, watch, constants as fsConstants, promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
+import { draftInput } from './task-input'
+import { safeArtifactURL, artifactPathAction } from './artifact-url'
+import { ClaudeTaskSession, type ClaudeTaskModel } from './claude/task-session'
+import { writeFileAtomic } from './atomic-file'
 import { TaskDraftStore } from './task-draft'
+import { stageTaskDraftAttachment, persistTaskDraftFile } from './task-draft-attachment'
+import { TaskFollowupCoordinator, type SubmitDraftOutcome, type DraftSubmissionRequest } from './task-followup'
+import { ComposerDictationCoordinator, applyComposerDictation, dispatchCaptureWithLifecycle, startComposerDictation, type ComposerDictationDelivery } from './composer-dictation'
+export type { ComposerDictationDelivery } from './composer-dictation'
 import { deliverAddressedCapture } from './addressed-capture'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
@@ -114,13 +122,13 @@ import { SESSION_PREAMBLE } from './session-policy'
 import { installHookSettingsSync, hookToken } from './hooks'
 import { parseHookEvent, type HookEvent } from './observer'
 import type { ExecutorFactoryOpts } from './executor'
-import { startCuaServer, type CuaServer } from './cua/server'
+import { startCuaServer, CUA_MCP_PORT, CUA_MCP_PATH, type CuaServer } from './cua/server'
 import { NotchClient } from './notch/notch-client'
 import { NotchController } from './notch/notch-controller'
 import { PillController, type PillStateP } from './notch/pill-controller'
 import { listCodexModels, matchCurrent, type CodexModel } from './codex/appserver'
 import { listCodexCliModels, resolveCodexCliChoice, codexCliChoiceLabel } from './codex/cli-models'
-import { CodexHub } from './codex/hub'
+import { CodexHub, type CodexInputMetadata } from './codex/hub'
 import { CodexAppServer } from './codex/app-server-client'
 import { resolveCodexCli } from './codex/driver'
 import { DriverManager } from './cua/driver-manager'
@@ -131,8 +139,8 @@ import { type RouterCtx } from './cua/router'
 import { Presence } from './presence'
 import { listImportableSessions, findSessionCwd } from './claude-cli-sessions'
 import { listImportableCodexSessions, findCodexSessionCwd } from './codex/cli-session'
-import { applyAxRegistration } from './ax/register'
-import { pruneUnmuteFromCodex, sweepUnmuteFromCodexAfterConnect } from './ax/codex-prune'
+import { applyAxRegistration, AX_MCP_NAME, STEER_BODY } from './ax/register'
+import { sweepUnmuteFromCodexAfterConnect } from './ax/codex-prune'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
 import {
@@ -191,14 +199,16 @@ import type { Destination, Entry, InsertKind } from './capture/types'
 type CaptureRoute = Destination
 import { CaptureHistoryStore, clipboardPayload, type CaptureHistoryKind } from './capture/history-store'
 import { screenCaptureVisibility } from './screen-capture-visibility'
-import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
+import type { ScratchpadEntryP, ScratchpadPayloadP, ChatConfigP } from './notch/notch-client'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
 // don't entangle with engine internals. main.ts passes its real instances.
 interface SessionManagerLike {
-  startRemoteCapture(targetTaskId?: string | null, agentAddressed?: boolean): void
+  startRemoteCapture(targetTaskId?: string | null, agentAddressed?: boolean, composerDictation?: ComposerDictationDelivery): void
   stopRemoteCapture(): Promise<void>
+  cancelSession?(): void
+  onComposerDictationQueued?: ((token: string) => void) | null
   /** Move the LIVE capture to another lane. Returns false when there is
    *  nothing hot to move — the mic is the only window in which this is legal. */
   setCaptureRoute?(route: CaptureRoute): boolean
@@ -210,7 +220,7 @@ interface SessionManagerLike {
   /** Fired from every ending the session has — dispatch, cancel, too-short,
    *  junk STT. Declared here so the lane locks can be cleared however a capture
    *  dies, rather than only by its own stop tap. */
-  onSessionEnded?: (() => void) | null
+  onSessionEnded?: ((identity?: { sessionId: string; composerDictationToken?: string }) => void) | null
 }
 interface KeyboardManagerLike {
   on(event: 'keyboard', cb: (e: { type: string }) => void): unknown
@@ -538,7 +548,7 @@ function refreshTmux(): void {
 async function probeBackends(): Promise<BackendProbe[]> {
   const out: BackendProbe[] = []
   for (const p of Object.values(PROVIDERS)) {
-    if (p.transport === 'pty') {
+    if (p.surface === 'cli') {
       // An owned-PTY backend needs ITS OWN CLI on the PATH the executors get.
       //
       // This asked `claudeCliAvailable()` for every PTY backend and skipped
@@ -1463,6 +1473,7 @@ async function initializeUnmuteAgent(): Promise<void> {
 
 /** Unsent replies are task-scoped, not owned by any one expanded surface. */
 const taskDrafts = new TaskDraftStore()
+let taskFollowups: TaskFollowupCoordinator | null = null
 
 registerTaskDraftAttachmentSink(async ({ taskId, name, mimeType, data }) => {
   const taskManager = manager
@@ -1497,56 +1508,52 @@ async function persistTaskDraftImage(
   mimeType: string,
   name: string,
 ): Promise<{ attachment: import('./task-draft').DraftAttachment; bytes: number } | null> {
-  if (!manager || !manager.get(id)) return null
-  const data = await fs.readFile(sourcePath)
-  const ext = (basename(name).split('.').pop() || mimeType.split('/').pop() || 'png').replace(/[^a-z0-9]/gi, '')
-  const ownedPath = await manager.attachFile(id, data, ext)
-  if (!ownedPath) return null
-  return {
-    attachment: { id: randomUUID(), path: ownedPath, mimeType, name: name || basename(ownedPath) },
-    bytes: data.byteLength,
-  }
+  return persistTaskDraftFile(taskDrafts, manager, id, sourcePath, mimeType, name)
 }
 
-async function addDraftImageFromPath(id: string, sourcePath: string, mimeType: string, name: string): Promise<void> {
-  if (!manager || !manager.get(id)) return
+async function addDraftImageFromPath(id: string, sourcePath: string, mimeType: string, name: string, insertion?: import('./task-draft').DraftInsertion): Promise<void> {
   const draftId = taskDrafts.traceId(id)
   const startedAt = Date.now()
   emitTaskReplyInput(log, {
     taskId: id, draftId, source: 'task-composer', action: 'attachment-stage-started',
     sourcePath, mimeType, name,
   })
-  try {
-    await taskDrafts.stageAttachment(id, async () => {
-      try {
-        const persisted = await persistTaskDraftImage(id, sourcePath, mimeType, name)
-        const attachment = persisted?.attachment ?? null
-        emitTaskReplyInput(log, {
-          taskId: id, draftId, source: 'task-composer', action: attachment ? 'attachment-stage-succeeded' : 'attachment-stage-refused',
-          sourcePath, ownedPath: attachment?.path ?? null, attachmentId: attachment?.id ?? null,
-          mimeType, name, bytes: persisted?.bytes ?? null, elapsedMs: Date.now() - startedAt,
-        })
-        return attachment
-      } finally {
-        // AppKit creates this solely as an IPC handoff. Once copied into the
-        // task-owned directory it must not accumulate in the system temp folder.
+  await stageTaskDraftAttachment({
+    drafts: taskDrafts,
+    persist: async () => {
+      const persisted = await persistTaskDraftImage(id, sourcePath, mimeType, name)
+      const attachment = persisted?.attachment ?? null
+      emitTaskReplyInput(log, {
+        taskId: id, draftId, source: 'task-composer', action: attachment ? 'attachment-stage-succeeded' : 'attachment-stage-refused',
+        sourcePath, ownedPath: attachment?.path ?? null, attachmentId: attachment?.id ?? null,
+        mimeType, name, bytes: persisted?.bytes ?? null, elapsedMs: Date.now() - startedAt,
+      })
+      return attachment
+    },
+    cleanup: async () => {
+      // AppKit creates this solely as an IPC handoff. Once copied into the
+      // task-owned directory it must not accumulate in the system temp folder.
+      const parent = await fs.realpath(dirname(sourcePath)).catch(() => '')
+      const temp = await fs.realpath(tmpdir()).catch(() => '')
+      if (parent && parent === temp && /^unmute-draft-[0-9a-f-]+\.[a-z0-9]*$/i.test(basename(sourcePath))) {
         await fs.unlink(sourcePath).catch(() => {})
       }
-    })
-  } catch (error) {
-    emitTaskReplyInput(log, {
-      taskId: id, draftId, source: 'task-composer', action: 'attachment-stage-failed',
-      sourcePath, mimeType, name, elapsedMs: Date.now() - startedAt, error: (error as Error).message,
-    })
-    log.warn('draft image staging failed', { taskId: id, error: (error as Error).message })
-    notchController?.toast('That image could not be attached. Paste it again to retry.')
-  }
+    },
+    failed: error => {
+      emitTaskReplyInput(log, {
+        taskId: id, draftId, source: 'task-composer', action: 'attachment-stage-failed',
+        sourcePath, mimeType, name, elapsedMs: Date.now() - startedAt, error: (error as Error).message,
+      })
+      log.warn('draft image staging failed', { taskId: id, error: (error as Error).message })
+    },
+  }, id, insertion)
 }
 
 async function deliverTaskDraftSnapshot(
   id: string,
   draft: import('./task-draft').TaskDraft,
   trace?: TaskReplyTrace,
+  context: import('./question-reference').AnswerContext = null,
 ): Promise<boolean> {
   if (!manager) {
     if (trace) emitTaskReplyStep(log, trace, 'delivery-preflight', 'failed', { reason: 'task-manager-unavailable' })
@@ -1557,12 +1564,16 @@ async function deliverTaskDraftSnapshot(
     if (trace) emitTaskReplyStep(log, trace, 'delivery-preflight', 'failed', { reason: 'task-no-longer-exists' })
     return false
   }
-  const text = draft.text
+  const ordered = await draftInput(draft)
+  const text = ordered.flatMap(p => p.type === 'text' ? [p.text] : []).join('')
+  const images = draft.attachments.filter((attachment) => attachment.mimeType.startsWith('image/'))
   if (!text.trim() && !draft.attachments.length) {
     if (trace) emitTaskReplyStep(log, trace, 'delivery-preflight', 'refused', { reason: 'empty-draft' })
     return false
   }
-  const isPendingAnswer = !draft.attachments.length && manager.tasksAwaitingUser().some((entry) => entry.id === id)
+  const blocked = manager.tasksAwaitingUser().some((entry) => entry.id === id)
+  if (blocked && draft.attachments.length) throw new Error('Answer the pending request before sending attachments')
+  const isPendingAnswer = !task.claudeSessionSettings && !task.codexSessionSettings && !draft.attachments.length && blocked
   if (isPendingAnswer && trace) {
     emitTaskReplyStep(log, trace, 'provider-selected', 'succeeded', {
       agent: task.agent ?? 'claude', model: task.model ?? null, taskState: task.state,
@@ -1571,7 +1582,7 @@ async function deliverTaskDraftSnapshot(
   }
   const accepted = isPendingAnswer
     ? manager.answer(id, text)
-    : await manager.deliverDraft(id, text, draft.attachments.map((attachment) => attachment.path), trace)
+    : await manager.deliverDraft(id, text, images.map((attachment) => attachment.path), trace, ordered, context)
   if (isPendingAnswer && trace) {
     emitTaskReplyStep(log, trace, 'transport-result', accepted ? 'succeeded' : 'failed', {
       reason: accepted ? 'answer-handler-accepted' : 'answer-handler-refused', draftRetained: !accepted,
@@ -1580,7 +1591,27 @@ async function deliverTaskDraftSnapshot(
   return accepted
 }
 
-async function sendTaskDraft(id: string, source: TaskReplySource = 'task-composer'): Promise<boolean> {
+const draftSubmissions = new Map<string, { promise: Promise<SubmitDraftOutcome>; contextKey: string }>()
+function sendTaskDraft(id: string, source: TaskReplySource = 'task-composer', request?: DraftSubmissionRequest, context: import('./question-reference').AnswerContext = request?.answerContext ?? null): Promise<SubmitDraftOutcome> {
+  if (taskFollowups && manager?.followupScope(id)) return taskFollowups.submit(id, request, context).then(outcome => {
+    log.event('task-draft-outcome', { taskId: id, outcome: outcome.kind })
+    if (outcome.kind === 'retained' || outcome.kind === 'uncertain') notchController?.toast(outcome.reason)
+    return outcome
+  })
+  const pending = draftSubmissions.get(id)
+  const contextKey = JSON.stringify(context ? [context.requestId, context.stepId] : null)
+  if (pending && (request || pending.contextKey !== contextKey)) return Promise.resolve({ kind: 'retained', reason: 'Another message is still sending. Your capture remains in this task draft.' })
+  if (pending) return pending.promise
+  const submission = performSendTaskDraft(id, source, undefined, context).then((ok): SubmitDraftOutcome => ok ? { kind: 'accepted' } : { kind: 'retained', reason: 'Your draft is kept.' }).catch((error): SubmitDraftOutcome => {
+    log.warn('draft submission failed', { taskId: id, error: (error as Error).message })
+    notchController?.toast('Could not send this message. Your draft has been kept.')
+    return { kind: 'retained', reason: 'Could not send this message. Your draft has been kept.' }
+  }).finally(() => { draftSubmissions.delete(id) })
+  draftSubmissions.set(id, { promise: submission, contextKey })
+  return submission
+}
+
+async function performSendTaskDraft(id: string, source: TaskReplySource, onSnapshot?: (snapshot: import('./task-draft').TaskDraft) => void, context: import('./question-reference').AnswerContext = null): Promise<boolean> {
   const before = taskDrafts.get(id)
   const draftId = taskDrafts.traceId(id)
   const trace = beginTaskReplyTrace(log, {
@@ -1603,14 +1634,16 @@ async function sendTaskDraft(id: string, source: TaskReplySource = 'task-compose
     finishTaskReplyTrace(log, trace, 'refused', { reason: 'empty-draft', draftDisposition: 'empty' })
     return false
   }
+  onSnapshot?.(draft)
   emitTaskReplyStep(log, trace, 'draft-snapshot', 'succeeded', {
     textChars: draft.text.length,
     attachments: draft.attachments.map((attachment, index) => ({
       index, id: attachment.id, path: attachment.path, mimeType: attachment.mimeType, name: attachment.name,
     })),
   })
-  const accepted = await deliverTaskDraftSnapshot(id, draft, trace)
-  const cleared = accepted && taskDrafts.clearIfUnchanged(id, draft)
+  const accepted = await deliverTaskDraftSnapshot(id, draft, trace, context)
+  if (accepted) taskDrafts.acceptSnapshot(id, draft)
+  const cleared = accepted && !taskDrafts.snapshot(id)
   finishTaskReplyTrace(log, trace, accepted ? 'succeeded' : 'failed', {
     reason: accepted ? 'provider-accepted' : 'provider-refused',
     draftDisposition: cleared ? 'cleared' : 'retained',
@@ -2189,6 +2222,10 @@ function serializeTask(t: Task) {
     // how blocks came to be built, persisted, and then silently dropped one
     // step before the wire: every other layer had them and this one did not.
     blocks: t.blocks ?? null,
+    chatWritable: !t.importedFromCli && !!(t.claudeSessionSettings || t.codexSessionSettings),
+    sessionPermission: t.claudeSessionSettings?.permissionMode ?? t.codexSessionSettings?.sandbox,
+    chatResumable: !t.importedFromCli,
+    chatOwned: !t.importedFromCli,
     usage: t.usage ?? null,
     state: t.state,
     category: t.category ?? null,
@@ -2213,6 +2250,7 @@ function serializeTask(t: Task) {
     resuming: t.resuming ?? false,
     resumeError: t.resumeError ?? null,
     question: t.question ?? null,
+    questionAcknowledgment: t.questionAcknowledgment,
     mcpGap: t.mcpGap ?? null,
     // PTY still alive (running or parked-warm) → the live terminal can repaint
     // it clean instead of replaying stale-width history (PRD §13.4 #8).
@@ -2406,6 +2444,81 @@ function codexCliSpawnArgs(): { model?: string; effort?: string } {
   // An effort without a model is meaningless — efforts are a property OF a
   // model, and Codex would apply it to whichever model it defaults to.
   return model ? { model, effort } : {}
+}
+
+let chatCodexModels: CodexModel[] = []
+let chatCatalogLoading = false
+let chatCatalogAttemptAt = 0
+let chatClaudeModels: ClaudeTaskModel[] = []
+let chatClaudeCatalogLoading = false
+let chatClaudeCatalogAttemptAt = 0
+const composerDictation = new ComposerDictationCoordinator()
+
+async function openChatArtifactPath(path: string): Promise<void> {
+  const resolved = await fs.realpath(path)
+  const stat = await fs.stat(resolved)
+  if (!stat.isFile() || artifactPathAction(resolved) === 'reveal') { shell.showItemInFolder(resolved); return }
+  const error = await shell.openPath(resolved)
+  if (error) throw new Error(error)
+}
+
+function chatConfig(id: string): ChatConfigP | undefined {
+  const task = manager?.get(id)
+  if (!task) return undefined
+  const provider = task.agent ?? 'claude'
+  const owned = task.claudeSessionSettings ?? task.codexSessionSettings
+  if (provider === 'claude' && !chatClaudeModels.length && !chatClaudeCatalogLoading && Date.now() - chatClaudeCatalogAttemptAt > 30_000) {
+    chatClaudeCatalogLoading = true
+    chatClaudeCatalogAttemptAt = Date.now()
+    const probe = new ClaudeTaskSession({ binary: 'claude', cwd: tmpdir(), controlTimeoutMs: 15_000, onEvent: () => {} })
+    void probe.start().then(() => { chatClaudeModels = probe.models })
+      .catch(error => log.warn('claude-chat-model-catalog', { error: (error as Error).message }))
+      .finally(() => { probe.close(); chatClaudeCatalogLoading = false; notchController?.refresh() })
+  }
+  if (provider === 'codex' && !chatCodexModels.length && !chatCatalogLoading && Date.now() - chatCatalogAttemptAt > 30_000) {
+    chatCatalogLoading = true
+    chatCatalogAttemptAt = Date.now()
+    void listCodexCliModels().then(models => { chatCodexModels = models }).catch(error => log.warn('chat-model-catalog', { error: (error as Error).message }))
+      .finally(() => { chatCatalogLoading = false; notchController?.refresh() })
+  }
+  const codexModel = chatCodexModels.find(m => m.id === owned?.model)
+  const claudeModel = chatClaudeModels.find(m => m.id === (owned?.model || 'default'))
+  const permission = task.claudeSessionSettings
+    ? task.claudeSessionSettings.permissionMode === 'bypassPermissions' ? 'full' : task.claudeSessionSettings.permissionMode === 'plan' ? 'plan' : 'ask'
+    : task.codexSessionSettings?.sandbox === 'danger-full-access' ? 'full' : task.codexSessionSettings?.sandbox === 'read-only' ? 'read' : task.codexSessionSettings?.approvalPolicy === 'never' ? 'workspace' : 'ask'
+  return {
+    provider, providerLabel: providerOf(provider).label, providers: [], cwd: task.cwd,
+    model: owned?.model || (provider === 'claude' ? 'default' : ''), modelLabel: task.model ?? owned?.model ?? 'Provider default',
+    models: provider === 'codex' ? chatCodexModels.map(m => ({ id: m.id, label: m.uiLabel, description: m.description }))
+      : provider === 'claude' ? chatClaudeModels.map(({ id, label, description }) => ({ id, label, description })) : [],
+    effort: owned?.effort,
+    efforts: codexModel ? codexModel.efforts.map((id, i) => ({ id, label: codexModel.effortLabels[i] }))
+      : claudeModel ? claudeModel.efforts.map(id => ({ id, label: ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum' } as Record<string, string>)[id] ?? id })) : [],
+    permission, permissions: owned ? [
+      ...(provider === 'codex' ? [{ id: 'workspace', label: 'Workspace access', description: 'Work without approval prompts within the configured sandbox.' }] : []),
+      ...(manager?.chatFullAccessAllowed(id) ? [{ id: 'full', label: 'Full access', description: 'This Unmute session: filesystem, commands and network without provider approval prompts. macOS consent still applies.' }] : []),
+      { id: 'ask', label: 'Ask for approval', description: 'Keep provider approval requests actionable in chat.' },
+      ...(provider === 'claude' ? [{ id: 'plan', label: 'Plan mode', description: 'Plan without executing changes.' }] : [{ id: 'read', label: 'Read only', description: 'No workspace writes without permission.' }]),
+    ] : [],
+    permissionScope: owned ? `This conversation only · global defaults unchanged${task.permissionReason ? ` · ${task.permissionReason}` : ''}` : 'Managed by the original application',
+    mutable: !!owned, busy: task.state === 'processing' || task.state === 'needs-user',
+    ...(provider === 'codex' && !chatCodexModels.length ? { error: chatCatalogLoading ? 'Loading model choices…' : 'Model choices unavailable. Check Codex installation and sign-in.' } : {}),
+    ...(provider === 'claude' && !chatClaudeModels.length ? { error: chatClaudeCatalogLoading ? 'Loading model choices…' : 'Model choices unavailable. Check Claude installation and sign-in.' } : {}),
+    ...(sessionManagerRef ? { dictation: composerDictation.stateFor(id) } : {}),
+  }
+}
+
+async function configureTaskChat(id: string, change: { model?: string; effort?: string; permission?: string }): Promise<void> {
+  const config = chatConfig(id)
+  if (!config || !manager) throw new Error('Conversation unavailable')
+  if (change.model !== undefined && !config.models.some(m => m.id === change.model)) throw new Error('That model is not currently offered by this provider')
+  if (change.effort !== undefined && !config.efforts.some(e => e.id === change.effort)) throw new Error('That effort level is not supported by the current model')
+  if (change.model && config.provider === 'codex') {
+    const model = chatCodexModels.find(m => m.id === change.model)
+    change = { ...change, effort: model?.defaultEffort ?? '' }
+  }
+  if (change.model && config.provider === 'claude') change = { ...change, effort: '' }
+  await manager.configureChat(id, change)
 }
 
 /** Just the model id, for the places that record what a task ran on. */
@@ -3382,6 +3495,7 @@ function initCaptureWatchers(): void {
     log.event('composer-image-sink', { taskId, images: paths.length })
     for (const path of paths) {
       void addDraftImageFromPath(taskId, path, 'image/png', basename(path))
+        .catch(error => notchController?.toast(`Could not attach image: ${error instanceof Error ? error.message : String(error)}`))
     }
     return true
   })
@@ -3697,8 +3811,10 @@ export interface CaptureDispatchOptions {
    * A field on the session cannot have that class of bug: the session is
    * nulled on every teardown path there is, and the route rides along with the
    * utterance it belongs to. Nothing outlives the capture that set it.
-   */
+  */
   route?: CaptureRoute
+  /** Immutable composer address stamped at capture creation and spent once. */
+  composerDictation?: ComposerDictationDelivery
 }
 
 export async function dispatchFromCapture(
@@ -3707,35 +3823,63 @@ export async function dispatchFromCapture(
   targetTaskId?: string | null,
   options: CaptureDispatchOptions = {},
 ): Promise<string | null> {
-  // The lane this utterance was on when the user submitted it. Handed in by
-  // the session that recorded it (see CaptureDispatchOptions.route), never
-  // read from anything that outlives the capture.
-  if (options.route === 'agent') options = { ...options, destination: 'unmute-agent' }
-  // WHY THIS WENT WHERE IT WENT, recorded rather than left to inference. The
-  // failure that made this necessary looked exactly like a normal Agent turn
-  // in the logs, twelve seconds after a Remote key release.
-  log.event('capture-destination', {
-    route: options.route ?? null,
-    explicit: options.destination ?? null,
-    targetTaskId: targetTaskId ?? null,
+  // Composer dictation is not a routed task. It edits an unsent draft and must
+  // not touch captureBusy, focus, the generic phase broadcasts, or voice beats
+  // if its detached queue happens to drain during a newer recording.
+  const composerDelivery = options.composerDictation
+  return dispatchCaptureWithLifecycle({
+    composer: composerDelivery ? async () => {
+      if (!manager) {
+        log.error('composer dictation before initRemote')
+        return null
+      }
+      const claim = composerDictation.claim(composerDelivery)
+      if (claim.kind === 'drop') {
+        log.event('composer-dictation-dropped', { token: composerDelivery.token, reason: 'unknown-or-cancelled-token' })
+        return null
+      }
+      if (!manager.get(claim.taskId)) {
+        log.event('composer-dictation-dropped', { token: composerDelivery.token, taskId: claim.taskId, reason: 'task-no-longer-exists' })
+        return null
+      }
+      return applyComposerDictation(claim, (rawTranscript || '').trim(), attachments, {
+        drafts: taskDrafts,
+        taskExists: id => !!manager?.get(id),
+        stageImage: (id, image, insertion) => addDraftImageFromPath(id, image, 'image/png', basename(image), insertion),
+      })
+    } : undefined,
+    routed: async () => {
+      // The lane this utterance was on when the user submitted it. Handed in by
+      // the session that recorded it (see CaptureDispatchOptions.route), never
+      // read from anything that outlives the capture.
+      if (options.route === 'agent') options = { ...options, destination: 'unmute-agent' }
+      // WHY THIS WENT WHERE IT WENT, recorded rather than left to inference. The
+      // failure that made this necessary looked exactly like a normal Agent turn
+      // in the logs, twelve seconds after a Remote key release.
+      log.event('capture-destination', {
+        route: options.route ?? null,
+        explicit: options.destination ?? null,
+        targetTaskId: targetTaskId ?? null,
+      })
+      return dispatchFromCaptureInner(rawTranscript, attachments, targetTaskId, options)
+    },
+    initialResult: null,
+    // Observe the routing phase for the wall's listening surface. The helper's
+    // composer branch returns before this callback, so detached insertion can
+    // never release a newer capture's busy/focus state.
+    onRouting: () => {
+      broadcastCapturePhase('routing')
+      pendingBeat = null
+    },
+    onIdle: landed => broadcastCapturePhase('idle', landed),
+    onAcknowledge: landed => {
+      // Speak AFTER the phase returns to idle (captureBusy released) so the beat
+      // can't be dropped by the talking-over-the-user guard.
+      const beat = pendingBeat !== null ? pendingBeat : landed ? 'On it.' : 'That didn\u2019t land.'
+      if (beat) speakLine(beat)
+      pendingBeat = null
+    },
   })
-  // Observe the routing phase for the wall's listening surface — the dispatch
-  // logic itself (the inner function) is untouched. `finally` guarantees the
-  // surface always returns to idle, whatever path the dispatch takes.
-  broadcastCapturePhase('routing')
-  pendingBeat = null
-  let landed: string | null = null
-  try {
-    landed = await dispatchFromCaptureInner(rawTranscript, attachments, targetTaskId, options)
-    return landed
-  } finally {
-    broadcastCapturePhase('idle', landed)
-    // Speak AFTER the phase returns to idle (captureBusy released) so the beat
-    // can't be dropped by the talking-over-the-user guard.
-    const beat = pendingBeat !== null ? pendingBeat : landed ? 'On it.' : 'That didn\u2019t land.'
-    if (beat) speakLine(beat)
-    pendingBeat = null
-  }
 }
 
 async function dispatchFromCaptureInner(
@@ -3783,7 +3927,7 @@ async function dispatchFromCaptureInner(
     // Right-Option capture and the visible composer are one draft. Captured
     // images stay as attachments rather than being rendered as filesystem paths.
     let trace: TaskReplyTrace | null = null
-    const accepted = await deliverAddressedCapture({
+    const captureOutcome = await deliverAddressedCapture({
       taskId: fid,
       text,
       attachments,
@@ -3822,18 +3966,21 @@ async function dispatchFromCaptureInner(
         })
         notchController?.refresh()
       },
-      deliver: (taskId, snapshot) => deliverTaskDraftSnapshot(taskId, snapshot, trace ?? undefined),
+      submitDraft: (taskId, request) => sendTaskDraft(taskId, 'right-option', request),
     })
+    const accepted = captureOutcome.kind === 'accepted'
+    const queued = captureOutcome.kind === 'queued'
     if (trace) {
-      finishTaskReplyTrace(log, trace, accepted ? 'succeeded' : 'failed', {
-        reason: accepted ? 'provider-accepted' : 'provider-refused',
-        draftDisposition: accepted ? 'cleared-if-unchanged' : 'retained',
+      finishTaskReplyTrace(log, trace, accepted || queued ? 'succeeded' : 'failed', {
+        reason: queued ? 'queued-locally' : accepted ? 'provider-accepted' : captureOutcome.kind,
+        draftDisposition: queued ? 'transferred-to-queue' : accepted ? 'handled-by-submission-owner' : 'retained',
       })
     }
     notchController?.refresh()
-    log.event('capture-addressed-delivery', { taskId: fid, attachments: attachments.length, accepted })
-    pendingBeat = accepted ? '' : 'That didn\u2019t land. Your reply is still in the task.'
-    return accepted ? fid : null
+    log.event('capture-addressed-delivery', { taskId: fid, attachments: attachments.length, accepted, outcome: captureOutcome.kind })
+    if (queued) notchController?.toast('Follow-up queued — sends after this turn.')
+    pendingBeat = accepted ? '' : queued ? 'Follow-up queued for after this turn.' : 'That didn\u2019t land. Your reply is still in the task.'
+    return accepted || queued ? fid : null
   }
 
   if (!raw) {
@@ -4275,11 +4422,12 @@ async function dispatchFromCaptureInner(
       // the gap \u2014 derived locally from the utterance, no model involved, and
       // replaced the moment the real one arrives.
       if (decision.enrich) {
+        const taskManager = manager
         if (!decision.name) manager.setName(newId, provisionalName(decision.intent || raw))
         void decision.enrich.then((late) => {
-          if (late.name) manager.setName(newId, late.name)
+          if (late.name) taskManager.setName(newId, late.name)
           // Assign-once still holds: only fill a group the task does not have.
-          if (late.group && !manager.get(newId)?.group) manager.setGroup(newId, late.group)
+          if (late.group && !taskManager.get(newId)?.group) taskManager.setGroup(newId, late.group)
           log.event('late-label-applied', { taskId: newId, name: late.name ?? null, group: late.group ?? null })
         }).catch(() => {})
       }
@@ -4358,11 +4506,33 @@ const LIBRARIAN_PARKED = true
 const CURATOR_PARKED = true
 
 export function initRemote(deps: RemoteInitDeps): TaskManager {
+  taskDrafts.connectFile(join(REMOTE_BASE_DIR, 'drafts.json'), (error) => {
+    log.warn('draft persistence failed', { error: (error as Error).message })
+  })
   notetakerAdapters = deps.notetaker ?? null
   sessionManagerRef = deps.sessionManager
   runHeadlessSummary = deps.runHeadless ?? null
   captureHistory.cleanup()
   if (manager) return manager
+
+  // Session teardown happens before the detached remote queue necessarily
+  // drains. A queued token stays claimable; every other ending abandons the
+  // active token so empty/error/cancel paths cannot wedge or leak dictation.
+  const previousSessionEnded = deps.sessionManager.onSessionEnded
+  deps.sessionManager.onSessionEnded = (identity) => {
+    try { previousSessionEnded?.(identity) }
+    finally {
+      const abandoned = identity?.composerDictationToken
+        ? composerDictation.abandon(identity.composerDictationToken)
+        : composerDictation.abandonActive() !== null
+      if (abandoned) notchController?.refresh()
+    }
+  }
+  const previousComposerQueued = deps.sessionManager.onComposerDictationQueued
+  deps.sessionManager.onComposerDictationQueued = (token) => {
+    try { previousComposerQueued?.(token) }
+    finally { if (composerDictation.markQueued(token)) notchController?.refresh() }
+  }
 
   // THE AGENT'S GATE, ANSWERED BEFORE THE LANE LATCHES. Pushed down the same
   // way paywall-glue pushes the Orchestrator's entitlement into
@@ -4484,6 +4654,59 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // over a `manager` that is still undefined is how a stream of events would
   // land silently on nothing.
   codexHub = new CodexHub({
+    approvalCap: taskId => ({ fullAccessAllowed: manager?.chatFullAccessAllowed(taskId) === true, roots: settings.get('sandboxRoots') ?? [] }),
+    loadPlans: async (taskId, threadId) => {
+      const task = manager?.get(taskId)
+      if (!task) throw new Error('Conversation storage is unavailable')
+      try {
+        const saved = JSON.parse(await fs.readFile(join(task.home, 'chat-plans.json'), 'utf8'))
+        if (saved.threadId !== threadId || !Array.isArray(saved.plans)) throw new Error('Saved plans do not match this conversation')
+        return saved.plans
+      } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
+    },
+    savePlans: async (taskId, threadId, plans) => {
+      const task = manager?.get(taskId)
+      if (!task) throw new Error('Conversation storage is unavailable')
+      const path = join(task.home, 'chat-plans.json')
+      await writeFileAtomic(path, JSON.stringify({ threadId, plans }))
+      await fs.chmod(path, 0o600)
+    },
+    loadInputMetadata: async (taskId, threadId) => {
+      const task = manager?.get(taskId)
+      if (!task) throw new Error('Conversation storage is unavailable')
+      try {
+        const saved = JSON.parse(await fs.readFile(join(task.home, 'chat-inputs.json'), 'utf8'))
+        if (saved.threadId !== threadId || !Array.isArray(saved.records)) throw new Error('Conversation attachment history does not match this session')
+        return saved.records as CodexInputMetadata[]
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+        throw error
+      }
+    },
+    saveInputMetadata: async (taskId, threadId, record) => {
+      const task = manager?.get(taskId)
+      if (!task) throw new Error('Conversation storage is unavailable')
+      const path = join(task.home, 'chat-inputs.json')
+      let records: CodexInputMetadata[] = []
+      try {
+        const saved = JSON.parse(await fs.readFile(path, 'utf8'))
+        if (saved.threadId !== threadId || !Array.isArray(saved.records)) throw new Error('Conversation attachment history does not match this session')
+        records = saved.records
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      const index = records.findIndex(item => item.id === record.id)
+      if (index >= 0) records[index] = record
+      else records.push(record)
+      await writeFileAtomic(path, JSON.stringify({ threadId, records }))
+      await fs.chmod(path, 0o600)
+    },
+    threadConfig: async taskId => {
+      const env = mintMcpEnvFor(taskId)
+      const computerEnabled = normalizePolicy(settings.get('computerUse')).enabled
+      return { developer_instructions: SESSION_PREAMBLE + (computerEnabled ? '\n\n' + STEER_BODY : ''), mcp_servers: {
+        unmute: { url: env.UNMUTE_MCP_URL, http_headers: { Authorization: `Bearer ${env.UNMUTE_MCP_TOKEN}` } },
+        [AX_MCP_NAME]: { url: `http://127.0.0.1:${CUA_MCP_PORT}${CUA_MCP_PATH}`, enabled: computerEnabled },
+      } }
+    },
     resolveBin: () => resolveCodexCli((bin) => new Promise<string | null>((res) => {
       execFile('/usr/bin/which', [bin], { env: process.env }, (err, stdout) => res(err ? null : String(stdout).trim() || null))
     })),
@@ -4497,6 +4720,31 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   void groupRegistry.load().catch(() => { /* metadata, never a gate */ })
   manager = new TaskManager({
     executorFactory,
+    claudeChoice: context => ({
+      ...(doerModel() ? { model: doerModel() } : {}),
+      permissionMode: settings.get('permissionMode') === 'auto-approve' && !(settings.get('sandboxRoots') ?? []).length ? 'bypassPermissions' : 'manual',
+      addDirs: settings.get('sandboxRoots') ?? [],
+      chrome: settings.get('browserEnabled') !== false && (!context || !!context.managedProjectId || context.cwd === context.home || context.cwd.startsWith(context.home + '/')),
+    }),
+    claudeSessionOptions: async task => {
+      const promptPath = join(task.home, 'task-instructions.md')
+      const mcpPath = join(task.home, 'task-mcp.json')
+      const env = mintMcpEnvFor(task.id)
+      const computerEnabled = normalizePolicy(settings.get('computerUse')).enabled
+      await writeFileAtomic(promptPath, SESSION_PREAMBLE + (computerEnabled ? '\n\n' + STEER_BODY : ''))
+      await writeFileAtomic(mcpPath, JSON.stringify({ mcpServers: {
+        unmute: { type: 'http', url: env.UNMUTE_MCP_URL, headers: { Authorization: `Bearer ${env.UNMUTE_MCP_TOKEN}` } },
+        ...(computerEnabled ? { [AX_MCP_NAME]: { type: 'http', url: `http://127.0.0.1:${CUA_MCP_PORT}${CUA_MCP_PATH}` } } : {}),
+      } }))
+      await fs.chmod(mcpPath, 0o600)
+      return {
+        binary: 'claude', cwd: task.cwd, sessionId: task.sessionId,
+        appendSystemPromptFile: promptPath, mcpConfigFile: mcpPath,
+        ...(hookSettingsFile ? { settingsFile: hookSettingsFile } : {}),
+        chrome: task.claudeSessionSettings?.chrome ?? (settings.get('browserEnabled') !== false && (!!task.managedProjectId || task.cwd === task.home || task.cwd.startsWith(task.home + '/'))),
+        env,
+      }
+    },
     groupRegistry,
     codexHub,
     // The path fence, read fresh per dispatch so a task started after the
@@ -4645,16 +4893,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       mcpServer = server
     })
     .catch((e) => log.warn('mcp server not started', { error: (e as Error).message }))
-  // Register the server in the user's Claude Code config (idempotent). The
-  // header uses env expansion so each session presents ITS OWN token.
-  execFile('claude', ['mcp', 'get', 'unmute'], { timeout: 10_000 }, (err) => {
-    if (!err) return // already registered
-    const cfg = JSON.stringify({ type: 'http', url: `http://127.0.0.1:${getKnobs().mcpPort}${MCP_PATH}`, headers: { Authorization: 'Bearer ${UNMUTE_MCP_TOKEN}' } })
-    execFile('claude', ['mcp', 'add-json', 'unmute', cfg, '--scope', 'user'], { timeout: 15_000 }, (e2, _o, stderr2) => {
-      if (e2) log.warn('mcp registration failed', { error: String(stderr2 || e2.message) })
-      else log.event('mcp-registered-user-scope', {})
-    })
-  })
+  // Owned sessions receive their MCP configuration at launch. Never mutate
+  // the user's global Claude configuration; pre-existing registrations remain.
 
   // ── Computer Use v2: cua-driver, EMBEDDED. Unmute (this process — the
   // signed .app) is the DIRECT SPAWNER of every driver child, so each child
@@ -4689,18 +4929,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     onActivity: (ev) => broadcastAxActivity(ev),
     router: cuaLaneRouter,
   }).then((s) => { cuaServer = s }).catch((e) => log.warn('cua server not started', { error: (e as Error).message }))
-  void applyAxRegistration(normalizePolicy(settings.get('computerUse')).enabled)
-  // AND TAKE IT BACK OUT OF CODEX. applyAxRegistration above registers with
-  // Claude Code, which is the only agent it was ever meant for. The ChatGPT
-  // desktop app's "import your Claude setup" then copies the whole thing —
-  // every MCP server plus CLAUDE.md into ~/.codex/AGENTS.md — so Codex ends up
-  // holding a computer-use server registered for a different agent, and a steer
-  // preferring it over its own.
-  //
-  // Unconditional, and not gated on the toggle: the toggle is about Claude Code
-  // and has never said anything about Codex. Removal only, never registration —
-  // Unmute must not become a second writer of another agent's config.
-  void pruneUnmuteFromCodex()
+  // Owned structured sessions receive computer tools and steering in their
+  // per-session configuration. Startup does not rewrite provider global files.
+  // Explicit Computer Use toggle actions retain their existing registration behavior.
+
+  // Shared by optional native notch and always-registered renderer IPC.
+  const appendSkillToOwnedTask = (taskId: string, name: string): boolean => {
+    const task = manager?.get(taskId)
+    if (!task || task.importedFromCli || (!task.claudeSessionSettings && !task.codexSessionSettings)) return false
+    taskDrafts.appendText(taskId, `/${name} `)
+    notchController?.refresh()
+    return true
+  }
 
   // ── Notch shell (native Swift helper) ──
   // The single task/attention surface (spec 2026-07-24). Spawned by THIS signed
@@ -4770,17 +5010,91 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           releaseBackgroundAudio: () => deps.backgroundAudio!.release(),
         } : {}),
         getDraft: (id) => taskDrafts.get(id),
-        setDraftText: (id, text) => {
+        getFollowup: id => taskFollowups?.view(id),
+        getComposerMode: id => manager?.followupScope(id) ? taskFollowups?.composerMode(id) : undefined,
+        draftSubmitting: id => taskFollowups?.isSubmitting(id) ?? false,
+        cancelTaskFollowup: (id, queueId) => taskFollowups?.cancel(id, queueId) ?? false,
+        restoreTaskFollowup: (id, queueId, confirmed) => taskFollowups?.restore(id, queueId, confirmed) ?? false,
+        queueSavedTaskFollowup: (id, queueId) => taskFollowups?.queueSaved(id, queueId) ?? false,
+        answerAsync: async (id, text, reference) => {
+          const task = manager?.get(id)
+          if (!task || !manager || task.sending) return false
+          if (!task.claudeSessionSettings && !task.codexSessionSettings) return manager.answer(id, text)
+          task.sending = true
+          notchController?.refresh()
+          try { return reference ? await manager.answerQuestion(id, text, reference) : false }
+          finally { task.sending = false; notchController?.refresh() }
+        },
+        getChatConfig: chatConfig,
+        configureChat: configureTaskChat,
+        createChat: async options => {
+          if (!manager) throw new Error('Task service is not ready')
+          return manager.createChat(options)
+        },
+        previewChat: async options => {
+          if (!manager) throw new Error('Task service is not ready')
+          return manager.previewChat(options)
+        },
+        cancelDraftDictation: id => {
+          const delivery = composerDictation.activeDelivery
+          if (delivery?.taskId !== id) return
+          sessionManagerRef?.cancelSession?.()
+          // cancelSession normally triggers onSessionEnded synchronously. Keep
+          // this as a fail-safe for a partial/older engine implementation.
+          composerDictation.abandon(delivery.token)
+          notchController?.refresh()
+        },
+        toggleDraftDictation: (id, insertion) => {
+          if (!sessionManagerRef) return
+          const active = composerDictation.activeDelivery
+          if (active?.taskId === id && composerDictation.stateFor(id) === 'recording') {
+            composerDictation.markTranscribing(active.token)
+            void sessionManagerRef.stopRemoteCapture().catch(error => {
+              notchController?.toast(`Dictation failed: ${(error as Error).message}`)
+            }).finally(() => {
+              // Every normal engine path signals queued or ended. If an older
+              // implementation throws without either callback, still release.
+              composerDictation.abandon(active.token)
+              notchController?.refresh()
+            })
+          } else {
+            if (sessionManagerRef.captureRoute || active) { notchController?.toast('Finish the current recording first'); return }
+            const started = startComposerDictation(composerDictation, id, insertion, delivery => {
+              sessionManagerRef!.startRemoteCapture(id, false, delivery)
+            })
+            if (!started.started || !sessionManagerRef.captureRoute) {
+              composerDictation.abandon(started.delivery.token)
+              if (!started.started) sessionManagerRef.cancelSession?.()
+              const detail = started.error ? `: ${started.error.message}` : ''
+              notchController?.toast(`Recording could not start${detail}. Check microphone access and finish any active capture.`)
+            }
+          }
+          notchController?.refresh()
+        },
+        setDraftText: (id, text, clientRevision) => {
           const before = taskDrafts.get(id)
           const draftId = taskDrafts.traceId(id)
-          taskDrafts.setText(id, text)
+          taskDrafts.setText(id, text, clientRevision)
           emitTaskReplyInput(log, {
             taskId: id, draftId, source: 'task-composer', action: 'text-edited',
             beforeChars: before.text.length, afterChars: text.length,
             deltaChars: text.length - before.text.length, attachments: before.attachments.length,
           })
         },
-        addDraftImage: (id, path, mimeType, name) => addDraftImageFromPath(id, path, mimeType, name),
+        addDraftImage: (id, path, mimeType, name, insertion) => addDraftImageFromPath(id, path, mimeType, name, insertion),
+        reserveDraftAttachment: (id, operationId, name, insertion) => taskDrafts.reserveAttachment(id, operationId, name, insertion),
+        failDraftAttachment: (id, operationId, error) => taskDrafts.failAttachment(id, operationId, error),
+        restoreDraftAttachment: async (id, attachmentId) => {
+          const item = taskDrafts.get(id).attachments.find(a => a.id === attachmentId)
+          if (!item || item.mimeType !== 'text/x-unmute-paste') throw new Error('This pasted text is no longer in the draft')
+          const text = await fs.readFile(item.path, 'utf8')
+          taskDrafts.restoreAttachment(id, attachmentId, text)
+        },
+        undoDraftAttachment: async (id, attachmentId) => {
+          await taskDrafts.whenSettled(id)
+          taskDrafts.undoAttachment(id, attachmentId)
+        },
+        redoDraftAttachment: (id, attachmentId) => taskDrafts.redoAttachment(id, attachmentId),
         removeDraftAttachment: async (id, attachmentId) => {
           const draftId = taskDrafts.traceId(id)
           const attachment = taskDrafts.removeAttachment(id, attachmentId)
@@ -4788,9 +5102,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
             taskId: id, draftId, source: 'task-composer', action: attachment ? 'attachment-removed' : 'attachment-remove-missed',
             attachmentId, path: attachment?.path ?? null, remainingAttachments: taskDrafts.get(id).attachments.length,
           })
-          if (attachment) await fs.unlink(attachment.path).catch(() => {})
+          // Retain task-owned files for in-flight snapshots and Undo. Task
+          // cleanup deletes them; removal never touches the original file.
         },
-        sendDraft: (id) => sendTaskDraft(id),
+        sendDraft: (id, context) => sendTaskDraft(id, 'task-composer', undefined, context ?? null),
         kill: (id) => mgr.kill(id),
         remove: (id) => mgr.remove(id),
         killAll: () => mgr.killAll(),
@@ -4894,9 +5209,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           if (on) cur.add(name); else cur.delete(name)
           settings.set('pinnedSkills', [...cur])
         },
-        tapSkill: (taskId, name) => { mgr.typeUnsubmitted(taskId, `/${name} `) },
+        tapSkill: appendSkillToOwnedTask,
         openProject: (path, name) => {
-          void dispatchFromCapture(`Start a working session in the ${name} project (${path}).`)
+          if (!manager) return
+          const provider = settings.get('agent') === 'codex' ? 'codex' : 'claude'
+          void manager.createChat({ provider, cwd: path }).then(id => notchController?.openTask(id))
+            .catch(error => notchController?.toast(`Could not open ${name}: ${(error as Error).message}`))
         },
         // curator — the same hoisted accept/reject + conversation machinery
         listProposals: () => listPendingProposals(curatorPathsV),
@@ -4923,8 +5241,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         openArtifact: (type, value) => {
           void (async () => {
             try {
-              if (type === 'path') { const err = await shell.openPath(value); if (err) log.warn('open-artifact path failed', { value, err }) }
-              else await shell.openExternal(value, { activate: false })
+              if (type === 'path') await openChatArtifactPath(value)
+              else await shell.openExternal(safeArtifactURL(value), { activate: false })
             } catch (e) { log.warn('open-artifact failed', { type, value, error: (e as Error).message }) }
           })()
         },
@@ -4952,8 +5270,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         scratchpadArm: (on) => { armScratchpadFrom(on) },
         scratchpadRemove: (id) => removeScratchpadEntry(id),
         scratchpadDeliver: (dest) => { void deliverScratchpad(dest) },
-        loadBlocks: async (taskId) => {
-          await manager?.loadBlocksFor(taskId)
+        loadBlocks: async (taskId, retry) => {
+          await manager?.loadBlocksFor(taskId, retry)
           manager?.reconcileNow(taskId)
         },
         scratchpadDiscard: () => discardScratchpad(),
@@ -5468,6 +5786,22 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Fan task lifecycle out to renderers (PRD §13). Terminal/attention states
   // also AUTO-PRESENT the overlay (the canonical surface; OS notifications off).
   // A new task clears any prior ✕ dismissal and re-shows the dock (docked mode).
+  taskFollowups = new TaskFollowupCoordinator({
+    store: taskDrafts,
+    onOutcome: event => log.event('task-followup-outcome', event),
+    assetsRoot: id => join(manager!.get(id)!.home, 'attachments'),
+    scope: id => manager?.followupScope(id),
+    gate: id => manager?.followupGate(id) ?? { kind: 'unavailable', reason: 'Task manager unavailable' },
+    deliver: (id, record, idle) => manager!.deliverQueuedDraft(id, record, idle),
+    immediate: async (id, onSnapshot, context) => {
+      const accepted = await performSendTaskDraft(id, 'task-composer', onSnapshot, context ?? null)
+      return accepted ? { kind: 'accepted' } : { kind: 'retained', reason: manager?.get(id)?.deliveryError ?? 'Your draft is kept.' }
+    },
+    changed: id => { const task = manager?.get(id); if (task) manager?.emit('updated', task) },
+  })
+  manager.on('followup-turn-ended', e => taskFollowups?.turnEnded(e))
+  manager.on('followup-ready', ({ taskId }) => taskFollowups?.readinessChanged(taskId))
+  manager.on('followup-disarm', ({ taskId }) => taskFollowups?.disarm(taskId, 'Session stopped or connection changed — follow-up saved'))
   manager.on('created', (t: Task) => {
     broadcast('remote:task-created', t)
     onNewTask(activeTaskCount())
@@ -5561,6 +5895,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
   // Task erased (Kill/Delete) → tell renderers to drop the row + update the dock.
   manager.on('removed', (t: Task) => {
+    taskDrafts.forget(t.id)
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) w.webContents.send('remote:task-removed', { id: t.id })
     }
@@ -5571,6 +5906,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Closing Unmute detaches persistent tmux clients so their work keeps moving;
   // one-offs stay bounded and headless Agent turns are still reaped below.
   app.on('before-quit', () => {
+    taskDrafts.flush()
     try { manager?.shutdown() } catch (e) { log.warn('before-quit shutdown failed', { error: (e as Error).message }) }
     // A running Agent turn must not survive us. Same failure as the notch
     // process that outlived its parent and sat on screen with nothing driving
@@ -5982,10 +6318,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     curatorConversations.delete(id)
   })
   ipcMain.handle('curator:tap-skill', async (_e, taskId: string, name: string): Promise<boolean> => {
-    if (!manager) return false
-    // Trailing space per preflight: it dismisses the autocomplete menu so the
-    // user's Enter submits the typed `/name` as a real skill invocation.
-    return manager.typeUnsubmitted(taskId, `/${name} `)
+    return appendSkillToOwnedTask(taskId, name)
   })
   // DEV-ONLY full-UX logging (fire-and-forget). The renderer emits this
   // UNCONDITIONALLY for every user-facing curator action; the single gate lives
@@ -6115,10 +6448,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:open-artifact', async (_e, type: 'url' | 'path', value: string) => {
     try {
       if (type === 'path') {
-        const err = await shell.openPath(value)
-        if (err) { log.warn('open-artifact path failed', { value, err }); return false }
+        await openChatArtifactPath(value)
       } else {
-        await shell.openExternal(value, { activate: false })
+        await shell.openExternal(safeArtifactURL(value), { activate: false })
       }
       log.event('artifact-opened', { type, value })
       return true
@@ -6709,7 +7041,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       log.warn('codex-hook-install-threw', { error: (e as Error).message })
       return { ok: false, reason: 'threw' as const }
     })
-    log[hook.ok ? 'event' : 'warn']('codex-hook-install', hook)
+    log[hook.ok ? 'event' : 'warn']('codex-hook-install', { ...hook })
     // A failed hook install does NOT fail the connect: everything else about
     // Codex still works, the user just gets Codex's own approval dialog.
     return { ok: true, approvals: hook.ok, approvalsReason: hook.ok ? undefined : hook.reason }
@@ -6749,7 +7081,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     })
     // Only overwrite the cache with a REAL reading — a failed walk must not
     // erase what we last genuinely saw.
-    if (state.options.Model?.length) settings.set('codexReasoningCache' as never, state as never)
+    if ('Model' in state.options && state.options.Model?.length) settings.set('codexReasoningCache' as never, state as never)
     return state
   }
   ipcMain.handle('remote:codex-reasoning-refresh', async () => await refreshCodexReasoning())

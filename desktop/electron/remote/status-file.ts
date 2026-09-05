@@ -19,6 +19,7 @@
 import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
 import { createLogger } from './log'
+import { writeFileAtomic } from './atomic-file'
 
 const log = createLogger('status-file')
 
@@ -67,7 +68,11 @@ export interface TaskError {
 }
 
 export interface TaskQuestion {
+  reference?: import('./question-reference').QuestionReference
+  acknowledgment?: 'pending' | 'accepted'
   text: string
+  /** Full proposed action/scope, shown in a bounded selectable disclosure. */
+  details?: string
   /**
    * `terminal_only` is a REFUSAL, and the only kind that offers the user no way
    * to reply from the card. It means a picker is open in the session that we
@@ -134,18 +139,22 @@ export async function scaffoldStatusFile(filePath: string): Promise<void> {
  * Returns false rather than throwing — a failed status write must never take
  * down the task it was describing.
  */
+const statusWrites = new Map<string, Promise<boolean>>()
 export async function writeStatusFile(filePath: string, payload: StatusPayload): Promise<boolean> {
-  const tmp = `${filePath}.tmp`
-  try {
-    await fs.mkdir(dirname(filePath), { recursive: true })
-    await fs.writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8')
-    await fs.rename(tmp, filePath)
-    return true
-  } catch (e) {
-    log.warn('status write failed', { filePath, error: (e as Error).message })
-    try { await fs.rm(tmp, { force: true }) } catch { /* best effort */ }
-    return false
-  }
+  const content = JSON.stringify(payload, null, 2)
+  const next = (statusWrites.get(filePath) ?? Promise.resolve(true)).then(async () => {
+    try {
+      await fs.mkdir(dirname(filePath), { recursive: true })
+      await writeFileAtomic(filePath, content)
+      return true
+    } catch (e) {
+      log.warn('status write failed', { filePath, error: (e as Error).message })
+      return false
+    }
+  })
+  statusWrites.set(filePath, next)
+  try { return await next }
+  finally { if (statusWrites.get(filePath) === next) statusWrites.delete(filePath) }
 }
 
 // ─── Tolerant read (PRD #2) ─────────────────────────────────────────

@@ -368,7 +368,7 @@ export class HeadlessRouterEngine {
       kind: d.kind ?? null, mode: d.mode ?? null, dir: d.dir ?? null,
       targetTaskId: d.targetTaskId ?? null, surface: d.surface ?? null,
       spokeFirst: this.sawText.length > 0,   // prose alongside the call
-      turns: this.lastResult?.numTurns ?? null,
+      turns: (this.lastResult as Record<string, unknown> | null)?.numTurns ?? null,
     })
     devEvent(log, 'headless-decision-raw', { raw })
 

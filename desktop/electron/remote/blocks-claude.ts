@@ -17,7 +17,7 @@
  * Field names verified across 400 transcripts / 55,956 lines on 2026-08-16.
  */
 
-import type { Block, Source } from './blocks'
+import { asBlock, fullContent, toolStatus, type Block, type Source } from './blocks'
 import { commandLabel } from './codex/blocks-app-server'
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? v as Record<string, unknown> : {})
@@ -26,6 +26,8 @@ const num = (v: unknown): number | undefined => (typeof v === 'number' && Number
 
 export interface ClaudeBlocks {
   blocks: Block[]
+  /** Private checkpoint correlation; not part of the native block payload. */
+  pendingTools?: Record<string, number>
   usage?: { used: number; window: number }
   /** Claude's own generated title for the session, when it has one. */
   title?: string
@@ -96,7 +98,7 @@ function sourcesOf(v: unknown): Source[] {
 }
 
 /** A pending tool call, waiting for the result entry that completes it. */
-interface Pending { name: string; input: Record<string, unknown>; index: number }
+interface Pending { name: string; input: Record<string, unknown>; index: number; block: Block }
 
 export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
   const blocks: Block[] = []
@@ -121,6 +123,22 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
     if (type === 'ai-title') { title = str(e.aiTitle) ?? title; continue }
 
     if (type === 'system') {
+      // Only an owned incomplete-history checkpoint can replace the display
+      // prefix. Its raw frames remain persisted for later UUID reconciliation.
+      if (e.unmuteHistoryProjection === true) {
+        blocks.length = 0
+        // Correlation outlives a display replacement. Old indices do not:
+        // detach each call unless this owned checkpoint names its exact row.
+        const retained = Array.isArray(e.unmuteRetainedBlocks) ? e.unmuteRetainedBlocks : []
+        const positions = obj(e.unmutePendingTools)
+        for (const [id, p] of pending) {
+          const index = num(positions[id])
+          p.index = index !== undefined && Number.isInteger(index) && index >= 0 && obj(retained[index]).kind === p.block.kind ? index : -1
+        }
+      }
+      if (Array.isArray(e.unmuteRetainedBlocks)) blocks.push(...e.unmuteRetainedBlocks.map(asBlock))
+      if (typeof e.unmuteTurnStart === 'number') blocks.push({ kind: 'turnStart', startedAt: e.unmuteTurnStart })
+      if (['completed', 'failed', 'cancelled'].includes(String(e.unmuteTurnEnd))) blocks.push({ kind: 'turnEnd', outcome: e.unmuteTurnEnd as 'completed' | 'failed' | 'cancelled', ...(num(e.durationMs) !== undefined ? { durationMs: num(e.durationMs) } : {}) })
       const meta = obj(e.compactMetadata)
       if (Object.keys(meta).length) {
         blocks.push({
@@ -137,7 +155,9 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
       // A REJECTED TOOL CALL. The result entry carries the denial, and the call
       // it refers to must NOT also render as a command that ran.
       const denial = str(e.toolDenialKind)
-      const result = obj(e.toolUseResult)
+      // SDK stream-json uses snake_case; authoritative transcript files also
+      // exist with camelCase. This shared parser serves live and replay paths.
+      const result = { ...obj(e.toolUseResult), ...obj(e.tool_use_result) }
       const content = obj(e.message).content
       const toolUseId = Array.isArray(content)
         ? str(obj(content.find((c) => str(obj(c).type) === 'tool_result')).tool_use_id)
@@ -146,8 +166,7 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
       if (denial && toolUseId) {
         const p = pending.get(toolUseId)
         if (p) {
-          blocks.splice(p.index, 1)
-          reindex(pending, p.index)
+          if (p.index >= 0) { blocks.splice(p.index, 1); reindex(pending, p.index) }
           pending.delete(toolUseId)
           blocks.push({ kind: 'denied', what: describeTool(p.name, p.input), reason: denial })
         } else {
@@ -156,8 +175,12 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
         continue
       }
 
-      if (toolUseId && pending.has(toolUseId)) {
-        completeTool(blocks, pending, toolUseId, result, Array.isArray(content) ? content : [])
+      if (Array.isArray(content) && content.some(c => obj(c).type === 'tool_result')) {
+        const results = content.filter(c => obj(c).type === 'tool_result')
+        for (const raw of results) {
+          const id = str(obj(raw).tool_use_id)
+          if (id && pending.has(id)) completeTool(blocks, pending, id, results.length === 1 ? result : {}, [raw])
+        }
         continue
       }
 
@@ -166,6 +189,10 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
       if (e.isMeta === true) continue
       const body = textOfContent(content)
       if (body) blocks.push({ kind: 'message', role: 'user', text: body })
+      if (Array.isArray(e.unmuteAttachments)) for (const value of e.unmuteAttachments) {
+        const a = obj(value)
+        if (str(a.path) && str(a.name) && str(a.mimeType)) blocks.push({ kind: 'attachment', path: str(a.path)!, name: str(a.name)!, mimeType: str(a.mimeType)!, ...(num(a.bytes) !== undefined ? { bytes: num(a.bytes) } : {}) })
+      }
       continue
     }
 
@@ -208,7 +235,7 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
           const block = startTool(name, input, obj(e))
           if (!block) break
           blocks.push(block)
-          if (id) pending.set(id, { name, input, index })
+          if (id) pending.set(id, { name, input, index, block })
           break
         }
         default:
@@ -219,6 +246,7 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
 
   return {
     blocks,
+    ...(pending.size ? { pendingTools: Object.fromEntries([...pending].filter(([, p]) => p.index >= 0).map(([id, p]) => [id, p.index])) } : {}),
     ...(usage ? { usage } : {}),
     ...(title ? { title } : {}),
   }
@@ -243,9 +271,10 @@ function startTool(name: string, input: Record<string, unknown>, entry: Record<s
   if (mcp) {
     return {
       kind: 'mcpCall',
+      status: 'running',
       server: str(entry.attributionMcpServer) ?? mcp.server,
       tool: str(entry.attributionMcpTool) ?? mcp.tool,
-      ...(Object.keys(input).length ? { args: JSON.stringify(input).slice(0, 300) } : {}),
+      ...(Object.keys(input).length ? { args: JSON.stringify(input) } : {}),
     }
   }
   switch (name) {
@@ -293,20 +322,31 @@ function completeTool(
 ): void {
   const p = pending.get(id)!
   pending.delete(id)
-  const at = p.index
+  const at = p.index >= 0 ? p.index : blocks.push(p.block) - 1
   const existing = blocks[at]
   if (!existing) return
   const isError = content.some((c) => obj(c).is_error === true)
+  const toolResult = obj(content.find(c => obj(c).type === 'tool_result' && obj(c).tool_use_id === id))
+  const output = fullContent(toolResult.content)
+  const structured = Object.keys(result).length ? fullContent(result) : undefined
+  const completeOutput = [output, structured].filter(v => v !== undefined).join('\n\n') || undefined
+  const error = fullContent(result.error) ?? (isError ? completeOutput : undefined)
+  const status = toolStatus(result.status ?? toolResult.status, result.interrupted === true ? 'cancelled' : isError ? 'failed' : 'succeeded')
 
   switch (existing.kind) {
     case 'command': {
       const stdout = str(result.stdout) ?? ''
       const stderr = str(result.stderr) ?? ''
-      const interrupted = result.interrupted === true
       blocks[at] = {
         ...existing,
-        status: isError || stderr && !stdout ? 'failed' : interrupted ? 'failed' : 'ok',
-        ...(stdout || stderr ? { output: (stdout || stderr).slice(0, 2000) } : {}),
+        status: status === 'succeeded' ? 'ok' : status,
+        ...(num(result.exitCode ?? result.exit_code) !== undefined ? { exitCode: num(result.exitCode ?? result.exit_code) } : {}),
+        ...(num(result.durationMs ?? result.duration_ms) !== undefined ? { durationMs: num(result.durationMs ?? result.duration_ms) } : {}),
+        ...(str(result.cwd) ? { cwd: str(result.cwd) } : {}),
+        ...(stdout || stderr || output || structured ? { output: [stdout, stderr,
+          ...(!stdout && !stderr ? [output] : []),
+          ...(Object.keys(result).some(k => !['stdout', 'stderr', 'status', 'interrupted', 'exitCode', 'exit_code', 'durationMs', 'duration_ms', 'cwd'].includes(k)) ? [structured] : []),
+        ].filter(Boolean).join('\n') } : {}),
       }
       break
     }
@@ -324,6 +364,11 @@ function completeTool(
         verb: str(result.type) === 'create' ? 'Added' : existing.verb,
         added,
         removed: counted.removed,
+        status,
+        diff: Array.isArray(patch) && patch.length ? patch.map(h => {
+          const p = obj(h)
+          return `@@ -${p.oldStart ?? ''},${p.oldLines ?? ''} +${p.newStart ?? ''},${p.newLines ?? ''} @@\n${Array.isArray(p.lines) ? p.lines.join('\n') : fullContent(h) ?? ''}`
+        }).join('\n') : str(result.content) ?? output,
       }
       break
     }
@@ -342,11 +387,11 @@ function completeTool(
       break
     }
     case 'mcpCall': {
-      blocks[at] = { ...existing, ok: !isError }
+      blocks[at] = { ...existing, ok: status === 'succeeded', status, output: completeOutput, ...(error ? { error } : {}) }
       break
     }
     case 'subAgent': {
-      blocks[at] = { ...existing, status: isError ? 'failed' : 'done' }
+      blocks[at] = { ...existing, status: status === 'succeeded' ? 'done' : status, ...(completeOutput ? { output: completeOutput } : {}) }
       break
     }
     default:

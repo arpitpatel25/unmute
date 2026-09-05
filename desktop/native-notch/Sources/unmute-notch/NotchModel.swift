@@ -205,6 +205,31 @@ final class NotchModel: ObservableObject {
 
     // Transient toast (accept errors etc.).
     @Published var toast: String? = nil
+    @Published var newChatPending = false
+    @Published var newChatError: String? = nil
+    @Published var newChatPreview: ChatPreviewP? = nil
+    @Published var newChatPreviewToken: String = ""
+    @Published var questionSubmissions: [String: QuestionAcknowledgmentP] = [:]
+
+    func questionBusy(_ id: String, _ question: QuestionP?) -> Bool {
+        guard let reference = question?.reference else { return false }
+        return question?.acknowledgment != nil || questionSubmissions[id]?.reference == reference
+    }
+    func beginQuestion(_ id: String, _ question: QuestionP?) -> Bool {
+        guard !questionBusy(id, question) else { return false }
+        if let reference = question?.reference { questionSubmissions[id] = QuestionAcknowledgmentP(reference: reference, state: "pending") }
+        else { questionSubmissions.removeValue(forKey: id) }
+        return true
+    }
+    func questionStatus(_ id: String, _ reference: QuestionReferenceP, _ state: String) {
+        guard questionSubmissions[id] == nil || questionSubmissions[id]?.reference == reference else { return }
+        if state == "rejected" { questionSubmissions.removeValue(forKey: id) }
+        else { questionSubmissions[id] = QuestionAcknowledgmentP(reference: reference, state: state) }
+    }
+    func restoreQuestionAcknowledgment(_ task: TaskDetail) {
+        questionSubmissions[task.id] = mergeChatAcknowledgment(current: questionSubmissions[task.id],
+            incoming: task.questionAcknowledgment, displayed: task.question?.reference)
+    }
 
     /// Whether the primary display has a hardware notch (drives idle content:
     /// text on a dummy notch would sit under the camera housing on real ones).

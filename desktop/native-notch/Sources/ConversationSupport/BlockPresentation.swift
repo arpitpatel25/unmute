@@ -145,7 +145,7 @@ public enum BlockPresentation {
                 // unanswered turn is a real state — interrupted, or still
                 // thinking when you typed again — and it must keep its own work
                 // rather than donate it to the next turn.
-                close()
+                if prompt != nil || !body.allSatisfy({ $0.kind == "turnStart" }) { close() }
                 prompt = block
             } else {
                 body.append(block)
@@ -157,24 +157,31 @@ public enum BlockPresentation {
 
     static func meta(of work: [Block]) -> BlockTurnMeta {
         var steps = 0, files = 0, added = 0, removed = 0
-        var running = false, failed = false
+        var running = false, failed = false, cancelled = false, denied = false, ended = false
+        var outcome: String?
         var planDone: Int?, planTotal: Int?
         var startedAt: Int?
         var durationMs: Int?
 
         for b in work {
+            if b.kind == "attachment" { continue }
             // The clock markers bound the turn; they are not steps the user did.
             if b.kind == "turnStart" { startedAt = b.startedAt; continue }
-            if b.kind == "turnEnd" { durationMs = b.durationMs; continue }
+            if b.kind == "turnEnd" { durationMs = b.durationMs; outcome = b.outcome; ended = true; continue }
             steps += 1
             switch b.kind {
             case "fileChange":
-                files += 1
-                added += b.added ?? 0
-                removed += b.removed ?? 0
-            case "command", "subAgent":
+                if let changes = b.changes {
+                    files += changes.count
+                    added += changes.reduce(0) { $0 + $1.added }
+                    removed += changes.reduce(0) { $0 + $1.removed }
+                } else { files += 1; added += b.added ?? 0; removed += b.removed ?? 0 }
+            case "command", "subAgent", "mcpCall":
                 if b.status == "running" { running = true }
                 if b.status == "failed" { failed = true }
+                if b.status == "cancelled" { cancelled = true }
+                if b.status == "denied" { denied = true }
+                if b.kind == "mcpCall" && b.status == nil && b.ok == false { failed = true }
             case "reasoning":
                 if b.streaming == true { running = true }
             case "error":
@@ -195,8 +202,8 @@ public enum BlockPresentation {
         // working, and settling it would stop a card that is still moving.
         // A turn with a start and no end is still going, whatever its steps say
         // — the last command can have finished while the model keeps thinking.
-        if startedAt != nil && durationMs == nil { running = true }
-        let status = running ? "running" : (failed ? "failed" : "done")
+        if startedAt != nil && !ended { running = true }
+        let status = outcome == "cancelled" ? "cancelled" : outcome == "failed" ? "failed" : running && !ended ? "running" : failed ? "failed" : cancelled ? "cancelled" : denied ? "denied" : "done"
         return BlockTurnMeta(status: status, durationMs: durationMs, startedAt: startedAt,
                              steps: steps, files: files, added: added, removed: removed,
                              planDone: planDone, planTotal: planTotal)

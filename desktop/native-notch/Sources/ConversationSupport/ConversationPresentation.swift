@@ -26,6 +26,22 @@ public struct ConversationRow: Identifiable, Equatable, Sendable {
 }
 
 public enum ConversationPresentation {
+    /// Legacy receipts enter the same stable scrolling/disclosure presentation.
+    public static func blocks(from rows: [ConversationRow]) -> [Block] {
+        rows.flatMap { row -> [Block] in
+            switch row.kind {
+            case .user: return [Block(kind: "message", role: "user", text: row.text)]
+            case .answer: return [Block(kind: "message", role: "assistant", text: row.text)]
+            case .work:
+                let items = row.workItems.flatMap { item -> [Block] in
+                    if item.role == "commentary" { return [Block(kind: "reasoning", text: item.text)] }
+                    return [Block(kind: "command", label: item.title ?? "Tool", command: item.code ?? item.text,
+                        output: item.output, durationMs: item.durationMs, status: item.ok == false ? "failed" : "ok")]
+                }
+                return items + (row.durationMs.map { [Block(kind: "turnEnd", durationMs: $0)] } ?? [])
+            }
+        }
+    }
     public static func build(_ turns: [ConversationTurn]) -> [ConversationRow] {
         var rows: [ConversationRow] = []
         var i = 0

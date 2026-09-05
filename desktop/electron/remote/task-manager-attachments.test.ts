@@ -135,8 +135,11 @@ test('an unconfirmed text-only CLI task draft is not reported as delivered', asy
 test('a Codex app-server text draft uses the structured turn transport, not its terminal view', async () => {
   const sends: Array<{ text: string; attachments: readonly string[] | undefined }> = []
   const hub = {
+    running: true,
+    async resumeThread(_id: string, threadId: string) { assert.equal(this.running, true); assert.equal(threadId, 'codex-thread') },
+    stop() { this.running = false },
     async startThread() { return { threadId: 'codex-thread', url: 'ws://test' } },
-    threadIdFor() { return 'codex-thread' },
+    threadIdFor() { return this.running ? 'codex-thread' : undefined },
     async send(_id: string, text: string, opts: { attachments?: readonly string[] } = {}) {
       sends.push({ text, attachments: opts.attachments })
       return true
@@ -165,8 +168,11 @@ test('a Codex app-server text draft uses the structured turn transport, not its 
 test('a Right Option capture reaches Codex CLI as one structured text-and-image turn', async () => {
   const sends: Array<{ text: string; attachments: readonly string[] | undefined }> = []
   const hub = {
+    running: true,
+    async resumeThread(_id: string, threadId: string) { assert.equal(this.running, true); assert.equal(threadId, 'codex-thread') },
+    stop() { this.running = false },
     async startThread() { return { threadId: 'codex-thread', url: 'ws://test' } },
-    threadIdFor() { return 'codex-thread' },
+    threadIdFor() { return this.running ? 'codex-thread' : undefined },
     async send(_id: string, text: string, opts: { attachments?: readonly string[] } = {}) {
       sends.push({ text, attachments: opts.attachments })
       return true
@@ -218,8 +224,11 @@ test('provider delivery logs the exact correlated transport and task configurati
   setConsoleMirror(true)
   console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')) }
   const hub = {
+    running: true,
+    async resumeThread(_id: string, threadId: string) { assert.equal(this.running, true); assert.equal(threadId, 'codex-thread') },
+    stop() { this.running = false },
     async startThread() { return { threadId: 'codex-thread', url: 'ws://test' } },
-    threadIdFor() { return 'codex-thread' },
+    threadIdFor() { return this.running ? 'codex-thread' : undefined },
     async send() { return true },
   }
   const ex: AgentExecutor = {

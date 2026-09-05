@@ -26,6 +26,14 @@ final class ComposerAvailabilityTests: XCTestCase {
         XCTAssertEqual(composerState(alive: true, status: "processing", kind: "session"), .composable)
     }
 
+    func testExplicitCapabilityRefusalBeatsAlive() {
+        XCTAssertEqual(composerState(alive: true, canCompose: false, status: "processing", kind: "session"), .notRunning)
+    }
+
+    func testMissingCapabilityFallsBackToAliveForLegacyPayloads() {
+        XCTAssertEqual(composerState(alive: true, canCompose: nil, status: "processing", kind: "session"), .composable)
+    }
+
     // Driver-backed threads (Codex desktop) have no PTY to be alive or dead; the
     // engine reports alive: true for them precisely so this reads correctly.
     func testADriverBackedThreadIsAlwaysComposable() {

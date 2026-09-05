@@ -51,6 +51,7 @@ declare module 'electron' {
   export const shell: {
     openExternal(url: string, options?: { activate?: boolean }): Promise<void>
     openPath(path: string): Promise<string>
+    showItemInFolder(path: string): void
   }
   export interface NativeImage {
     isEmpty(): boolean
@@ -60,6 +61,7 @@ declare module 'electron' {
   }
   export const nativeImage: {
     createFromPath(path: string): NativeImage
+    createFromBuffer(buffer: Buffer): NativeImage
   }
   export const clipboard: {
     readImage(): NativeImage

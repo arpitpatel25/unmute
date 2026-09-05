@@ -19,11 +19,23 @@ import ConversationSupport
 
 struct BlockTurnView: View {
     let turn: BlockTurn
+    let taskId: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let prompt = turn.prompt, let text = prompt.text {
                 BlockUserBubble(text: text)
+            }
+            ForEach(Array(turn.work.filter { $0.kind == "attachment" }.enumerated()), id: \.offset) { _, attachment in
+                if let path = attachment.path, !path.isEmpty {
+                    ComposerAttachmentTile(attachment: DraftAttachmentP(id: attachment.id, path: path,
+                        mimeType: attachment.mimeType ?? "application/octet-stream",
+                        name: attachment.name ?? URL(fileURLWithPath: path).lastPathComponent),
+                        remove: {}, restore: {}, readOnly: true, knownBytes: attachment.bytes)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                } else {
+                    NoticeRow(text: "Attachment unavailable: \(attachment.name ?? "File")", tone: .warn)
+                }
             }
             // THE PLAN IS NOT A STEP. It is what the turn intends, so it sits
             // above the work rather than inside it.
@@ -31,7 +43,7 @@ struct BlockTurnView: View {
                 PlanCard(block: plan)
             }
             if !workSteps.isEmpty {
-                WorkGroup(turn: turn)
+                WorkGroup(turn: turn, taskId: taskId)
             }
             // THESE SURFACE OUT OF THE GROUP, all for the same reason: they are
             // consequences, not steps. What a turn did to your files, what it
@@ -56,7 +68,7 @@ struct BlockTurnView: View {
     private var surfaced: [Block] { turn.work.filter { Self.surfacedKinds.contains($0.kind) } }
     private var workSteps: [Block] {
         turn.work.filter { !Self.surfacedKinds.contains($0.kind) && $0.kind != "plan"
-            && $0.kind != "turnStart" && $0.kind != "turnEnd" }
+            && $0.kind != "turnStart" && $0.kind != "turnEnd" && $0.kind != "attachment" }
     }
 
     private func compactionText(_ b: Block) -> String {
@@ -135,6 +147,7 @@ private struct PlanCard: View {
 
 private struct WorkGroup: View {
     let turn: BlockTurn
+    let taskId: String
     @State private var open: Bool?
     /// Drives the running clock. One tick a second, and ONLY while the turn is
     /// live — a wall of settled turns must not each hold a timer.
@@ -151,7 +164,10 @@ private struct WorkGroup: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeOut(duration: 0.16)) { open = !isOpen }
+                withAnimation(.easeOut(duration: 0.16)) {
+                    open = !isOpen
+                    DisclosureStateMemory.shared.remember(task: taskId, key: disclosureKey, open: open!)
+                }
             } label: {
                 // Codex, measured: 14pt / 21, white at 60%, 4pt gap, and the
                 // chevron AFTER the text rather than before it.
@@ -192,7 +208,7 @@ private struct WorkGroup: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(runs) { run in
-                            WorkRunView(run: run)
+                            WorkRunView(run: run, taskId: taskId)
                         }
                         if !turn.sources.isEmpty { SourcesSection(sources: turn.sources) }
                     }
@@ -207,14 +223,17 @@ private struct WorkGroup: View {
             guard turn.meta.isRunning else { return }
             now = t
         }
+        .onAppear { open = DisclosureStateMemory.shared.value(task: taskId, key: disclosureKey) }
+        .onChange(of: taskId) { _ in open = DisclosureStateMemory.shared.value(task: taskId, key: disclosureKey) }
     }
 
     /// Consequences and the plan are drawn outside the group — see the turn
     /// view — so they are not repeated inside it.
-    private static let outside: Set<String> = ["fileChange", "denied", "error", "compaction", "plan"]
+    private static let outside: Set<String> = ["fileChange", "denied", "error", "compaction", "plan", "attachment"]
     private var runs: [WorkRun] {
         WorkRun.runs(of: turn.work.filter { !Self.outside.contains($0.kind) }, id: turn.id)
     }
+    private var disclosureKey: String { "work:\(turn.id)" }
 
     /// Tall enough to read a run without scrolling, short enough that the answer
     /// below stays in view. A short turn shrinks to fit rather than padding out.
@@ -232,6 +251,9 @@ private struct WorkGroup: View {
             let elapsed = Int(now.timeIntervalSince1970 * 1000) - started
             return elapsed > 0 ? "Working for \(formatDuration(elapsed))" : "Working"
         }
+        if turn.meta.status == "cancelled" { return "Cancelled" }
+        if turn.meta.status == "failed" { return "Failed" }
+        if turn.meta.status == "denied" { return "Denied" }
         if let ms = turn.meta.durationMs, ms > 0 { return "Worked for \(formatDuration(ms))" }
         return "Worked"
     }
@@ -240,6 +262,7 @@ private struct WorkGroup: View {
 /// One stretch of work: what the model said, then what it did.
 private struct WorkRunView: View {
     let run: WorkRun
+    let taskId: String
     @State private var open = false
 
     var body: some View {
@@ -252,7 +275,9 @@ private struct WorkRunView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if !run.steps.isEmpty {
-                Button { withAnimation(.easeOut(duration: 0.14)) { open.toggle() } } label: {
+                Button { withAnimation(.easeOut(duration: 0.14)) {
+                    open.toggle(); DisclosureStateMemory.shared.remember(task: taskId, key: disclosureKey, open: open)
+                } } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 7.5, weight: .semibold))
@@ -269,8 +294,8 @@ private struct WorkRunView: View {
 
                 if open {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(run.steps.enumerated()), id: \.offset) { _, b in
-                            CallRow(block: b)
+                        ForEach(Array(run.steps.enumerated()), id: \.offset) { index, b in
+                            CallRow(block: b, taskId: taskId, disclosureKey: "call:\(run.id):\(index):\(b.id)")
                         }
                     }
                     .padding(.leading, 13)
@@ -278,7 +303,10 @@ private struct WorkRunView: View {
             }
         }
         .padding(.vertical, 5)
+        .onAppear { open = DisclosureStateMemory.shared.value(task: taskId, key: disclosureKey) ?? false }
+        .onChange(of: taskId) { _ in open = DisclosureStateMemory.shared.value(task: taskId, key: disclosureKey) ?? false }
     }
+    private var disclosureKey: String { "run:\(run.id)" }
 }
 
 private func formatDuration(_ ms: Int) -> String {
@@ -313,6 +341,8 @@ private struct RunningDot: View {
 /// off the screen.
 private struct CallRow: View {
     let block: Block
+    let taskId: String
+    let disclosureKey: String
     @State private var open = false
 
     private var hasDetail: Bool {
@@ -324,7 +354,9 @@ private struct CallRow: View {
         // opens onto nothing is a small lie about there being more.
         VStack(alignment: .leading, spacing: 0) {
             if hasDetail {
-                Button { withAnimation(.easeOut(duration: 0.13)) { open.toggle() } } label: { head }
+                Button { withAnimation(.easeOut(duration: 0.13)) {
+                    open.toggle(); DisclosureStateMemory.shared.remember(task: taskId, key: disclosureKey, open: open)
+                } } label: { head }
                     .buttonStyle(.plain)
             } else {
                 head
@@ -340,6 +372,8 @@ private struct CallRow: View {
                 .padding(.bottom, 7)
             }
         }
+        .onAppear { open = DisclosureStateMemory.shared.value(task: taskId, key: disclosureKey) ?? false }
+        .onChange(of: taskId) { _ in open = DisclosureStateMemory.shared.value(task: taskId, key: disclosureKey) ?? false }
     }
 
     private var head: some View {
@@ -373,6 +407,7 @@ private struct CallRow: View {
     }
 
     private var trailing: String? {
+        if let status = block.status { return status == "ok" || status == "done" ? "succeeded" : status }
         if let ms = block.durationMs { return formatDuration(ms) }
         if let n = block.lines { return "\(n) lines" }
         if block.kind == "subAgent" { return block.status }
@@ -387,13 +422,18 @@ private struct CallRow: View {
         switch block.kind {
         case "command":
             if let c = block.command, !c.isEmpty { out.append(("command", c)) }
+            if let cwd = block.cwd { out.append(("working directory", cwd)) }
             if let o = block.output, !o.isEmpty { out.append((block.status == "failed" ? "stderr" : "stdout", o)) }
         case "mcpCall":
             let id = [block.server, block.tool].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
             if !id.isEmpty { out.append(("tool", id)) }
             if let a = block.args, a != "{}", !a.isEmpty { out.append((looksJSON(a) ? "json" : "arguments", a)) }
+            if let output = block.output { out.append(("result", output)) }
+            if let error = block.error, error != block.output { out.append(("error", error)) }
         case "fileRead":
             if let p = block.path, !p.isEmpty { out.append(("path", p)) }
+        case "subAgent":
+            if let output = block.output { out.append(("subagent result", output)) }
         case "search":
             if let q = block.query, !q.isEmpty { out.append(("query", q)) }
         case "unknown":
@@ -426,7 +466,7 @@ private struct CallRow: View {
 
 /// Labelled by type, bounded, and scrolled in its own box — never spilling into
 /// the conversation around it.
-private struct OutputBox: View {
+struct OutputBox: View {
     let tag: String
     let text: String
     /// Code is allowed past the prose column — see the note in
@@ -436,7 +476,12 @@ private struct OutputBox: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(tag)
+            HStack {
+                Text(tag)
+                Spacer()
+                Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
+                    .buttonStyle(.plain).accessibilityLabel("Copy \(tag)")
+            }
                 .font(.system(size: 9.5, design: .monospaced))
                 .foregroundColor(Theme.textFaint)
                 .padding(.horizontal, 10).padding(.vertical, 5)
@@ -517,9 +562,28 @@ private struct SourcesSection: View {
 
 private struct FileChangeRow: View {
     let block: Block
+    @State private var expanded = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let changes = block.changes {
+                ForEach(Array(changes.enumerated()), id: \.offset) { _, change in
+                    FileChangeRow(block: Block(kind: "fileChange", status: block.status, path: change.path, verb: change.verb,
+                        added: change.added, removed: change.removed, diff: change.diff))
+                }
+            } else {
+                Button { expanded.toggle() } label: { header }.buttonStyle(.plain)
+                if expanded {
+                    OutputBox(tag: "path", text: block.path ?? "")
+                    if let diff = block.diff { OutputBox(tag: "diff", text: diff) }
+                    if let status = block.status { Text(status).font(.caption).foregroundColor(Theme.textDim) }
+                }
+            }
+        }
+    }
+    private var header: some View {
         HStack(spacing: 9) {
+            Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2)
             Text(block.verb ?? "Edited")
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundColor(Theme.textDim)

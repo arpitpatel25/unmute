@@ -175,21 +175,26 @@ struct RichText: View {
         // Fenced blocks are the commonest construct in agent output. Verbatim,
         // monospaced, on their own ground so they read as a quoted artifact
         // rather than as more prose.
-        let lines = body.hasSuffix("\n")
-            ? String(body.dropLast()).components(separatedBy: "\n")
-            : body.components(separatedBy: "\n")
         return VStack(alignment: .leading, spacing: 2) {
-            if let language, !language.isEmpty {
-                Text(language)
+            HStack {
+                Text(language?.isEmpty == false ? language! : "Code")
                     .font(.system(size: size * 0.72, weight: .semibold))
                     .foregroundColor(Theme.textFaint)
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(body, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc").frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain).help("Copy code").accessibilityLabel("Copy code")
             }
-            ForEach(lines.indices, id: \.self) { i in
-                Text(lines[i].isEmpty ? " " : lines[i])
+            ScrollView(.horizontal, showsIndicators: true) {
+                Text(body)
                     .font(.system(size: size * 0.88, design: .monospaced))
                     .foregroundColor(color)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: true)
             }
         }
         .padding(.horizontal, 9).padding(.vertical, 7)

@@ -73,4 +73,11 @@ final class BottomProximityTests: XCTestCase {
         XCTAssertTrue(isAtBottom(was: true, distance: .nan))
         XCTAssertFalse(isAtBottom(was: false, distance: .nan))
     }
+
+    func testReadableMeasuresStayInsideNarrowPanelsAndCapProse() {
+        XCTAssertEqual(proseMeasure(panelWidth: 500), 404)
+        XCTAssertEqual(proseMeasure(panelWidth: 1400), 760)
+        XCTAssertEqual(codeMeasure(panelWidth: 500), 404)
+        XCTAssertEqual(codeMeasure(panelWidth: 1400), 1304)
+    }
 }

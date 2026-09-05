@@ -75,6 +75,8 @@ export interface ServerRequest {
   id: number | string
   method: string
   params: unknown
+  /** Synchronous socket enqueue, throws if this request's connection was lost. */
+  respond?: (result: unknown) => void
 }
 
 export interface AppServerDeps {
@@ -154,6 +156,7 @@ export class CodexAppServer {
     this.proc.on('exit', (code, signal) => {
       log.warn('app-server-exited', { code, signal, deliberate: this.stopped })
       this.failAllPending(new Error('app-server exited'))
+      if (!this.stopped) this.dispatchNotification('transport/disconnected', { reason: 'app-server exited' })
       this.ws = null
       this.proc = null
     })
@@ -206,6 +209,7 @@ export class CodexAppServer {
     ws.addEventListener('close', () => {
       log.warn('app-server-socket-closed', {})
       this.failAllPending(new Error('socket closed'))
+      if (!this.stopped) this.dispatchNotification('transport/disconnected', { reason: 'socket closed' })
       this.ws = null
     })
     ws.addEventListener('error', () => log.warn('app-server-socket-error', {}))
@@ -236,6 +240,14 @@ export class CodexAppServer {
   }
 
   private async handleServerRequest(req: ServerRequest): Promise<void> {
+    const socket = this.ws
+    let delivered = false
+    req.respond = (result) => {
+      if (delivered) throw new Error('Codex request already answered')
+      if (!socket || this.ws !== socket || socket.readyState !== 1) throw new Error('Codex request connection lost')
+      socket.send(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }))
+      delivered = true
+    }
     if (!this.requestHandler) {
       // AN UNANSWERED REQUEST HANGS THE TURN. Codex is waiting; there is no
       // timeout on its side that rescues us. Refusing loudly is the only safe
@@ -248,10 +260,12 @@ export class CodexAppServer {
     }
     try {
       const result = await this.requestHandler(req)
-      this.respond(req.id, result)
+      if (!delivered) req.respond(result)
     } catch (e) {
       log.warn('app-server-request-handler-threw', { method: req.method, error: (e as Error).message })
-      this.respond(req.id, null, { code: -32603, message: (e as Error).message })
+      if (socket && this.ws === socket && socket.readyState === 1 && !delivered) {
+        socket.send(JSON.stringify({ jsonrpc: '2.0', id: req.id, error: { code: -32603, message: (e as Error).message } }))
+      }
     }
   }
 

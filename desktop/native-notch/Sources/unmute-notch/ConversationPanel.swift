@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import ComposerSupport
 import ConversationSupport
 
@@ -32,60 +33,20 @@ struct ConversationPanel: View {
     /// Whether the agent is still working. The task manager knows this for
     /// certain; the blocks often cannot say — see BlockPresentation.build.
     var running: Bool = false
+    var history: ChatHistoryState? = nil
+
+    private var visibleBlocks: [Block] { blocks.isEmpty ? ConversationPresentation.blocks(from: rows) : blocks }
 
     var body: some View {
-        if !blocks.isEmpty {
-            BlockConversation(turns: BlockPresentation.build(blocks, running: running), id: id, usage: usage)
-        } else if rows.isEmpty {
-            Text("no messages yet")
-                .font(.system(size: 13))
-                .foregroundColor(Theme.textFaint)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 6)
+        if !visibleBlocks.isEmpty {
+            BlockConversation(turns: BlockPresentation.build(visibleBlocks, running: running), id: id, usage: usage)
         } else {
-            // SCROLLS, rather than growing the panel. The latest exchange is
-            // what you want in view on open, and a new message should follow —
-            // so the scroller is anchored to the bottom and re-anchored when
-            // the item count changes.
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 26) {
-                        ForEach(rows) { row in
-                            switch row.kind {
-                            case .user:   UserBubble(text: row.text)
-                            case .answer: AnswerBlock(text: row.text)
-                            case .work:   WorkBlock(durationMs: row.durationMs, items: row.workItems)
-                            }
-                        }
-                        // Anchor: scrolling to a zero-height marker puts the
-                        // real last message flush with the bottom edge.
-                        Color.clear.frame(height: 1).id(BOTTOM)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.bottom, 2)
-                }
-                // ANCHOR AFTER LAYOUT, NOT DURING IT.
-                //
-                // `onAppear` fires before SwiftUI has laid the content out, so
-                // scrolling there is a no-op — the transcript opened at the very
-                // TOP every time. And `onChange(of: turns.count)` was the only
-                // other trigger, which never fires when you open a conversation
-                // that already has all its messages. Hopping to the next runloop
-                // pass puts this after layout, where scrollTo actually lands.
-                .onAppear { jump(proxy, animated: false) }
-                // `id` changes when the panel switches to a different task, so
-                // each task opens at its own latest message rather than
-                // inheriting the previous one's scroll position.
-                .onChange(of: id) { _ in jump(proxy, animated: false) }
-                .onChange(of: rows.count) { _ in jump(proxy, animated: true) }
+            HStack(spacing: 8) {
+                if running || history?.phase == "loading" { ProgressView().controlSize(.small) }
+                Text(history?.phase == "empty" ? "No messages yet" : history?.phase == "loading" ? "Loading conversation…" : running ? "Starting…" : "Conversation history is unavailable")
             }
-        }
-    }
-
-    private func jump(_ proxy: ScrollViewProxy, animated: Bool) {
-        DispatchQueue.main.async {
-            if animated { withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(BOTTOM, anchor: .bottom) } }
-            else { proxy.scrollTo(BOTTOM, anchor: .bottom) }
+            .font(.system(size: 13)).foregroundColor(Theme.textFaint)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
         }
     }
 
@@ -294,18 +255,95 @@ struct StageComposer: View {
     /// True while a send is in flight.
     var sending: Bool = false
     var draft: TaskDraftP? = nil
+    var config: ChatConfigP? = nil
+    var followup: FollowupP? = nil
+    var composerMode: String? = nil
+    var question: QuestionP? = nil
+    var pastePolicy: ComposerPastePolicy = .default
+    @State private var confirmUncertainRecovery = false
     @State private var text = ""
     @State private var editorHeight: CGFloat = 30
+    @State private var clientRevision = 0
+    @State private var attachmentError: String? = nil
+    @State private var newChatOpen = false
+    @State private var editorSelection = NSRange(location: 0, length: 0)
+    @ObservedObject private var staging = ComposerStagingStore.shared
     @FocusState private var focused: Bool
     /// Theme.composerFill follows Appearance.tone, and a computed colour
     /// changing does not invalidate a view on its own — the same belt-and-
     /// braces UserBubble carries, for the same reason.
     @ObservedObject private var appearance = Appearance.shared
 
-    private var canSend: Bool { !text.trimmingCharacters(in: .whitespaces).isEmpty || !(draft?.attachments.isEmpty ?? true) }
+    private var stagingItems: [ComposerStagingRecord] {
+        let local = staging.items(task: taskId)
+        // The helper can restart independently of Electron. Authoritative
+        // reservations still have an accessible remove action after replay.
+        let recovered = (draft?.operations ?? []).filter { op in !local.contains { $0.id == op.id } }
+            .map { ComposerStagingRecord(id: $0.id, taskId: taskId, name: $0.name, phase: .failed,
+                error: $0.error ?? "Preparation interrupted. Remove and attach again.") }
+        return local + recovered
+    }
+    private var draftAttachmentIds: Set<String> { Set((draft?.attachments ?? []).map(\.id)) }
+    private var trayIds: [String] {
+        let attachments = draft?.attachments ?? [], pending = stagingItems
+        let ids = attachments.map(\.id) + pending.filter { !draftAttachmentIds.contains($0.id) }.map(\.id)
+        func rank(_ id: String) -> Int {
+            attachments.first(where: { $0.id == id })?.reservationOrder
+                ?? draft?.operations?.first(where: { $0.id == id })?.order
+                ?? (Int.max - ids.count + (ids.firstIndex(of: id) ?? 0))
+        }
+        return ids.sorted { rank($0) < rank($1) }
+    }
+    private var stagingCount: Int { (draft?.stagingCount ?? 0) + stagingItems.filter { $0.phase == .pending }.count }
+    private var canSend: Bool { composerFollowupCanSend(mode: composerMode) && !staging.blocksSend(task: taskId, attachmentIds: draftAttachmentIds) && (draft?.operations?.isEmpty ?? true) && (draft?.stagingCount ?? 0) == 0 && (!text.trimmingCharacters(in: .whitespaces).isEmpty || !(draft?.attachments.isEmpty ?? true)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let followup {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(followup.label).font(.system(size: 11.5, weight: .medium))
+                    if !followup.preview.isEmpty { Text(followup.preview).font(.system(size: 11)).lineLimit(2) }
+                    if !followup.attachments.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: true) {
+                            HStack(spacing: 6) {
+                                ForEach(followup.attachments, id: \.id) { attachment in
+                                    ComposerAttachmentTile(attachment: attachment, remove: {}, restore: {}, readOnly: true)
+                                }
+                            }
+                        }.frame(height: 66)
+                    }
+                    HStack {
+                        if followup.canCancel { Button("Cancel queued delivery") { model.emit(.cancelTaskFollowup(id: taskId, queueId: followup.id)) } }
+                        if followup.phase == "saved" {
+                            Button("Restore to composer") { model.emit(.restoreTaskFollowup(id: taskId, queueId: followup.id)) }.disabled(!followup.canRestore)
+                                .help("Send or clear your current draft before restoring. The saved follow-up is kept.")
+                        }
+                        if followup.canQueueAgain { Button("Queue again") { model.emit(.queueSavedTaskFollowup(id: taskId, queueId: followup.id)) } }
+                        if followup.phase == "uncertain" {
+                            Button("Copy back to draft…") { confirmUncertainRecovery = true }
+                                .disabled(!text.isEmpty || !(draft?.attachments.isEmpty ?? true) || stagingCount > 0)
+                        }
+                    }.font(.system(size: 11))
+                }
+                .padding(8).background(Theme.sunken).clipShape(RoundedRectangle(cornerRadius: 8))
+                .alert("This message may already have been sent", isPresented: $confirmUncertainRecovery) {
+                    Button("Copy back — may duplicate") { model.emit(.recoverUncertainFollowup(id: taskId, queueId: followup.id)) }
+                    Button("Keep saved", role: .cancel) {}
+                } message: { Text("Check the conversation first. Copying restores the saved input without sending it and cannot retract a message the provider accepted.") }
+            }
+            if composerMode == "full" { Text("One follow-up is already saved. Your current draft is kept.").font(.system(size: 11)).foregroundColor(Theme.textDim) }
+            if question == nil, model.questionSubmissions[taskId]?.state == "accepted" {
+                Text("Answer accepted").font(.caption).foregroundColor(Theme.textFaint)
+            }
+            if stagingCount > 0 {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Preparing \(stagingCount) attachment(s)…").font(.system(size: 11.5))
+                }
+            }
+            if let error = attachmentError ?? draft?.error {
+                Text(error).font(.system(size: 11.5)).foregroundColor(Theme.cError)
+            }
             if let e = deliveryError, !e.isEmpty {
                 HStack(spacing: 5) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
@@ -328,53 +366,60 @@ struct StageComposer: View {
                 // remove control on the corner, the way every composer that
                 // takes images does it. A file we cannot render still falls back
                 // to a name, because then the name is all there is.
-                if let attachments = draft?.attachments, !attachments.isEmpty {
+                if !(draft?.attachments.isEmpty ?? true) || !stagingItems.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: true) {
                     HStack(spacing: 8) {
-                        ForEach(attachments, id: \.id) { attachment in
-                            let preview = NSImage(contentsOfFile: attachment.path)
-                            ZStack(alignment: .topTrailing) {
-                                Group {
-                                    if let preview {
-                                        Image(nsImage: preview)
-                                            .resizable().scaledToFill()
-                                            .frame(width: 52, height: 52)
-                                    } else {
-                                        HStack(spacing: 5) {
-                                            Image(systemName: "doc").font(.system(size: 11))
-                                            Text(attachment.name).lineLimit(1).font(.system(size: 11.5))
-                                        }
-                                        .padding(.horizontal, 8).frame(height: 52)
-                                    }
-                                }
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline, lineWidth: 0.5))
-                                Button(action: { model.emit(.removeDraftAttachment(id: taskId, attachmentId: attachment.id)) }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.system(size: 13))
-                                        .symbolRenderingMode(.palette)
-                                        .foregroundStyle(Theme.text, Theme.sunken)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Remove \(attachment.name)")
-                                .offset(x: 5, y: -5)
+                        ForEach(trayIds, id: \.self) { id in
+                            if let attachment = draft?.attachments.first(where: { $0.id == id }) {
+                                ComposerAttachmentTile(attachment: attachment,
+                                    remove: { model.emit(.removeDraftAttachment(id: taskId, attachmentId: attachment.id)) },
+                                    restore: { model.emit(.restoreDraftAttachment(id: taskId, attachmentId: attachment.id)) })
+                            } else if let item = stagingItems.first(where: { $0.id == id }) {
+                                ComposerStagingTile(item: item, retry: { staging.retry(item.id) }, remove: {
+                                    if staging.items(task: taskId).contains(where: { $0.id == item.id }) { staging.remove(item.id) }
+                                    else { model.emit(.removeDraftAttachment(id: taskId, attachmentId: item.id)) }
+                                })
                             }
-                            .padding(.top, 5).padding(.trailing, 5)
                         }
                     }
+                    .padding(2)
+                    }
+                    .frame(height: 66)
                 }
                 HStack(alignment: .bottom, spacing: 8) {
-                    SubmitTextEditor(text: $text, measuredHeight: $editorHeight,
+                    Menu {
+                        Button("Attach files and images", action: pickFiles)
+                        Divider()
+                        Button("New conversation…") { newChatOpen = true }
+                    } label: {
+                        Image(systemName: "plus").frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Up to 10 attachments · PNG/JPEG/GIF/WebP images 10 MB · files 25 MB · total 50 MB")
+                    .accessibilityLabel("Attach files and images")
+                    SubmitTextEditor(text: Binding(get: { text }, set: editText), measuredHeight: $editorHeight, taskId: taskId, pastePolicy: pastePolicy,
                                      placeholder: placeholder, onSubmit: send, onImagePaste: attachImage,
-                                     onFocusChange: reportFocus)
+                                     onFocusChange: reportFocus,
+                                     onSelectionChange: { editorSelection = $0 },
+                                     onAttachmentReserved: { [taskId, clientRevision] operation, name, selection, snapshot in
+                                         model.emit(.reserveDraftAttachment(id: taskId, operationId: operation, name: name,
+                                             insertionOffset: selection.location, selectedLength: selection.length, clientRevision: clientRevision, insertionText: snapshot))
+                                     },
+                                     onAttachmentFailed: { [taskId] operation, error in model.emit(.failDraftAttachment(id: taskId, operationId: operation, error: error)) },
+                                     onAttachmentCanceled: { [taskId] operation in model.emit(.removeDraftAttachment(id: taskId, attachmentId: operation)) },
+                                     onAdmissionError: { attachmentError = $0 },
+                                     onAttachmentUndo: { [taskId] operationId, redo in
+                                         model.emit(redo ? .redoDraftAttachment(id: taskId, attachmentId: operationId) : .undoDraftAttachment(id: taskId, attachmentId: operationId))
+                                     })
                         .frame(height: ComposerHeight.resolve(measured: editorHeight))
                         .focused($focused)
-                    if let m = modelLabel, !m.isEmpty {
+                    if config == nil, let m = modelLabel, !m.isEmpty {
                         Text(m).font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
                     }
                     if sending {
                         // Sending is a round-trip through another app's window;
                         // silence for a second reads as "nothing happened".
-                        Text("Sending…").font(.system(size: 11)).foregroundColor(Theme.textFaint)
+                        Text(composerMode == "queue" ? "Saving follow-up…" : "Sending…").font(.system(size: 11)).foregroundColor(Theme.textFaint)
                     }
                     // The composer's ONE primary action, and the only tinted
                     // thing on this surface.
@@ -386,8 +431,17 @@ struct StageComposer: View {
                             .background(Circle().fill(canSend ? Theme.accent : Theme.raised))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!canSend)
+                    .accessibilityLabel(sending ? "Submitting message" : composerFollowupSendLabel(mode: composerMode))
+                    .disabled(!canSend || sending || model.questionBusy(taskId, question))
                     .animation(Theme.hover, value: canSend)
+                }
+                if let config {
+                    ComposerControls(config: config,
+                                     change: { model.emit(.configureChat(id: taskId, field: $0, value: $1)) },
+                                     dictate: { model.emit(.toggleDraftDictation(id: taskId, insertionOffset: editorSelection.location,
+                                         selectedLength: editorSelection.length, clientRevision: clientRevision, insertionText: text)) },
+                                     cancelDictation: { model.emit(.cancelDraftDictation(id: taskId)) },
+                                     newConversation: { newChatOpen = true })
                 }
             }
             .padding(.horizontal, 11)
@@ -398,20 +452,76 @@ struct StageComposer: View {
                         lineWidth: focused ? 1 : 0.75))
             .animation(Theme.hover, value: focused)
         }
-        .onAppear { text = draft?.text ?? "" }
-        .onChange(of: draft?.text ?? "") { remote in
-            if remote != text { text = remote }
+        .onAppear {
+            text = draft?.text ?? ""
+            clientRevision = draft?.clientRevision ?? 0
+            staging.reconcile(task: taskId, attachmentIds: draftAttachmentIds)
         }
-        .onChange(of: text) { value in model.emit(.setDraftText(id: taskId, text: value)) }
+        .frame(maxWidth: 760)
+        .popover(isPresented: $newChatOpen) { NewConversationSetup(model: model, close: { newChatOpen = false }) }
+        .onChange(of: RemoteDraftSnapshot(text: draft?.text ?? "", revision: draft?.clientRevision)) { remote in
+            let next = reconcileDraft(localText: text, localRevision: clientRevision,
+                                      remoteText: remote.text, remoteRevision: remote.revision)
+            text = next.text
+            clientRevision = next.revision
+        }
+        .onChange(of: taskId) { _ in
+            text = draft?.text ?? ""
+            clientRevision = draft?.clientRevision ?? 0
+            attachmentError = nil
+            editorSelection = NSRange(location: (text as NSString).length, length: 0)
+            if focused { reportFocus(true) }
+            staging.reconcile(task: taskId, attachmentIds: draftAttachmentIds)
+        }
+        .onChange(of: (draft?.attachments ?? []).map(\.id)) { ids in
+            staging.reconcile(task: taskId, attachmentIds: Set(ids))
+        }
+    }
+
+    private func editText(_ value: String) {
+        text = value
+        clientRevision += 1
+        model.emit(.setDraftText(id: taskId, text: value, clientRevision: clientRevision))
     }
 
     private func send() {
-        guard canSend else { return }
-        model.emit(.sendDraft(id: taskId))
+        guard canSend && !sending else { return }
+        guard model.beginQuestion(taskId, question) else { return }
+        model.emit(.sendDraft(id: taskId, reference: question?.reference))
     }
 
-    private func attachImage(_ path: String, _ mimeType: String, _ name: String) {
-        model.emit(.addDraftImage(id: taskId, path: path, mimeType: mimeType, name: name))
+    private func attachImage(_ path: String, _ mimeType: String, _ name: String, _ selection: NSRange? = nil, _ snapshot: String? = nil, _ operationId: String? = nil) {
+        attachmentError = nil
+        model.emit(.addDraftImage(id: taskId, path: path, mimeType: mimeType, name: name,
+                                 insertionOffset: selection?.location, selectedLength: selection?.length,
+                                 clientRevision: clientRevision, insertionText: snapshot, operationId: operationId ?? UUID().uuidString))
+    }
+
+    private func pickFiles() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Attach"
+        panel.begin { response in
+            guard response == .OK else { return }
+            for url in panel.urls {
+                // The backend consumes the handoff file. Never give it the
+                // user's original, which must survive draft removal.
+                let capturedTask = taskId, selection = editorSelection, snapshot = text, revision = clientRevision
+                let operation = staging.reserve(task: capturedTask, name: url.lastPathComponent, sourcePath: url.path,
+                    reserved: { operation in model.emit(.reserveDraftAttachment(id: capturedTask, operationId: operation, name: url.lastPathComponent,
+                        insertionOffset: selection.location, selectedLength: selection.length, clientRevision: revision, insertionText: snapshot)) },
+                    failed: { operation, error in model.emit(.failDraftAttachment(id: capturedTask, operationId: operation, error: error)) },
+                    canceled: { operation in model.emit(.removeDraftAttachment(id: capturedTask, attachmentId: operation)) },
+                    work: { try stageComposerFile(url) },
+                    deliver: { operation, staged in
+                        model.emit(.addDraftImage(id: capturedTask, path: staged.path, mimeType: staged.mime, name: staged.name,
+                            insertionOffset: selection.location, selectedLength: selection.length,
+                            clientRevision: revision, insertionText: snapshot, operationId: operation))
+                    })
+                if operation == nil { attachmentError = "Too many attachments are being prepared. Remove or finish existing items first." }
+            }
+        }
     }
 
     /// Dictation delivers images by posting a synthetic ⌘V, and that keystroke
@@ -428,14 +538,22 @@ struct StageComposer: View {
 private struct SubmitTextEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var measuredHeight: CGFloat
+    let taskId: String
+    let pastePolicy: ComposerPastePolicy
     let placeholder: String
     let onSubmit: () -> Void
-    let onImagePaste: (String, String, String) -> Void
+    let onImagePaste: (String, String, String, NSRange?, String?, String?) -> Void
     let onFocusChange: (Bool) -> Void
+    let onSelectionChange: (NSRange) -> Void
+    let onAttachmentReserved: (String, String, NSRange, String) -> Void
+    let onAttachmentFailed: (String, String) -> Void
+    let onAttachmentCanceled: (String) -> Void
+    let onAdmissionError: (String) -> Void
+    let onAttachmentUndo: (String, Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, measuredHeight: $measuredHeight,
-                    onSubmit: onSubmit, onImagePaste: onImagePaste)
+                    onSubmit: onSubmit, onImagePaste: onImagePaste, onSelectionChange: onSelectionChange)
     }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -454,6 +572,14 @@ private struct SubmitTextEditor: NSViewRepresentable {
         view.delegate = context.coordinator
         view.onImagePaste = context.coordinator.onImagePaste
         view.onFocusChange = onFocusChange
+        view.stagingTaskId = taskId
+        view.pastePolicy = pastePolicy
+        view.onAttachmentReserved = onAttachmentReserved
+        view.onAttachmentFailed = onAttachmentFailed
+        view.onAttachmentCanceled = onAttachmentCanceled
+        view.onAdmissionError = onAdmissionError
+        view.onAttachmentUndo = onAttachmentUndo
+        view.allowsUndo = true
         view.string = text
         scroll.documentView = view
         context.coordinator.measure(view)
@@ -461,21 +587,47 @@ private struct SubmitTextEditor: NSViewRepresentable {
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let view = scroll.documentView as? NSTextView else { return }
+        context.coordinator.text = $text
+        context.coordinator.onSubmit = onSubmit
+        context.coordinator.onImagePaste = onImagePaste
+        context.coordinator.onSelectionChange = onSelectionChange
+        if let attachmentView = view as? AttachmentTextView {
+            attachmentView.onImagePaste = onImagePaste
+            attachmentView.onFocusChange = onFocusChange
+            attachmentView.stagingTaskId = taskId
+            attachmentView.pastePolicy = pastePolicy
+            attachmentView.onAttachmentReserved = onAttachmentReserved
+            attachmentView.onAttachmentFailed = onAttachmentFailed
+            attachmentView.onAttachmentCanceled = onAttachmentCanceled
+            attachmentView.onAdmissionError = onAdmissionError
+            attachmentView.onAttachmentUndo = onAttachmentUndo
+        }
         let width = max(scroll.contentSize.width, 1)
         view.textContainer?.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
-        if view.string != text { view.string = text }
+        if view.string != text && !view.hasMarkedText() {
+            let selection = view.selectedRange()
+            view.string = text
+            let length = (text as NSString).length
+            view.setSelectedRange(NSRange(location: min(selection.location, length), length: min(selection.length, max(0, length - selection.location))))
+        }
         context.coordinator.measure(view)
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
-        let text: Binding<String>
+        var text: Binding<String>
         let measuredHeight: Binding<CGFloat>
-        let onSubmit: () -> Void
-        let onImagePaste: (String, String, String) -> Void
-        init(text: Binding<String>, measuredHeight: Binding<CGFloat>, onSubmit: @escaping () -> Void, onImagePaste: @escaping (String, String, String) -> Void) {
+        var onSubmit: () -> Void
+        var onImagePaste: (String, String, String, NSRange?, String?, String?) -> Void
+        var onSelectionChange: (NSRange) -> Void
+        init(text: Binding<String>, measuredHeight: Binding<CGFloat>, onSubmit: @escaping () -> Void, onImagePaste: @escaping (String, String, String, NSRange?, String?, String?) -> Void, onSelectionChange: @escaping (NSRange) -> Void) {
             self.text = text
             self.measuredHeight = measuredHeight
             self.onSubmit = onSubmit
             self.onImagePaste = onImagePaste
+            self.onSelectionChange = onSelectionChange
+        }
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView else { return }
+            onSelectionChange(view.selectedRange())
         }
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
@@ -493,6 +645,7 @@ private struct SubmitTextEditor: NSViewRepresentable {
         }
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
+            if textView.hasMarkedText() { return false }
             if NSEvent.modifierFlags.contains(.shift) { return false }
             onSubmit()
             return true
@@ -500,68 +653,6 @@ private struct SubmitTextEditor: NSViewRepresentable {
     }
 }
 
-final class AttachmentTextView: NSTextView {
-    var onImagePaste: ((String, String, String) -> Void)?
-    /// Announced so dictation can hand images straight to this box rather than
-    /// posting a synthetic ⌘V at it — see registerComposerImageSink.
-    var onFocusChange: ((Bool) -> Void)?
-
-    override func becomeFirstResponder() -> Bool {
-        let ok = super.becomeFirstResponder()
-        if ok { onFocusChange?(true) }
-        return ok
-    }
-
-    override func resignFirstResponder() -> Bool {
-        let ok = super.resignFirstResponder()
-        if ok { onFocusChange?(false) }
-        return ok
-    }
-
-    /// Stage whatever image the pasteboard is carrying. Returns false when
-    /// there is none, or when it could not be written — the caller then falls
-    /// back to an ordinary text paste.
-    ///
-    /// SEPARATE FROM `paste(_:)` ON PURPOSE. This app is `.accessory` and
-    /// builds no menu, so ⌘V is delivered by AppController's key monitor via
-    /// `sendAction(paste:)` rather than by AppKit's menu machinery. That walk
-    /// reaches this view only when the responder chain cooperates, and when it
-    /// did not the paste vanished in silence: no attachment, no text, nothing
-    /// logged. Exposing the staging step lets the ⌘V path call it directly, so
-    /// the composer no longer depends on a menu this app does not have.
-    @discardableResult
-    func stagePasteboardImage() -> Bool {
-        let board = NSPasteboard.general
-        let hasImage = board.canReadObject(forClasses: [NSImage.self], options: nil)
-        let hasText = board.string(forType: .string) != nil
-        guard composerPasteAction(hasImage: hasImage, hasText: hasText) == .stageImage else {
-            NotchLog.log("composer paste: no image on the pasteboard (text=\(hasText))")
-            return false
-        }
-        guard let image = board.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage,
-              let data = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: data),
-              let png = bitmap.representation(using: .png, properties: [:]) else {
-            NotchLog.log("composer paste: pasteboard claimed an image it would not render")
-            return false
-        }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("unmute-draft-\(UUID().uuidString).png")
-        do {
-            try png.write(to: url)
-        } catch {
-            NotchLog.log("composer paste: could not write the staged image — \(error)")
-            return false
-        }
-        NotchLog.log("composer paste: staged image \(url.lastPathComponent) (\(png.count) bytes)")
-        onImagePaste?(url.path, "image/png", url.lastPathComponent)
-        return true
-    }
-
-    override func paste(_ sender: Any?) {
-        if stagePasteboardImage() { return }
-        super.paste(sender)
-    }
-}
 
 
 /// Codex's composer: the shared one, with Codex's own wording.
@@ -572,10 +663,11 @@ struct CodexComposer: View {
     var modelLabel: String? = nil
     var sending: Bool = false
     var draft: TaskDraftP? = nil
+    var config: ChatConfigP? = nil
 
     var body: some View {
         StageComposer(placeholder: "Reply to Codex — or hold right ⌥ and speak",
                       model: model, taskId: taskId, deliveryError: deliveryError,
-                      modelLabel: modelLabel, sending: sending, draft: draft)
+                      modelLabel: modelLabel, sending: sending, draft: draft, config: config)
     }
 }

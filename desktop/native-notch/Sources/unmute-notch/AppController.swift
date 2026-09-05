@@ -1,4 +1,5 @@
 import AppKit
+import ComposerSupport
 import SwiftUI
 import SwiftTerm
 import HoverStateSupport
@@ -270,6 +271,9 @@ final class AppController: NSObject, NotchResizing {
             if !window.isVisible { window.present() }
             NotchLog.log("CMD present — bootstrap and replay complete")
 
+        case let .draftAttachmentError(id, operationId, error):
+            ComposerStagingStore.shared.fail(task: id, id: operationId, error: error)
+
         case let .setState(state, attention, working):
             NotchLog.log("CMD setState \(state.rawValue) attention=\(attention) working=\(working)")
             model.attention = attention
@@ -397,6 +401,7 @@ final class AppController: NSObject, NotchResizing {
             // task's proportions until the next state change.
             let fillChanged = model.task?.hasTerminal != task.hasTerminal
             model.prepareTaskConversation(task)
+            model.restoreQuestionAcknowledgment(task)
             model.task = task
             // A PREFERENCE IS A DEFAULT, NOT A CORRECTION.
             //
@@ -427,6 +432,7 @@ final class AppController: NSObject, NotchResizing {
             if model.focusedId == nil || model.focusedId == task.id {
                 model.focusedId = task.id
                 model.prepareStageConversation(task)
+                model.restoreQuestionAcknowledgment(task)
                 model.stageTask = task
                 if needsTerminalToAnswer(task) { model.stageTerminalOpen = true }
                 refit()
@@ -534,6 +540,15 @@ final class AppController: NSObject, NotchResizing {
 
         case let .toast(text):
             showToast(text)
+        case let .newChatStatus(pending, error):
+            model.newChatError = error
+            model.newChatPending = pending
+        case let .newChatPreview(token, preview, error):
+            guard token == model.newChatPreviewToken else { return }
+            model.newChatPreview = preview
+            model.newChatError = error
+        case let .questionAnswerStatus(id, reference, state):
+            model.questionStatus(id, reference, state)
 
         case .notchGeometry:
             recomputeGeometry("explicit-push")
@@ -845,6 +860,9 @@ final class AppController: NSObject, NotchResizing {
                     h = max(h, minimum.height)
                 }
                 size = NSSize(width: round(w), height: round(h))
+            }
+            if state == .task || model.stageTask != nil {
+                size = ChatSurfaceSize.bound(size, screen: geometry.screenFrame.size, expanded: state == .cockpit)
             }
             return (geometry.topPinnedFrame(width: size.width, height: size.height),
                     geometry.panelPlacement,
@@ -1461,6 +1479,9 @@ final class AppController: NSObject, NotchResizing {
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self else { return e }
+            // File panels and attachment popovers own their keyboard events.
+            // Escape there dismisses that presentation, not the conversation.
+            if let eventWindow = e.window, eventWindow !== self.window { return e }
             // Never steal keys from a text field or the terminal.
             let fr = self.window.firstResponder
             let typing = fr is NSTextView || fr is TerminalView
@@ -1605,7 +1626,10 @@ final class AppController: NSObject, NotchResizing {
                 if let n = Int(ch), n >= 1, n <= 9,
                    let t = self.model.frontDetail, t.status == .needsUser,
                    let choices = t.question?.choices, n <= choices.count {
-                    self.model.emit(.chooseOption(id: t.id, index: n - 1)); return nil
+                    if self.model.beginQuestion(t.id, t.question) {
+                        self.model.emit(.chooseOption(id: t.id, index: n - 1, reference: t.question?.reference))
+                    }
+                    return nil
                 }
             }
             return e

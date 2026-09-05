@@ -22,7 +22,7 @@ export interface RemoteTask {
   /** Which backend runs this task. 'codex-desktop' tasks live in the Codex app:
    *  their work is not a PTY we can show, so the card offers "open in Codex"
    *  instead of the live terminal. */
-  agent?: 'claude' | 'codex' | 'codex-desktop'
+  agent?: 'claude' | 'codex' | 'codex-desktop' | 'claude-code-desktop'
   /** WHAT that backend is, resolved by the main process from the provider
    *  registry (electron/remote/providers.ts) and sent with the task.
    *
@@ -37,7 +37,7 @@ export interface RemoteTask {
     vendor: string
     surface: 'cli' | 'desktop'
     label: string
-    transport: 'pty' | 'driver'
+    transport: 'structured' | 'driver'
     hasTerminal: boolean
     canResume: boolean
   }
@@ -60,6 +60,9 @@ export interface RemoteTask {
    *  no backfill, and no placeholder word, which is noise dressed as
    *  information. */
   model?: string
+  /** An Unmute-owned structured conversation with a native draft. */
+  chatWritable?: boolean
+  sessionPermission?: string
   /** This task is being brought back right now. Resume takes seconds (spawn,
    *  trust-accept, nudge); without this the card showed nothing until it landed,
    *  so a working Resume was indistinguishable from a dead button. */

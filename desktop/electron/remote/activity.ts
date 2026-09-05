@@ -31,6 +31,7 @@
 
 /** The eight things an agent can be visibly doing. */
 export type ActivityKind =
+  | 'lifecycle'
   /** Reasoning, planning — no external effect yet. */
   | 'thinking'
   /** A shell command. `label` is the command. */
@@ -80,6 +81,7 @@ export function describeActivity(a: Activity | undefined | null): string | undef
   if (!a) return undefined
   const l = a.label
   switch (a.kind) {
+    case 'lifecycle': return l ?? 'Working'
     case 'thinking':   return 'thinking'
     case 'running':    return l ? `running ${l}` : 'running a command'
     case 'editing':    return l ? `editing ${l}` : 'editing files'

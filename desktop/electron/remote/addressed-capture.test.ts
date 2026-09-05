@@ -2,6 +2,81 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { TaskDraftStore } from './task-draft'
 import { deliverAddressedCapture } from './addressed-capture'
+import { TaskFollowupCoordinator, type FollowupGate } from './task-followup'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+test('distinct capture waits for the prior snapshot acknowledgement and preserves later typing', async () => {
+  for (const mode of ['queue', 'edited', 'unavailable']) {
+    const laterTyping = mode === 'edited'
+    const drafts = new TaskDraftStore(); drafts.setText('t', 'original message')
+    const root = mkdtempSync(join(tmpdir(), 'capture-distinct-')), image = join(root, 'capture.png'); writeFileSync(image, 'image')
+    let gate: FollowupGate = { kind: 'idle', sessionId: 's', generation: 1, blocked: false }
+    let acknowledge!: () => void, started!: () => void
+    const began = new Promise<void>(resolve => { started = resolve })
+    const providerMessages: string[] = []
+    const queue = new TaskFollowupCoordinator({ store: drafts, assetsRoot: root,
+      scope: () => ({ provider: 'claude', sessionId: 's' }), gate: () => gate, changed: () => {},
+      deliver: async () => { throw new Error('No completion yet') },
+      immediate: async (_id, onSnapshot) => {
+        const snapshot = drafts.snapshot('t')!; onSnapshot?.(snapshot)
+        providerMessages.push(snapshot.text); started()
+        await new Promise<void>(resolve => { acknowledge = resolve })
+        drafts.acceptSnapshot('t', snapshot)
+        gate = mode === 'unavailable' ? { kind: 'unavailable', reason: 'Connection changed' }
+          : { kind: 'active', fence: { sessionId: 's', generation: 1, turnId: 'original-turn' }, blocked: false }
+        return { kind: 'accepted' }
+      },
+    })
+    const first = queue.submit('t'); await began
+    let captureSubmitted!: () => void
+    const submitted = new Promise<void>(resolve => { captureSubmitted = resolve })
+    const capture = deliverAddressedCapture({ taskId: 't', text: 'new capture', attachments: [image], drafts,
+      persistAttachment: async () => ({ id: 'capture-image', path: image, mimeType: 'image/png', name: 'Capture' }),
+      submitDraft: (id, request) => { const result = queue.submit(id, request); captureSubmitted(); return result },
+    })
+    await submitted
+    if (laterTyping) drafts.appendText('t', ' plus newer typing')
+    acknowledge(); assert.equal((await first).kind, 'accepted')
+    const result = await capture
+    assert.equal(result.kind, mode === 'queue' ? 'queued' : 'retained')
+    assert.deepEqual(providerMessages, ['original message'])
+    if (mode !== 'queue') {
+      assert.equal(drafts.get('t').text, '\nnew capture' + (laterTyping ? ' plus newer typing' : ''))
+      assert.equal(drafts.get('t').attachments[0].path, image)
+      assert.equal(drafts.getFollowup('t'), undefined)
+    } else {
+      assert.equal(drafts.getFollowup('t')?.draft.text, '\nnew capture')
+      assert.equal(drafts.getFollowup('t')?.draft.attachments.length, 1)
+      assert.equal(drafts.get('t').text, '')
+    }
+  }
+})
+
+test('addressed busy capture queues once without double-clear and later capture cannot overtake it', async () => {
+  class ObservedDrafts extends TaskDraftStore {
+    clears = 0
+    override clearIfUnchanged(id: string, snapshot: import('./task-draft').TaskDraft): boolean { this.clears++; return super.clearIfUnchanged(id, snapshot) }
+  }
+  const drafts = new ObservedDrafts(), root = mkdtempSync(join(tmpdir(), 'capture-queue-')), path = join(root, 'image.png')
+  writeFileSync(path, 'image')
+  let gate: FollowupGate = { kind: 'active', fence: { sessionId: 's', generation: 1, turnId: 'turn1' }, blocked: false }
+  const sent: string[] = []
+  const queue = new TaskFollowupCoordinator({ store: drafts, assetsRoot: root, scope: () => ({ provider: 'claude', sessionId: 's' }), gate: () => gate,
+    deliver: async (_id, r) => { sent.push(r.draft.text); return { kind: 'accepted', submissionId: 'next' } }, immediate: async () => { throw new Error('Capture bypassed queue') }, changed: () => {} })
+  const input = { taskId: 't', drafts, persistAttachment: async () => ({ id: 'image', path, mimeType: 'image/png', name: 'Image' }), submitDraft: (id: string, request: import('./task-followup').DraftSubmissionRequest) => queue.submit(id, request) }
+  assert.equal((await deliverAddressedCapture({ ...input, text: 'captured', attachments: [path] })).kind, 'queued')
+  assert.equal(drafts.clears, 0); assert.equal(drafts.get('t').text, '')
+  assert.equal(drafts.getFollowup('t')?.draft.attachments.length, 1)
+  assert.equal((await deliverAddressedCapture({ ...input, text: 'later capture', attachments: [] })).kind, 'retained')
+  assert.equal(drafts.get('t').text, 'later capture')
+  gate = { kind: 'idle', sessionId: 's', generation: 1, blocked: false }
+  assert.equal((await deliverAddressedCapture({ ...input, text: 'at completion', attachments: [] })).kind, 'retained')
+  assert.deepEqual(sent, [])
+  queue.turnEnded({ taskId: 't', fence: { sessionId: 's', generation: 1, turnId: 'turn1' }, outcome: 'completed' }); await queue.settled('t')
+  assert.deepEqual(sent, ['captured']); assert.equal(drafts.get('t').text, 'later capture\nat completion'); assert.equal(drafts.clears, 0)
+})
 
 test('an addressed Right Option capture stages text and images, then submits that exact task draft', async () => {
   const drafts = new TaskDraftStore()
