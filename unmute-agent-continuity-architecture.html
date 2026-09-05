@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unmute Agent — natural continuity architecture</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f3f4f8;
+      --muted: #9698a4;
+      --quiet: #676a77;
+      --canvas: #07080b;
+      --panel: #101116;
+      --panel-2: #171820;
+      --line: #2a2c36;
+      --purple: #9d8cff;
+      --blue: #67b8ff;
+      --green: #6bd7a5;
+      --amber: #f0bd68;
+      --red: #ff7d82;
+      --radius: 18px;
+      --shadow: 0 26px 80px rgba(0,0,0,.36);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    button, select { font: inherit; }
+    button { color: inherit; }
+    a { color: var(--blue); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    code, .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+    code { color: #d8dcff; }
+
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 240px minmax(0,1fr); }
+    .rail {
+      position: sticky; top: 0; height: 100vh; padding: 30px 22px;
+      border-right: 1px solid var(--line); background: #0b0c10;
+      display: flex; flex-direction: column; z-index: 5;
+    }
+    .mark { display: flex; align-items: center; gap: 12px; font-weight: 680; letter-spacing: -.02em; }
+    .mark-icon {
+      width: 34px; height: 34px; border-radius: 12px; display: grid; place-items: center;
+      background: var(--purple); color: #090912; font-weight: 900;
+    }
+    .rail-copy { color: var(--quiet); font-size: 12px; margin: 10px 0 28px 46px; }
+    nav { display: grid; gap: 5px; }
+    nav a {
+      color: var(--muted); text-decoration: none; padding: 9px 11px; border-radius: 10px;
+      font-size: 14px; transition: background .16s ease, color .16s ease;
+    }
+    nav a:hover, nav a:focus-visible { background: var(--panel-2); color: var(--ink); outline: none; }
+    .rail-foot { margin-top: auto; color: var(--quiet); font-size: 12px; }
+    .rail-foot strong { color: var(--green); font-weight: 650; }
+
+    main { min-width: 0; }
+    section { padding: 86px clamp(28px, 6vw, 88px); border-bottom: 1px solid var(--line); }
+    .wrap { max-width: 1180px; margin: 0 auto; }
+    .hero { min-height: 92vh; display: grid; align-content: center; position: relative; overflow: hidden; }
+    .hero::after {
+      content: ""; position: absolute; inset: 9% -14% auto 50%; height: 1px;
+      background: var(--purple); opacity: .26; box-shadow: 0 48px 0 var(--blue), 0 96px 0 var(--green);
+      transform: rotate(-11deg); pointer-events: none;
+    }
+    h1 { font-size: clamp(48px, 7vw, 94px); line-height: .98; letter-spacing: -.065em; max-width: 950px; margin: 0; }
+    h2 { font-size: clamp(34px, 4vw, 58px); line-height: 1.04; letter-spacing: -.045em; margin: 0 0 18px; }
+    h3 { font-size: 20px; letter-spacing: -.025em; margin: 0 0 8px; }
+    .lede { max-width: 750px; color: var(--muted); font-size: clamp(18px, 2vw, 24px); margin: 28px 0 36px; }
+    .kicker { color: var(--purple); font-weight: 650; margin-bottom: 22px; }
+    .hero-rule { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .hero-rule .id { padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--blue); background: var(--panel); }
+    .arrow { color: var(--quiet); font-size: 20px; }
+    .identity-result { color: var(--green); font-weight: 680; }
+    .note { margin-top: 28px; max-width: 760px; color: var(--quiet); font-size: 14px; }
+
+    .section-head { display: flex; justify-content: space-between; gap: 28px; align-items: end; margin-bottom: 40px; }
+    .section-head p { max-width: 580px; color: var(--muted); margin: 0; }
+    .truth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+    .truth { background: var(--panel); padding: 28px; min-height: 188px; }
+    .truth .tag { font-size: 12px; color: var(--quiet); margin-bottom: 32px; }
+    .truth.bad .tag { color: var(--red); }
+    .truth.good .tag { color: var(--green); }
+    .truth p { margin: 0; color: var(--muted); }
+    .truth strong { color: var(--ink); }
+
+    .pipeline { display: grid; grid-template-columns: repeat(5, minmax(120px,1fr)); gap: 10px; align-items: stretch; }
+    .pipe-step { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; position: relative; }
+    .pipe-step:not(:last-child)::after { content: "›"; position: absolute; right: -10px; top: 50%; transform: translate(50%,-50%); color: var(--quiet); background: var(--canvas); padding: 2px; z-index: 1; }
+    .pipe-step span { display: block; color: var(--quiet); font-size: 12px; margin-bottom: 10px; }
+    .pipe-step b { font-size: 14px; }
+    .callout { border-left: 3px solid var(--red); margin-top: 22px; padding: 14px 18px; background: rgba(255,125,130,.06); color: #d5a7a9; }
+
+    .simulator { display: grid; grid-template-columns: minmax(270px,.78fr) minmax(0,1.45fr); border: 1px solid var(--line); border-radius: 24px; overflow: hidden; box-shadow: var(--shadow); }
+    .sim-controls { background: #0d0e13; padding: 26px; border-right: 1px solid var(--line); }
+    .sim-output { background: var(--panel); padding: 30px; min-height: 520px; }
+    label { display: block; color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+    select {
+      width: 100%; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+      border-radius: 11px; padding: 11px 12px; margin-bottom: 18px;
+    }
+    .scenario-list { display: grid; gap: 8px; margin-bottom: 22px; }
+    .scenario {
+      text-align: left; border: 1px solid var(--line); background: transparent; padding: 12px 13px;
+      border-radius: 11px; cursor: pointer; color: var(--muted);
+    }
+    .scenario:hover, .scenario:focus-visible { border-color: #55596c; outline: none; color: var(--ink); }
+    .scenario.active { background: #22202f; border-color: var(--purple); color: var(--ink); }
+    .intent-quote { font-size: clamp(23px, 3vw, 38px); line-height: 1.18; letter-spacing: -.035em; max-width: 760px; }
+    .route-badge { display: inline-flex; margin: 24px 0 18px; padding: 7px 10px; border-radius: 8px; background: var(--purple); color: #0b0a12; font-weight: 750; font-size: 12px; }
+    .decision-reason { color: var(--muted); max-width: 760px; }
+    .id-ledger { margin-top: 28px; display: grid; gap: 10px; }
+    .ledger-row { display: grid; grid-template-columns: 128px 1fr; gap: 14px; align-items: center; }
+    .ledger-row > span:first-child { color: var(--quiet); font-size: 13px; }
+    .ledger-value { border: 1px solid var(--line); background: #0a0b0f; border-radius: 10px; padding: 11px 13px; font-size: 13px; overflow-wrap: anywhere; }
+    .ledger-value.same { border-color: rgba(107,215,165,.55); color: var(--green); }
+    .ledger-value.new { border-color: rgba(103,184,255,.55); color: var(--blue); }
+    .command { margin-top: 22px; padding: 16px; border-radius: 12px; background: #090a0d; border: 1px solid var(--line); overflow-x: auto; white-space: pre-wrap; color: #cdd2e7; }
+
+    .operation-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+    .operation-tabs button { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 9px 15px; cursor: pointer; color: var(--muted); }
+    .operation-tabs button.active { border-color: var(--purple); color: var(--ink); background: #242132; }
+    .op-panel { display: none; }
+    .op-panel.active { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .provider-contract { border: 1px solid var(--line); border-radius: 16px; padding: 22px; background: var(--panel); }
+    .provider-contract .provider { color: var(--blue); font-weight: 720; margin-bottom: 18px; }
+    .provider-contract p { color: var(--muted); }
+    .invariant { color: var(--green); font-weight: 650; }
+
+    .change-list { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+    .change { display: grid; grid-template-columns: 220px 1fr auto; gap: 24px; align-items: start; padding: 22px 24px; background: var(--panel); }
+    .change .file { font-family: "SFMono-Regular", monospace; font-size: 12px; color: var(--blue); overflow-wrap: anywhere; }
+    .change p { margin: 0; color: var(--muted); }
+    .change .phase { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 5px 8px; white-space: nowrap; color: var(--quiet); }
+
+    .contract { display: grid; grid-template-columns: 1.15fr .85fr; gap: 18px; }
+    .codebox { border: 1px solid var(--line); border-radius: 16px; background: #090a0e; padding: 22px; overflow: auto; }
+    pre { margin: 0; color: #cfd3e6; font-size: 12px; line-height: 1.65; }
+    .rules { border: 1px solid var(--line); border-radius: 16px; padding: 22px; background: var(--panel); }
+    .rule { padding: 14px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
+    .rule:last-child { border: 0; }
+    .rule b { color: var(--ink); }
+
+    .check-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+    .check { border: 1px solid var(--line); background: var(--panel); padding: 18px; border-radius: 14px; display: flex; gap: 13px; align-items: start; }
+    .check-dot { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; background: rgba(107,215,165,.13); color: var(--green); display: grid; place-items: center; font-size: 12px; }
+    .check p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+    .bottom-line { font-size: clamp(30px, 4.5vw, 64px); line-height: 1.06; letter-spacing: -.045em; max-width: 980px; }
+    .source-note { margin-top: 34px; color: var(--quiet); font-size: 13px; max-width: 900px; }
+
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      .rail { position: relative; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      nav { display: flex; overflow-x: auto; }
+      .rail-copy, .rail-foot { display: none; }
+      section { padding: 60px 22px; }
+      .hero { min-height: 75vh; }
+      .truth-grid, .simulator, .op-panel.active, .contract { grid-template-columns: 1fr; }
+      .sim-controls { border-right: 0; border-bottom: 1px solid var(--line); }
+      .pipeline { grid-template-columns: 1fr; }
+      .pipe-step:not(:last-child)::after { display: none; }
+      .change { grid-template-columns: 1fr; gap: 8px; }
+      .check-grid { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="mark"><span class="mark-icon">U</span><span>Continuity map</span></div>
+    <div class="rail-copy">Verified against the feature worktree</div>
+    <nav aria-label="Document sections">
+      <a href="#principle">The rule</a>
+      <a href="#today">What happens today</a>
+      <a href="#simulator">Decision simulator</a>
+      <a href="#providers">Provider contract</a>
+      <a href="#changes">Required changes</a>
+      <a href="#mcp">MCP shape</a>
+      <a href="#acceptance">Acceptance checks</a>
+    </nav>
+    <div class="rail-foot"><strong>Research artifact</strong><br>No production code changed</div>
+  </aside>
+
+  <main>
+    <section class="hero" id="principle">
+      <div class="wrap">
+        <div class="kicker">Unmute Agent should understand work, not expose session mechanics.</div>
+        <h1>Continue naturally.<br>Preserve identity precisely.</h1>
+        <p class="lede">The user says what they want. Unmute decides whether that means resume, fork, synthesis, or fresh work—then uses the provider’s real operation, never a disguised substitute.</p>
+        <div class="hero-rule" aria-label="Identity invariant">
+          <span class="id mono">source: 552578f1…</span>
+          <span class="arrow">→</span>
+          <span class="identity-result">resume means 552578f1… remains the session</span>
+        </div>
+        <p class="note">A task-card ID may be new because it belongs to Unmute’s UI. The provider session/thread ID must obey the chosen operation: unchanged for resume, provider-created child for fork, new only for synthesis or fresh work.</p>
+      </div>
+    </section>
+
+    <section id="today">
+      <div class="wrap">
+        <div class="section-head"><div><h2>What the branch does today</h2></div><p>The foundations are strong: structured chat, exact transcript lookup, persistent Agent identity, and provider-native transports already exist. The orchestration verb is the broken seam.</p></div>
+        <div class="truth-grid">
+          <article class="truth good"><div class="tag">Already correct</div><h3>Owned task, existing card</h3><p><strong>Wake the card, resume its recorded session, then send the user’s exact follow-up.</strong> No synthetic prompt is added when the user only asks to reopen it.</p></article>
+          <article class="truth bad"><div class="tag">Semantic mismatch</div><h3>On-disk session without a card</h3><p>The only MCP verb is called <code>session_resume</code>, but <code>planResume()</code> changes the operation to <strong>fork</strong> and defaults the prompt to “Continue from where we left off.”</p></article>
+          <article class="truth good"><div class="tag">Already available</div><h3>Multi-session background</h3><p><code>task_create.context</code> can carry up to 24k characters of summarized background into a fresh session. This is the correct basic mechanism for synthesis.</p></article>
+          <article class="truth bad"><div class="tag">Provider hole</div><h3>Codex fork from Unmute Agent</h3><p>The task dispatcher routes Codex to <code>dispatchCodexCli()</code>, which currently starts a new app-server thread and does not consume <code>forkFromSessionId</code>. History is therefore not forked.</p></article>
+        </div>
+        <div class="pipeline" style="margin-top:28px">
+          <div class="pipe-step"><span>1 · Prompt</span><b>Find transcript ID</b></div>
+          <div class="pipe-step"><span>2 · MCP</span><b>session_resume</b></div>
+          <div class="pipe-step"><span>3 · Planner</span><b>External → fork</b></div>
+          <div class="pipe-step"><span>4 · Dispatch</span><b>Creates new task</b></div>
+          <div class="pipe-step"><span>5 · Prompt</span><b>Injects “Continue…”</b></div>
+        </div>
+        <div class="callout"><strong>Why the earlier run behaved strangely:</strong> the model selected the right source ID, but the adapter reinterpreted “resume” as “fork + invented follow-up.” The bug is downstream of session discovery.</div>
+      </div>
+    </section>
+
+    <section id="simulator">
+      <div class="wrap">
+        <div class="section-head"><div><h2>Try the continuation planner</h2></div><p>Select a user-shaped request and a provider. The result shows the invisible operation Unmute should choose and what must happen to identity.</p></div>
+        <div class="simulator">
+          <div class="sim-controls">
+            <label for="providerSelect">Target provider</label>
+            <select id="providerSelect"><option value="claude">Claude Code</option><option value="codex">Codex CLI</option><option value="cross">Different provider from source</option></select>
+            <label>User intent</label>
+            <div class="scenario-list" id="scenarioList">
+              <button class="scenario active" data-key="resume">“Do the same for this other user.”</button>
+              <button class="scenario" data-key="open">“Open that work again.”</button>
+              <button class="scenario" data-key="fork">“Try another approach without disturbing it.”</button>
+              <button class="scenario" data-key="merge">“Continue our marketing discussion from last week.”</button>
+              <button class="scenario" data-key="fresh">“Start a clean implementation.”</button>
+            </div>
+            <label for="sourceState">Source state</label>
+            <select id="sourceState"><option value="idle">Idle / completed</option><option value="active">Already active in Unmute</option><option value="large">Too large for useful continuation</option></select>
+          </div>
+          <div class="sim-output" aria-live="polite">
+            <div class="intent-quote" id="intentQuote"></div>
+            <div class="route-badge" id="routeBadge"></div>
+            <div class="decision-reason" id="decisionReason"></div>
+            <div class="id-ledger">
+              <div class="ledger-row"><span>Source identity</span><div class="ledger-value mono">552578f1-f061-4e41-9c2a-f40b9dc4dff3</div></div>
+              <div class="ledger-row"><span>Result identity</span><div class="ledger-value mono" id="resultIdentity"></div></div>
+              <div class="ledger-row"><span>User turn</span><div class="ledger-value" id="turnBehavior"></div></div>
+            </div>
+            <div class="command mono" id="commandPreview"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="providers">
+      <div class="wrap">
+        <div class="section-head"><div><h2>The provider contract</h2></div><p>These operations are structured and headless. They do not require restoring the old terminal/PTY interface.</p></div>
+        <div class="operation-tabs" role="tablist">
+          <button class="active" data-op="resume">Resume</button><button data-op="fork">Fork</button><button data-op="synthesize">Synthesize</button>
+        </div>
+        <div class="op-panel active" data-panel="resume">
+          <article class="provider-contract"><div class="provider">Claude Code</div><div class="command mono">claude -p … --resume SOURCE_ID</div><p>Structured stream-json mode can load the exact conversation. No <code>--fork-session</code>, no replacement ID, no prompt unless the user supplied a next action.</p><div class="invariant">Result session ID = source session ID</div></article>
+          <article class="provider-contract"><div class="provider">Codex CLI</div><div class="command mono">thread/resume { threadId: SOURCE_ID }</div><p>The existing app-server hub already uses this method to reattach known tasks and hydrate history. Bind a new Unmute card to the recorded thread instead of calling <code>thread/start</code>.</p><div class="invariant">Result thread ID = source thread ID</div></article>
+        </div>
+        <div class="op-panel" data-panel="fork">
+          <article class="provider-contract"><div class="provider">Claude Code</div><div class="command mono">claude -p … --resume SOURCE_ID --fork-session</div><p>The source ID is exact. Claude creates a child conversation; Unmute records the returned child identity and <code>forkedFrom</code> provenance.</p><div class="invariant">Source stays untouched; child ID is new</div></article>
+          <article class="provider-contract"><div class="provider">Codex CLI</div><div class="command mono">thread/fork { threadId: SOURCE_ID }</div><p>The official app-server protocol returns a new child thread ID and <code>forkedFromId</code>. Add this method to <code>CodexHub</code>; do not open a TUI and do not degrade to <code>thread/start</code>.</p><div class="invariant">Source stays untouched; child ID is provider-returned</div></article>
+        </div>
+        <div class="op-panel" data-panel="synthesize">
+          <article class="provider-contract"><div class="provider">Any target provider</div><div class="command mono">new session + structured context packet</div><p>Several sessions cannot be natively resumed into one. Summarize only the relevant decisions, constraints, state, and next edges; preserve exact artifact references separately.</p><div class="invariant">A new ID is intentional and honest</div></article>
+          <article class="provider-contract"><div class="provider">Cross-provider continuation</div><div class="command mono">sources[] → synthesis → target thread/start</div><p>Claude history can inform a new Codex session and vice versa, but this is not called resume or fork. The originals remain available and provenance remains inspectable.</p><div class="invariant">Never claim the original conversation “moved”</div></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="changes">
+      <div class="wrap">
+        <div class="section-head"><div><h2>Required changes, by seam</h2></div><p>Fix identity semantics first. Then make natural multi-session retrieval reliable. This order prevents a smarter planner from invoking the wrong primitive more often.</p></div>
+        <div class="change-list">
+          <div class="change"><div class="file">agent/constitution.ts</div><p>Replace “always call <code>session_resume</code>” with an explicit intent policy: exact continuation → resume; alternate branch → fork; multiple/cross-provider/oversized sources → synthesize; no match → fresh. Never invent “continue” as a user turn.</p><span class="phase">Prompt</span></div>
+          <div class="change"><div class="file">agent/capabilities/sessions.ts</div><p>Expose separate, non-overlapping <code>session_resume</code> and <code>session_fork</code> tools. Their schemas must make the source ID exact and must report both source and resulting provider identity.</p><span class="phase">MCP</span></div>
+          <div class="change"><div class="file">agent/sessions/resume.ts</div><p>Delete the resume→fork reinterpretation and <code>REOPEN_INTENT</code>. Resume planning may wake an existing card or attach the exact on-disk session; it must never mint a provider session.</p><span class="phase">Planner</span></div>
+          <div class="change"><div class="file">task-manager.ts</div><p>Add explicit provider-neutral operations such as <code>attachExistingSession()</code> and <code>forkSession()</code>. Keep Unmute task-card IDs separate from provider IDs. Do not overload <code>dispatch()</code>, whose meaning should remain “start new work.”</p><span class="phase">Runtime</span></div>
+          <div class="change"><div class="file">codex/hub.ts</div><p>Add <code>forkThread()</code> over official <code>thread/fork</code>; hydrate returned history and register the child mapping exactly as <code>startThread()</code>/<code>resumeThread()</code> do.</p><span class="phase">Codex</span></div>
+          <div class="change"><div class="file">claude/task-session.ts</div><p>Keep the existing native structured fork and resume flags. Use the source ID only for resume; for a fork, accept the child identity returned by Claude and persist <code>forkedFrom</code>.</p><span class="phase">Claude</span></div>
+          <div class="change"><div class="file">remote/init.ts + runtime host</div><p>Remove the duplicated fork-on-resume adapters. Both in-process and daemon-hosted paths should call one shared continuation service so they cannot drift.</p><span class="phase">Wiring</span></div>
+          <div class="change"><div class="file">agent/capabilities/handoff.ts</div><p>Extend synthesis with validated <code>sourceSessions</code>, optional working directory, and structured artifact references. Keep <code>intent</code> verbatim and <code>context</code> as background; store provenance outside the prompt.</p><span class="phase">Synthesis</span></div>
+          <div class="change"><div class="file">session retrieval</div><p>Add a cheap deterministic session catalog or on-demand projection for provider, cwd, timestamps, user turns, artifacts, and summaries. Use raw transcripts as source of truth; do not return to periodic model-generated sweeps.</p><span class="phase">Recall</span></div>
+          <div class="change"><div class="file">task metadata + UI</div><p>Persist <code>continuationMode</code>, source IDs, confidence, and artifact references. Keep it visually quiet (“Continued from earlier work”) but expandable for trust and debugging.</p><span class="phase">Provenance</span></div>
+          <div class="change"><div class="file">evals + contract tests</div><p>Test natural utterances, ambiguous matches, exact ID invariants, absence of synthetic prompts, provider parity, multi-source bounds, missing cwd, and active-source behavior.</p><span class="phase">Proof</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="mcp">
+      <div class="wrap">
+        <div class="section-head"><div><h2>A cleaner MCP contract</h2></div><p>The model selects the semantic operation. Runtime code enforces its identity invariant. Neither layer is allowed to silently substitute another operation.</p></div>
+        <div class="contract">
+          <div class="codebox"><pre>{
+  "session_resume": {
+    "sessionId": "exact provider ID",
+    "intent": "optional exact next user action"
+  },
+  "session_fork": {
+    "sessionId": "exact source provider ID",
+    "intent": "optional exact next user action"
+  },
+  "task_create": {
+    "intent": "the user's current request",
+    "context": "bounded synthesis, not commands",
+    "sourceSessions": [
+      { "sessionId": "…", "provider": "claude" },
+      { "sessionId": "…", "provider": "codex" }
+    ],
+    "artifacts": [
+      { "kind": "url", "value": "…" },
+      { "kind": "file", "value": "/…" }
+    ],
+    "kind": "session",
+    "provider": "optional explicit target",
+    "cwd": "optional validated directory"
+  }
+}</pre></div>
+          <div class="rules">
+            <h3>Hard invariants</h3>
+            <div class="rule"><b>Resume never forks.</b><br>Same provider ID before and after.</div>
+            <div class="rule"><b>Fork never guesses.</b><br>The exact source ID is passed; the provider returns the child ID.</div>
+            <div class="rule"><b>Reopen never speaks.</b><br>An omitted intent means zero submitted user turns.</div>
+            <div class="rule"><b>Synthesis never impersonates resume.</b><br>It is a new session, labeled as a continuation from selected sources.</div>
+            <div class="rule"><b>Artifacts are data, not prose.</b><br>Links, file paths, sheet IDs, and identifiers survive summary compression.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="acceptance">
+      <div class="wrap">
+        <div class="section-head"><div><h2>What proves it works</h2></div><p>Focused contract checks are enough. This does not require broad, unrelated regression testing.</p></div>
+        <div class="check-grid">
+          <div class="check"><span class="check-dot">✓</span><div><b>Exact Claude resume</b><p>The structured launch contains <code>--resume SOURCE_ID</code>, no fork flag, and the task stores SOURCE_ID.</p></div></div>
+          <div class="check"><span class="check-dot">✓</span><div><b>Exact Codex resume</b><p>The hub sends <code>thread/resume</code> with SOURCE_ID and never calls <code>thread/start</code>.</p></div></div>
+          <div class="check"><span class="check-dot">✓</span><div><b>Native provider forks</b><p>Claude uses <code>--fork-session</code>; Codex uses <code>thread/fork</code>; each records the returned child ID.</p></div></div>
+          <div class="check"><span class="check-dot">✓</span><div><b>No ghost prompt</b><p>Reopening without an intent adds no “continue,” “resume,” or hidden follow-up turn.</p></div></div>
+          <div class="check"><span class="check-dot">✓</span><div><b>Multi-source continuity</b><p>A fresh session receives bounded relevant context plus lossless artifact references and source provenance.</p></div></div>
+          <div class="check"><span class="check-dot">✓</span><div><b>Natural selection</b><p>High-confidence matching acts automatically; conflicting consequential targets produce one concise clarification.</p></div></div>
+          <div class="check"><span class="check-dot">✓</span><div><b>Active work</b><p>If the exact session already has a live card, the new action lands there—no duplicate card or provider process.</p></div></div>
+          <div class="check"><span class="check-dot">✓</span><div><b>Provider honesty</b><p>Cross-provider continuation is described as synthesis, never as moving or resuming the original thread.</p></div></div>
+        </div>
+        <div style="margin-top:78px" class="bottom-line">The correct abstraction is one user verb—<em>continue</em>—backed by four precise runtime operations that never masquerade as one another.</div>
+        <p class="source-note">Verified from the current feature worktree at commit <code>3819e593</code>, the installed Claude/Codex CLI help, and the official OpenAI Codex app-server contract. This page is an implementation map, not a production change.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  const SOURCE = '552578f1-f061-4e41-9c2a-f40b9dc4dff3';
+  const scenarios = {
+    resume: {
+      quote: '“Do the same for this other user.”',
+      route: 'EXACT RESUME + NEW USER ACTION',
+      reason: 'One strong, same-provider match exists. Continue that conversation and submit only the new action the user actually requested.',
+      identity: SOURCE,
+      identityClass: 'same',
+      turn: 'Submit the current request verbatim after the exact session is attached.'
+    },
+    open: {
+      quote: '“Open that work again.”',
+      route: 'EXACT RESUME · NO TURN',
+      reason: 'The user asked to reopen, not to perform another action. Attach and hydrate the exact session without manufacturing a prompt.',
+      identity: SOURCE,
+      identityClass: 'same',
+      turn: 'No user turn is submitted.'
+    },
+    fork: {
+      quote: '“Try another approach without disturbing it.”',
+      route: 'NATIVE FORK',
+      reason: 'The user wants inherited context and an independent branch. Pass the exact source ID to the provider’s fork operation and use the returned child ID.',
+      identity: 'provider returns CHILD_ID (forkedFrom = ' + SOURCE + ')',
+      identityClass: 'new',
+      turn: 'Submit only “Try another approach without disturbing it.”'
+    },
+    merge: {
+      quote: '“Continue our marketing discussion from last week.”',
+      route: 'MULTI-SESSION SYNTHESIS',
+      reason: 'Several sessions are relevant. Native resume cannot merge them, so create a new session with a bounded synthesis and exact artifact references.',
+      identity: 'provider returns NEW_ID; sources remain untouched',
+      identityClass: 'new',
+      turn: 'Current request stays separate from background context.'
+    },
+    fresh: {
+      quote: '“Start a clean implementation.”',
+      route: 'FRESH SESSION',
+      reason: 'The user explicitly asked not to inherit prior conversation state. Start blank, while still applying ordinary Unmute task configuration.',
+      identity: 'provider returns NEW_ID',
+      identityClass: 'new',
+      turn: 'Submit the user’s request as the first turn.'
+    }
+  };
+
+  let selected = 'resume';
+  const providerSelect = document.getElementById('providerSelect');
+  const sourceState = document.getElementById('sourceState');
+
+  function renderScenario() {
+    let s = { ...scenarios[selected] };
+    const provider = providerSelect.value;
+    const state = sourceState.value;
+
+    if (state === 'active' && (selected === 'resume' || selected === 'open')) {
+      s.route = selected === 'open' ? 'WAKE EXISTING CARD · NO TURN' : 'WAKE EXISTING CARD + FOLLOW-UP';
+      s.reason = 'This exact provider session is already represented by a live Unmute task. Reuse that card and runtime instead of creating a duplicate.';
+    }
+    if (state === 'large' && selected === 'resume') {
+      s.route = 'BOUNDED SYNTHESIS';
+      s.reason = 'A fork inherits the same oversized context and does not solve the problem. Start a fresh session with a precise summary and lossless artifacts.';
+      s.identity = 'provider returns NEW_ID; source retained for audit';
+      s.identityClass = 'new';
+    }
+    if (provider === 'cross' && selected !== 'fresh') {
+      s.route = selected === 'merge' ? 'MULTI-SESSION SYNTHESIS' : 'CROSS-PROVIDER SYNTHESIS';
+      s.reason = 'Provider-native history cannot be resumed or forked into another harness. Read the source, synthesize relevant context, and start the requested provider honestly.';
+      s.identity = 'target provider returns NEW_ID';
+      s.identityClass = 'new';
+    }
+
+    const providerName = provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : 'Target provider';
+    let command;
+    if (s.route.includes('FORK')) command = provider === 'codex' ? 'thread/fork { threadId: SOURCE_ID }' : 'claude -p … --resume SOURCE_ID --fork-session';
+    else if (s.route.includes('RESUME') || s.route.includes('WAKE')) command = provider === 'codex' ? 'thread/resume { threadId: SOURCE_ID }' : 'claude -p … --resume SOURCE_ID';
+    else command = providerName + ': start a new structured session with a context packet';
+
+    document.getElementById('intentQuote').textContent = s.quote;
+    document.getElementById('routeBadge').textContent = s.route;
+    document.getElementById('decisionReason').textContent = s.reason;
+    const identity = document.getElementById('resultIdentity');
+    identity.textContent = s.identity;
+    identity.className = 'ledger-value mono ' + s.identityClass;
+    document.getElementById('turnBehavior').textContent = s.turn;
+    document.getElementById('commandPreview').textContent = command;
+  }
+
+  document.querySelectorAll('.scenario').forEach(button => button.addEventListener('click', () => {
+    document.querySelectorAll('.scenario').forEach(b => b.classList.remove('active'));
+    button.classList.add('active'); selected = button.dataset.key; renderScenario();
+  }));
+  providerSelect.addEventListener('change', renderScenario);
+  sourceState.addEventListener('change', renderScenario);
+
+  document.querySelectorAll('.operation-tabs button').forEach(button => button.addEventListener('click', () => {
+    document.querySelectorAll('.operation-tabs button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.op-panel').forEach(p => p.classList.remove('active'));
+    button.classList.add('active');
+    document.querySelector('[data-panel="' + button.dataset.op + '"]').classList.add('active');
+  }));
+
+  renderScenario();
+</script>
+</body>
+</html>
