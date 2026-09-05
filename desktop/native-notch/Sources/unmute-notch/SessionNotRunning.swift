@@ -6,29 +6,20 @@ import SwiftUI
 /// session: you typed, pressed send, and the draft was retained and refused with
 /// nothing said. The app already knew why (`deliveryError` is set at the
 /// capability gate and shipped in the detail payload); there was simply nowhere
-/// showing it. So this says the true thing and offers the action that fixes it.
+/// showing it. Opening the task now performs the action, while this view reports
+/// the reconnect instead of asking the user to manage a provider process.
 struct SessionNotRunning: View {
-    @ObservedObject var model: NotchModel
-    let taskId: String
-    /// The engine's own words when it has them — "This CLI session cannot verify
-    /// task draft submission", "Codex is not connected to Unmute". Preferred over
-    /// anything invented here, because it names the actual blocker.
     let reason: String?
-    var canResume = true
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(reason ?? "This session isn’t running.")
+            if reason == nil { ProgressView().controlSize(.small) }
+            Text(reason ?? "Reconnecting conversation…")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            if canResume {
-                Button("Resume") { model.emit(.resume(id: taskId)) }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 12, weight: .semibold))
-            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)

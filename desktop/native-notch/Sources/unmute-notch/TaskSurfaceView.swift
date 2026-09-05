@@ -3,7 +3,7 @@ import ComposerSupport
 
 // The single-task surface — status + duration, the pending question (chips or
 // free-text), done result + detail + artifacts, failed reason / mcpGap fix,
-// stop / re-run / resume / kill, an on-demand live terminal — plus the crank
+// stop / re-run / kill and the native conversation controls — plus the crank
 // (Next + "1 of N") and Open dashboard.
 //
 // This is the ATTENTION panel: exactly one task, sized to itself, and it never
@@ -52,14 +52,15 @@ struct TaskSurfaceView: View {
                     // the box through the 8-15 minute parked-warm window when sending
                     // worked, and it showed the box over a dead executor where every
                     // send was silently retained.
-                    switch composerState(alive: t.alive, canCompose: t.canCompose, status: t.status.rawValue, kind: t.kind) {
+                    switch composerState(alive: t.alive, canCompose: t.canCompose, canResume: t.canResume,
+                                         status: t.status.rawValue, kind: t.kind) {
                     case .composable:
                         StageComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
                                       modelLabel: t.modelLabel, sending: t.sending ?? false,
                                       draft: t.draft, config: t.chatConfig, followup: t.followup, composerMode: t.composerMode, question: t.question)
                             .padding(.top, 9)
                     case .notRunning:
-                        SessionNotRunning(model: model, taskId: t.id, reason: t.deliveryError ?? (t.canResume ? nil : "This connected session cannot resume in chat. Start an Unmute-managed conversation."), canResume: t.canResume)
+                        SessionNotRunning(reason: reconnectReason(t))
                             .padding(.top, 9)
                     case .finished:
                         EmptyView()
@@ -90,6 +91,12 @@ struct TaskSurfaceView: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+
+    private func reconnectReason(_ task: TaskDetail) -> String? {
+        task.deliveryError
+            ?? task.resumeError
+            ?? (task.canResume ? nil : "This connected session cannot resume in chat. Start an Unmute-managed conversation.")
     }
 
     private func summaryLine(_ t: TaskDetail) -> String? {
@@ -163,11 +170,6 @@ struct TaskSurfaceView: View {
                 KeyButton(label: "Stop", symbol: "stop.circle") { model.emit(.kill(id: t.id)) }
             }
             .padding(.top, 11)
-        } else if !t.alive && t.canResume {
-            HStack(spacing: 6) {
-                KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
-            }
-            .padding(.top, 11)
         }
     }
 
@@ -176,12 +178,12 @@ struct TaskSurfaceView: View {
             QuietButton(label: "Open dashboard", symbol: "square.grid.2x2") {
                 model.emit(.openDashboard)
             }
-            Spacer(minLength: 0)
             QuietButton(label: model.backgroundAudioMuted ? "Resume background audio" : "Pause background audio",
                         symbol: model.backgroundAudioMuted ? "play.circle" : "pause.circle") {
                 model.backgroundAudioMuted.toggle()
                 model.emit(.backgroundAudio(muted: model.backgroundAudioMuted))
             }
+            Spacer(minLength: 0)
             SurfaceSizeControls(model: model)
             if t.agentOriginPresentation == nil {
                 KeyButton(label: "Prev", symbol: "arrow.left") { model.emit(.prev) }

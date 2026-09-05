@@ -18,7 +18,7 @@ final class ComposerAvailabilityTests: XCTestCase {
 
     // Direction two: the box sat there over a dead executor. Every send was
     // retained and silently refused — typing into nothing.
-    func testADeadExecutorOffersResumeRatherThanAnEmptyBox() {
+    func testADeadExecutorWaitsForAutomaticReconnectRatherThanShowingAnEmptyBox() {
         XCTAssertEqual(composerState(alive: false, status: "done", kind: "session"), .notRunning)
     }
 
@@ -42,14 +42,15 @@ final class ComposerAvailabilityTests: XCTestCase {
 
     // A dead executor is worth a Resume even mid-flight — that IS the state the
     // user hit when a session died while it said "processing".
-    func testADeadExecutorMidFlightStillOffersResume() {
+    func testADeadExecutorMidFlightWaitsForAutomaticReconnect() {
         XCTAssertEqual(composerState(alive: false, status: "processing", kind: "session"), .notRunning)
     }
 
-    // The one case where nothing is offered: a one-off errand that genuinely
-    // ended AND has no executor. There is nothing to say and nothing to resume
-    // into — the old `ended()` rule, kept for exactly this case.
-    func testAFinishedOneoffWithNoExecutorOffersNothing() {
-        XCTAssertEqual(composerState(alive: false, status: "failed", kind: "oneoff"), .finished)
+    func testAResumableFinishedOneoffWaitsForAutomaticReconnect() {
+        XCTAssertEqual(composerState(alive: false, canResume: true, status: "failed", kind: "oneoff"), .notRunning)
+    }
+
+    func testANonResumableFinishedOneoffOffersNothing() {
+        XCTAssertEqual(composerState(alive: false, canResume: false, status: "failed", kind: "oneoff"), .finished)
     }
 }

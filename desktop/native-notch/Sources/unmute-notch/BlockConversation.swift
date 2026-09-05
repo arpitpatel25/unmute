@@ -59,7 +59,6 @@ struct BlockConversation: View {
     /// The transcript stays hidden for its one layout pass so selecting a task
     /// never exposes the mechanical jump from SwiftUI's default top position.
     @State private var positionedTask: String?
-    @State private var positionToken = UUID()
 
     /// Open on the latest USER message's first line, not on the thread's last
     /// pixel and not wherever this task happened to be read previously.
@@ -81,21 +80,17 @@ struct BlockConversation: View {
     /// content end, so it simply sits at the bottom as before.
     private func restorePosition(_ proxy: ScrollViewProxy) {
         let task = id
-        let token = UUID()
-        positionToken = token
         positionedTask = nil
         _ = restoreGate.begin(task: task, savedAnchor: nil)
         DispatchQueue.main.async {
             if let target = initialConversationAnchor(turns: turns) {
                 proxy.scrollTo(target, anchor: .top)
             }
-            // Reveal only after the non-animated positioning transaction has
-            // been laid out. A fast Prev/Next cannot reveal a stale callback.
-            DispatchQueue.main.async {
-                guard positionToken == token else { return }
-                restoreGate.finish(task: task)
-                positionedTask = task
-            }
+            // scrollTo and reveal are committed in the same display pass: the
+            // reader receives an already-positioned task, while a stale callback
+            // can never reveal a different task because the ids must match.
+            restoreGate.finish(task: task)
+            positionedTask = task
         }
     }
 
@@ -173,6 +168,7 @@ struct BlockConversation: View {
                 // end as that turn grows.
                 .onAppear { restorePosition(proxy) }
                 .onChange(of: turns.count) { _ in
+                    if positionedTask != id { restorePosition(proxy); return }
                     guard atBottom else { return }   // do not yank a reader back
                     withAnimation(.easeOut(duration: 0.18)) {
                         proxy.scrollTo(BLOCK_BOTTOM, anchor: .bottom)

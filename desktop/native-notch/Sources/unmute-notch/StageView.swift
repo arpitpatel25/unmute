@@ -3,9 +3,9 @@ import StageSupport
 
 // The focused Stage inside the cockpit — split (stage + sessions minirail) or
 // full (terminal edge-to-edge). Header carries every per-task action: rename,
-// pin/unpin, kill, resume, shelve, remove, next, full/split, esc. Body: warm-up,
+// pin/unpin, kill, shelve, remove, next, full/split, esc. Body: warm-up,
 // editable note, pending question (chips or free-text), live terminal when
-// alive, dead panel (resume / re-run + artifacts) when not.
+// alive, dead panel (re-run + artifacts) when not.
 //
 // HIERARCHY FROM GROUPING, NOT DECORATION. The new design system asks us to
 // strip the extra backgrounds and borders that used to give buttons weight, and
@@ -107,10 +107,10 @@ struct StageView: View {
         if t.resuming == true {
             relaunchingRow
         } else if let reason = t.resumeError, !reason.isEmpty {
-            SessionNotRunning(model: model, taskId: t.id, reason: reason)
+            SessionNotRunning(reason: reason)
                 .padding(.top, 9)
         } else if !(t.canCompose ?? t.alive) {
-            SessionNotRunning(model: model, taskId: t.id, reason: t.canResume ? nil : "This connected session cannot resume in chat. Start an Unmute-managed conversation.", canResume: t.canResume)
+            SessionNotRunning(reason: t.canResume ? nil : "This connected session cannot resume in chat. Start an Unmute-managed conversation.")
                 .padding(.top, 9)
         } else {
             StageComposer(placeholder: "Reply — or hold right ⌥ and speak",
@@ -219,11 +219,6 @@ struct StageView: View {
                     KeyButton(label: "Stop", danger: true, symbol: "stop.circle") {
                         model.emit(.kill(id: t.id))
                     }
-                } else if t.canResume {
-                    // GATED ON THE CAPABILITY, not just on the absence of a
-                    // process: a backend that cannot be resumed was being offered
-                    // a Resume button the moment its PTY went away.
-                    KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
                 }
             }
             .padding(.leading, 6)
@@ -445,7 +440,7 @@ private struct ChoiceChip: View {
     }
 }
 
-// MARK: - Dead-task panel (result / error / artifacts + resume / re-run)
+// MARK: - Dead-task panel (result / error / artifacts + re-run)
 
 struct DeadPanel: View {
     @ObservedObject var model: NotchModel
@@ -524,12 +519,8 @@ struct DeadPanel: View {
                 }
             }
 
-            HStack(spacing: 8) {
-                ActButton(label: "Resume — continue with full context", go: true) {
-                    model.emit(.resume(id: t.id))
-                }
-                ActButton(label: "Re-run fresh") { model.emit(.rerun(id: t.id)) }
-            }.padding(.top, 3)
+            ActButton(label: "Re-run fresh") { model.emit(.rerun(id: t.id)) }
+                .padding(.top, 3)
         }
         .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)

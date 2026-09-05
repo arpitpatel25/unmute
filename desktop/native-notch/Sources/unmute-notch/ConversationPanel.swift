@@ -40,6 +40,10 @@ struct ConversationPanel: View {
     var body: some View {
         if !visibleBlocks.isEmpty {
             BlockConversation(turns: BlockPresentation.build(visibleBlocks, running: running), id: id, usage: usage)
+                // A task switch must create a fresh positioning lifecycle. This
+                // prevents SwiftUI from reusing a hidden transcript while the
+                // previous task's scroll state is still being reconciled.
+                .id(id)
         } else {
             HStack(spacing: 8) {
                 if running || history?.phase == "loading" { ProgressView().controlSize(.small) }

@@ -29,7 +29,7 @@ struct ComposerControls: View {
                     setupPinned.toggle()
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "slider.horizontal.3")
+                        Image(systemName: "command")
                         Text("Task setup")
                         Image(systemName: setupVisible ? "chevron.up" : "chevron.down")
                             .font(.system(size: 8, weight: .semibold))
@@ -42,6 +42,9 @@ struct ComposerControls: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(setupVisible ? "Close task setup" : "Open task setup")
                 .onHover(perform: updateSetupHover)
+                .popover(isPresented: setupPresentation, arrowEdge: .bottom) {
+                    setupPanel.onHover(perform: updateSetupHover)
+                }
 
                 Spacer(minLength: 8)
 
@@ -63,16 +66,6 @@ struct ComposerControls: View {
                 }
             }
             .frame(minHeight: 28)
-            .overlay(alignment: .bottomLeading) {
-                if setupVisible {
-                    setupPanel
-                        .offset(y: -35)
-                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottomLeading)))
-                        .zIndex(20)
-                        .onHover(perform: updateSetupHover)
-                }
-            }
-            .zIndex(20)
             if config.busy { Text("Settings can change after this turn finishes.").foregroundColor(Theme.textFaint) }
             if !config.mutable { Text("These settings are managed by the connected session.").foregroundColor(Theme.textFaint) }
             if let error = config.error { Text(error).foregroundColor(Theme.cError) }
@@ -81,6 +74,12 @@ struct ComposerControls: View {
         .font(.system(size: 11.5))
         .buttonStyle(.borderless)
         .animation(Theme.hover, value: setupVisible)
+    }
+
+    private var setupPresentation: Binding<Bool> {
+        Binding(get: { setupVisible }, set: { shown in
+            if !shown { setupPinned = false; setupHovered = false }
+        })
     }
 
     private var setupPanel: some View {
