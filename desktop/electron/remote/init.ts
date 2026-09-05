@@ -104,7 +104,7 @@ import { HistoryCapability } from './agent/capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
 import { SessionsCapability } from './agent/capabilities/sessions'
 import { locateSession } from './agent/sessions/locate'
-import { planResume, isReapedScratchCwd } from './agent/sessions/resume'
+import { AgentContinuationService } from './agent/sessions/service'
 
 let unmuteAgentLifecycle: AgentConversationLifecycle | AgentRuntimeClient | null = null
 import { CodexCliProvider } from './agent/providers/codex'
@@ -629,6 +629,12 @@ async function getSetupStatus() {
 }
 
 let manager: TaskManager | null = null
+const agentContinuations = new AgentContinuationService({
+  manager: () => manager,
+  locate: locateSession,
+  scratchRoot: join(homedir(), '.unmute', 'remote', 'local'),
+  ensureDirectory: path => fs.mkdir(path, { recursive: true }).then(() => undefined),
+})
 /** The OSS engine's session manager, kept so the few things that need to ask
  *  the LIVE capture a question (which lane is it on?) can, without threading
  *  `deps` through every helper. Set once by initRemote; opaque by contract. */
@@ -1220,61 +1226,8 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
       // nothing here re-creates the index (or the sweep that maintained it)
       // deleted in cc48bbf.
       new SessionsCapability({
-        async resume(input) {
-          if (!manager) throw new Error('Unmute Remote is not initialized')
-          const located = await locateSession(input.sessionId)
-          if (!located) throw new Error('That session is not on this machine')
-
-          // A Codex task holds the Codex THREAD id in `sessionId` and a Claude
-          // task holds Claude's, so this matches whichever the Agent gave us.
-          const existing = manager.list().find((t) => t.sessionId === input.sessionId)
-          const plan = planResume({
-            located,
-            ...(existing ? { existingTaskId: existing.id } : {}),
-            ...(input.intent ? { intent: input.intent } : {}),
-          })
-          if (plan.action === 'refuse') throw new Error(plan.reason)
-
-          if (plan.action === 'wake') {
-            await manager.resume(plan.taskId)
-            // The same path the router uses to land a follow-up in a live
-            // task, so a resumed session receives the request exactly as it
-            // would have by voice.
-            if (plan.followUp) manager.followUp(plan.taskId, plan.followUp)
-            log.event('agent-session-resumed', {
-              taskId: plan.taskId, sessionId: input.sessionId, via: 'wake',
-            })
-            return { taskId: plan.taskId }
-          }
-
-          // A session Unmute never started has no card. Forking it keeps the
-          // whole conversation and gives it one — the same dispatch the Remote
-          // key uses, so nothing here is a special case.
-          // A REAPED SCRATCH DIRECTORY IS RECREATED, NOT REFUSED. Until the
-          // lifecycle change a finished one-off had its home fs.rm'd, and for
-          // a scratch task that home IS the cwd — so the sessions most worth
-          // recovering are exactly the ones naming a directory that no longer
-          // exists. Unmute owns that path and nothing of the user's was ever
-          // in it; an empty one is what a fresh task gets anyway. A missing
-          // directory the user owns is left alone (isReapedScratchCwd).
-          if (isReapedScratchCwd(plan.cwd, join(homedir(), '.unmute', 'remote', 'local'))) {
-            await fs.mkdir(plan.cwd, { recursive: true }).catch(() => {})
-          }
-
-          const taskId = await manager.dispatch(plan.intent, {
-            kind: 'session',
-            agent: plan.harness,
-            forkFromSessionId: plan.sessionId,
-            cwd: plan.cwd,
-          })
-          // A fork's id is minted by the CLI and cannot be pinned, so the card
-          // adopts it once it exists — the same 8s the MCP fork path allows.
-          setTimeout(() => { void manager?.adoptForkSessionId(taskId, plan.sessionId) }, 8000)
-          log.event('agent-session-resumed', {
-            taskId, sessionId: plan.sessionId, harness: plan.harness, via: 'fork',
-          })
-          return { taskId }
-        },
+        resume: input => agentContinuations.resume(input),
+        fork: input => agentContinuations.fork(input),
       }),
       // What the user recorded. Optional: only present when the notetaker
       // feature wired its adapters in via RemoteInitDeps.notetaker — a build
@@ -3918,24 +3871,8 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
     const payload = clipboardPayload(entry)
     return copyHistoryToClipboard(payload.text, payload.attachments)
   }
-  if (method === 'sessions.resume') {
-    if (!manager) throw new Error('Unmute Remote is not initialized')
-    const input = args[0] as { sessionId: string; intent?: string }
-    const located = await locateSession(input.sessionId)
-    if (!located) throw new Error('That session is not on this machine')
-    const existing = manager.list().find(task => task.sessionId === input.sessionId)
-    const resume = planResume({ located, ...(existing ? { existingTaskId: existing.id } : {}), ...(input.intent ? { intent: input.intent } : {}) })
-    if (resume.action === 'refuse') throw new Error(resume.reason)
-    if (resume.action === 'wake') {
-      await manager.resume(resume.taskId)
-      if (resume.followUp) manager.followUp(resume.taskId, resume.followUp)
-      return { taskId: resume.taskId }
-    }
-    if (isReapedScratchCwd(resume.cwd, join(homedir(), '.unmute', 'remote', 'local'))) await fs.mkdir(resume.cwd, { recursive: true }).catch(() => {})
-    const taskId = await manager.dispatch(resume.intent, { kind: 'session', agent: resume.harness, forkFromSessionId: resume.sessionId, cwd: resume.cwd })
-    setTimeout(() => { void manager?.adoptForkSessionId(taskId, resume.sessionId) }, 8000)
-    return { taskId }
-  }
+  if (method === 'sessions.resume') return agentContinuations.resume(args[0])
+  if (method === 'sessions.fork') return agentContinuations.fork(args[0])
   if (method === 'handoff.createTask') {
     if (!manager) throw new Error('Unmute Remote is not initialized')
     const input = args[0] as { context?: string; intent: string; kind: 'oneoff' | 'session'; provider: AgentKind; agentRunId: string }

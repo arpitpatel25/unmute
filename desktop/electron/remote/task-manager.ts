@@ -163,6 +163,14 @@ export interface Task {
   intent: string
   /** Structured provenance for consequential work surfaced by Unmute Agent. */
   origin?: 'unmute-agent'
+  /** How this conversation relates to earlier provider work. */
+  continuationMode?: 'resume' | 'fork' | 'synthesis' | 'fresh'
+  /** Exact provider identities used as background or ancestry. */
+  continuationSources?: Array<{ sessionId: string; provider: 'claude' | 'codex' }>
+  /** Exact references retained alongside bounded synthesis prose. */
+  continuationArtifacts?: Array<{ kind: 'file' | 'url' | 'identifier'; value: string; label?: string }>
+  /** Agent confidence in the selected continuation, when recorded. */
+  continuationConfidence?: number
   /** Durable logical Agent run that produced this card. */
   agentRunId?: string
   /** Short display name for the session (2-5 words), generated async just after
@@ -1128,6 +1136,68 @@ export class TaskManager extends EventEmitter {
     this.tasks.set(id, task)
     this.emit('created', task)
     return id
+  }
+
+  /** Bind a new Unmute card to an existing provider conversation. The card is
+   * new; the provider identity is not. */
+  async attachProviderSession(input: {
+    harness: 'claude' | 'codex'
+    sessionId: string
+    cwd: string
+    intent?: string
+  }): Promise<{ taskId: string; sessionId: string }> {
+    const taskId = await this.createChat({ provider: input.harness, cwd: input.cwd, permission: 'maximum' })
+    const task = this.tasks.get(taskId)!
+    task.sessionId = input.sessionId
+    if (input.harness === 'codex') task.codexRolloutId = input.sessionId
+    task.chatUnstarted = false
+    task.intent = input.intent?.trim() || 'Continued conversation'
+    task.continuationMode = 'resume'
+    task.continuationSources = [{ sessionId: input.sessionId, provider: input.harness }]
+    await this.persistState(task)
+    if (!(await this.resume(taskId))) {
+      throw new Error(task.resumeError || task.deliveryError || `Could not resume ${input.harness} session`)
+    }
+    if (input.intent?.trim() && !(await this.deliverDraft(taskId, input.intent.trim(), []))) {
+      throw new Error(task.deliveryError || `Could not send the current request to ${input.harness}`)
+    }
+    return { taskId, sessionId: input.sessionId }
+  }
+
+  /** Create a provider-native child and persist the exact source/child pair. */
+  async forkProviderSession(input: {
+    harness: 'claude' | 'codex'
+    sessionId: string
+    cwd: string
+    intent?: string
+  }): Promise<{ taskId: string; sessionId: string }> {
+    const taskId = await this.createChat({ provider: input.harness, cwd: input.cwd, permission: 'maximum' })
+    const task = this.tasks.get(taskId)!
+    task.chatUnstarted = false
+    task.intent = input.intent?.trim() || 'Branched conversation'
+    task.continuationMode = 'fork'
+    task.continuationSources = [{ sessionId: input.sessionId, provider: input.harness }]
+
+    if (input.harness === 'codex') {
+      if (!this.opts.codexHub) throw new Error('CODEX_CLI_UNAVAILABLE: no app-server hub')
+      const result = await this.opts.codexHub.forkThread(taskId, input.sessionId, task.codexSessionSettings!)
+      if (result.forkedFromId !== input.sessionId || result.threadId === input.sessionId) {
+        throw new Error('Codex returned inconsistent fork identity')
+      }
+      task.sessionId = result.threadId
+      task.codexRolloutId = result.threadId
+    } else {
+      if (task.sessionId === input.sessionId) task.sessionId = randomUUID()
+      task.claudeForkFromSessionId = input.sessionId
+      await this.persistState(task)
+      await this.connectClaude(task, false)
+    }
+    await this.persistState(task)
+    this.emit('updated', task)
+    if (input.intent?.trim() && !(await this.deliverDraft(taskId, input.intent.trim(), []))) {
+      throw new Error(task.deliveryError || `Could not send the current request to ${input.harness}`)
+    }
+    return { taskId, sessionId: task.sessionId }
   }
 
   private async connectClaude(task: Task, resume: boolean): Promise<void> {

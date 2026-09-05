@@ -106,7 +106,10 @@ export class AgentRuntimeService {
       const registry = new CapabilityRegistry([
         new MemoryCapability(memory),
         new HistoryCapability({ recent: ms => this.host('history.recent', [ms]), copy: id => this.host('history.copy', [id]) }),
-        new SessionsCapability({ resume: input => this.host('sessions.resume', [input]) }),
+        new SessionsCapability({
+          resume: input => this.host('sessions.resume', [input]),
+          fork: input => this.host('sessions.fork', [input]),
+        }),
         new HandoffCapability({ createTask: input => this.host('handoff.createTask', [input]), taskStatus: id => this.host('handoff.taskStatus', [id]) }),
         ...(config.notetaker ? [new NotetakerCapability({ list: limit => this.host('notetaker.list', [limit]), search: (q, limit) => this.host('notetaker.search', [q, limit]), read: id => this.host('notetaker.read', [id]), open: id => this.host('notetaker.open', [id]) })] : []),
         new DeliveryCapability({ resolveAttachment: (principal, handle) => attachments.resolveForDelivery(principal, handle),

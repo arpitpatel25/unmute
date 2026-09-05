@@ -16,7 +16,21 @@ function adapters(overrides: Partial<SessionAdapters> = {}): SessionAdapters & {
   const asked: any[] = []
   return {
     asked,
-    async resume(input) { asked.push(input); return { taskId: 'task-9' } },
+    async resume(input) {
+      asked.push({ operation: 'resume', ...input })
+      return {
+        taskId: 'task-9', operation: 'resume' as const,
+        sourceSessionId: input.sessionId, sessionId: input.sessionId,
+      }
+    },
+    async fork(input) {
+      asked.push({ operation: 'fork', ...input })
+      return {
+        taskId: 'task-10', operation: 'fork' as const,
+        sourceSessionId: input.sessionId,
+        sessionId: 'bbbbbbbb-1111-2222-3333-444444444444',
+      }
+    },
     ...overrides,
   } as SessionAdapters & { asked: any[] }
 }
@@ -31,10 +45,64 @@ test('a past session is reopened as a card, and the id is reported back', async 
 
   assert.deepEqual(parse(result), {
     ok: true,
-    result: { taskId: 'task-9', resumed: 'aaaaaaaa-1111-2222-3333-444444444444' },
+    result: {
+      taskId: 'task-9', operation: 'resume',
+      sourceSessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+      sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+    },
   })
   assert.equal(a.asked[0].sessionId, 'aaaaaaaa-1111-2222-3333-444444444444')
   assert.equal(a.asked[0].intent, 'carry on with the migration')
+})
+
+test('fork is a separate operation and reports the provider child identity', async () => {
+  const a = adapters()
+
+  const result = await new SessionsCapability(a).call(ctx, 'session_fork', {
+    sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+    intent: 'try the alternate migration',
+  })
+
+  assert.deepEqual(parse(result), {
+    ok: true,
+    result: {
+      taskId: 'task-10', operation: 'fork',
+      sourceSessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+      sessionId: 'bbbbbbbb-1111-2222-3333-444444444444',
+    },
+  })
+  assert.deepEqual(a.asked[0], {
+    operation: 'fork', sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+    intent: 'try the alternate migration',
+  })
+})
+
+test('resume fails closed when the adapter changes provider identity', async () => {
+  const result = await new SessionsCapability(adapters({
+    async resume(input) {
+      return {
+        taskId: 'task-9', operation: 'resume', sourceSessionId: input.sessionId,
+        sessionId: 'different-session',
+      }
+    },
+  })).call(ctx, 'session_resume', { sessionId: 'source-session' })
+
+  assert.equal(result.isError, true)
+  assert.equal(parse(result).error.code, 'resume-failed')
+})
+
+test('fork fails closed when the adapter reuses provider identity', async () => {
+  const result = await new SessionsCapability(adapters({
+    async fork(input) {
+      return {
+        taskId: 'task-10', operation: 'fork', sourceSessionId: input.sessionId,
+        sessionId: input.sessionId,
+      }
+    },
+  })).call(ctx, 'session_fork', { sessionId: 'source-session' })
+
+  assert.equal(result.isError, true)
+  assert.equal(parse(result).error.code, 'fork-failed')
 })
 
 test('reopening without an intent asks for no follow-up at all', async () => {
@@ -90,10 +158,11 @@ test('an expired agent run cannot reopen a session', async () => {
   assert.equal(parse(result).error.code, 'access-denied')
 })
 
-test('the capability owns exactly one tool, and it is the Agent\'s', () => {
+test('the capability exposes distinct resume and fork tools only to the Agent', () => {
   const capability = new SessionsCapability(adapters())
 
-  assert.deepEqual(capability.tools.map((t) => t.name), ['session_resume'])
+  assert.deepEqual(capability.tools.map((t) => t.name), ['session_resume', 'session_fork'])
   assert.deepEqual([...capability.roles], ['unmute-agent'])
   assert.equal(capability.tools[0]!.consequence, 'reversible-write')
+  assert.equal(capability.tools[1]!.consequence, 'reversible-write')
 })

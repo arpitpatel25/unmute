@@ -41,7 +41,7 @@ const log = createLogger('codex-hub')
 export interface HubPatch extends CodexPatch { taskId: string }
 interface HistoryTurn { id: string; status?: string; startedAt?: number; durationMs?: number; itemsView?: string; items?: Record<string, unknown>[] }
 interface ResumeHistory {
-  thread?: { id?: string; turns?: HistoryTurn[] }
+  thread?: { id?: string; forkedFromId?: string; turns?: HistoryTurn[] }
   turnsBackwardsCursor?: string | null
   itemsBackwardsCursor?: string | null
 }
@@ -298,6 +298,61 @@ export class CodexHub {
     log.event('codex-thread-started', { taskId, threadId, cwd: o.cwd, model: o.model ?? null, effort: o.effort ?? null, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox })
     return { threadId, url: srv.url }
     } finally { this.finishRegistration() }
+  }
+
+  /** Create a provider-native child. The returned child identity is
+   * authoritative; a fork is never emulated by starting a blank thread. */
+  async forkThread(taskId: string, sourceThreadId: string, o: StartThreadOpts): Promise<{
+    threadId: string
+    forkedFromId: string
+  }> {
+    const srv = await this.ensure()
+    const config = { ...o.config, ...await this.deps.threadConfig?.(taskId) }
+    const model = o.model && /\s/.test(o.model) ? undefined : o.model
+    this.registrations++
+    try {
+      const result = await srv.request<ResumeHistory>('thread/fork', {
+        threadId: sourceThreadId,
+        cwd: o.cwd,
+        approvalPolicy: o.approvalPolicy,
+        sandbox: o.sandbox,
+        config,
+        ...(model ? { model } : {}),
+      })
+      const threadId = String(result.thread?.id ?? '')
+      if (!threadId) throw new Error('thread/fork returned no child thread id')
+      if (threadId === sourceThreadId) throw new Error('Codex fork returned the same thread as its source')
+      if (result.thread?.forkedFromId && result.thread.forkedFromId !== sourceThreadId) {
+        throw new Error('Codex fork returned inconsistent source identity')
+      }
+      const blocks = new CodexBlockStream()
+      for (const turn of result.thread?.turns ?? []) {
+        blocks.push({ method: 'turn/started', params: { threadId, turn } })
+        for (const item of turn.items ?? []) {
+          blocks.push({ method: 'item/completed', params: { threadId, turnId: turn.id, item } })
+        }
+        if (turn.status && turn.status !== 'inProgress') {
+          blocks.push({ method: 'turn/completed', params: { threadId, turn } })
+        }
+      }
+      const { config: _config, ...options } = o
+      const st: ThreadState = {
+        taskId, threadId, pending: null, pendingQueue: [], blocks,
+        options: { ...options, model },
+        completedTurns: new Set((result.thread?.turns ?? [])
+          .filter(turn => ['completed', 'interrupted', 'failed'].includes(turn.status ?? ''))
+          .map(turn => turn.id)),
+      }
+      st.turnId = result.thread?.turns?.find(turn => turn.status === 'inProgress')?.id
+      this.byThread.set(threadId, st)
+      this.byTask.set(taskId, st)
+      const snapshot = blocks.snapshot()
+      if (snapshot.blocks.length) this.deps.onPatch({ taskId, blocks: snapshot.blocks })
+      log.event('codex-thread-forked', { taskId, threadId, forkedFromId: sourceThreadId })
+      return { threadId, forkedFromId: sourceThreadId }
+    } finally {
+      this.finishRegistration()
+    }
   }
 
   /** Send a message — the first prompt or a reply. Starts a turn. */

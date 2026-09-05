@@ -19,6 +19,7 @@ function fakeServer() {
     async request(method: string, params: unknown) {
       calls.push({ method, params })
       if (method === 'thread/start') return { threadId: `th_${nextThread++}` }
+      if (method === 'thread/fork') return { thread: { id: `fork_${nextThread++}`, forkedFromId: (params as any).threadId, turns: [] } }
       if (method === 'turn/start') return { turn: { id: 'turn-1' } }
       return {}
     },
@@ -30,6 +31,33 @@ function fakeServer() {
     ask: (r: ServerRequest) => onReq!(r),
   }
 }
+
+test('native fork passes the exact source and registers only the returned child', async () => {
+  const { hub, calls } = makeHub()
+  const options = { cwd: '/project', approvalPolicy: 'never', sandbox: 'danger-full-access' }
+
+  const result = await hub.forkThread('child-task', 'source-thread', options)
+
+  assert.equal(result.threadId, 'fork_1')
+  assert.equal(result.forkedFromId, 'source-thread')
+  assert.equal(hub.threadIdFor('child-task'), 'fork_1')
+  assert.deepEqual(calls.find(call => call.method === 'thread/fork')?.params, {
+    threadId: 'source-thread', cwd: '/project', approvalPolicy: 'never',
+    sandbox: 'danger-full-access', config: {},
+  })
+})
+
+test('native fork fails closed when Codex returns the source identity', async () => {
+  const { hub, srv } = makeHub()
+  srv.request = async (method: string, params: any) => method === 'thread/fork'
+    ? { thread: { id: params.threadId, forkedFromId: params.threadId, turns: [] } } as any
+    : {} as any
+
+  await assert.rejects(
+    hub.forkThread('child-task', 'source-thread', { cwd: '/project', approvalPolicy: 'never', sandbox: 'danger-full-access' }),
+    /same thread/i,
+  )
+})
 
 function makeHub() {
   const patches: HubPatch[] = []

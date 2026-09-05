@@ -6,8 +6,6 @@ import type {
 } from '../types.ts'
 
 /**
- * ONE TOOL, because only one of these ever needed the app.
- *
  * `sessions_list`, `sessions_search` and `session_read` were MCP tools over
  * data the Agent can already open — `Read`, `Glob` and `Grep` are in its
  * allowlist, and a tool over readable data caps the Agent at the queries its
@@ -20,10 +18,9 @@ import type {
  * a judgement call. The Agent composes context itself and passes it to
  * `task_create`, which is the general operation; resuming is the narrow case.
  *
- * Resuming is here because it is the one thing the Agent genuinely cannot do
- * for itself: it needs a spawned process carrying `--resume`, and a card in
- * the Orchestrator. Everything else about finding the session is the Agent's
- * own work, done with the tools it already holds.
+ * Resume and fork are here because they are provider identity operations the
+ * Agent cannot perform through filesystem tools. They remain separate so one
+ * can never silently degrade into the other.
  */
 
 const tools = [
@@ -55,11 +52,39 @@ const tools = [
     },
     consequence: 'reversible-write',
   },
+  {
+    name: 'session_fork',
+    description: 'Create an independent child of one exact past session using the provider\'s'
+      + ' native fork operation. Use only when the user asks for an alternate path, branch, or'
+      + ' wants the original preserved. Find the full source id in transcripts first. This is'
+      + ' not a resume and never falls back to a blank task.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['sessionId'],
+      properties: {
+        sessionId: {
+          type: 'string', minLength: 1,
+          description: 'The full exact provider session id to fork.',
+        },
+        intent: {
+          type: 'string', maxLength: 2000,
+          description: 'The user\'s current request for the child. Omit to fork without adding a turn.',
+        },
+      },
+    },
+    consequence: 'reversible-write',
+  },
 ] as const satisfies readonly ToolDefinition[]
 
+export interface SessionActionResult {
+  taskId: string
+  operation: 'resume' | 'fork'
+  sourceSessionId: string
+  sessionId: string
+}
+
 export interface SessionAdapters {
-  /** Wakes an existing card, or forks an unowned session into a new one. */
-  resume(input: { sessionId: string; intent?: string }): Promise<{ taskId: string }>
+  resume(input: { sessionId: string; intent?: string }): Promise<SessionActionResult>
+  fork(input: { sessionId: string; intent?: string }): Promise<SessionActionResult>
 }
 
 function ok(result: unknown): ToolResult {
@@ -83,7 +108,9 @@ export class SessionsCapability implements CapabilityModule {
     if (ctx.principal.kind !== 'unmute-agent' || ctx.principal.expiresAt <= ctx.now) {
       return fail('access-denied', 'Session history is unavailable')
     }
-    if (tool !== 'session_resume') return fail('unknown-tool', `Unknown tool: ${tool}`)
+    if (tool !== 'session_resume' && tool !== 'session_fork') {
+      return fail('unknown-tool', `Unknown tool: ${tool}`)
+    }
 
     const value = (input ?? {}) as Record<string, unknown>
     const sessionId = typeof value.sessionId === 'string' ? value.sessionId.trim() : ''
@@ -92,13 +119,24 @@ export class SessionsCapability implements CapabilityModule {
     if (intent.length > 2000) return fail('invalid-input', 'Session query is invalid')
 
     try {
-      const { taskId } = await this.adapters.resume({
+      const operation = tool === 'session_resume' ? 'resume' : 'fork'
+      const result = await this.adapters[operation]({
         sessionId,
         ...(intent ? { intent } : {}),
       })
-      return ok({ taskId, resumed: sessionId })
+      if (result.operation !== operation || result.sourceSessionId !== sessionId) {
+        throw new Error(`Provider returned inconsistent ${operation} identity`)
+      }
+      if (operation === 'resume' && result.sessionId !== sessionId) {
+        throw new Error('Resume changed the provider session identity')
+      }
+      if (operation === 'fork' && result.sessionId === sessionId) {
+        throw new Error('Fork reused the source provider session identity')
+      }
+      return ok(result)
     } catch (error) {
-      return fail('resume-failed', (error as Error).message || 'That session could not be resumed')
+      return fail(`${tool === 'session_resume' ? 'resume' : 'fork'}-failed`,
+        (error as Error).message || `That session could not be ${tool === 'session_resume' ? 'resumed' : 'forked'}`)
     }
   }
 }
