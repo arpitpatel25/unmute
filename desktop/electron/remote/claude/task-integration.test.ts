@@ -454,6 +454,34 @@ test('legacy owned conversation migrates only on explicit resume and keeps its e
   manager.shutdown()
 })
 
+test('unknown legacy Claude conversation becomes Unmute-owned only after provider resume succeeds', async () => {
+  const baseDir = await mkdtemp(join(tmpdir(), 'unmute-legacy-adopt-'))
+  const initial = new TaskManager({ baseDir, executorFactory: () => { throw new Error('No PTY') },
+    claudeSessionOptions: async task => ({ binary: 'fake', cwd: task.cwd }),
+  })
+  const id = await initial.createChat({ provider: 'claude' })
+  const home = initial.get(id)!.home, sessionId = initial.get(id)!.sessionId
+  initial.shutdown(); await Promise.all([...(initial as any).metaChains.values()])
+  const meta = JSON.parse(await readFile(join(home, 'meta.json'), 'utf8'))
+  delete meta.claudeSessionSettings; delete meta.sessionOwnership; delete meta.chatUnstarted
+  await writeFile(join(home, 'meta.json'), JSON.stringify(meta))
+
+  const launches: ClaudeTaskOptions[] = []
+  const manager = new TaskManager({ baseDir, executorFactory: () => { throw new Error('No PTY migration') },
+    listLiveRuntimeIds: async () => new Set(),
+    claudeSessionOptions: async task => ({ binary: 'fake', cwd: task.cwd }),
+    claudeTaskFactory: options => { launches.push(options); return { alive: true, busy: false, async start() {}, close() {} } as never },
+  })
+  await manager.rehydrate()
+  assert.equal(manager.get(id)?.sessionOwnership, 'unknown')
+  assert.equal(await manager.resume(id), true)
+  assert.equal(launches[0].sessionId, sessionId)
+  const adopted = JSON.parse(await readFile(join(home, 'meta.json'), 'utf8'))
+  assert.equal(adopted.sessionOwnership, 'unmute')
+  assert.ok(adopted.claudeSessionSettings)
+  manager.shutdown()
+})
+
 test('externally owned conversation cannot silently acquire a second structured writer', async () => {
   const baseDir = await mkdtemp(join(tmpdir(), 'unmute-external-chat-'))
   const initial = new TaskManager({ baseDir, executorFactory: () => { throw new Error('No PTY') } })

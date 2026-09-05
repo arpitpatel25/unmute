@@ -42,6 +42,52 @@ test('Codex attach resumes the exact provider thread and submits only the curren
   assert.deepEqual(tm.get(result.taskId)?.continuationSources, [
     { sessionId: 'source-thread', provider: 'codex' },
   ])
+  const durable = JSON.parse(await fs.readFile(join(tm.get(result.taskId)!.home, 'meta.json'), 'utf8'))
+  assert.equal(durable.intent, 'add the pricing row')
+  assert.equal(durable.chatUnstarted, false)
+  assert.equal(durable.continuationMode, 'resume')
+  assert.deepEqual(durable.continuationSources, [{ sessionId: 'source-thread', provider: 'codex' }])
+})
+
+test('unknown legacy Codex conversation is claimed only after exact provider resume succeeds', async () => {
+  const baseDir = await base()
+  const firstHub = { running: true, threadIdFor() { return undefined } }
+  const first = new TaskManager({ executorFactory, codexHub: firstHub as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  const id = await first.createChat({ provider: 'codex', cwd: baseDir, permission: 'maximum' })
+  const task = first.get(id)!, home = task.home
+  const meta = JSON.parse(await fs.readFile(join(home, 'meta.json'), 'utf8'))
+  meta.sessionId = 'legacy-thread'; meta.codexRolloutId = 'legacy-thread'; meta.chatUnstarted = false
+  delete meta.codexSessionSettings; delete meta.sessionOwnership
+  await fs.writeFile(join(home, 'meta.json'), JSON.stringify(meta))
+
+  const calls: string[] = []
+  let activeWriter = true
+  const hub = {
+    running: true,
+    async resumeThread(_taskId: string, threadId: string) {
+      calls.push(threadId)
+      if (activeWriter) throw new Error('thread already has an active writer')
+    },
+    threadIdFor() { return undefined },
+  }
+  const restarted = new TaskManager({ executorFactory, codexHub: hub as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  await restarted.rehydrate()
+  assert.equal(restarted.get(id)?.sessionOwnership, 'unknown')
+  assert.equal(restarted.get(id)?.agent, 'codex')
+  assert.equal(await restarted.resume(id), false)
+  const refused = JSON.parse(await fs.readFile(join(home, 'meta.json'), 'utf8'))
+  assert.equal(refused.sessionOwnership, undefined)
+  assert.equal(refused.codexSessionSettings, undefined)
+  activeWriter = false
+  assert.equal(await restarted.resume(id), true, restarted.get(id)?.deliveryError ?? restarted.get(id)?.resumeError)
+  assert.deepEqual(calls, ['legacy-thread', 'legacy-thread'])
+  assert.equal(restarted.get(id)?.deliveryError, undefined)
+  assert.equal(restarted.get(id)?.resumeError, undefined)
+  const adopted = JSON.parse(await fs.readFile(join(home, 'meta.json'), 'utf8'))
+  assert.equal(adopted.sessionOwnership, 'unmute')
+  assert.ok(adopted.codexSessionSettings)
 })
 
 test('Codex reopen attaches exact history without inventing a user turn', async () => {
@@ -96,6 +142,11 @@ test('Codex fork uses native fork and persists the returned child and source', a
   assert.deepEqual(tm.get(result.taskId)?.continuationSources, [
     { sessionId: 'source-thread', provider: 'codex' },
   ])
+  const durable = JSON.parse(await fs.readFile(join(tm.get(result.taskId)!.home, 'meta.json'), 'utf8'))
+  assert.equal(durable.intent, 'try another route')
+  assert.equal(durable.chatUnstarted, false)
+  assert.equal(durable.continuationMode, 'fork')
+  assert.deepEqual(durable.continuationSources, [{ sessionId: 'source-thread', provider: 'codex' }])
 })
 
 test('synthesis provenance survives task rehydration', async () => {

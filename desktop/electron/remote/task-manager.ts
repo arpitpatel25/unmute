@@ -3804,8 +3804,16 @@ export class TaskManager extends EventEmitter {
     // concurrent read/merge/write operations must not restore stale settings.
     this.mergeMeta(task, {
       state: task.state, updatedAt: task.updatedAt,
+      intent: task.intent,
+      chatUnstarted: task.chatUnstarted === true,
+      sessionOwnership: task.sessionOwnership,
       ...(task.sessionId ? { sessionId: task.sessionId } : {}),
       ...(task.codexRolloutId ? { codexRolloutId: task.codexRolloutId } : {}),
+      continuationMode: task.continuationMode,
+      continuationSources: task.continuationSources,
+      continuationArtifacts: task.continuationArtifacts,
+      continuationConfidence: task.continuationConfidence,
+      claudeForkFromSessionId: task.claudeForkFromSessionId,
       conversation: task.conversation ?? [],
       turnOutcome: task.turnOutcome,
     }, 'state')
@@ -5298,7 +5306,8 @@ export class TaskManager extends EventEmitter {
       if (attachments.length) return false
       return this.answerQuestion(id, text, context)
     }
-    if (!task.claudeSessionSettings && !task.codexSessionSettings && !isExternalAgent(task.agent) && this.opts.claudeSessionOptions) {
+    const canMigrateLegacy = task.agent === 'codex' ? Boolean(this.opts.codexHub) : Boolean(this.opts.claudeSessionOptions)
+    if (!task.claudeSessionSettings && !task.codexSessionSettings && !isExternalAgent(task.agent) && canMigrateLegacy) {
       task.deliveryError = task.importedFromCli ? 'Externally owned sessions are read-only here. Start a new conversation.' : 'Resume this legacy conversation in graphical chat before sending. Your draft is saved.'
       this.emit('updated', task)
       return false
@@ -5621,13 +5630,15 @@ export class TaskManager extends EventEmitter {
       this.emit('updated', task)
       return false
     }
-    if (!task.claudeSessionSettings && !task.codexSessionSettings && !isExternalAgent(task.agent) && this.opts.claudeSessionOptions) {
+    let legacyMigration: { ownership: Task['sessionOwnership'] } | undefined
+    const canMigrateLegacy = task.agent === 'codex' ? Boolean(this.opts.codexHub) : Boolean(this.opts.claudeSessionOptions)
+    if (!task.claudeSessionSettings && !task.codexSessionSettings && !isExternalAgent(task.agent) && canMigrateLegacy) {
       try {
         if (task.importedFromCli) throw new Error('This session is owned outside Unmute and is read-only here. Start a new conversation to avoid simultaneous writers.')
-        if (task.sessionOwnership !== 'unmute') throw new Error('Ownership of this legacy session is not verified. It is read-only here to avoid simultaneous writers; start a new conversation.')
         const live = await this.opts.listLiveRuntimeIds?.()
         if (this.executors.get(id)?.alive || live?.has(id)) throw new Error('Stop the existing legacy runtime before resuming this conversation in graphical chat.')
         if (!(await fs.stat(task.cwd).catch(() => null))?.isDirectory()) throw new Error(`Project folder is unavailable: ${task.cwd}`)
+        legacyMigration = { ownership: task.sessionOwnership }
         if (task.agent === 'codex') {
           const posture = codexPosture({ permissionMode: this.opts.permissionMode?.() === 'auto-approve' ? 'auto-approve' : 'prompt', sandboxRoots: this.opts.sandboxRoots?.() ?? [], fullAccessAllowed: this.opts.codexFullAccess?.() === true })
           task.codexSessionSettings = { ...this.opts.codexCliChoice?.(), cwd: task.cwd, approvalPolicy: posture.approvalPolicy, sandbox: posture.sandbox, writableRoots: posture.addDirs }
@@ -5639,13 +5650,27 @@ export class TaskManager extends EventEmitter {
           }
           task.claudeSessionSettings = this.opts.claudeChoice?.(task) ?? { permissionMode: 'manual' }
         }
-        this.mergeMeta(task, { claudeSessionSettings: task.claudeSessionSettings, codexSessionSettings: task.codexSessionSettings }, 'structured-migration')
-        await this.metaChains.get(id)
       } catch (error) { task.resumeError = (error as Error).message; this.emit('updated', task); return false }
     }
     if (task.claudeSessionSettings) {
-      try { await this.connectClaude(task, true); return true }
+      try {
+        await this.connectClaude(task, true)
+        if (legacyMigration) {
+          task.sessionOwnership = 'unmute'; task.chatUnstarted = false
+          this.mergeMeta(task, {
+            sessionOwnership: 'unmute', chatUnstarted: false,
+            claudeSessionSettings: task.claudeSessionSettings,
+          }, 'structured-migration')
+          await this.metaChains.get(id)
+        }
+        task.deliveryError = undefined; task.resumeError = undefined
+        return true
+      }
       catch (error) {
+        if (legacyMigration) {
+          delete task.claudeSessionSettings
+          task.sessionOwnership = legacyMigration.ownership
+        }
         task.deliveryError = `Could not resume Claude: ${(error as Error).message}`
         this.emit('updated', task)
         return false
@@ -5665,8 +5690,21 @@ export class TaskManager extends EventEmitter {
           if (!task.sessionId) throw new Error('Session creation was not acknowledged. Start a new conversation.')
           await this.opts.codexHub.resumeThread(id, task.codexRolloutId ?? task.sessionId, task.codexSessionSettings)
         }
+        if (legacyMigration) {
+          task.sessionOwnership = 'unmute'; task.chatUnstarted = false
+          this.mergeMeta(task, {
+            sessionOwnership: 'unmute', chatUnstarted: false,
+            codexSessionSettings: task.codexSessionSettings,
+          }, 'structured-migration')
+          await this.metaChains.get(id)
+        }
+        task.deliveryError = undefined; task.resumeError = undefined
         return true
       } catch (error) {
+        if (legacyMigration) {
+          delete task.codexSessionSettings
+          task.sessionOwnership = legacyMigration.ownership
+        }
         task.deliveryError = `Could not resume Codex: ${(error as Error).message}`
         this.emit('updated', task)
         return false

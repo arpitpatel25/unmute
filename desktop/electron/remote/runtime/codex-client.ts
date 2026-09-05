@@ -53,6 +53,12 @@ export class PersistentCodexHub extends CodexHub {
     await this.rpc.call('codex.resumeThread', id, thread, options)
     await this.reconnect()
   }
+  override async forkThread(id: string, source: string, options: StartThreadOpts): Promise<{ threadId: string; forkedFromId: string }> {
+    await this.prepare(id, source)
+    const result = await this.rpc.call<{ threadId: string; forkedFromId: string }>('codex.forkThread', id, source, options)
+    await this.reconnect()
+    return result
+  }
   override async send(id: string, text: string, options: Parameters<CodexHub['send']>[2] = {}): Promise<boolean> {
     return this.rpc.call('codex.send', id, text, options)
   }

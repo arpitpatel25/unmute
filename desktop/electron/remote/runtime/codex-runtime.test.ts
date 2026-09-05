@@ -57,3 +57,43 @@ test('UI reconnect replays pending approval and keeps the original provider thre
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('provider-native fork is owned by the persistent runtime and survives UI reconnect', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'codex-daemon-fork-'))
+  const calls: string[] = []
+  const provider = {
+    running: true, url: 'ws://localhost:9999', async start() {}, stop() {},
+    on() { return () => {} }, onRequest() {}, notify() {},
+    async request(method: string) {
+      calls.push(method)
+      if (method === 'thread/fork') return { thread: { id: 'child', forkedFromId: 'source', turns: [
+        { id: 'turn-1', status: 'completed', items: [{ type: 'userMessage', content: [{ type: 'inputText', text: 'Earlier request' }] }] },
+      ] } }
+      return {}
+    },
+  } as unknown as CodexAppServer
+  let service!: CodexRuntimeService
+  const server = new RuntimeRpcServer(join(root, 'rpc.sock'), (method, args) => service.invoke(method.replace('codex.', ''), args))
+  service = new CodexRuntimeService(join(root, 'data'), event => server.emit('codex.event', event), { makeServer: () => provider })
+  await server.listen()
+  const options = { cwd: '/tmp', approvalPolicy: 'on-request', sandbox: 'danger-full-access' }
+  const deps = { resolveBin: async () => '/codex', onPatch() {}, approvalCap: () => ({ roots: [], fullAccessAllowed: true }) }
+  const firstRpc = new RuntimeRpcClient(join(root, 'rpc.sock'))
+  const first = new PersistentCodexHub(firstRpc, deps)
+  try {
+    assert.deepEqual(await first.forkThread('task', 'source', options), { threadId: 'child', forkedFromId: 'source' })
+    assert.equal(first.threadIdFor('task'), 'child')
+    first.stop(); firstRpc.disconnect()
+
+    const nextRpc = new RuntimeRpcClient(join(root, 'rpc.sock'))
+    const next = new PersistentCodexHub(nextRpc, deps)
+    try {
+      await next.reconnect()
+      assert.equal(next.threadIdFor('task'), 'child')
+      assert.deepEqual(calls, ['thread/fork'])
+    } finally { next.stop(); nextRpc.disconnect() }
+  } finally {
+    first.stop(); firstRpc.disconnect(); service.close(); await server.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})

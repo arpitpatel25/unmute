@@ -87,6 +87,7 @@ export class CodexRuntimeService {
     switch (method) {
       case 'startThread': return this.register(id, async () => this.hub.threadIdFor(id) ? { threadId: this.hub.threadIdFor(id), url: this.hub.url } : this.hub.startThread(id, rest[0]))
       case 'resumeThread': return this.register(id, () => this.hub.resumeThread(id, rest[0], rest[1], false))
+      case 'forkThread': return this.register(id, () => this.hub.forkThread(id, rest[0], rest[1]))
       case 'send': return this.hub.send(id, rest[0], rest[1])
       case 'sendNewTurn': return this.hub.sendNewTurn(id, rest[0], rest[1], rest[2])
       case 'answer': { const accepted = this.hub.answer(id, rest[0], rest[1]); return { accepted, mirror: this.mirror(id) } }
