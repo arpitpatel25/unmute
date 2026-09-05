@@ -459,6 +459,7 @@ struct StageComposer: View {
             staging.reconcile(task: taskId, attachmentIds: draftAttachmentIds)
         }
         .frame(maxWidth: 760)
+        .frame(maxWidth: .infinity, alignment: .center)
         .popover(isPresented: $newChatOpen) { NewConversationSetup(model: model, close: { newChatOpen = false }) }
         .onChange(of: RemoteDraftSnapshot(text: draft?.text ?? "", revision: draft?.clientRevision)) { remote in
             let next = reconcileDraft(localText: text, localRevision: clientRevision,
@@ -504,11 +505,14 @@ struct StageComposer: View {
     }
 
     private func pickFiles() {
+        let owner = NSApp.windows.first { $0 is NotchWindow && $0.isVisible }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         panel.prompt = "Attach"
+        owner?.orderOut(nil)
         panel.begin { response in
+            owner?.orderFrontRegardless()
             guard response == .OK else { return }
             for url in panel.urls {
                 // The backend consumes the handoff file. Never give it the
