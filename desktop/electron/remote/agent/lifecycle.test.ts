@@ -15,7 +15,8 @@ async function harness(ceiling = 20) {
   const store = new AgentConversationStore({ root: join(root, 'conversations'), crypto: new MemoryCrypto({ keyProvider: { getMasterKey: async () => Buffer.alloc(32, 4) } }) })
   const calls: Array<{ text: string; prior?: string; context: AgentSubmissionContext; settle(outcome?: AgentInteractionResult['outcome']): void }> = []
   let reject = false, uncertain = false, refreshes = 0
-  const options = { journal, store, ceiling: () => ceiling, selectedProvider: () => 'claude' as const,
+  let now = 1_000
+  const options = { journal, store, now: () => now, ceiling: () => ceiling, selectedProvider: () => 'claude' as const,
     prepareFresh: async () => { refreshes++ }, pin: (_ids: string[]) => {}, close: async (_id: string) => {},
     controller: { async submit(input: { transcript: string; priorRunId?: string }, context: AgentSubmissionContext) {
       const result = (outcome: AgentInteractionResult['outcome']): AgentInteractionResult => ({ interactionId: context.interactionId, agentRunId: context.runId, provider: context.provider, source: 'provider', presentation: 'transient', outcome, text: `answer ${input.transcript}` })
@@ -30,12 +31,13 @@ async function harness(ceiling = 20) {
     await c.context.onAccepted({ id: c.context.runId, provider: c.context.provider, providerHandle: `handle-${c.context.runId}`, model: 'reported-model', state: 'running', createdAt: 1, lastUserAt: 1, lastActivityAt: 1, providerWorkEnded: false })
   }
   return { root, journal, store, calls, get lifecycle() { return lifecycle }, waitCalls, accept,
+    advance: (ms: number) => { now += ms },
     setReject: (value: boolean) => { reject = value }, setUncertain: (value: boolean) => { uncertain = value }, get refreshes() { return refreshes },
     restart: async () => { lifecycle.dispose(); lifecycle = new AgentConversationLifecycle(options); await lifecycle.initialize(); return lifecycle },
     cleanup: async () => { lifecycle.dispose(); await rm(root, { recursive: true, force: true }) } }
 }
 
-test('exactly twenty accepted turns settle before queued twenty-one starts fresh; full text/draft/replay survive', async () => {
+test('continuous work past twenty stays in the same conversation, preserving draft and replay', async () => {
   const h = await harness()
   try {
     for (let i = 1; i <= 19; i++) {
@@ -51,17 +53,16 @@ test('exactly twenty accepted turns settle before queued twenty-one starts fresh
     assert.equal(h.calls.length, 20)
     h.calls[19].settle('interrupted'); await p20
     await h.waitCalls(21)
-    assert.equal(h.calls[20].prior, undefined)
+    assert.equal(h.calls[20].prior, h.calls[19].context.runId)
     assert.equal(h.lifecycle.view().record.accepted.length, 20)
     await h.accept(20)
-    assert.equal(h.lifecycle.view().record.accepted.length, 1)
-    assert.equal(h.lifecycle.view().snapshot.notice, 'Conversation cleared after 20 messages')
-    assert.equal(h.lifecycle.view().snapshot.chat.turns[0].text.length, 40000)
+    assert.equal(h.lifecycle.view().record.accepted.length, 21)
+    assert.equal(h.lifecycle.view().snapshot.chat.turns.at(-1)!.text.length, 40000)
     assert.equal(h.lifecycle.view().snapshot.draft.text, 'typed during send')
     h.calls[20].settle(); await queued.completion
     await h.lifecycle.submit({ transcript: 'm1 replay', submissionId: 's1' })
     assert.equal(h.calls.length, 21)
-    assert.equal(h.refreshes, 2)
+    assert.equal(h.refreshes, 1)
   } finally { await h.cleanup() }
 })
 
@@ -80,8 +81,38 @@ test('rejected fresh reset keeps old chat and queue; only explicit retry publish
     h.setReject(false)
     const retry = h.lifecycle.retry()
     await h.waitCalls(2); await h.accept(1); h.calls[1].settle(); await retry
+    assert.equal(h.calls[1].context.carryoverRunId, h.calls[0].context.runId)
+    assert.equal(h.lifecycle.view().snapshot.chat.turns[0].text, 'old')
     assert.equal(h.lifecycle.view().record.provider, 'codex')
     assert.match(h.lifecycle.view().snapshot.notice!, /Switched to Codex/)
+    assert.equal(h.lifecycle.view().record.accepted.length, 1)
+  } finally { await h.cleanup() }
+})
+
+test('idle requires the threshold and an empty draft; successful rotation retains visible history', async () => {
+  const h = await harness(2)
+  try {
+    async function turn(text: string, n: number) {
+      const pending = h.lifecycle.submit({ transcript: text })
+      await h.waitCalls(n); await h.accept(n - 1); h.calls[n - 1].settle(); await pending
+    }
+    await turn('one', 1)
+    h.advance(20 * 60_000)
+    await turn('two', 2)
+    assert.equal(h.calls[1].prior, h.calls[0].context.runId)
+    await h.lifecycle.setDraft('composing', 1)
+    h.advance(20 * 60_000)
+    await turn('three', 3)
+    assert.equal(h.calls[2].prior, h.calls[0].context.runId)
+    await h.lifecycle.setDraft('', 2)
+    h.advance(20 * 60_000 - 1)
+    await turn('four', 4)
+    assert.equal(h.calls[3].prior, h.calls[0].context.runId)
+    h.advance(20 * 60_000)
+    await turn('five', 5)
+    assert.equal(h.calls[4].prior, undefined)
+    assert.equal(h.calls[4].context.carryoverRunId, h.calls[0].context.runId)
+    assert.equal(h.lifecycle.view().snapshot.chat.turns.length, 10)
     assert.equal(h.lifecycle.view().record.accepted.length, 1)
   } finally { await h.cleanup() }
 })
@@ -101,7 +132,7 @@ test('prepared crash and unobserved write ambiguity fail closed without replay o
   } finally { await h.cleanup() }
 })
 
-test('restart at accepted twenty settles interruption and cannot send again to the old handle', async () => {
+test('restart at threshold waits for idle before rotating and carries prior run context', async () => {
   const h = await harness(1)
   try {
     const pending = h.lifecycle.submit({ transcript: 'boundary', submissionId: 'boundary' })
@@ -109,8 +140,10 @@ test('restart at accepted twenty settles interruption and cannot send again to t
     await h.restart()
     assert.equal(h.lifecycle.view().record.phase, 'reset-due')
     assert.equal(h.lifecycle.view().record.accepted[0].outcome, 'interrupted')
+    h.advance(20 * 60_000)
     const next = h.lifecycle.submit({ transcript: 'fresh' })
     await h.waitCalls(2); assert.equal(h.calls[1].prior, undefined)
+    assert.equal(h.calls[1].context.carryoverRunId, h.calls[0].context.runId)
     await h.accept(1); h.calls[1].settle(); await next
     h.calls[0].settle(); await pending
   } finally { await h.cleanup() }

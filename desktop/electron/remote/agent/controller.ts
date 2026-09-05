@@ -104,6 +104,8 @@ export interface AgentControllerRuntime {
 }
 
 export interface AgentSubmissionContext {
+  /** Prior run summaries are background context, never fresh user authorization. */
+  carryoverRunId?: string
   interactionId: string
   runId: string
   provider: AgentProviderId
@@ -222,7 +224,7 @@ export class UnmuteAgentController {
       }
       const runtime = validateRuntime(this.options.runtime())
       const recent = (await this.options.supervisor.recentExchanges())
-        .filter(exchange => validated.priorRunId === exchange.runId)
+        .filter(exchange => (validated.priorRunId ?? context?.carryoverRunId) === exchange.runId)
         .slice(-MAX_RECENT_EXCHANGES)
       const capabilities = this.options.capabilities.tools(principal)
       const transcript = providerTranscript(validated, handles, recent, capabilities)

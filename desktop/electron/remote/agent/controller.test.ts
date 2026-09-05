@@ -22,6 +22,9 @@ test('controller uses actual resumed provider and never injects another run tran
   assert.doesNotMatch(transcripts[0], /TRANSIENT_OTHER/)
   await controller.submit({ transcript: 'fresh' })
   assert.doesNotMatch(transcripts[1], /TRANSIENT_OLD|TRANSIENT_OTHER/)
+  await controller.submit({ transcript: 'continue the task' }, { interactionId: 'handover', runId: 'new', provider: 'claude', carryoverRunId: 'old', onAccepted: async () => {} })
+  assert.match(transcripts[2], /TRANSIENT_OLD/)
+  assert.doesNotMatch(transcripts[2], /TRANSIENT_OTHER/)
   controller.dispose()
 })
 async function* empty() {}

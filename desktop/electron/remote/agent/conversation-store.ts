@@ -7,6 +7,8 @@ import type { AgentInteractionInput, AgentInteractionResult } from './controller
 
 export interface AgentConversationSnapshot {
   generation: number
+  /** Last input, draft edit, or completed work; absent legacy snapshots start a new idle window. */
+  lastActivityAt?: number
   chat: AgentChatSnapshot
   draft: { text: string; revision: number }
   queued: Array<{ submissionId: string; input: AgentInteractionInput }>

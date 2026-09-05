@@ -12,6 +12,8 @@ interface Options {
   controller: { submit(input: AgentInteractionInput, context: AgentSubmissionContext): Promise<AgentInteractionResult> }
   selectedProvider(): AgentProviderId
   ceiling?(): number
+  idleMs?: number
+  now?(): number
   prepareFresh(): Promise<void>
   pin(ids: string[]): void
   close(id: string): Promise<void>
@@ -31,6 +33,7 @@ export class AgentConversationLifecycle {
   private stopped = false
   private waiting = new Map<string, Waiting>()
   private pendingSettlement: AgentPendingSettlement | null = null
+  private rotationDue = false
   constructor(private readonly options: Options) {}
 
   initialize(): Promise<void> {
@@ -72,6 +75,13 @@ export class AgentConversationLifecycle {
         completion = Promise.resolve(failure('That Agent conversation is not the current conversation.', 'run-unavailable')); return
       }
       const snapshot = structuredClone(this.snapshot)
+      // Prepare lazily on the next interaction: no provider is started solely
+      // because a timer fired. Work and queued input can never be split by idle.
+      if (!this.draining && !this.pendingSettlement && !snapshot.queued.length && !snapshot.draft.text.trim()
+        && !this.record.prepared && this.record.phase !== 'recovery-required'
+        && this.record.accepted.length >= this.record.ceiling
+        && this.now() - (snapshot.lastActivityAt ?? this.now()) >= (this.options.idleMs ?? 20 * 60_000)) this.rotationDue = true
+      snapshot.lastActivityAt = this.now()
       if (!snapshot.queued.some(q => q.submissionId === submissionId)) snapshot.queued.push({ submissionId, input: structuredClone({ ...input, submissionId }) })
       if (draftRevision !== undefined && snapshot.draft.revision === draftRevision && snapshot.draft.text.trim() === input.transcript.trim()) snapshot.draft.text = ''
       await this.publish(this.record, snapshot)
@@ -92,6 +102,7 @@ export class AgentConversationLifecycle {
       if (revision < this.snapshot.draft.revision) return
       const snapshot = structuredClone(this.snapshot)
       snapshot.draft = { text, revision }
+      snapshot.lastActivityAt = this.now()
       await this.publish(this.record, snapshot)
     })
   }
@@ -147,6 +158,7 @@ export class AgentConversationLifecycle {
     }
     this.record = state.conversation
     this.snapshot = await this.options.store.read(this.record.snapshotId)
+    this.snapshot.lastActivityAt ??= this.now()
     if (this.snapshot.generation !== this.record.generation || this.snapshot.chat.runId !== this.record.runId
       || (this.record.runId && !state.runs.some(r => r.id === this.record.runId && r.provider === this.record.provider && r.providerHandle))) throw new Error('Agent conversation recovery identity is invalid.')
     await this.options.store.markEstablished()
@@ -195,7 +207,7 @@ export class AgentConversationLifecycle {
       this.assertLive()
       const first = this.snapshot.queued[0]
       input = structuredClone(first.input)
-      fresh = !this.record.runId || this.record.accepted.length >= this.record.ceiling || !!this.record.pendingProvider
+      fresh = !this.record.runId || this.rotationDue || !!this.record.pendingProvider
       provider = this.record.pendingProvider ?? this.record.provider ?? this.options.selectedProvider()
       prepared = { submissionId: first.submissionId, interactionId: randomUUID(), candidateRunId: fresh ? randomUUID() : this.record.runId!, generation: fresh && this.record.runId ? this.record.generation + 1 : this.record.generation }
       await this.publish({ ...this.record, prepared }, this.snapshot)
@@ -208,6 +220,7 @@ export class AgentConversationLifecycle {
       this.assertLive()
       result = await this.options.controller.submit({ ...input, priorRunId: fresh ? undefined : prepared.candidateRunId }, {
         interactionId: prepared.interactionId, runId: prepared.candidateRunId, provider,
+        ...(fresh && this.record.runId ? { carryoverRunId: this.record.runId } : {}),
         onAccepted: async run => {
           await this.lock(async () => {
             this.assertPrepared(prepared)
@@ -221,11 +234,11 @@ export class AgentConversationLifecycle {
               record.generation = prepared.generation
               record.ceiling = this.ceiling()
               snapshot.generation = prepared.generation
-              snapshot.chat = { runId: run.id, turns: [] }
+              snapshot.chat.runId = run.id
               snapshot.results = {}
               if (oldRun) snapshot.notice = record.pendingProvider
                 ? `Switched to ${provider === 'claude' ? 'Claude' : 'Codex'} — new conversation`
-                : `Conversation cleared after ${this.record.ceiling} messages`
+                : `Started a fresh conversation after idle; earlier messages retained`
               if (record.pendingProvider === provider) delete record.pendingProvider
             }
             record.runId = run.id; record.provider = run.provider; record.model = run.model
@@ -241,6 +254,7 @@ export class AgentConversationLifecycle {
               throw new AgentProviderError('acceptance-uncertain')
             }
             accepted = true
+            if (fresh) this.rotationDue = false
             if (oldRun && oldRun !== run.id) void this.options.close(oldRun).catch(() => {})
           })
         },
@@ -258,7 +272,7 @@ export class AgentConversationLifecycle {
         const submission = record.accepted.find(a => a.submissionId === prepared.submissionId)
         if (!submission || submission.outcome) return
         result = { ...result, provider: record.provider!, model: record.model }
-        this.pendingSettlement = { generation: record.generation, runId: record.runId!, submissionId: prepared.submissionId, at: Date.now(), result }
+        this.pendingSettlement = { generation: record.generation, runId: record.runId!, submissionId: prepared.submissionId, at: this.now(), result }
         try { await this.settlePending() } catch { this.options.onView?.(this.view()) }
         this.finish(prepared.submissionId, result)
         return
@@ -315,6 +329,7 @@ export class AgentConversationLifecycle {
   }
   private finish(id: string, result: AgentInteractionResult): void { this.waiting.get(id)?.resolve(result); this.waiting.delete(id) }
   private ceiling(): number { const n = this.options.ceiling?.() ?? AGENT_TURN_CEILING; if (!Number.isSafeInteger(n) || n < 1) throw new Error('Invalid Agent conversation ceiling'); return n }
+  private now(): number { return this.options.now?.() ?? Date.now() }
 }
 
 function applySettlement(view: AgentConversationView, pending: AgentPendingSettlement): void {
@@ -325,6 +340,7 @@ function applySettlement(view: AgentConversationView, pending: AgentPendingSettl
   }
   view.snapshot.results = { ...view.snapshot.results, [pending.submissionId]: pending.result }
   accepted.outcome = pending.result.outcome
+  view.snapshot.lastActivityAt = Math.max(view.snapshot.lastActivityAt ?? 0, pending.at)
   view.record.phase = view.record.accepted.length >= view.record.ceiling ? 'reset-due' : 'ready'
 }
 

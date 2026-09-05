@@ -341,7 +341,7 @@ function validateConversation(c: AgentConversationRecord): AgentConversationReco
     || !['ready', 'sending', 'reset-due', 'recovery-required'].includes(c.phase)
     || (c.runId !== null && !ID.test(c.runId)) || (c.provider !== null && !isProvider(c.provider))
     || c.effort !== 'medium' || !Number.isSafeInteger(c.ceiling) || c.ceiling < 1
-    || !ID.test(c.snapshotId) || !Array.isArray(c.accepted) || c.accepted.length > c.ceiling
+    || !ID.test(c.snapshotId) || !Array.isArray(c.accepted)
     || new Set(c.accepted.map(a => a.submissionId)).size !== c.accepted.length
     || c.accepted.some(a => !ID.test(a.submissionId) || !ID.test(a.interactionId) || !timestamp(a.acceptedAt) || (a.outcome !== undefined && !['completed', 'failed', 'interrupted'].includes(a.outcome)))
     || (c.pendingProvider !== undefined && !isProvider(c.pendingProvider))
