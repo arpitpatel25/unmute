@@ -39,6 +39,7 @@ import {
   sttCostCents,
   llmCostCents,
   rawGroqCostUsd,
+  MARKUP_MULTIPLIER,
 } from '../../shared/groq'
 import { rpc } from '../../shared/supabase'
 import { remoteConfigResponse } from '../../shared/remoteConfig'
@@ -47,6 +48,7 @@ import type {
   PipelineErrorResponse,
   LLMRequest,
 } from '../../shared/types'
+import { transcribeNotetakerWithFallback } from './notetakerSttCascade'
 
 // ─── Durable usage recording (the BILL we must never lose) ──────────────────
 // Records a usage event with RETRIES. `rpc` swallows failures and returns null
@@ -201,10 +203,14 @@ async function handleSTT(
   }
   const tParsed = Date.now()
 
-  const file = form.get('file')
-  if (!(file instanceof File) && !(file instanceof Blob)) {
+  const fileEntry = form.get('file')
+  if (fileEntry == null || typeof fileEntry === 'string') {
     return err('BAD_REQUEST', 'Missing "file" part', 400)
   }
+  // Cloudflare's FormDataEntryValue typing differs from the DOM definition,
+  // but a non-string multipart entry is the uploaded Blob/File at runtime.
+  const file = fileEntry as unknown as Blob & { name?: string }
+  const filename = typeof file.name === 'string' && file.name ? file.name : 'audio.wav'
 
   // Optional client-side metadata
   const duration = parseFloat((form.get('duration_seconds') as string) || '0') || estimateDurationFromBytes(file.size)
@@ -229,6 +235,72 @@ async function handleSTT(
     })
   }
 
+  // Notetaker alone uses the accuracy/cost-oriented managed cascade. Keep
+  // this branch before the existing Groq path so every ordinary dictation,
+  // instruction, quote, context and transform request remains byte-for-byte
+  // on its established provider/model behavior.
+  if (flowType === 'notetaker') {
+    const audio = new Uint8Array(await file.arrayBuffer())
+    const result = await transcribeNotetakerWithFallback({
+      audio,
+      filename,
+      mimeType: file.type || 'audio/wav',
+      durationSeconds: duration,
+      language,
+      openRouterApiKey: env.OPENROUTER_API_KEY,
+      groqApiKey: env.GROQ_API_KEY,
+    })
+    if (!result) {
+      return err('UPSTREAM_ERROR', 'Notetaker managed transcription failed', 502)
+    }
+
+    const costCents = Math.ceil(result.rawCostUsd * MARKUP_MULTIPLIER * 100)
+    console.log('[billing]', JSON.stringify({
+      user: userId,
+      call: 'stt',
+      flow: flowType,
+      provider: result.provider,
+      model: result.model,
+      duration_s: duration,
+      raw_cost_usd: result.rawCostUsd,
+      cost_cents: costCents,
+    }))
+    ctx.waitUntil(
+      logUsageDurable(env, {
+        p_user_id: userId,
+        p_call_type: 'stt',
+        p_flow_type: flowType,
+        p_provider: result.provider,
+        p_model: result.model,
+        p_prompt_tokens: 0,
+        p_completion_tokens: 0,
+        p_audio_duration_seconds: duration,
+        p_estimated_cost: result.rawCostUsd,
+        p_latency_ms: result.latencyMs,
+      }).catch((e) => console.error('[pipeline] log_usage FAILED (bill at risk until retry/reconcile):', e))
+    )
+    const fairUseHeader: Record<string, string> = ent.overFairUse ? { 'x-unmute-fair-use': 'notify' } : {}
+    return json({
+      ok: true,
+      data: {
+        text: result.text,
+        ...(result.segments.length > 0 ? { segments: result.segments } : {}),
+        duration_seconds: duration,
+        model: result.model,
+        provider: result.provider,
+      },
+      balance_cents: 0,
+      cost_cents: costCents,
+      engine: 'managed',
+      timing_ms: {
+        parse: tParsed - tEnter,
+        balance: tBalanceChecked - tParsed,
+        upstream_total: result.latencyMs,
+        worker_total: Date.now() - tEnter,
+      },
+    }, 200, fairUseHeader)
+  }
+
   // ─── Forward to Groq ──────────────────────────────────────────
   // The note-taker must retain source timings so mic/system utterances can
   // be globally ordered by when they were actually spoken. Dictation keeps
@@ -236,7 +308,7 @@ async function handleSTT(
   const includeTimestamps = flowType === 'notetaker'
   const sttModel = includeTimestamps ? NOTETAKER_STT_MODEL : STT_MODEL
   const groqForm = new FormData()
-  groqForm.append('file', file, (file as File).name || 'audio.webm')
+  groqForm.append('file', file, filename || 'audio.webm')
   groqForm.append('model', sttModel)
   groqForm.append('response_format', includeTimestamps ? 'verbose_json' : 'json')
   if (includeTimestamps) groqForm.append('timestamp_granularities[]', 'segment')

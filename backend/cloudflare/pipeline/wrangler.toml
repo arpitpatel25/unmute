@@ -11,6 +11,7 @@ compatibility_flags = ["nodejs_compat"]
 
 # ─── Secrets (set via `wrangler secret put <NAME>`) ────────────
 # GROQ_API_KEY              — Groq API key, charged to OUR account for managed users
+# OPENROUTER_API_KEY        — OpenRouter key for Notetaker Qwen3 ASR 0.6B
 # SUPABASE_URL              — Same Supabase project as BoloAI
 # SUPABASE_SERVICE_ROLE_KEY — Server-side write access (RLS bypassed)
 

@@ -199,12 +199,20 @@ export async function tryManagedSTT(
 
     type Envelope = {
       ok: boolean
-      data?: { text: string; segments?: ManagedSTTResult['segments']; duration_seconds: number; model: string }
+      data?: { text: string; segments?: ManagedSTTResult['segments']; duration_seconds: number; model: string; provider?: string }
       balance_cents?: number
       cost_cents?: number
       code?: string
       message?: string
-      timing_ms?: { parse: number; balance: number; groq_ttfb: number; groq_body: number; groq_total: number; worker_total: number }
+      timing_ms?: {
+        parse?: number
+        balance?: number
+        groq_ttfb?: number
+        groq_body?: number
+        groq_total?: number
+        upstream_total?: number
+        worker_total?: number
+      }
     }
     const body = (await res.json()) as Envelope
 
@@ -241,19 +249,29 @@ export async function tryManagedSTT(
     const clientTotal = tBodyParseEnd - tFetchStart
     const headersMs = tFetchHeaders - tFetchStart
     const bodyMs = tBodyParseEnd - tFetchHeaders
-    const w = body.timing_ms ?? { parse: 0, balance: 0, groq_ttfb: 0, groq_body: 0, groq_total: 0, worker_total: 0 }
-    const network = Math.max(0, clientTotal - w.worker_total)
-    const workerOverhead = Math.max(0, w.worker_total - w.groq_total - w.parse - w.balance)
+    const w = body.timing_ms ?? {}
+    const workerTotal = w.worker_total ?? 0
+    const parse = w.parse ?? 0
+    const balance = w.balance ?? 0
+    const upstreamTotal = w.upstream_total ?? w.groq_total ?? 0
+    const upstreamName = body.data?.provider === 'openrouter'
+      ? 'OpenRouter'
+      : body.data?.provider === 'groq' || w.groq_total !== undefined
+        ? 'Groq'
+        : 'Upstream'
+    const network = Math.max(0, clientTotal - workerTotal)
+    const workerOverhead = Math.max(0, workerTotal - upstreamTotal - parse - balance)
     const uploadKBs = audio.length / 1024
     console.log(
       `[paywall-route] STT TIMING — ${uploadKBs.toFixed(1)}KB upload | total ${clientTotal}ms\n` +
       `  ├─ client→edge headers: ${headersMs}ms (upload + TTFB)\n` +
       `  ├─ body download+parse: ${bodyMs}ms\n` +
       `  ├─ network total (devicе↔edge): ${network}ms\n` +
-      `  └─ worker total: ${w.worker_total}ms\n` +
-      `       ├─ parse FormData: ${w.parse}ms\n` +
-      `       ├─ balance KV: ${w.balance}ms\n` +
-      `       ├─ Groq round-trip: ${w.groq_total}ms (TTFB ${w.groq_ttfb}ms + body ${w.groq_body}ms)\n` +
+      `  └─ worker total: ${workerTotal}ms\n` +
+      `       ├─ parse FormData: ${parse}ms\n` +
+      `       ├─ balance KV: ${balance}ms\n` +
+      `       ├─ ${upstreamName} round-trip: ${upstreamTotal}ms` +
+      (w.groq_ttfb !== undefined || w.groq_body !== undefined ? ` (TTFB ${w.groq_ttfb ?? 0}ms + body ${w.groq_body ?? 0}ms)\n` : '\n') +
       `       └─ worker overhead: ${workerOverhead}ms`
     )
 

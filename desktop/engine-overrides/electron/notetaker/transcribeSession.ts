@@ -8,7 +8,8 @@ import { downmixAndResample } from './resample'
 import { mergeChannelChunks, generateTitle, attributeSpeakers, type TranscriptSegment, type TimedChunkText, type SpeakerSample } from './transcriptMerge'
 import { insertMeeting, type DBMeeting } from '../db'
 import { createNotetakerLogger } from './notetakerLog'
-import { isReliableWhisperSegment, type WhisperConfidenceSegment } from './whisperConfidence'
+import { transcribeEncodedChunkWithFallback } from './notetakerSttFallback'
+import { parakeetManager } from '../parakeet'
 
 const log = createNotetakerLogger('transcribe')
 
@@ -23,12 +24,6 @@ export type ChunkTranscriptionResult = {
    * to order mic and system utterances precisely, not by upload completion
    * order or a guessed whole-channel duration. */
   segments: Array<{ startSeconds: number; endSeconds: number; text: string }>
-}
-
-type WhisperSegment = WhisperConfidenceSegment & {
-  start: number
-  end: number
-  text: string
 }
 
 /** One chunk's audio, already reduced to mono/target-rate and WAV-encoded — the input `transcribeEncodedChunk` needs, and the payload `notetakerInit.ts` streams to disk. */
@@ -95,80 +90,37 @@ export function encodeChunk(samples: Float32Array, channelsCount: number, sample
 export async function transcribeEncodedChunk(channel: 'mic' | 'system', encoded: EncodedChunk): Promise<ChunkTranscriptionResult> {
   const startedAt = Date.now()
   const clog = log.child({ channel })
-  try {
-    // The null language override makes this request truly auto-detecting on
-    // the dedicated notetaker backend branch. Ordinary dictation continues to
-    // use its existing configured language behavior unchanged.
-    const result = await tryManagedSTT(
+  const result = await transcribeEncodedChunkWithFallback(channel, encoded, {
+    managed: () => tryManagedSTT(
       encoded.wav,
       encoded.durationSeconds,
       'notetaker',
       undefined,
-      // Whisper's prompt is decoder context, not an instruction channel. Both
-      // imperative wording and a Hinglish example have leaked into output and
-      // displaced real speech. Decode without a prompt. Any optional transcript
-      // cleanup happens later on returned text only; it never chooses or forces
-      // Whisper's language.
       undefined,
       null,
       'audio/wav',
-    )
-    const latencyMs = Date.now() - startedAt
-    // A NULL result is a FAILURE here, not an empty transcript — same
-    // Finding-3 reasoning as the old whole-session flow: tryManagedSTT
-    // returns null both when the call really failed AND when managed STT is
-    // simply unavailable, and treating that as "successfully transcribed
-    // nothing" is what produced a silent blank transcript on real audio.
-    // We KNOW audio existed (encodeChunk already filtered out empty
-    // chunks), so mark this chunk failed and let the caller factor that
-    // into the channel's/meeting's overall status. This promise settling
-    // with `failed: true` never rejects, so it can never take down
-    // `Promise.all` for the rest of this channel's or the other channel's
-    // chunks.
-    if (!result) {
-      clog.error(`${channel} chunk transcription unavailable or failed (managed STT returned no result)`, {
-        durationSeconds: encoded.durationSeconds,
-        sampleRate: encoded.sampleRate,
-        wavBytes: encoded.wav.length,
-        latencyMs,
-      })
-      return { text: '', failed: true, segments: [] }
-    }
-    const hasTimestampedSegments = Array.isArray(result.segments)
-    const receivedSegments = (result.segments ?? []) as WhisperSegment[]
-    const reliableSegments = receivedSegments.filter(isReliableWhisperSegment)
-    const droppedSegmentCount = receivedSegments.length - reliableSegments.length
-    // When confidence metadata is available, the accepted segments are the
-    // source of truth for both text and timing. If every segment looks like
-    // noise, return empty rather than keeping Groq's unfiltered top-level
-    // hallucination. Old worker responses have no segment array and retain
-    // their existing top-level-text behavior.
-    const reliableText = hasTimestampedSegments
-      ? reliableSegments.map((segment) => segment.text.trim()).filter(Boolean).join(' ')
-      : (result.text ?? '')
-    clog.event('chunk-transcribed', {
-      durationSeconds: encoded.durationSeconds,
-      sampleRate: encoded.sampleRate,
-      latencyMs,
-      textLength: reliableText.length,
-      textPreview: reliableText,
-      droppedSegmentCount,
-    })
-    return {
-      text: reliableText,
-      failed: false,
-      segments: reliableSegments
-        .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end >= segment.start)
-        .map((segment) => ({ startSeconds: segment.start, endSeconds: segment.end, text: segment.text ?? '' })),
-    }
-  } catch (err) {
-    clog.error(`${channel} chunk transcription failed`, {
-      durationSeconds: encoded.durationSeconds,
-      latencyMs: Date.now() - startedAt,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return { text: '', failed: true, segments: [] }
-  }
+    ),
+    local: async () => {
+      if (!parakeetManager.isAvailable()) throw new Error('Parakeet is not installed or ready')
+      return parakeetManager.transcribe(encoded.wav)
+    },
+    onManagedFallback: (reason) => clog.warn('managed Notetaker STT exhausted Qwen and Groq; trying local Parakeet', {
+      reason: reason instanceof Error ? reason.message : String(reason),
+    }),
+    onLocalFailure: (reason) => clog.error('local Parakeet fallback failed', {
+      reason: reason instanceof Error ? reason.message : String(reason),
+    }),
+  })
+  clog.event('chunk-transcribed', {
+    durationSeconds: encoded.durationSeconds,
+    sampleRate: encoded.sampleRate,
+    latencyMs: Date.now() - startedAt,
+    textLength: result.text.length,
+    textPreview: result.text,
+    segmentCount: result.segments.length,
+    failed: result.failed,
+  })
+  return result
 }
 
 /**
