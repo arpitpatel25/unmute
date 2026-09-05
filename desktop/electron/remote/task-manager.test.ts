@@ -2461,6 +2461,12 @@ test('an unchanged state is not news — the surface must not be re-triggered', 
   // And a real state change always lands.
   tm.applyHubPatch({ taskId: id, state: 'done' })
   assert.equal(tm.get(id)!.state, 'done')
+  assert.deepEqual(tm.get(id)!.result, { summary: 'halfway', detail: 'halfway' },
+    'a separately delivered Codex reply becomes the completed-task subtitle')
+  await new Promise((r) => setTimeout(r, 30))
+  const persisted = JSON.parse(await fs.readFile(tm.get(id)!.statusPath, 'utf8'))
+  assert.deepEqual(persisted.result, { summary: 'halfway', detail: 'halfway' },
+    'the subtitle survives an app restart')
 })
 
 // ── The warm window must never reap a session that is actually working ──

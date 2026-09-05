@@ -237,6 +237,9 @@ export interface Task {
   permissionReason?: string
   history?: import('./codex/app-server-events').HistoryState
   turnOutcome?: import('./blocks').TurnOutcome
+  /** Codex reports its final assistant item before the separate turn-completed
+   *  event. Retain that turn-local text so completion can persist a result. */
+  currentTurnAssistantText?: string
   mcpStatuses?: import('./codex/app-server-events').McpStatus[]
   questionAcknowledgment?: { reference: QuestionReference; state: 'pending' | 'accepted' }
   claudeSessionSettings?: Pick<ClaudeTaskOptions, 'model' | 'effort' | 'permissionMode' | 'addDirs' | 'chrome'>
@@ -2146,7 +2149,11 @@ export class TaskManager extends EventEmitter {
     const learnedRolloutId = !!p.threadId && !task.codexRolloutId
     if (learnedRolloutId) task.codexRolloutId = p.threadId
     if (p.name && !task.name) task.name = p.name
+    if (p.state === 'processing' && 'turnOutcome' in p && p.turnOutcome === null) {
+      task.currentTurnAssistantText = undefined
+    }
     if (p.assistantText) {
+      task.currentTurnAssistantText = p.assistantText
       task.conversation = [...(task.conversation ?? []), { role: 'assistant', text: p.assistantText }]
     }
     // THE LIVE CHAT VIEW. Replaces wholesale rather than appending: the stream
@@ -2169,14 +2176,15 @@ export class TaskManager extends EventEmitter {
     // transition() would rewrite updatedAt on every keystroke of streamed output
     // and shove the task to the top of the wall forever.
     if (p.state) {
+      const completedText = p.assistantText ?? task.currentTurnAssistantText
       const status: StatusPayload = {
         schema_version: 1,
         state: p.state,
         updated_at: new Date(this.clock()).toISOString(),
         ...(p.question ? { question: p.question } : {}),
         ...(p.errorReason ? { error: { reason: p.errorReason } } : {}),
-        ...(p.state === 'done' && p.assistantText
-          ? { result: { summary: p.assistantText.split('\n')[0].slice(0, 140), detail: p.assistantText } }
+        ...(p.state === 'done' && completedText
+          ? { result: { summary: completedText.split('\n')[0].slice(0, 140), detail: completedText } }
           : {}),
       }
       // NOTHING CHANGED IS NOT NEWS — the guard pollCodexCli has, missing here.
