@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RuntimeRpcClient } from './rpc'
 
@@ -9,10 +10,24 @@ export function runtimeSocket(root: string): string {
   return join(tmpdir(), `unmute-runtime-${process.getuid?.() ?? 'user'}-${key}`, 'rpc.sock')
 }
 
+/**
+ * A packaged macOS daemon must not run as Contents/MacOS/<app>. LaunchServices
+ * identifies that executable as the GUI process, so leaving it alive can turn
+ * the next `open` into a no-op. Electron's signed Node-capable helper has the
+ * same runtime but a distinct process identity, allowing the UI to quit and
+ * relaunch while work remains daemon-owned.
+ */
+export function runtimeExecutable(mainExecutable: string): string {
+  const name = basename(mainExecutable)
+  const contents = dirname(dirname(mainExecutable))
+  const helper = join(contents, 'Frameworks', `${name} Helper.app`, 'Contents', 'MacOS', `${name} Helper`)
+  return existsSync(helper) ? helper : mainExecutable
+}
+
 /** A per-user-data daemon; dev worktrees do not attach to production runtimes. */
 export class PersistentRuntimeClient extends RuntimeRpcClient {
   private starting?: Promise<void>
-  constructor(private root: string, private entry: string, private executable = process.execPath) {
+  constructor(private root: string, private entry: string, private executable = runtimeExecutable(process.execPath)) {
     super(runtimeSocket(root))
   }
   override connect(): Promise<void> {
