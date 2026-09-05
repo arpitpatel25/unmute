@@ -119,6 +119,36 @@ const CODEX_ID = '22222222-2222-4222-8222-222222222222'
 const CONSTITUTION = '/private/unmute/agent-constitution.md'
 const TOKEN = 'interaction-secret-token'
 
+test('persistent driver reuses a warm process only with the identical session-scoped runtime', async () => {
+  const processes: FakeProcess[] = []
+  class WarmProcess extends FakeProcess {
+    readonly persistent = true
+    async submitUserTurn(text: string) {
+      await super.submitUserTurn(text)
+      this.events.emit({ type: 'handle', sessionId: CLAUDE_ID, observed: true })
+      this.events.emit({ type: 'completion', outcome: 'completed', finalText: text })
+    }
+  }
+  const provider = new ClaudeCodeProvider({ processFactory: () => {
+    const process = new WarmProcess(); processes.push(process); return process
+  }, randomId: () => CLAUDE_ID })
+  const firstInput = input('warm')
+  firstInput.mcp.sessionScoped = true
+  firstInput.requireObservedAcceptance = true
+  const first = await provider.start(firstInput)
+  assert.equal((await first.completion).finalText, firstInput.transcript)
+  const second = await provider.resume(first.handle, { ...firstInput, interactionId: 'second', transcript: 'second' })
+  assert.equal((await second.completion).finalText, 'second')
+  assert.equal(processes.length, 1)
+  assert.deepEqual(processes[0].submitted, [firstInput.transcript, 'second'])
+  assert.equal(processes[0].closes, 0)
+  const third = await provider.resume(first.handle, { ...firstInput, mcp: { ...firstInput.mcp, token: 'changed' } })
+  await third.completion
+  assert.equal(processes.length, 2)
+  assert.equal(processes[0].closes, 1)
+  await provider.close(third.handle)
+})
+
 function input(runId: string, overrides: Partial<AgentStartInput> = {}): AgentStartInput {
   return {
     runId,

@@ -31,6 +31,8 @@ export class AgentTokenStore {
   private readonly randomToken: () => string
   private readonly recordsByHash = new Map<string, TokenRecord>()
   private readonly activeHashByRun = new Map<string, string>()
+  private readonly sessions = new Map<string, { token: string; provider: AgentProviderId }>()
+  private readonly sessionHashToRun = new Map<string, string>()
 
   constructor(options: AgentTokenStoreOptions = {}) {
     this.now = options.now ?? Date.now
@@ -52,9 +54,16 @@ export class AgentTokenStore {
   }
 
   resolve(token: string): McpPrincipal | null {
-    const hash = tokenHash(token)
+    let hash = tokenHash(token)
+    const sessionRun = this.sessionHashToRun.get(hash)
+    if (sessionRun) {
+      const active = this.activeHashByRun.get(sessionRun)
+      if (!active) return null
+      hash = active
+    }
     const record = this.recordsByHash.get(hash)
     if (!record) return null
+    if (sessionRun && this.sessions.get(sessionRun)?.provider !== record.provider) return null
 
     if (record.expiresAt <= this.now()) {
       this.remove(record.runId, hash)
@@ -69,6 +78,25 @@ export class AgentTokenStore {
   closeRun(runId: string): void {
     const hash = this.activeHashByRun.get(runId)
     if (hash) this.remove(runId, hash)
+  }
+
+  /** Stable transport credential, not a grant. Between turns it resolves to
+   * nothing; mint activates only the new interaction's existing scoped grant. */
+  sessionToken(runId: string, provider: AgentProviderId): string {
+    const previous = this.sessions.get(runId)
+    if (previous?.provider === provider) return previous.token
+    if (previous) this.sessionHashToRun.delete(tokenHash(previous.token))
+    const token = this.randomToken()
+    this.sessions.set(runId, { token, provider })
+    this.sessionHashToRun.set(tokenHash(token), runId)
+    return token
+  }
+
+  forgetSession(runId: string): void {
+    this.closeRun(runId)
+    const session = this.sessions.get(runId)
+    if (session) this.sessionHashToRun.delete(tokenHash(session.token))
+    this.sessions.delete(runId)
   }
 
   sweep(): void {

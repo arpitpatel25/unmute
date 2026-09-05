@@ -16,6 +16,8 @@ export interface ProviderProbe {
 }
 
 export interface AgentMcpContext {
+  /** Credential resolves dynamically to the current interaction grant only. */
+  sessionScoped?: boolean
   endpoint: string
   config: string
   token: string
@@ -130,6 +132,7 @@ export interface AgentProcessLaunch {
  * is intentionally a separate, non-authoritative event.
  */
 export interface AgentProcessDriver {
+  readonly persistent?: boolean
   readonly hasDispatched?: boolean
   readonly events: AsyncIterable<AgentProcessEvent>
   start(launch: AgentProcessLaunch): Promise<void>
@@ -240,6 +243,15 @@ export interface CliProviderRuntimeOptions {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
+function sameSessionContext(previous: AgentStartInput, next: AgentStartInput): boolean {
+  return previous.mcp.sessionScoped === true && next.mcp.sessionScoped === true
+    && previous.runId === next.runId && previous.cwd === next.cwd
+    && previous.constitutionPath === next.constitutionPath && previous.model === next.model
+    && previous.mcp.token === next.mcp.token && previous.mcp.endpoint === next.mcp.endpoint
+    && previous.mcp.config === next.mcp.config
+    && JSON.stringify(buildAgentEnvironment(previous)) === JSON.stringify(buildAgentEnvironment(next))
+}
+
 /** Shared state machine; adapters own only argv, executable, and handle source. */
 export class CliProviderRuntime implements AgentProvider {
   readonly id: AgentProviderId
@@ -273,6 +285,23 @@ export class CliProviderRuntime implements AgentProvider {
     if (this.closed.has(key)) throw new AgentProviderError('session-closed')
     const current = this.active.get(key)
     if (current && !current.settled) throw new AgentProviderError('session-active')
+    if (current && !current.closed && current.driver.persistent && sameSessionContext({ ...current.input, model: current.model ?? current.input.model }, input)) {
+      current.input = input
+      current.activity = new ActivityQueue()
+      current.completion = deferred<AgentCompletion>()
+      current.observed = deferred<void>()
+      void current.observed.promise.catch(() => {})
+      current.sequence = 0
+      current.settled = false
+      try {
+        await current.driver.submitUserTurn(input.transcript)
+        if (input.requireObservedAcceptance) await withTimeout(current.observed.promise, this.options.handleTimeoutMs ?? 8_000)
+        return { handle, activity: current.activity, completion: current.completion.promise, ...(current.model ? { model: current.model } : {}) }
+      } catch {
+        await this.failAndClose(current)
+        throw new AgentProviderError(input.requireObservedAcceptance && current.driver.hasDispatched !== false ? 'acceptance-uncertain' : 'provider-unavailable')
+      }
+    }
     if (current) {
       await this.closeDriver(current)
       this.active.delete(key)
@@ -471,6 +500,8 @@ export class CliProviderRuntime implements AgentProvider {
       }
       live.observed.reject(new AgentProviderError('acceptance-uncertain'))
       if (!live.closed && live.handle && !live.settled) await this.failAndClose(live)
+      // An idle process exit must not leave a reusable driver without an event consumer.
+      if (!live.closed) await this.closeDriver(live)
     } catch {
       if (!live.handle) {
         live.learnedHandle.reject(new AgentProviderError('provider-handle-missing'))

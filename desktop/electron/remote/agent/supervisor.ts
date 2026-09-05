@@ -30,6 +30,8 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 export type AgentRun = JournalAgentRun
 
 export interface AgentRunTokenStore {
+  sessionToken?(runId: string, provider: AgentProviderId): string
+  forgetSession?(runId: string): void
   mint(runId: string, interactionId: string, provider: AgentProviderId, ttlMs: number): string
   closeRun(runId: string): void
   sweep(): void
@@ -336,6 +338,7 @@ export class AgentRunSupervisor {
         try { await this.provider(run.provider).close(handleOf(run)) } catch { /* stale after restart */ }
       }
       this.options.tokenStore.closeRun(run.id)
+      this.options.tokenStore.forgetSession?.(run.id)
       await this.options.journal.removeRun(run.id).catch((error) => { throw publicFailure(error) })
       this.runs.delete(run.id)
       reaped.push(run.id)
@@ -353,6 +356,7 @@ export class AgentRunSupervisor {
       try { await this.provider(run.provider).close(handleOf(run)) } catch { /* closing is final */ }
     }
     this.options.tokenStore.closeRun(runId)
+    this.options.tokenStore.forgetSession?.(runId)
     run.state = 'closed'
     run.providerWorkEnded = true
     run.completedAt = this.now()
@@ -376,6 +380,7 @@ export class AgentRunSupervisor {
         try { await this.provider(run.provider).close(handleOf(run)) } catch { /* shutdown is final */ }
       }
       this.options.tokenStore.closeRun(run.id)
+      this.options.tokenStore.forgetSession?.(run.id)
       if (interrupted) {
         run.providerWorkEnded = true
         run.lastActivityAt = this.now()
@@ -418,6 +423,7 @@ export class AgentRunSupervisor {
       run.provider,
       positiveInteger(input.tokenTtlMs, this.tokenTtlMs),
     )
+    const sessionToken = this.options.tokenStore.sessionToken?.(run.id, run.provider)
     const tokenExpiresAt = this.now() + positiveInteger(input.tokenTtlMs, this.tokenTtlMs)
     const providerInput: AgentStartInput = {
       requireObservedAcceptance: input.requireObservedAcceptance,
@@ -428,7 +434,7 @@ export class AgentRunSupervisor {
       transcript: input.transcript,
       constitutionPath: input.constitutionPath,
       environment: input.environment,
-      mcp: { endpoint: input.mcp.endpoint, config: input.mcp.config, token },
+      mcp: { endpoint: input.mcp.endpoint, config: input.mcp.config, token: sessionToken ?? token, sessionScoped: !!sessionToken },
     }
 
     const session = resume && run.providerHandle

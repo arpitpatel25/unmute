@@ -20,6 +20,7 @@ import {
 } from '../provider'
 import { agentRuntimeMode, type AgentRuntimeMode } from './claude-headless'
 import { CodexHeadlessProcess } from './codex-headless'
+import { CodexPersistentProcess } from './codex-persistent'
 
 export interface CodexCliProviderOptions {
   binary?: string
@@ -59,20 +60,10 @@ export class CodexCliProvider extends CliProviderRuntime {
       observe,
     })
     const runtime = options.runtime ?? agentRuntimeMode()
-    // PERSISTENT MEANS HEADLESS HERE, and that is a statement about the CLI
-    // rather than about this design. `claude -p` accepts --input-format
-    // stream-json and can hold one process open across turns; `codex exec`
-    // reads one prompt and exits, so there is no warm driver to select. Codex
-    // keeps the persistent CONVERSATION (it resumes by thread id — see `argv`
-    // below) and pays a spawn per turn.
-    //
-    // Written as "not repl" ON PURPOSE. Spelled as `=== 'headless'`, the mode
-    // added for Claude silently dropped Codex onto the PTY driver — the exact
-    // failure the three-way switch exists to prevent, and one that would have
-    // shipped as an unexplained return of the hangs the headless rewrite fixed.
     const usesHeadless = runtime !== 'repl'
     const processFactory = options.processFactory
-      ?? (usesHeadless ? () => new CodexHeadlessProcess() : replFactory)
+      ?? (runtime === 'persistent' ? () => new CodexPersistentProcess()
+        : usesHeadless ? () => new CodexHeadlessProcess() : replFactory)
     super({
       id: 'codex',
       binary,

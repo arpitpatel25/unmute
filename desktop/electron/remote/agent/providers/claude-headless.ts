@@ -34,17 +34,15 @@ export type AgentRuntimeMode = 'persistent' | 'headless' | 'repl'
  *
  *   headless    one process PER TURN. THE DEFAULT, and the only one that has
  *               ever worked in the field: 6 turns of 6.
- *   persistent  streaming input, ready for a runtime that can keep a driver
- *               alive across turns. NOT YET USEFUL — see below.
+ *   persistent  streaming input, reused by CliProviderRuntime when a stable
+ *               session credential scopes each turn to its new live grant.
  *   repl        the PTY driver. Kept for completeness; see the header above for
  *               why it is not the default and should not be.
  *
  * WHY PERSISTENT IS NOT THE DEFAULT, THOUGH IT WAS BRIEFLY.
  *
- * A driver cannot outlive a turn. CliProviderRuntime.startTurn builds a new one
- * from processFactory() for every turn, and resume() explicitly closes the
- * previous driver before starting the next — one driver per turn is the
- * contract, and the contract suite is built on it.
+ * Originally CliProviderRuntime closed every driver on resume. It now keeps
+ * explicitly persistent drivers while the identity and runtime are unchanged.
  *
  * So a "persistent" driver is constructed, spawns once, answers, and is closed.
  * It buys nothing: identical behaviour to headless with an extra flag, extra
@@ -53,13 +51,15 @@ export type AgentRuntimeMode = 'persistent' | 'headless' | 'repl'
  * turn failed). Shipped as the default on reasoning about the CLI, without ever
  * checking what owned the driver's lifetime.
  *
- * WHAT A WARM PROCESS ACTUALLY NEEDS, if it is wanted later: persistence has to
+ * WHAT A WARM PROCESS NEEDS: persistence has to
  * live in CliProviderRuntime, not under it. Two things move with it. The driver
- * must survive resume() instead of being closed. And the MCP bearer token must
- * outlive one interaction — it is minted per interaction into the process
+ * must survive resume() instead of being closed. The MCP transport credential
+ * must outlive one interaction — an ordinary token is minted into the process
  * ENVIRONMENT at spawn, and mint() invalidates the previous token for that run,
  * so a process that spans turns would hold a dead token from turn two onward
- * and lose every capability the Agent has.
+ * and lose every capability the Agent has. AgentTokenStore.sessionToken now
+ * supplies a stable alias, resolving only the latest active interaction grant
+ * and resolving to nothing between turns. Ordinary tokens remain revoked.
  *
  * NONE OF THIS AFFECTS THE PERSISTENT CHAT. The conversation is continuous
  * because the runtime resumes the RUN (continuity.ts → priorRunId →
@@ -192,7 +192,7 @@ export function headlessArgv(
     '--output-format', 'stream-json',
     // THE ONE FLAG THAT MAKES THE PROCESS PERSISTENT. Without it print mode
     // reads a single prompt to EOF and exits, which is the per-turn driver.
-    ...(streamingInput ? ['--input-format', 'stream-json'] : []),
+    ...(streamingInput ? ['--input-format', 'stream-json', '--replay-user-messages'] : []),
     '--verbose',
     ...(launch.model ? ['--model', launch.model] : []),
     '--append-system-prompt', systemPrompt,
@@ -493,6 +493,9 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
  * the session id is.
  */
 export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
+  readonly persistent = true
+  hasDispatched = false
+  private pendingText: string | null = null
   private readonly queue = new EventQueue()
   readonly events: AsyncIterable<AgentProcessEvent> = this.queue
   private readonly spawn: HeadlessSpawner
@@ -546,7 +549,10 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
     if (!launch) throw new Error('not started')
     if (this.closed) throw new Error('closed')
     this.interrupted = false
+    this.hasDispatched = false
     await this.ensureChild(launch)
+    this.pendingText = text
+    this.hasDispatched = true
     // The user turn, in the shape stream-json input expects. One line, one turn.
     this.child?.writeTurn(`${JSON.stringify({
       type: 'user',
@@ -618,6 +624,14 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
         if (this.closed || this.child !== child) return
         let parsed: unknown
         try { parsed = JSON.parse(line) } catch { continue }
+        // --replay-user-messages is the provider's acknowledgement on warm
+        // turns, where system/init is not emitted again. Match the exact text.
+        const message = parsed as { type?: string; session_id?: string; message?: { content?: Array<{ type?: string; text?: string }> } }
+        if (message.type === 'user' && this.pendingText !== null && message.session_id === this.sessionId
+          && message.message?.content?.some(block => block.type === 'text' && block.text === this.pendingText)) {
+          this.queue.emit({ type: 'handle', sessionId: this.sessionId!, observed: true })
+          this.pendingText = null
+        }
         for (const trace of traceStreamLine(parsed)) this.onTrace(trace)
         for (const event of headlessEvents(parsed)) {
           // Learn the id once and keep it for the life of the conversation —
