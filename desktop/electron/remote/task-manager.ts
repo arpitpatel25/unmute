@@ -5857,7 +5857,7 @@ export class TaskManager extends EventEmitter {
   opened(id: string): void {
     const task = this.tasks.get(id)
     if (!task) return
-    if (task.chatUnstarted || (!task.claudeSessionSettings && !task.codexSessionSettings && this.opts.claudeSessionOptions)) return
+    if (task.chatUnstarted) return
     if (isExternalAgent(task.agent)) return
     if (this.executors.get(id)?.alive) return
     if (this.resuming.has(id) || this.opening.has(id)) return
