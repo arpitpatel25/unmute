@@ -8,15 +8,22 @@ const MAX_FRAME = 64 * 1024 * 1024
 type Frame = { id?: string; method?: string; args?: unknown[]; result?: unknown; error?: string; event?: string; data?: unknown }
 
 function readFrames(socket: Socket, receive: (frame: Frame) => void): void {
-  let buffer = ''
-  socket.setEncoding('utf8')
+  let chunks: Buffer[] = []
+  let size = 0
   socket.on('data', data => {
-    buffer += data
-    if (Buffer.byteLength(buffer) > MAX_FRAME) { socket.destroy(new Error('Runtime frame exceeds limit')); return }
-    let newline: number
-    while ((newline = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1)
+    const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data)
+    let start = 0
+    while (start < bytes.length) {
+      const newline = bytes.indexOf(10, start)
+      const end = newline === -1 ? bytes.length : newline
+      const part = bytes.subarray(start, end)
+      chunks.push(part); size += part.length
+      if (size > MAX_FRAME) { socket.destroy(new Error('Runtime frame exceeds limit')); return }
+      if (newline === -1) break
+      const line = Buffer.concat(chunks, size).toString('utf8')
+      chunks = []; size = 0
       try { receive(JSON.parse(line)) } catch { socket.destroy(new Error('Invalid runtime frame')); return }
+      start = newline + 1
     }
   })
 }
@@ -70,7 +77,7 @@ export class RuntimeRpcClient extends EventEmitter {
   private socket?: Socket
   private connecting?: Promise<void>
   private pending = new Map<string, { resolve(value: any): void; reject(error: Error): void }>()
-  constructor(private readonly path: string) { super() }
+  constructor(private readonly path: string, private readonly requestTimeoutMs = 30_000) { super() }
   get connected(): boolean { return !!this.socket && !this.socket.destroyed }
   connect(): Promise<void> {
     if (this.connected) return Promise.resolve()
@@ -79,7 +86,8 @@ export class RuntimeRpcClient extends EventEmitter {
       socket.once('connect', () => { this.socket = socket; resolve() })
       socket.on('error', reject)
       socket.on('close', () => {
-        if (this.socket === socket) this.socket = undefined
+        if (this.socket !== socket) return
+        this.socket = undefined
         for (const p of this.pending.values()) p.reject(new Error('Runtime disconnected; submission may have been accepted'))
         this.pending.clear()
         this.emit('disconnected')
@@ -97,10 +105,19 @@ export class RuntimeRpcClient extends EventEmitter {
     await this.connect()
     return new Promise<T>((resolve, reject) => {
       const id = randomUUID()
-      this.pending.set(id, { resolve, reject })
+      // These methods intentionally await a complete agent turn. Ordinary
+      // sends acknowledge acceptance and must remain bounded.
+      const timer = ['agent.submit', 'agent.retry'].includes(method) ? undefined : setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`Background runtime request ${method} timed out; its outcome is unknown. Check the conversation before retrying.`))
+      }, this.requestTimeoutMs)
+      this.pending.set(id, {
+        resolve: value => { clearTimeout(timer); resolve(value) },
+        reject: error => { clearTimeout(timer); reject(error) },
+      })
       write(this.socket!, { id, method, args })
     })
   }
   /** Disconnect only: never requests termination of provider work. */
-  disconnect(): void { this.socket?.destroy(); this.socket = undefined }
+  disconnect(): void { this.socket?.destroy() }
 }

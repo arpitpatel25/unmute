@@ -17,12 +17,13 @@ export interface ClaudeRuntimeEvent {
   event: ClaudeTaskEvent
   state: ClaudeRuntimeState
 }
-type Entry = { driver: ClaudeTaskSession; events: ClaudeRuntimeEvent[]; opening: Promise<void> }
+type Entry = { driver: ClaudeTaskSession; events: ClaudeRuntimeEvent[]; opening: Promise<void>; opened: boolean }
 
 /** Owns both stdio and approval continuations, including while no UI exists. */
 export class ClaudeRuntimeService {
   private sessions = new Map<string, Entry>()
-  constructor(private root: string, private emit: (event: ClaudeRuntimeEvent) => void) {
+  constructor(private root: string, private emit: (event: ClaudeRuntimeEvent) => void,
+    private makeDriver: (options: ClaudeTaskOptions) => ClaudeTaskSession = options => new ClaudeTaskSession(options)) {
     mkdirSync(root, { recursive: true, mode: 0o700 })
   }
   async invoke(method: string, args: any[]): Promise<unknown> {
@@ -31,11 +32,11 @@ export class ClaudeRuntimeService {
     if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new Error('Invalid runtime session identity')
     if (method === 'open') {
       let entry = this.sessions.get(id)
-      if (!entry) {
+      if (!entry || (entry.opened && !entry.driver.alive)) {
         const options = rest[0] as ClaudeTaskOptions
         if (options.sessionId !== id) throw new Error('Provider session identity mismatch')
-        const events: ClaudeRuntimeEvent[] = []
-        const driver = new ClaudeTaskSession({ ...options, onEvent: event => {
+        const events: ClaudeRuntimeEvent[] = entry?.events ?? []
+        const driver = this.makeDriver({ ...options, onEvent: event => {
           const record = { sessionId: id, sequence: events.length + 1, event, state: this.state(driver) }
           // Runtime receipts survive a daemon crash; only a live daemon can
           // claim that the old process is still executing.
@@ -43,9 +44,10 @@ export class ClaudeRuntimeService {
           events.push(record)
           this.emit(record)
         } })
-        entry = { driver, events, opening: Promise.resolve() }
+        entry = { driver, events, opening: Promise.resolve(), opened: false }
         this.sessions.set(id, entry)
-        entry.opening = driver.start()
+        const current = entry
+        entry.opening = driver.start().finally(() => { current.opened = true })
       }
       await entry.opening
       return { ...this.state(entry.driver), sequence: entry.events.length }
