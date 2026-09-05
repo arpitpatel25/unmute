@@ -12,6 +12,7 @@ import ComposerSupport
 struct TaskSurfaceView: View {
     @ObservedObject var model: NotchModel
     let topInset: CGFloat
+    @State private var confirmingRemoval = false
 
     private var t: TaskDetail? { model.task }
 
@@ -75,6 +76,14 @@ struct TaskSurfaceView: View {
             .padding(.top, topInset + 4)
             .padding(.bottom, 14)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .alert("Remove from Unmute?", isPresented: $confirmingRemoval) {
+                Button("Cancel", role: .cancel) {}
+                Button("Remove", role: .destructive) {
+                    if let id = t?.id { model.emit(.remove(id: id)) }
+                }
+            } message: {
+                Text("This removes the task from Unmute. Provider history and project files are preserved.")
+            }
             if model.captureAimed {
                 AimedChip(level: model.captureLevel)
                     .padding(.bottom, 16)
@@ -142,34 +151,24 @@ struct TaskSurfaceView: View {
         (t.status == .done || t.status == .failed) && t.kind != "session"
     }
 
+    @ViewBuilder
     private func actions(_ t: TaskDetail) -> some View {
-        HStack(spacing: 6) {
-            if !t.isOwned && !t.foreignAppName.isEmpty {
+        if !t.isOwned && !t.foreignAppName.isEmpty {
+            HStack(spacing: 6) {
                 KeyButton(label: "Open in \(t.foreignAppName)", symbol: "arrow.up.forward.app") { model.emit(.openInTerminal(id: t.id)) }
-            } else if t.isOwned && t.alive && (t.status == .processing || t.status == .needsUser) {
+            }
+            .padding(.top, 11)
+        } else if t.isOwned && t.alive && (t.status == .processing || t.status == .needsUser) {
+            HStack(spacing: 6) {
                 KeyButton(label: "Stop", symbol: "stop.circle") { model.emit(.kill(id: t.id)) }
-            } else if !t.alive && t.canResume {
+            }
+            .padding(.top, 11)
+        } else if !t.alive && t.canResume {
+            HStack(spacing: 6) {
                 KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
             }
-            KeyButton(label: model.backgroundAudioMuted ? "Resume background audio" : "Pause background audio",
-                      symbol: model.backgroundAudioMuted ? "play.circle" : "pause.circle") {
-                model.backgroundAudioMuted.toggle()
-                model.emit(.backgroundAudio(muted: model.backgroundAudioMuted))
-            }
-            Spacer(minLength: 0)
-            // NOT FOR THE AGENT. It is an element of the pocket, not work you
-            // dispatched: there is no process to kill and no card to drop. The
-            // conversation ends by being purged on its own clock, which is a
-            // different thing and is not a button.
-            if t.agentOriginPresentation == nil {
-                // This drops OUR card; it has never touched the agent's session. For
-                // a Codex thread — which lives on until you delete it in Codex —
-                // "kill" claims something we do not do and would not want to.
-                KeyButton(label: "Remove",
-                          danger: true, symbol: "trash") { model.emit(.remove(id: t.id)) }
-            }
+            .padding(.top, 11)
         }
-        .padding(.top, 11)
     }
 
     private func footer(_ t: TaskDetail) -> some View {
@@ -177,24 +176,33 @@ struct TaskSurfaceView: View {
             QuietButton(label: "Open dashboard", symbol: "square.grid.2x2") {
                 model.emit(.openDashboard)
             }
-            // MUTE AND THE CRANK ARE THE TASK QUEUE'S, and the Agent is not in
-            // it. Muting something that is always present would have to mean
-            // something new, and cranking from the chat would walk you into
-            // tasks by a control that looks like it moves within this one.
-            if t.agentOriginPresentation == nil {
-                // Episode-mute: out of the attention strip + crank until you interact
-                // with it or its state changes again. Still on the cockpit wall.
-                QuietButton(label: "Mute", symbol: "bell.slash", color: Theme.textFaint) {
-                    model.emit(.mute(id: t.id))
-                }
-                .help("Don't show again — returns when it changes or you open it")
-            }
             Spacer(minLength: 0)
+            QuietButton(label: model.backgroundAudioMuted ? "Resume background audio" : "Pause background audio",
+                        symbol: model.backgroundAudioMuted ? "play.circle" : "pause.circle") {
+                model.backgroundAudioMuted.toggle()
+                model.emit(.backgroundAudio(muted: model.backgroundAudioMuted))
+            }
             SurfaceSizeControls(model: model)
             if t.agentOriginPresentation == nil {
                 KeyButton(label: "Prev", symbol: "arrow.left") { model.emit(.prev) }
                 // THE ONE TINTED PRIMARY — the crank.
                 ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
+                Menu {
+                    // Removing retires Unmute's task record. The provider's
+                    // transcript and every project file remain where they are.
+                    Button("Remove from Unmute…", role: .destructive) {
+                        confirmingRemoval = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Theme.textDim)
+                        .frame(width: 28, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("More task actions")
             }
         }
         .padding(.top, 10)
