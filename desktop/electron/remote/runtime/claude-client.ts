@@ -1,0 +1,76 @@
+import { ClaudeTaskSession, type ClaudeTaskOptions, type ClaudeTaskAnswer } from '../claude/task-session'
+import type { TaskInput } from '../task-input'
+import type { RuntimeRpcClient } from './rpc'
+import type { ClaudeRuntimeEvent, ClaudeRuntimeState } from './claude-service'
+
+/** UI-side projection. Provider pipes and continuations belong to the daemon. */
+export class PersistentClaudeTaskSession extends ClaudeTaskSession {
+  private runtimeState: ClaudeRuntimeState = { alive: false, busy: false, followupBlocked: false, followupUnavailable: true, models: [] }
+  private attached?: Promise<void>
+  private sequence = 0
+  private buffered: ClaudeRuntimeEvent[] = []
+  private replaying = true
+  private detached = false
+  private receiveEvent = (event: ClaudeRuntimeEvent) => {
+    if (event.sessionId !== this.sessionId || this.detached) return
+    if (this.replaying) { this.buffered.push(event); return }
+    this.apply(event)
+  }
+  private disconnected = () => {
+    this.runtimeState = { ...this.runtimeState, alive: false, followupUnavailable: true }
+    this.remoteOptions.onEvent({ type: 'error', message: 'Background runtime connection lost; reconnect before sending again.' })
+  }
+  constructor(private rpc: RuntimeRpcClient, private remoteOptions: ClaudeTaskOptions) {
+    super(remoteOptions)
+    rpc.on('claude.event', this.receiveEvent)
+    rpc.on('disconnected', this.disconnected)
+  }
+  override get alive(): boolean { return !this.detached && this.runtimeState.alive }
+  override get busy(): boolean { return this.runtimeState.busy }
+  override get activeSubmissionId(): string | undefined { return this.runtimeState.activeSubmissionId }
+  override get followupBlocked(): boolean { return this.runtimeState.followupBlocked }
+  override get followupUnavailable(): boolean { return this.detached || this.runtimeState.followupUnavailable }
+  override get pid(): number | undefined { return this.runtimeState.pid }
+  override start(): Promise<void> { return this.attached ??= this.attach() }
+  private async attach(): Promise<void> {
+    const { onEvent: _onEvent, spawn: _spawn, readImage: _readImage, ...options } = this.remoteOptions
+    const opened = await this.rpc.call<ClaudeRuntimeState & { sequence: number }>('claude.open', this.sessionId, { ...options, sessionId: this.sessionId })
+    while (this.sequence < opened.sequence) {
+      const events = await this.rpc.call<ClaudeRuntimeEvent[]>('claude.replay', this.sessionId, this.sequence)
+      if (!events.length) throw new Error('Background runtime replay is incomplete')
+      for (const event of events) this.apply(event)
+    }
+    this.runtimeState = opened
+    this.models = opened.models
+    this.replaying = false
+    for (const event of this.buffered.splice(0).sort((a, b) => a.sequence - b.sequence)) this.apply(event)
+  }
+  private apply(record: ClaudeRuntimeEvent): void {
+    if (record.sequence <= this.sequence) return
+    this.sequence = record.sequence
+    this.runtimeState = record.state
+    this.models = record.state.models
+    this.remoteOptions.onEvent(record.event)
+  }
+  override async send(text: string, images: string[] = [], submissionId?: string, ordered?: TaskInput[], newTurnOnly = false) {
+    await this.start()
+    return this.rpc.call<{ submissionId: string; sessionId: string }>('claude.send', this.sessionId, text, images, submissionId, ordered, newTurnOnly)
+  }
+  override async sendNewTurn(text: string, images: string[], submissionId: string, ordered?: TaskInput[]) {
+    await this.start()
+    return this.rpc.call<import('../task-followup').NewTurnOutcome>('claude.sendNewTurn', this.sessionId, text, images, submissionId, ordered)
+  }
+  override async answer(id: string, decision: ClaudeTaskAnswer): Promise<void> {
+    this.runtimeState = await this.rpc.call('claude.answer', this.sessionId, id, decision)
+  }
+  override async interrupt(): Promise<void> { this.runtimeState = await this.rpc.call('claude.interrupt', this.sessionId) }
+  override close(): void {
+    void this.rpc.call('claude.close', this.sessionId).catch(error => this.remoteOptions.onEvent({ type: 'error', message: error.message }))
+    this.detach()
+  }
+  detach(): void {
+    this.detached = true
+    this.rpc.off('claude.event', this.receiveEvent)
+    this.rpc.off('disconnected', this.disconnected)
+  }
+}

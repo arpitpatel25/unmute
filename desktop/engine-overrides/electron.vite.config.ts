@@ -29,7 +29,10 @@ export default defineConfig({
     build: {
       outDir: 'dist/electron',
       lib: {
-        entry: resolve(__dirname, 'electron/main.ts')
+        entry: {
+          main: resolve(__dirname, 'electron/main.ts'),
+          'unmute-runtime': resolve(__dirname, 'electron/paywall/remote/runtime/main.ts'),
+        }
       }
     }
   },

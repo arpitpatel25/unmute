@@ -238,8 +238,10 @@ export function startMcpServer(
       reject(e)
     })
     server.listen(port, '127.0.0.1', () => {
-      log.event('mcp-server-started', { port })
-      resolve({ close: () => server.close(), port })
+      const address = server.address()
+      const boundPort = typeof address === 'object' && address ? address.port : port
+      log.event('mcp-server-started', { port: boundPort })
+      resolve({ close: () => server.close(), port: boundPort })
     })
   })
 }

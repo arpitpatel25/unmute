@@ -30,6 +30,9 @@ test('Agent work and encrypted conversation survive UI disconnection', async () 
   const client = new AgentRuntimeClient(rpc, { onView() {}, onActivity() {} })
   try {
     await client.configure({ masterKey: randomBytes(32).toString('base64'), selectedProvider: 'codex' })
+    await client.configure({ masterKey: randomBytes(32).toString('base64'), selectedProvider: 'codex', conversationCeiling: 24 })
+    assert.equal(client.view().record.pendingProvider, undefined, 'UI reconnect must not rotate an unchanged provider conversation')
+    assert.equal(client.view().record.ceiling, 20, 'the new ceiling applies at the next conversation boundary')
     const queued = await client.enqueue({ transcript: 'remember the durable test', submissionId: 'test-submission' })
     const input = await started
     assert.ok(input.mcp.endpoint.includes('127.0.0.1:'))

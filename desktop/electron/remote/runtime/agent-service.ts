@@ -58,9 +58,10 @@ export class AgentRuntimeService {
   }
   private async configure(input: AgentRuntimeConfig): Promise<unknown> {
     if (this.lifecycle) {
+      const providerChanged = this.config!.selectedProvider !== input.selectedProvider
       this.config!.selectedProvider = input.selectedProvider
       this.config!.conversationCeiling = input.conversationCeiling
-      await this.lifecycle.requestProvider(input.selectedProvider)
+      if (providerChanged) await this.lifecycle.requestProvider(input.selectedProvider)
       return this.snapshot()
     }
     if (this.configuring) return this.configuring
@@ -150,6 +151,17 @@ export class AgentRuntimeService {
   private snapshot() { return { view: this.lifecycle?.view(), activity: this.activity, availability: { available: !!this.lifecycle && this.probes.some(p => p.available), providers: this.probes.map(p => ({ ...p, id: p.provider })) } } }
   async invoke(method: string, args: unknown[]): Promise<unknown> {
     if (method === 'configure') return this.configure(args[0] as AgentRuntimeConfig)
+    if (method === 'disable') { await this.close(); return true }
+    if (method === 'update') {
+      if (!this.lifecycle || !this.config) throw new Error('Agent runtime is not configured')
+      const update = args[0] as Partial<Omit<AgentRuntimeConfig, 'masterKey'>>
+      if (update.conversationCeiling !== undefined) this.config.conversationCeiling = update.conversationCeiling
+      if (update.selectedProvider) {
+        this.config.selectedProvider = update.selectedProvider
+        await this.lifecycle.requestProvider(update.selectedProvider)
+      }
+      return this.snapshot()
+    }
     if (method === 'snapshot' || method === 'availability') return this.snapshot()
     if (!this.lifecycle) throw new Error('Agent runtime is not configured')
     const a = args as any[]
@@ -167,7 +179,7 @@ export class AgentRuntimeService {
       case 'completion': return this.completions.get(a[0]) ?? null
       case 'interrupt': return this.supervisor!.interrupt(a[0])
       case 'records.list': return this.records!.list()
-      case 'memory.get': return this.memory!.get(a[0], a[1])
+      case 'memory.get': return this.memory!.get(a[0], a[1], a[2])
       case 'memory.forget': return this.memory!.forget(a[0], a[1])
       case 'memory.restore': return this.memory!.restore(a[0], a[1])
       default: throw new Error('Unknown Agent runtime command')
@@ -180,5 +192,7 @@ export class AgentRuntimeService {
     this.mcp?.close(); this.mcp = undefined
     this.index?.close(); this.index = undefined
     this.key?.fill(0); this.key = undefined
+    this.records = undefined; this.memory = undefined; this.config = undefined
+    this.activity = undefined; this.completions.clear(); this.probes = []
   }
 }

@@ -4551,9 +4551,12 @@ export class TaskManager extends EventEmitter {
   shutdown(): void {
     for (const id of this.tasks.keys()) if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
     this.shuttingDown = true
+    const structured = new Set<string>(this.claudeTasks.keys())
     for (const [id, runtime] of this.claudeTasks) {
       this.chatStopVersion.set(id, (this.chatStopVersion.get(id) ?? 0) + 1)
-      runtime.driver.close()
+      const detachable = runtime.driver as ClaudeTaskSession & { detach?: () => void }
+      if (detachable.detach) detachable.detach()
+      else runtime.driver.close()
     }
     this.claudeTasks.clear()
     this.stopMaintenance()
@@ -4563,12 +4566,15 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       const task = this.tasks.get(id)
       const ex = this.executors.get(id)
+      const threadIdFor = this.opts.codexHub?.threadIdFor
+      const persistentStructured = structured.has(id)
+        || !!(task?.codexSessionSettings && typeof threadIdFor === 'function' && threadIdFor.call(this.opts.codexHub, id))
       const detachable = task
         && task.agent !== 'codex-desktop'
         && task.agent !== 'claude-code-desktop'
         && ex?.alive
         && ex.detach
-      if (task?.kind === 'session' || detachable) {
+      if (task && (task.kind === 'session' || detachable || persistentStructured)) {
         this.stopPolling(id)
         const wt = this.warmTimers.get(id)
         if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
