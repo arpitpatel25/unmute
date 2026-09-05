@@ -1,0 +1,97 @@
+/* Integrate the separately consented recording demo with the site shell. */
+[data-demo-root] {
+  min-height: 760px;
+  margin-bottom: 35px;
+}
+.unmute-demo .demo-tabs {
+  border: 1px solid #e2e5e9;
+  border-radius: 14px;
+  margin-bottom: 20px;
+  gap: 0;
+}
+.unmute-demo .demo-tab {
+  border-radius: 0;
+  padding: 18px 14px;
+  background: #f3f5f8;
+  font-size: 12px;
+}
+.unmute-demo .demo-tab[aria-selected="true"] {
+  background: #e7eefb;
+}
+.demo-tab-number {
+  display: none;
+}
+.unmute-demo h2 {
+  letter-spacing: -0.035em;
+}
+.demo-intro {
+  display: none;
+}
+.unmute-demo .demo-tab small {
+  font-size: 10px;
+}
+.unmute-demo .demo-tab strong {
+  font-weight: 550;
+}
+.unmute-demo .demo-help {
+  font-family: inherit;
+}
+.unmute-demo button:focus-visible {
+  outline: 3px solid #3983ff;
+  outline-offset: 3px;
+}
+@media (max-width: 650px) {
+  [data-demo-root] {
+    min-height: 640px;
+  }
+  .unmute-demo .demo-tab {
+    padding: 12px 7px;
+    font-size: 10px;
+  }
+  .unmute-demo .demo-tab small {
+    display: none;
+  }
+}
+.unmute-demo {
+  --ink-60: #626873;
+}
+.unmute-demo .demo-tab[aria-selected="true"]::before {
+  background: #245de8;
+}
+.unmute-demo .macbook-stage {
+  background: #eef2f7;
+  border: 1px solid #dce2ea;
+  border-radius: 16px;
+  box-shadow: none;
+}
+.unmute-demo .macbook-base {
+  background: linear-gradient(#e9edf1, #bfc7d0 50%, #8c98a5);
+}
+.unmute-demo .macbook-base span {
+  background: #b8c1cb;
+}
+.unmute-demo .guide-copy .guide-step {
+  background: #e9effb;
+  color: #335eac;
+  font-family: inherit;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+.unmute-demo .demo-guide {
+  border-color: #dce2ea;
+  box-shadow: none;
+}
+.unmute-demo .enable-mic {
+  background: #17191d;
+  border-radius: 24px;
+  box-shadow: none;
+}
+.unmute-demo .keycap,
+.unmute-demo .context-key,
+.unmute-demo .replay-button {
+  background: linear-gradient(#fff, #eef1f6);
+  color: #202630;
+  border-color: #ccd3dd;
+  box-shadow: 0 2px 0 #c6ced8;
+}

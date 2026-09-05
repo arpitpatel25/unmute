@@ -1,133 +1,447 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>unmute remote — a voice remote for Claude Code</title>
-<meta name="description" content="Remote is Claude Code, voice-driven, on your Mac. unmute has no intelligence of its own — that's the point. Needs a Claude Code Pro or Max plan, because it is one." />
-<link rel="icon" type="image/png" href="icon.png" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="docs.css" />
-<script>(function(){try{var t=localStorage.getItem('theme')||(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-</head>
-<body>
-  <main class="page">
-
-    <div class="top">
-      <a class="logo" href="./" aria-label="unmute">
-        <img class="logo-light" src="unmute-wordmark.png" alt="unmute" />
-        <img class="logo-dark" src="unmute-wordmark-light.png" alt="unmute" />
-      </a>
-      <nav>
-        <a href="dictation.html">dictation</a>
-        <a href="remote.html">unmute remote</a>
-        <a href="pricing.html">pricing</a>
-        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
-          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Unmute Remote — Claude Code and Codex by voice</title>
+    <meta
+      name="description"
+      content="Start Claude Code and Codex tasks by voice on your Mac. Follow sessions in the Notch, respond to your agents, and explore meeting notes and memory."
+    />
+    <link rel="canonical" href="https://justunmute.me/remote.html" />
+    <meta
+      property="og:title"
+      content="Unmute Remote — Claude Code and Codex by voice"
+    />
+    <meta
+      property="og:description"
+      content="Start Claude Code and Codex tasks by voice on your Mac. Follow sessions in the Notch, respond to your agents, and explore meeting notes and memory."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://justunmute.me/remote.html" />
+    <meta property="og:image" content="https://justunmute.me/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Unmute Remote — Claude Code and Codex by voice"
+    />
+    <meta
+      name="twitter:description"
+      content="Start Claude Code and Codex tasks by voice on your Mac. Follow sessions in the Notch, respond to your agents, and explore meeting notes and memory."
+    />
+    <meta name="twitter:image" content="https://justunmute.me/og.png" />
+    <meta name="theme-color" content="#fbfcfe" />
+    <link rel="icon" href="icon.png" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <link rel="stylesheet" href="site.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Unmute",
+        "applicationCategory": "ProductivityApplication",
+        "operatingSystem": "macOS",
+        "description": "Start Claude Code and Codex tasks by voice on your Mac. Follow sessions in the Notch, respond to your agents, and explore meeting notes and memory.",
+        "url": "https://justunmute.me/",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD",
+          "description": "Free on-device dictation"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-header">
+      <nav class="nav wrap" aria-label="Main navigation">
+        <a class="brand" href="./" aria-label="Unmute home"
+          ><img
+            src="unmute-wordmark-black.png"
+            alt="Unmute"
+            width="108"
+            height="36" /></a
+        ><button
+          class="menu-toggle"
+          aria-expanded="false"
+          aria-controls="navigation"
+        >
+          Menu
         </button>
-        <a class="nav-cta" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Get unmute</a>
+        <div class="nav-links" id="navigation">
+          <a href="dictation.html">Dictation</a><a href="remote.html">Remote</a
+          ><a href="./#how-it-works">How it works</a
+          ><a href="pricing.html">Pricing</a
+          ><a
+            class="button small"
+            href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+            >Download for Mac <span aria-hidden="true">↗</span></a
+          >
+        </div>
       </nav>
-    </div>
-
-    <p class="lede"><b>unmute remote.</b> A voice remote for the most capable agent ever shipped — which happens to be the one you already pay for.</p>
-    <p class="sublede">Dictation puts words on the screen. Remote does the actual thing.</p>
-
-    <section>
-      <p class="mark">// the honest version</p>
-      <p>Most "AI agent" products are a prompt in a trench coat doing an impression of a brain. We'll skip the suspense: <b>Remote is Claude Code.</b> The real one, running on your Mac. We didn't build a model — we built the part Anthropic didn't bother with: a voice interface good enough that you forget there's a terminal under it.</p>
-      <p><b>unmute has no intelligence of its own, and that is the feature.</b> All the brains are Claude's. We gave it ears and got out of the way.</p>
-      <p class="dim">If "it needs my own Claude Code plan" just lost you, Remote isn't for you yet — <a href="./">the dictation half</a> still is. If it didn't, keep reading. This gets good.</p>
-    </section>
-
-    <section>
-      <p class="mark">// what you're paying for (and not using)</p>
-      <p>You have a Claude Code plan. You use it hard — for code, for a couple of workflows you'd defend in court. That's roughly <b>20% of what it can do.</b> The other 80% isn't locked. It's just annoying to reach, because reaching it means typing into a terminal, and you have a life.</p>
-      <p>Remote deletes the typing. You talk; it acts. The plan you already pay for, finally spent.</p>
-    </section>
-
-    <section>
-      <p class="mark">// how it works</p>
-      <ul class="dash">
-        <li><b>1. Speak the task.</b> Hold <kbd>right ⌥</kbd> and say it like a human. No prompt-craft, no syntax, no "as an AI language model."</li>
-        <li><b>2. It runs on your Mac.</b> Real files, real terminal, your actual logged-in Chrome, your apps. Not a sandbox. Not a vibe.</li>
-        <li><b>3. You watch, or you don't.</b> A live view shows the work; an indicator nags you only when it genuinely needs a decision.</li>
-        <li><b>4. It comes back.</b> The result lands where you're working — files, links, the lot. Answer follow-ups by voice.</li>
-      </ul>
-    </section>
-
-    <section>
-      <p class="mark">// the flywheel (the part that compounds)</p>
-      <p>Claude Code gets smarter the more you feed it — skills, memory, project files, little notes-to-self. The people getting absurd value out of it are the ones forever grooming that context. You're not, because doing it by hand is tedious and you are (lovingly) lazy.</p>
-      <p>So say it out loud instead. "Save how I just did that as a skill." "Remember I always want X." "Spin up a project for this client." Friction gone, flywheel spinning, and the thing you pay a fortune for every month finally earns its keep.</p>
-    </section>
-
-    <section>
-      <p class="mark">// things people actually say to it</p>
-      <ul class="dash">
-        <li>"who won last night — and don't make me open a browser."</li>
-        <li>"what's hammering my CPU? kill it."</li>
-        <li>"rename these 40 screenshots by date."</li>
-        <li>"Skyscanner, London to Tokyo, next Friday, cheapest — don't book it."</li>
-        <li>"my flight's at 6, when do I leave the house?"</li>
-        <li>"log this tweet URL in my Google Sheet with a one-line summary."</li>
-        <li>"total every invoice in Downloads into a sheet."</li>
-        <li>"read this repo and tell me what it actually does."</li>
-        <li>"save how I just did that as a skill, so I never explain it again."</li>
-        <li>"resume yesterday's Claude chat about the migration."</li>
-      </ul>
-      <p class="aside">Simple to unhinged, none of it a feature we built. It's Claude Code, finally within reach.</p>
-    </section>
-
-    <section>
-      <p class="mark">// you're the driver, not a passenger</p>
-      <p>To get things done without pestering you about every step, Remote runs with real permissions. The guardrails, because we're not reckless:</p>
-      <ul class="dash">
-        <li><b>Human-initiated, always.</b> It does the one thing you asked, when you ask. No background agent quietly redecorating your hard drive.</li>
-        <li><b>Kill it instantly.</b> One stop, everything stops.</li>
-        <li><b>Training wheels, optional.</b> Turn on per-action approval, or fence it to a single folder.</li>
-        <li><b>Your credentials stay yours.</b> We never see your keys or logins — you authorize things inside your own Claude Code. Frankly we don't want them; they sound like a liability.</li>
-      </ul>
-    </section>
-
-    <section>
-      <p class="mark">// honest about speed</p>
-      <p>Remote is exactly as fast as Claude Code — which is to say it thinks before it acts, like an adult. Not instant. It's also exactly as reliable as Claude Code — which is to say, the most reliable agent there is. We'll take that trade every time. And as Claude Code gets faster and smarter, so does Remote. We're just along for the ride; it's a good ride.</p>
-    </section>
-
-    <section>
-      <p class="mark">// setup, ~30 seconds</p>
-      <ul class="dash">
-        <li>Install the <b>Claude for Chrome extension</b>.</li>
-        <li>Keep one Chrome window open with it on.</li>
-        <li>Hold <kbd>right ⌥</kbd> and start talking. That's the setup. There is no step four.</li>
-      </ul>
-      <p class="aside">Optional integrations (Gmail, Drive, …) are add-as-you-go, authorized in your own Claude Code. We never touch your credentials.</p>
-    </section>
-
-    <hr />
-
-    <section>
-      <p><a class="btn" href="pricing.html">Get unmute — from $5.99/mo</a> &nbsp;<span class="aside">// Remote ships in the $8.99 plan.</span></p>
-    </section>
-
-    <footer>
-      <div class="logo"><img class="logo-light" src="unmute-wordmark.png" alt="unmute" /><img class="logo-dark" src="unmute-wordmark-light.png" alt="unmute" /></div>
-      <div class="links">
-        <a href="./">home</a>
-        <a href="dictation.html">dictation</a>
-        <a href="pricing.html">pricing</a>
-        <a href="https://github.com/arpitpatel25/unmute-dictation">open source</a>
-        <a href="https://x.com/just_unmute">twitter</a>
-        <a href="terms.html">terms</a>
-        <a href="privacy.html">privacy</a>
+    </header>
+    <main id="main">
+      <div class="wrap">
+        <section class="subhero">
+          <p class="availability" style="justify-content: flex-start">
+            Unmute Remote
+          </p>
+          <h1>Have a thought.<br />Start something.</h1>
+          <p class="intro">
+            Your Claude Code and Codex sessions, one voice shortcut away. Give
+            them work. Keep your attention for what needs you.
+          </p>
+          <div class="cta-row">
+            <a
+              class="button"
+              href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                aria-hidden="true"
+              >
+                <path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5" /></svg
+              >Download for Mac</a
+            ><a class="text-link" href="#demo"
+              >Explore the product <span aria-hidden="true">↘</span></a
+            >
+          </div>
+          <p class="footnote">
+            Uses your own connected agent. Agent subscription and usage are
+            separate.
+          </p>
+        </section>
       </div>
-      <div>© 2026 unmute</div>
+      <section
+        class="product-showcase"
+        id="demo"
+        aria-label="Interactive Unmute product preview"
+        data-product-demo
+        data-mode="remote"
+      >
+        <div class="demo-tabs" role="tablist" aria-label="Explore Unmute">
+          <button
+            id="tab-remote"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="true"
+            data-mode-tab="remote"
+          >
+            Unmute Remote</button
+          ><button
+            id="tab-dictation"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="dictation"
+          >
+            Dictation</button
+          ><button
+            id="tab-scratchpad"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="scratchpad"
+          >
+            Scratchpad</button
+          ><button
+            id="tab-meetings"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="meetings"
+          >
+            Meetings</button
+          ><button
+            id="tab-memory"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="memory"
+          >
+            Memory
+          </button>
+        </div>
+        <div
+          class="desktop"
+          id="product-panel"
+          role="tabpanel"
+          aria-label="Product preview"
+        >
+          <div class="wallpaper" aria-hidden="true"></div>
+          <div class="menubar" aria-hidden="true">
+            <span
+              ><b>◆ &nbsp; Finder</b
+              ><span class="menu-items"
+                >File &nbsp; Edit &nbsp; View &nbsp; Go</span
+              ></span
+            ><span>Wi-Fi &nbsp; 100% &nbsp; 9:41</span>
+          </div>
+          <div class="notch" data-notch>
+            <div class="notch-bar">Unmute</div>
+            <div class="notch-body">
+              <h3>Your work, within reach.</h3>
+              <p>Enable JavaScript to explore the interactive preview.</p>
+            </div>
+          </div>
+          <div class="preview-window">
+            <div class="window-chrome">
+              <div class="traffic" aria-hidden="true">
+                <i></i><i></i><i></i>
+              </div>
+              <span>Notes</span>
+            </div>
+            <div class="window-content" data-window>
+              <h3>A better first impression.</h3>
+              <p>Give the product room to speak.</p>
+            </div>
+          </div>
+          <aside class="ambient-card" aria-hidden="true">
+            <b>A little room to think.</b>Your workspace stays yours.<br />Unmute
+            works alongside it.
+          </aside>
+          <div class="dock" aria-hidden="true">
+            <span>▣</span><span>▤</span><span>✉</span><span>⌘</span
+            ><span>✳</span>
+          </div>
+        </div>
+        <div class="demo-caption">
+          <p data-caption>
+            <strong>Explore Unmute.</strong> Interactive examples. No microphone
+            or apps are accessed.
+          </p>
+          <button data-action="reset" aria-label="Reset product preview">
+            ↺ Reset preview
+          </button>
+        </div>
+      </section>
+      <section class="section">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>One place to see<br />whose move it is.</h2>
+            <p>
+              The Notch keeps the state of your work visible. Open a task when
+              you need the details; open the overview when you need the whole
+              picture.
+            </p>
+          </div>
+          <div class="feature-grid">
+            <article>
+              <span class="feature-icon" aria-hidden="true">◌</span>
+              <h3>Working</h3>
+              <p>
+                Your agent is moving the task forward. There’s nothing you need
+                to do right now.
+              </p>
+            </article>
+            <article>
+              <span class="feature-icon" aria-hidden="true">◐</span>
+              <h3>Needs you</h3>
+              <p>
+                A choice, a question, or a blocker. Open the task and give it
+                the direction it needs.
+              </p>
+            </article>
+            <article>
+              <span class="feature-icon" aria-hidden="true">✓</span>
+              <h3>Ready</h3>
+              <p>
+                The result is waiting for your review. Read it, follow up, or
+                move on to the next task.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+      <section class="dark-section">
+        <div class="wrap feature-split">
+          <div class="feature-copy">
+            <h2>Same agents.<br />A shorter way<br />to reach them.</h2>
+            <p style="color: #a4acb8">
+              Unmute starts ordinary sessions and follows their progress. Your
+              agent’s tools, project context, and permissions still define the
+              work.
+            </p>
+            <p style="color: #a4acb8">
+              Browser and native app support extends that work beyond code. What
+              your agent can do depends on the tools and access you’ve
+              connected.
+            </p>
+          </div>
+          <div>
+            <h3>“Review this repo and explain the setup.”</h3>
+            <p style="color: #9da6b2; line-height: 1.8; margin-bottom: 32px">
+              Get oriented without finding a terminal first.
+            </p>
+            <h3>“Organize these screenshots by date.”</h3>
+            <p style="color: #9da6b2; line-height: 1.8; margin-bottom: 32px">
+              Turn a small chore into a task you can hand off.
+            </p>
+            <h3>“Put these invoice totals in a sheet.”</h3>
+            <p style="color: #9da6b2; line-height: 1.8">
+              Bring the same agent to everyday work.
+            </p>
+          </div>
+        </div>
+      </section>
+      <section class="section" id="meetings">
+        <div class="wrap feature-split">
+          <div class="feature-copy">
+            <h2>
+              Your conversations.<br />Useful long after<br />they’re over.
+            </h2>
+            <p>
+              Double-tap left Control to capture a meeting. Unmute records
+              microphone and system audio, transcribes the conversation, and
+              asks your connected CLI agent to write the notes.
+            </p>
+            <p>
+              The notes workflow uses your own connected agent. Its provider may
+              process the transcript according to your account settings.
+            </p>
+          </div>
+          <div class="meeting-paper">
+            <span class="recording-label">✓ Notes ready</span>
+            <h3>Design review</h3>
+            <p class="date">Today · 24 minutes</p>
+            <h4>What we decided</h4>
+            <p>
+              Lead with the product. Give the demo more room and keep the motion
+              purposeful.
+            </p>
+            <h4>What happens next</h4>
+            <ul>
+              <li>Maya — refine the first-screen copy.</li>
+              <li>Alex — review the mobile experience.</li>
+              <li>Team — regroup on Thursday.</li>
+            </ul>
+            <p class="date">Illustrative meeting notes</p>
+          </div>
+        </div>
+      </section>
+      <section class="quiet-section">
+        <div class="wrap feature-split">
+          <div class="feature-copy">
+            <h2>Context that<br />comes back to you.</h2>
+            <p>
+              Right Command talks to Unmute itself. Find something you dictated,
+              recall a decision, save a preference, or reopen an earlier
+              session.
+            </p>
+            <p>
+              When a thought becomes a new task, Unmute can hand it to your
+              agent.
+            </p>
+          </div>
+          <div class="meeting-paper">
+            <p class="date">Unmute Agent · Example conversation</p>
+            <h3>“What did I say about<br />the homepage last week?”</h3>
+            <p>
+              You wanted to lead with the product, give the Notch more room, and
+              simplify the copy.
+            </p>
+            <p class="date">
+              Your dictation history and saved context, within reach.
+            </p>
+          </div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="wrap faq">
+          <div>
+            <h2>A few things<br />you might be wondering.</h2>
+            <a class="text-link" href="https://cal.com/unmute/15min"
+              >Talk to the founder ↗</a
+            >
+          </div>
+          <div>
+            <details>
+              <summary>Do I need Claude Code or Codex?</summary>
+              <p>
+                Only for agent-powered work. Remote connects to your own Claude
+                Code or Codex setup. Free local dictation does not need either.
+                Meeting notes use your connected agent to write the summary.
+              </p>
+            </details>
+            <details>
+              <summary>Does it work on a Mac without a notch?</summary>
+              <p>
+                Yes. Unmute provides its own surface at the top of the screen.
+                You do not need a MacBook with a physical display cutout.
+              </p>
+            </details>
+            <details>
+              <summary>Where does my audio go?</summary>
+              <p>
+                In local mode, dictation is processed on your Mac. Managed cloud
+                dictation sends audio through Unmute’s service to a
+                transcription provider. With your own API key, requests go
+                directly to your provider. Agent tasks follow your connected
+                provider’s data handling. Read the privacy policy for details.
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+      <section class="closing">
+        <h2>You have a thought.<br />Take it somewhere.</h2>
+        <p>Start with free, on-device dictation. Grow from there.</p>
+        <a
+          class="button"
+          href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+          >Download for Mac</a
+        >
+        <div class="footnote">
+          Apple silicon Mac · Free offline dictation · No account required
+        </div>
+      </section>
+    </main>
+    <footer class="footer">
+      <div class="wrap">
+        <div class="footer-top">
+          <div class="footer-brand">
+            <a class="brand" href="./"
+              ><img
+                src="unmute-wordmark-black.png"
+                alt="Unmute"
+                width="108"
+                height="36"
+            /></a>
+            <p>A little less between you and your Mac.</p>
+          </div>
+          <div class="footer-links">
+            <div>
+              <b>Product</b><a href="dictation.html">Dictation</a
+              ><a href="remote.html">Unmute Remote</a
+              ><a href="pricing.html">Pricing</a
+              ><a href="try.html">Product preview</a>
+            </div>
+            <div>
+              <b>Unmute</b><a href="manifesto.html">Our thinking</a
+              ><a href="https://github.com/arpitpatel25/unmute-dictation"
+                >Open source</a
+              ><a href="https://cal.com/unmute/15min">Talk to the founder</a
+              ><a href="https://x.com/just_unmute">Follow along</a>
+            </div>
+            <div>
+              <b>The details</b><a href="privacy.html">Privacy</a
+              ><a href="terms.html">Terms</a
+              ><a href="refund.html">Refund policy</a>
+            </div>
+          </div>
+        </div>
+        <div class="footer-bottom">
+          <span>© 2026 Unmute. Made for Mac.</span
+          ><span>Your voice. Your context. Your agents.</span>
+        </div>
+      </div>
     </footer>
-
-  </main>
-  <script src="theme.js"></script>
-</body>
+    <script type="module" src="site.js"></script>
+    <script type="module" src="product-demo.js"></script>
+  </body>
 </html>

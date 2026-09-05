@@ -1,146 +1,662 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>unmute — it types what you say. it also does what you say.</title>
-<meta name="description" content="The fastest Mac dictation there is, with an offline fallback so your words never drop. Then Remote: a voice remote for Claude Code. unmute has no intelligence of its own — that's the point." />
-<link rel="icon" type="image/png" href="icon.png" />
-<meta property="og:title" content="unmute" />
-<meta property="og:description" content="It types what you say. It also does what you say." />
-<meta property="og:image" content="https://arpitpatel25.github.io/unmute/icon.png" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="docs.css" />
-<link rel="stylesheet" href="demo.css?v=live-demo-2" />
-<script>(function(){try{var t=localStorage.getItem('theme')||(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
-</head>
-<body>
-  <main class="page">
-
-    <div class="top">
-      <a class="logo" href="./" aria-label="unmute">
-        <img class="logo-light" src="unmute-wordmark.png" alt="unmute" />
-        <img class="logo-dark" src="unmute-wordmark-light.png" alt="unmute" />
-      </a>
-      <nav>
-        <a href="dictation.html">dictation</a>
-        <a href="remote.html">unmute remote</a>
-        <a href="pricing.html">pricing</a>
-        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
-          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Unmute — Voice dictation and AI agents for Mac</title>
+    <meta
+      name="description"
+      content="Dictate into your apps, work with Claude Code and Codex by voice, and manage tasks in the Notch. Start with free on-device dictation for Mac."
+    />
+    <link rel="canonical" href="https://justunmute.me/" />
+    <meta
+      property="og:title"
+      content="Unmute — Voice dictation and AI agents for Mac"
+    />
+    <meta
+      property="og:description"
+      content="Dictate into your apps, work with Claude Code and Codex by voice, and manage tasks in the Notch. Start with free on-device dictation for Mac."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://justunmute.me/" />
+    <meta property="og:image" content="https://justunmute.me/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Unmute — Voice dictation and AI agents for Mac"
+    />
+    <meta
+      name="twitter:description"
+      content="Dictate into your apps, work with Claude Code and Codex by voice, and manage tasks in the Notch. Start with free on-device dictation for Mac."
+    />
+    <meta name="twitter:image" content="https://justunmute.me/og.png" />
+    <meta name="theme-color" content="#fbfcfe" />
+    <link rel="icon" href="icon.png" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <link rel="stylesheet" href="site.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Unmute",
+        "applicationCategory": "ProductivityApplication",
+        "operatingSystem": "macOS",
+        "description": "Dictate into your apps, work with Claude Code and Codex by voice, and manage tasks in the Notch. Start with free on-device dictation for Mac.",
+        "url": "https://justunmute.me/",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD",
+          "description": "Free on-device dictation"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-header">
+      <nav class="nav wrap" aria-label="Main navigation">
+        <a class="brand" href="./" aria-label="Unmute home"
+          ><img
+            src="unmute-wordmark-black.png"
+            alt="Unmute"
+            width="108"
+            height="36" /></a
+        ><button
+          class="menu-toggle"
+          aria-expanded="false"
+          aria-controls="navigation"
+        >
+          Menu
         </button>
-        <a class="nav-cta" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Get unmute</a>
+        <div class="nav-links" id="navigation">
+          <a href="dictation.html">Dictation</a><a href="remote.html">Remote</a
+          ><a href="./#how-it-works">How it works</a
+          ><a href="pricing.html">Pricing</a
+          ><a
+            class="button small"
+            href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+            >Download for Mac <span aria-hidden="true">↗</span></a
+          >
+        </div>
       </nav>
-    </div>
-
-    <p class="lede"><b>unmute</b> does two things: it types what you say, and it does what you say.</p>
-    <p class="sublede">A Mac dictation app that also, casually, runs your entire computer. Hold a key. Talk. Typing was a mistake; we're walking it back.</p>
-
-    <section class="demo-section" aria-labelledby="demo-title">
-      <div class="demo-intro">
-        <p class="mark">// don't read about it — use it</p>
-        <h1 id="demo-title">Tap a key. Watch where your words go.</h1>
-        <p>Four short, guided demos. The controls and states below mirror the real Mac app.</p>
+    </header>
+    <main id="main">
+      <section class="hero">
+        <p class="availability">
+          <i></i> For your Mac. And everything you do on it.
+        </p>
+        <h1>A little less typing.<br />A lot more done.</h1>
+        <p class="intro">
+          Speak your thoughts. Give your agents work.<br />Keep it all within
+          reach, with Unmute.
+        </p>
+        <div class="cta-row">
+          <a
+            class="button"
+            href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+            ><svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              aria-hidden="true"
+            >
+              <path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5" /></svg
+            >Download for Mac</a
+          ><a class="text-link" href="#demo"
+            >Explore the product <span aria-hidden="true">↘</span></a
+          >
+        </div>
+        <p class="footnote">Free on-device dictation. No account required.</p>
+      </section>
+      <section
+        class="product-showcase"
+        id="demo"
+        aria-label="Interactive Unmute product preview"
+        data-product-demo
+        data-mode="remote"
+      >
+        <div class="demo-tabs" role="tablist" aria-label="Explore Unmute">
+          <button
+            id="tab-remote"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="true"
+            data-mode-tab="remote"
+          >
+            Unmute Remote</button
+          ><button
+            id="tab-dictation"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="dictation"
+          >
+            Dictation</button
+          ><button
+            id="tab-scratchpad"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="scratchpad"
+          >
+            Scratchpad</button
+          ><button
+            id="tab-meetings"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="meetings"
+          >
+            Meetings</button
+          ><button
+            id="tab-memory"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="memory"
+          >
+            Memory
+          </button>
+        </div>
+        <div
+          class="desktop"
+          id="product-panel"
+          role="tabpanel"
+          aria-label="Product preview"
+        >
+          <div class="wallpaper" aria-hidden="true"></div>
+          <div class="menubar" aria-hidden="true">
+            <span
+              ><b>◆ &nbsp; Finder</b
+              ><span class="menu-items"
+                >File &nbsp; Edit &nbsp; View &nbsp; Go</span
+              ></span
+            ><span>Wi-Fi &nbsp; 100% &nbsp; 9:41</span>
+          </div>
+          <div class="notch" data-notch>
+            <div class="notch-bar">Unmute</div>
+            <div class="notch-body">
+              <h3>Your work, within reach.</h3>
+              <p>Enable JavaScript to explore the interactive preview.</p>
+            </div>
+          </div>
+          <div class="preview-window">
+            <div class="window-chrome">
+              <div class="traffic" aria-hidden="true">
+                <i></i><i></i><i></i>
+              </div>
+              <span>Notes</span>
+            </div>
+            <div class="window-content" data-window>
+              <h3>A better first impression.</h3>
+              <p>Give the product room to speak.</p>
+            </div>
+          </div>
+          <aside class="ambient-card" aria-hidden="true">
+            <b>A little room to think.</b>Your workspace stays yours.<br />Unmute
+            works alongside it.
+          </aside>
+          <div class="dock" aria-hidden="true">
+            <span>▣</span><span>▤</span><span>✉</span><span>⌘</span
+            ><span>✳</span>
+          </div>
+        </div>
+        <div class="demo-caption">
+          <p data-caption>
+            <strong>Explore Unmute.</strong> Interactive examples. No microphone
+            or apps are accessed.
+          </p>
+          <button data-action="reset" aria-label="Reset product preview">
+            ↺ Reset preview
+          </button>
+        </div>
+      </section>
+      <div class="app-strip wrap">
+        <p>Write in your apps. Work with your agents.</p>
+        <div class="app-names">
+          <span>Notes</span><span>Slack</span><span>Gmail</span
+          ><span>Notion</span><span>Claude Code</span><span>Codex</span>
+        </div>
       </div>
-      <div data-demo-root data-stt-endpoint="https://unmute-pipeline.zodpatel.workers.dev/v1/demo/stt"></div>
-      <noscript>This interactive demo needs JavaScript enabled.</noscript>
-    </section>
-
-    <p class="mark" style="margin-top:22px;">// we know our landing page is simple, but hey — this is the best way to convey the message without the noise. so read it, and don't complain.</p>
-
-    <section>
-      <p class="mark">// the first key — dictation, except fast</p>
-      <p>You've dictated before. Not like this. <b>Under a second to text, always</b> — 10 seconds of audio or 10 minutes, same sub-1-second latency, every single time. We're not going to explain dictation to you; you know what it is. We're going to out-run everyone who's ever sold it to you. The speed is the whole pitch.</p>
-      <p>And your words do not die. Wi-Fi quits mid-sentence — keeps going. Café internet from a dial-up fever dream — keeps going. The instant the network wobbles, dictation falls back <b>on-device, automatically</b> — no toggle, no spinner, no "something went wrong." <b>Wispr Flow couldn't keep a sentence alive through a hiccup. So we had to.</b></p>
-    </section>
-
-    <section>
-      <p class="mark">// the second key — remote · a voice remote for Claude Code</p>
-      <h2>Dictation types it. Remote does it.</h2>
-      <p>Hold <kbd>right ⌥</kbd>, say the thing, it happens — on your actual Mac.</p>
-
-      <p>The twist: <b>unmute is dumb. Proudly, aggressively dumb.</b> We didn't train a model — the smartest one already exists, you're already paying for it, and ours would only get in the way. We gave it ears. That's the innovation.</p>
-
-      <p>Which is the entire trust story. Remote <em>is</em> Claude Code — your own terminal session, just voice-driven. The best agent anyone has shipped, minus the part where you type at it. Nothing new to trust. Friendly neighborhood Claude Code.</p>
-
-      <p>Here's the thing: you probably use Claude Code hard — for code, for a couple of workflows you'd defend with your life. And that's still maybe <b>20% of what it can actually do.</b> Press a key, say it, watch the other 80% show up:</p>
-      <ul class="dash">
-        <li>"who won the match last night?"</li>
-        <li>"put on the next episode."</li>
-        <li>"what's eating my battery — and kill it."</li>
-        <li>"rename these 40 screenshots by date."</li>
-        <li>"open Skyscanner, London to Tokyo, next Friday, cheapest."</li>
-        <li>"my flight's at 6 — when do I leave the house?"</li>
-        <li>"drop this tweet URL in my Google Sheet with a one-line summary."</li>
-        <li>"total every invoice in my Downloads and put it in a sheet."</li>
-        <li>"read this repo and tell me what it actually does."</li>
-        <li>"go through my last 50 emails and flag the 3 that actually need me."</li>
-      </ul>
-      <p class="aside">None of these are features we built. It's just Claude Code, finally within reach. The bottleneck was never the model — it was the keyboard.</p>
-    </section>
-
-    <section>
-      <p class="mark">// the flywheel (this is the actual pitch)</p>
-      <p>Agents like Claude Code get better the more you feed them — skills, memory, project files, notes-to-self. Give it structure and it serves you better, permanently. The power users know this; they're forever creating skills and updating memory and organizing context.</p>
-      <p>You're probably not. Not because you're lazy — okay, a little — but because doing all that by hand, in a terminal, is a chore, so the flywheel never starts spinning.</p>
-      <p><b>unmute spins it.</b> "Save that as a skill." "Remember I always want X." "Start a project for this." Said out loud, in passing, zero friction. You end up feeding Claude Code without trying — and the more you feed it, the more it's worth to you. The value compounds somewhere you've genuinely never taken it before.</p>
-      <p class="dim">Honest notes: it needs a <b>Claude Code Pro or Max plan</b>, because it is one and it uses yours. It's as fast as Claude Code (not instant) and as reliable as Claude Code (the most reliable agent there is). And every time Claude Code levels up, so does unmute — free. <a class="arrow" href="remote.html">how remote works</a></p>
-    </section>
-
-    <hr />
-
-    <section>
-      <p class="mark">// raw by default — what dictation is actually for</p>
-      <p>Be honest: most of what you dictate goes straight into ChatGPT, Claude, Cursor. Prompts. And prompts don't need commas. So we paste <b>raw</b> — no auto-punctuation, no autocorrect editing you into a stranger.</p>
-      <p class="dim">Need it shaped? Select the text, hold <kbd>Caps Lock</kbd>, and say the format out loud — "three bullets," "less corporate," "make it sound human." You name it; we don't pick for you. Two seconds, done.</p>
-    </section>
-
-    <hr />
-
-    <section>
-      <p class="mark">// price</p>
-      <ul class="dash">
-        <li><b>Offline dictation</b> — $0. <span class="note">No account. Runs on your Mac. Forever. We're not monsters.</span></li>
-        <li><b>Dictation</b> (cloud) — <b>$5.99/mo</b></li>
-        <li><b>Unmute</b> (dictation + remote) — <b>$8.99/mo</b> <span class="note">// the whole thing. a rounding error next to your Claude Code bill.</span></li>
-      </ul>
-      <p class="dim">Yearly is cheaper, obviously. Arithmetic still works in 2026. <a class="arrow" href="pricing.html">see pricing</a></p>
-      <p><a class="btn" href="pricing.html">Get unmute</a> &nbsp;<span class="aside">// we allowed ourselves exactly one button. Restraint.</span></p>
-      <p class="aside" style="margin-top:10px;">// macOS says "damaged"? It's signed &amp; notarized — that's just a browser quarantine flag. Drag unmute into Applications, then run <code>xattr -dr com.apple.quarantine /Applications/unmute.app</code> once. <a href="pricing.html">more</a></p>
-    </section>
-
-    <hr />
-
-    <section>
-      <p class="mark">// talk to a human — 15 minutes</p>
-      <p>If you live in <b>Claude Code, Codex or Cursor</b>, I'd like 15 minutes of your time.</p>
-      <p>Not a demo, not a pitch. There's nothing I could sell you on a call that this page hasn't already tried. I want to hear how you <em>actually</em> work — what you run all day, where it goes slow, and which part of it you'd hand to your voice if you trusted it enough.</p>
-      <p>Because the next piece is the hard one: you say a thing, an agent task starts. One gets stuck, you unblock it by talking. No terminal. I'd rather build that out of ten real conversations than a hundred confident guesses.</p>
-      <p><a class="arrow" href="https://cal.com/unmute/15min" data-cal-link="unmute/15min" data-cal-namespace="unmute15" data-cal-config='{"layout":"month_view"}'>book 15 minutes</a> &nbsp;<span class="aside">// pick a slot — that's the entire form. no phone number, no "when works for you?", no follow-up sequence.</span></p>
-      <p class="aside">// and yes, still exactly one button on this site. that was a link. if no slot works, <a href="https://x.com/just_unmute">dm me</a> instead.</p>
-    </section>
-
-    <footer>
-      <div class="logo"><img class="logo-light" src="unmute-wordmark.png" alt="unmute" /><img class="logo-dark" src="unmute-wordmark-light.png" alt="unmute" /></div>
-      <div class="links">
-        <a href="dictation.html">dictation</a>
-        <a href="remote.html">unmute remote</a>
-        <a href="pricing.html">pricing</a>
-        <a href="https://cal.com/unmute/15min" data-cal-link="unmute/15min" data-cal-namespace="unmute15">book a call</a>
-        <a href="https://github.com/arpitpatel25/unmute-dictation">open source</a>
-        <a href="https://x.com/just_unmute">twitter</a>
-        <a href="terms.html">terms</a>
-        <a href="privacy.html">privacy</a>
+      <section class="section">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Less between the thought<br />and the thing.</h2>
+            <p>
+              Some thoughts need a text field. Some need an agent.<br />Unmute
+              gives both a place to go.
+            </p>
+          </div>
+          <div class="feature-grid">
+            <article>
+              <span class="feature-icon" aria-hidden="true">⌁</span>
+              <h3>Say what’s on your mind.</h3>
+              <p>
+                Dictate where you already write. Keep your original words, or
+                select text and ask for a clearer version.
+              </p>
+            </article>
+            <article>
+              <span class="feature-icon" aria-hidden="true">⌘</span>
+              <h3>Give the work a head start.</h3>
+              <p>
+                Start a real session with your connected agent. Bring files,
+                browser tasks, and everyday work within reach.
+              </p>
+            </article>
+            <article>
+              <span class="feature-icon" aria-hidden="true">◒</span>
+              <h3>Know when it’s your move.</h3>
+              <p>
+                Working, ready, or waiting for you. The Notch keeps your
+                sessions close without taking over your workspace.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+      <section class="quiet-section" id="how-it-works">
+        <div class="wrap feature-split">
+          <div class="feature-copy">
+            <h2>Four small gestures.<br />A different kind<br />of workday.</h2>
+            <p>
+              No new place to spend your day. Just a few keys that make the Mac
+              you know feel a little more capable.
+            </p>
+            <a class="text-link" href="dictation.html"
+              >Meet your new shortcuts ↗</a
+            >
+          </div>
+          <div class="key-grid">
+            <article>
+              <kbd>fn</kbd>
+              <h3>Put it into words.</h3>
+              <p>Hold to dictate into the app you’re using.</p>
+            </article>
+            <article>
+              <kbd>right ⌥</kbd>
+              <h3>Put it to work.</h3>
+              <p>Give your connected agent something to do.</p>
+            </article>
+            <article>
+              <kbd>right ⌘</kbd>
+              <h3>Pick up the thread.</h3>
+              <p>Talk to Unmute about your work and memory.</p>
+            </article>
+            <article>
+              <kbd>⌃ × 2</kbd>
+              <h3>Stay in the meeting.</h3>
+              <p>Double-tap left Control to start taking notes.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="wrap feature-split">
+          <div class="feature-copy">
+            <h2>
+              Keep the thought.<br />And everything<br />that goes with it.
+            </h2>
+            <p>
+              A copied error. A reference image. The next sentence you haven’t
+              found yet. The scratchpad holds your words and context until
+              you’re ready to use them.
+            </p>
+            <p>Pause, add to it, and deliver the whole thing together.</p>
+            <a class="text-link" href="dictation.html#demo"
+              >Explore the scratchpad ↗</a
+            >
+          </div>
+          <div class="meeting-paper">
+            <p class="date">Scratchpad</p>
+            <h3>Good ideas rarely arrive<br />in one piece.</h3>
+            <p>
+              “Tighten up this section. Keep the original logo, but give the
+              headline more room.”
+            </p>
+            <div
+              style="
+                background: #eef2f7;
+                border-radius: 8px;
+                padding: 18px;
+                font-size: 12px;
+                color: #526074;
+              "
+            >
+              ▧ &nbsp; layout-reference.png<br /><span
+                style="font-size: 10px; padding-left: 23px"
+                >Image context, collected with your thought</span
+              >
+            </div>
+            <p style="margin-top: 22px">
+              “And check it on mobile before you’re done.”
+            </p>
+            <p class="date">Illustrative capture · held until you deliver</p>
+          </div>
+        </div>
+      </section>
+      <section class="dark-section">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Your agents.<br />Now within speaking distance.</h2>
+            <p>
+              You already chose your tools. Unmute brings Claude Code and Codex
+              to your voice, with ordinary sessions that stay yours.
+            </p>
+          </div>
+          <div class="feature-grid">
+            <article>
+              <span class="feature-icon" aria-hidden="true">↗</span>
+              <h3>Start from anywhere.</h3>
+              <p>
+                Hold right Option and say the task. Unmute dispatches it to your
+                connected agent on your Mac.
+              </p>
+            </article>
+            <article>
+              <span class="feature-icon" aria-hidden="true">▦</span>
+              <h3>Keep a few things moving.</h3>
+              <p>
+                See multiple sessions in one overview. Open a task, inspect its
+                activity, and respond when it needs a decision.
+              </p>
+            </article>
+            <article>
+              <span class="feature-icon" aria-hidden="true">⌥</span>
+              <h3>Keep your workspace.</h3>
+              <p>
+                Supported browser and app actions can run in the background.
+                Carry on with your work while your agent handles its own.
+              </p>
+            </article>
+          </div>
+          <a
+            class="text-link"
+            style="margin-top: 35px; color: #a6c8ff"
+            href="remote.html"
+            >Explore Unmute Remote ↗</a
+          >
+        </div>
+      </section>
+      <section class="section">
+        <div class="wrap feature-split">
+          <div class="feature-copy">
+            <h2>Be there.<br />The notes can<br />take care of themselves.</h2>
+            <p>
+              Capture your microphone and system audio. Let your connected agent
+              turn the conversation into decisions and next steps.
+            </p>
+            <p>
+              Later, ask Unmute what you decided. Your meetings, saved context,
+              and work history are part of the conversation.
+            </p>
+            <a class="text-link" href="remote.html#meetings"
+              >Meet notes and memory ↗</a
+            >
+          </div>
+          <div class="meeting-paper">
+            <span class="recording-label">✓ Notes ready</span>
+            <h3>Design review</h3>
+            <p class="date">Today · 24 minutes</p>
+            <h4>What we decided</h4>
+            <p>
+              Lead with the product. Give the demo more room and keep the motion
+              purposeful.
+            </p>
+            <h4>What happens next</h4>
+            <ul>
+              <li>Maya — refine the first-screen copy.</li>
+              <li>Alex — review the mobile experience.</li>
+              <li>Team — regroup on Thursday.</li>
+            </ul>
+            <p class="date">Illustrative meeting notes</p>
+          </div>
+        </div>
+      </section>
+      <section class="quiet-section">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Know what stays.<br />Choose what leaves.</h2>
+            <p>
+              Local when you want it. Cloud when you choose it.<br />Clear
+              boundaries for your words and work.
+            </p>
+          </div>
+          <div class="feature-grid">
+            <article>
+              <span class="feature-icon" aria-hidden="true">⌂</span>
+              <h3>On your Mac.</h3>
+              <p>
+                Local dictation processes your audio on-device. Once the model
+                is installed, it works with the internet off.
+              </p>
+            </article>
+            <article>
+              <span class="feature-icon" aria-hidden="true">⇄</span>
+              <h3>Your choice of engine.</h3>
+              <p>
+                Use the local model, bring your own API key, or choose managed
+                cloud dictation. Cloud and local are different choices, clearly
+                explained.
+              </p>
+            </article>
+            <article>
+              <span class="feature-icon" aria-hidden="true">◈</span>
+              <h3>Built on an open foundation.</h3>
+              <p>
+                Unmute’s dictation engine is open source. Remote works with your
+                own agent setup and its existing permissions.
+              </p>
+            </article>
+          </div>
+          <a class="text-link" href="privacy.html" style="margin-top: 30px"
+            >Read the privacy details ↗</a
+          >
+        </div>
+      </section>
+      <section class="section" id="pricing">
+        <div class="wrap">
+          <div class="pricing-head">
+            <h2>Start free.<br />Find your flow from there.</h2>
+            <p class="intro">One Mac app. A plan for the way you work.</p>
+            <div class="billing-switch" aria-label="Billing interval">
+              <button data-billing="month" aria-pressed="true">Monthly</button
+              ><button data-billing="year" aria-pressed="false">Yearly</button>
+            </div>
+          </div>
+          <div class="pricing-grid">
+            <article class="plan">
+              <h3>On-device</h3>
+              <p class="plan-desc">
+                Your voice, turned into text.<br />Right on your Mac.
+              </p>
+              <div class="price">$0<span> / forever</span></div>
+              <p class="billing-note">No account. No subscription.</p>
+              <ul>
+                <li>On-device speech recognition</li>
+                <li>Dictate into your apps</li>
+                <li>Works without the internet</li>
+                <li>Open-source dictation engine</li>
+              </ul>
+              <a
+                class="button light"
+                href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+                >Download free</a
+              >
+            </article>
+            <article class="plan">
+              <h3>Dictation</h3>
+              <p class="plan-desc">
+                Cloud dictation, with local<br />fallback when you need it.
+              </p>
+              <div class="price" data-plan-price="dictation">
+                $4.99<span> / month</span>
+              </div>
+              <p class="billing-note" data-billing-note>
+                Billed monthly. Cancel anytime.
+              </p>
+              <ul>
+                <li>Everything in On-device</li>
+                <li>Managed cloud transcription</li>
+                <li>Automatic on-device fallback</li>
+                <li>No API key to manage</li>
+              </ul>
+              <a
+                class="button light"
+                href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+                >Get Dictation</a
+              >
+            </article>
+            <article class="plan featured">
+              <h3>Unmute</h3>
+              <p class="plan-desc">
+                Your words, your agents,<br />and work that moves forward.
+              </p>
+              <div class="price" data-plan-price="unmute">
+                $7.99<span> / month</span>
+              </div>
+              <p class="billing-note" data-billing-note>
+                Billed monthly. Cancel anytime.
+              </p>
+              <ul>
+                <li>Everything in Dictation</li>
+                <li>Unmute Remote</li>
+                <li>Claude Code and Codex sessions</li>
+                <li>Task management in the Notch</li>
+              </ul>
+              <a
+                class="button blue"
+                href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+                >Get Unmute</a
+              >
+            </article>
+          </div>
+          <p class="pricing-note">
+            Download the app to choose your plan. Remote uses your own connected
+            agent; its account, subscription, and usage charges are separate.
+            Cloud plans are subject to fair use.
+          </p>
+        </div>
+      </section>
+      <section class="section">
+        <div class="wrap faq">
+          <div>
+            <h2>A few things<br />you might be wondering.</h2>
+            <a class="text-link" href="https://cal.com/unmute/15min"
+              >Talk to the founder ↗</a
+            >
+          </div>
+          <div>
+            <details>
+              <summary>What is Unmute?</summary>
+              <p>
+                Unmute is a Mac app for dictation and working with your agents
+                by voice. Dictate into a text field, start a task in Claude Code
+                or Codex, collect context, and see which sessions need you in
+                the Notch.
+              </p>
+            </details>
+            <details>
+              <summary>Do I need an account to start?</summary>
+              <p>
+                No. On-device dictation is free and runs without an Unmute
+                account. Sign in if you choose a managed cloud subscription.
+              </p>
+            </details>
+            <details>
+              <summary>Do I need Claude Code or Codex?</summary>
+              <p>
+                Only for agent-powered work. Remote connects to your own Claude
+                Code or Codex setup. Free local dictation does not need either.
+                Meeting notes use your connected agent to write the summary.
+              </p>
+            </details>
+            <details>
+              <summary>What happens when I go offline?</summary>
+              <p>
+                On-device dictation works without the internet once the local
+                model is installed. Cloud dictation can fall back to the local
+                engine. Cloud agents and online tasks still need connectivity.
+              </p>
+            </details>
+            <details>
+              <summary>Does it work on a Mac without a notch?</summary>
+              <p>
+                Yes. Unmute provides its own surface at the top of the screen.
+                You do not need a MacBook with a physical display cutout.
+              </p>
+            </details>
+            <details>
+              <summary>Where does my audio go?</summary>
+              <p>
+                In local mode, dictation is processed on your Mac. Managed cloud
+                dictation sends audio through Unmute’s service to a
+                transcription provider. With your own API key, requests go
+                directly to your provider. Agent tasks follow your connected
+                provider’s data handling. Read the privacy policy for details.
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+      <section class="closing">
+        <h2>You have a thought.<br />Take it somewhere.</h2>
+        <p>Start with free, on-device dictation. Grow from there.</p>
+        <a
+          class="button"
+          href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+          >Download for Mac</a
+        >
+        <div class="footnote">
+          Apple silicon Mac · Free offline dictation · No account required
+        </div>
+      </section>
+    </main>
+    <footer class="footer">
+      <div class="wrap">
+        <div class="footer-top">
+          <div class="footer-brand">
+            <a class="brand" href="./"
+              ><img
+                src="unmute-wordmark-black.png"
+                alt="Unmute"
+                width="108"
+                height="36"
+            /></a>
+            <p>A little less between you and your Mac.</p>
+          </div>
+          <div class="footer-links">
+            <div>
+              <b>Product</b><a href="dictation.html">Dictation</a
+              ><a href="remote.html">Unmute Remote</a
+              ><a href="pricing.html">Pricing</a
+              ><a href="try.html">Product preview</a>
+            </div>
+            <div>
+              <b>Unmute</b><a href="manifesto.html">Our thinking</a
+              ><a href="https://github.com/arpitpatel25/unmute-dictation"
+                >Open source</a
+              ><a href="https://cal.com/unmute/15min">Talk to the founder</a
+              ><a href="https://x.com/just_unmute">Follow along</a>
+            </div>
+            <div>
+              <b>The details</b><a href="privacy.html">Privacy</a
+              ><a href="terms.html">Terms</a
+              ><a href="refund.html">Refund policy</a>
+            </div>
+          </div>
+        </div>
+        <div class="footer-bottom">
+          <span>© 2026 Unmute. Made for Mac.</span
+          ><span>Your voice. Your context. Your agents.</span>
+        </div>
       </div>
-      <div>© 2026 unmute · made for people who talk faster than they type.</div>
     </footer>
-
-  </main>
-  <script src="theme.js"></script>
-  <script src="cal.js"></script>
-  <script type="module" src="demo.js?v=live-demo-2"></script>
-</body>
+    <script type="module" src="site.js"></script>
+    <script type="module" src="product-demo.js"></script>
+  </body>
 </html>

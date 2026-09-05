@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Try Unmute — Interactive product preview</title>
+    <meta
+      name="description"
+      content="Explore interactive Unmute previews for dictation, agent tasks, scratchpad, meeting notes, and memory. No microphone or account required."
+    />
+    <link rel="canonical" href="https://justunmute.me/try.html" />
+    <meta
+      property="og:title"
+      content="Try Unmute — Interactive product preview"
+    />
+    <meta
+      property="og:description"
+      content="Explore interactive Unmute previews for dictation, agent tasks, scratchpad, meeting notes, and memory. No microphone or account required."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://justunmute.me/try.html" />
+    <meta property="og:image" content="https://justunmute.me/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Try Unmute — Interactive product preview"
+    />
+    <meta
+      name="twitter:description"
+      content="Explore interactive Unmute previews for dictation, agent tasks, scratchpad, meeting notes, and memory. No microphone or account required."
+    />
+    <meta name="twitter:image" content="https://justunmute.me/og.png" />
+    <meta name="theme-color" content="#fbfcfe" />
+    <link rel="icon" href="icon.png" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <link rel="stylesheet" href="site.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Unmute",
+        "applicationCategory": "ProductivityApplication",
+        "operatingSystem": "macOS",
+        "description": "Explore interactive Unmute previews for dictation, agent tasks, scratchpad, meeting notes, and memory. No microphone or account required.",
+        "url": "https://justunmute.me/",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD",
+          "description": "Free on-device dictation"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-header">
+      <nav class="nav wrap" aria-label="Main navigation">
+        <a class="brand" href="./" aria-label="Unmute home"
+          ><img
+            src="unmute-wordmark-black.png"
+            alt="Unmute"
+            width="108"
+            height="36" /></a
+        ><button
+          class="menu-toggle"
+          aria-expanded="false"
+          aria-controls="navigation"
+        >
+          Menu
+        </button>
+        <div class="nav-links" id="navigation">
+          <a href="dictation.html">Dictation</a><a href="remote.html">Remote</a
+          ><a href="./#how-it-works">How it works</a
+          ><a href="pricing.html">Pricing</a
+          ><a
+            class="button small"
+            href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+            >Download for Mac <span aria-hidden="true">↗</span></a
+          >
+        </div>
+      </nav>
+    </header>
+    <main id="main">
+      <div class="wrap">
+        <section class="subhero">
+          <h1>A feel for Unmute.<br />Before you install.</h1>
+          <p class="intro">
+            Try a thought. Start a task. Explore the Notch.<br />These
+            interactive examples don’t need your microphone.
+          </p>
+        </section>
+      </div>
+      <section
+        class="product-showcase"
+        id="demo"
+        aria-label="Interactive Unmute product preview"
+        data-product-demo
+        data-mode="dictation"
+      >
+        <div class="demo-tabs" role="tablist" aria-label="Explore Unmute">
+          <button
+            id="tab-remote"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="true"
+            data-mode-tab="remote"
+          >
+            Unmute Remote</button
+          ><button
+            id="tab-dictation"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="dictation"
+          >
+            Dictation</button
+          ><button
+            id="tab-scratchpad"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="scratchpad"
+          >
+            Scratchpad</button
+          ><button
+            id="tab-meetings"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="meetings"
+          >
+            Meetings</button
+          ><button
+            id="tab-memory"
+            role="tab"
+            aria-controls="product-panel"
+            aria-selected="false"
+            data-mode-tab="memory"
+          >
+            Memory
+          </button>
+        </div>
+        <div
+          class="desktop"
+          id="product-panel"
+          role="tabpanel"
+          aria-label="Product preview"
+        >
+          <div class="wallpaper" aria-hidden="true"></div>
+          <div class="menubar" aria-hidden="true">
+            <span
+              ><b>◆ &nbsp; Finder</b
+              ><span class="menu-items"
+                >File &nbsp; Edit &nbsp; View &nbsp; Go</span
+              ></span
+            ><span>Wi-Fi &nbsp; 100% &nbsp; 9:41</span>
+          </div>
+          <div class="notch" data-notch>
+            <div class="notch-bar">Unmute</div>
+            <div class="notch-body">
+              <h3>Your work, within reach.</h3>
+              <p>Enable JavaScript to explore the interactive preview.</p>
+            </div>
+          </div>
+          <div class="preview-window">
+            <div class="window-chrome">
+              <div class="traffic" aria-hidden="true">
+                <i></i><i></i><i></i>
+              </div>
+              <span>Notes</span>
+            </div>
+            <div class="window-content" data-window>
+              <h3>A better first impression.</h3>
+              <p>Give the product room to speak.</p>
+            </div>
+          </div>
+          <aside class="ambient-card" aria-hidden="true">
+            <b>A little room to think.</b>Your workspace stays yours.<br />Unmute
+            works alongside it.
+          </aside>
+          <div class="dock" aria-hidden="true">
+            <span>▣</span><span>▤</span><span>✉</span><span>⌘</span
+            ><span>✳</span>
+          </div>
+        </div>
+        <div class="demo-caption">
+          <p data-caption>
+            <strong>Explore Unmute.</strong> Interactive examples. No microphone
+            or apps are accessed.
+          </p>
+          <button data-action="reset" aria-label="Reset product preview">
+            ↺ Reset preview
+          </button>
+        </div>
+      </section>
+      <section class="closing" style="margin-top: 80px">
+        <h2>Now make it your own.</h2>
+        <p>Download Unmute to dictate with your voice, right on your Mac.</p>
+        <a
+          class="button"
+          href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"
+          >Download for Mac</a
+        >
+        <p class="footnote">Free on-device dictation. No account required.</p>
+      </section>
+    </main>
+    <footer class="footer">
+      <div class="wrap">
+        <div class="footer-top">
+          <div class="footer-brand">
+            <a class="brand" href="./"
+              ><img
+                src="unmute-wordmark-black.png"
+                alt="Unmute"
+                width="108"
+                height="36"
+            /></a>
+            <p>A little less between you and your Mac.</p>
+          </div>
+          <div class="footer-links">
+            <div>
+              <b>Product</b><a href="dictation.html">Dictation</a
+              ><a href="remote.html">Unmute Remote</a
+              ><a href="pricing.html">Pricing</a
+              ><a href="try.html">Product preview</a>
+            </div>
+            <div>
+              <b>Unmute</b><a href="manifesto.html">Our thinking</a
+              ><a href="https://github.com/arpitpatel25/unmute-dictation"
+                >Open source</a
+              ><a href="https://cal.com/unmute/15min">Talk to the founder</a
+              ><a href="https://x.com/just_unmute">Follow along</a>
+            </div>
+            <div>
+              <b>The details</b><a href="privacy.html">Privacy</a
+              ><a href="terms.html">Terms</a
+              ><a href="refund.html">Refund policy</a>
+            </div>
+          </div>
+        </div>
+        <div class="footer-bottom">
+          <span>© 2026 Unmute. Made for Mac.</span
+          ><span>Your voice. Your context. Your agents.</span>
+        </div>
+      </div>
+    </footer>
+    <script type="module" src="site.js"></script>
+    <script type="module" src="product-demo.js"></script>
+  </body>
+</html>

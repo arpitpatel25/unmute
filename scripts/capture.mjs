@@ -1,0 +1,13 @@
+import { chromium } from '@playwright/test';
+const browser=await chromium.launch({channel:'chrome',headless:true});
+const page=await browser.newPage({viewport:{width:1440,height:1000},deviceScaleFactor:1});
+await page.goto('http://localhost:4173');
+await page.screenshot({path:'docs/redesign/screenshots/home-desktop.png',fullPage:true});
+await page.locator('#demo').scrollIntoViewIfNeeded();
+await page.screenshot({path:'docs/redesign/screenshots/demo-desktop.png'});
+await page.setViewportSize({width:390,height:844});await page.goto('http://localhost:4173');
+await page.screenshot({path:'docs/redesign/screenshots/home-mobile.png',fullPage:true});
+await page.locator('#demo').scrollIntoViewIfNeeded();await page.screenshot({path:'docs/redesign/screenshots/demo-mobile.png'});
+await page.goto('http://localhost:4173/try.html');await page.screenshot({path:'docs/redesign/screenshots/voice-mobile.png',fullPage:true});
+await page.setViewportSize({width:1440,height:1000});await page.goto('http://localhost:4173/pricing.html');await page.screenshot({path:'docs/redesign/screenshots/pricing-desktop.png',fullPage:true});
+await browser.close();
