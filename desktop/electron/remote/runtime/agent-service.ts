@@ -57,7 +57,12 @@ export class AgentRuntimeService {
     ])
   }
   private async configure(input: AgentRuntimeConfig): Promise<unknown> {
-    if (this.lifecycle) { this.config!.selectedProvider = input.selectedProvider; await this.lifecycle.requestProvider(input.selectedProvider); return this.snapshot() }
+    if (this.lifecycle) {
+      this.config!.selectedProvider = input.selectedProvider
+      this.config!.conversationCeiling = input.conversationCeiling
+      await this.lifecycle.requestProvider(input.selectedProvider)
+      return this.snapshot()
+    }
     if (this.configuring) return this.configuring
     this.configuring = this.initialize(input).finally(() => { this.configuring = undefined })
     return this.configuring
@@ -127,7 +132,8 @@ export class AgentRuntimeService {
       await this.supervisor.initialize()
       this.lifecycle = new AgentConversationLifecycle({ journal, store: new AgentConversationStore({ root: join(this.root, 'runtime', 'conversations'), crypto }),
         controller: this.controller, selectedProvider, ceiling: () => this.config?.conversationCeiling ?? 20, prepareFresh,
-        pin: ids => this.supervisor!.pinConversation(ids), close: id => this.supervisor!.closeRun(id), onView: view => this.emit({ kind: 'view', view }),
+        pin: ids => this.supervisor!.pinConversation(ids), close: id => this.supervisor!.closeRun(id),
+        onView: view => { if (view.record.phase === 'ready') this.activity = undefined; this.emit({ kind: 'view', view }) },
       })
       await this.lifecycle.initialize()
       this.probes = await Promise.all([...this.providers.values()].map(provider => provider.probe()))
