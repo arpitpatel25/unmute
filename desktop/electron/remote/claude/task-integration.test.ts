@@ -51,6 +51,24 @@ test('Kill All and direct Codex stop retain follow-ups as saved without automati
   }
 })
 
+test('app shutdown detaches a daemon-owned Claude turn without failing or closing it', async () => {
+  const baseDir = await mkdtemp(join(tmpdir(), 'unmute-daemon-shutdown-'))
+  let detached = 0, closed = 0
+  const manager = new TaskManager({
+    baseDir, executorFactory: () => { throw new Error('No PTY') },
+    claudeSessionOptions: async task => ({ binary: 'fake', cwd: task.cwd }),
+    claudeTaskFactory: () => ({ alive: true, busy: true, followupBlocked: false, followupUnavailable: false,
+      async start() {}, async send() { return { submissionId: 'submission', sessionId: 'session' } },
+      detach() { detached++ }, close() { closed++ },
+    } as never),
+  })
+  const id = await manager.dispatch('continue after the UI exits', { agent: 'claude' })
+  manager.shutdown()
+  assert.equal(detached, 1)
+  assert.equal(closed, 0)
+  assert.equal(manager.get(id)?.state, 'processing')
+})
+
 test('old queued Codex acknowledgement loss stays uncertain after same-thread resume', async () => {
   const h = await codexQueueFixture()
   await h.queue.submit(h.id)
