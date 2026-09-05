@@ -49,7 +49,7 @@ export const AGENT_IDLE_WINDOW_MS = 6 * 60 * 60 * 1_000
  * exists — an unbounded context is a real cost and a real risk — it is just no
  * longer the thing you meet first.
  */
-export const AGENT_TURN_CEILING = 200
+export const AGENT_TURN_CEILING = 20
 
 export interface Conversation {
   runId: string
@@ -74,6 +74,5 @@ export function nextConversation(
   // intended it to have.
   if (!prior.endedAt) return { resume: false }
   if (prior.turns >= ceiling) return { resume: false }
-  if (now - prior.endedAt > idleWindowMs) return { resume: false }
   return { resume: true, runId: prior.runId }
 }

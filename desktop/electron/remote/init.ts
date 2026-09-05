@@ -96,7 +96,8 @@ import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-he
 import { reapCodexHeadlessTurns } from './agent/providers/codex-headless'
 import { agentConstitution } from './agent/constitution'
 import { loadPersona } from './agent/persona'
-import { nextConversation, type Conversation } from './agent/continuity'
+import { AgentConversationLifecycle } from './agent/lifecycle'
+import { AgentConversationStore } from './agent/conversation-store'
 import { HandoffCapability } from './agent/capabilities/handoff'
 import { ProviderHealth } from './agent/providerHealth'
 import { HistoryCapability } from './agent/capabilities/history'
@@ -105,9 +106,7 @@ import { SessionsCapability } from './agent/capabilities/sessions'
 import { locateSession } from './agent/sessions/locate'
 import { planResume, isReapedScratchCwd } from './agent/sessions/resume'
 
-/** Where the Agent's last conversation got to. Memory is the durable
- *  continuity; this is only the short-term thread. */
-let lastAgentConversation: Conversation | null = null
+let unmuteAgentLifecycle: AgentConversationLifecycle | null = null
 import { CodexCliProvider } from './agent/providers/codex'
 import { probeCli, type AgentProviderId, type ProviderProbe } from './agent/provider'
 import { SafeStorageKeyProvider } from './agent/memory/key-provider'
@@ -406,6 +405,7 @@ interface RemoteSettings {
   unmuteAgentAvailable: boolean
   /** Maximum concurrently owned Agent CLI processes. */
   unmuteAgentMaxProcesses: number
+  unmuteAgentConversationCeiling: number
 }
 
 const settings = new Store<RemoteSettings>({
@@ -453,6 +453,7 @@ const settings = new Store<RemoteSettings>({
     unmuteAgentProvider: 'claude',
     unmuteAgentAvailable: false,
     unmuteAgentMaxProcesses: 2,
+    unmuteAgentConversationCeiling: 20,
   },
 })
 
@@ -965,6 +966,7 @@ async function submitUnmuteAgent(
    * key goes into whatever is open in the pocket".
    */
   addressedByKey = false,
+  enqueue?: { revision: number; acknowledged(): void },
 ): Promise<AgentInteractionResult> {
   if (!unmuteAgentController) throw new Error('Unmute Agent is unavailable')
   const focusedTaskId = (input.currentContext?.activeTaskId || addressedByKey)
@@ -987,7 +989,10 @@ async function submitUnmuteAgent(
     ...(input.priorRunId ? { agentRunId: input.priorRunId } : {}),
   })
   try {
-    const result = await unmuteAgentController.submit(effectiveInput)
+    if (!unmuteAgentLifecycle) throw new Error('Unmute Agent conversation is unavailable')
+    const queued = await unmuteAgentLifecycle.enqueue(effectiveInput, enqueue?.revision)
+    enqueue?.acknowledged()
+    const result = await queued.completion
     if (result.presentation === 'task' && result.outcome === 'completed' && result.text?.trim()) {
       await manager?.presentAgentResult({
         agentRunId: result.agentRunId,
@@ -1017,6 +1022,8 @@ async function submitUnmuteAgent(
 
 function disposeUnmuteAgent(): void {
   unmuteAgentGeneration += 1
+  unmuteAgentLifecycle?.dispose()
+  unmuteAgentLifecycle = null
   const supervisor = unmuteAgentSupervisor
   const controller = unmuteAgentController
   const index = unmuteAgentIndex
@@ -1154,7 +1161,8 @@ async function initializeUnmuteAgent(): Promise<void> {
     // hookEvents/executor are consumed only by the REPL driver; they stay wired
     // so UNMUTE_AGENT_RUNTIME=repl is a pure environment change. Which driver
     // is live is logged because the two fail in completely different ways.
-    const agentRuntime = agentRuntimeMode()
+    // Each interaction receives fresh credentials; conversation continuity uses exact resume.
+    const agentRuntime = 'headless' as const
     log.event('unmute-agent-runtime', { runtime: agentRuntime })
     const claude = new ClaudeCodeProvider({
       runtime: agentRuntime,
@@ -1417,11 +1425,27 @@ async function initializeUnmuteAgent(): Promise<void> {
           },
         }
       },
-      onActivity: broadcastUnmuteAgentActivity,
+      onActivity: (activity) => { if (generation === unmuteAgentGeneration) broadcastUnmuteAgentActivity(activity) },
     })
     pendingController = controller
     await supervisor.initialize()
+    const lifecycle = new AgentConversationLifecycle({
+      journal,
+      store: new AgentConversationStore({ root: join(root, 'runtime', 'conversations'), crypto }),
+      controller,
+      selectedProvider: () => resolveAgentProvider(),
+      ceiling: () => settings.get('unmuteAgentConversationCeiling') ?? 20,
+      prepareFresh: async () => {
+        const canonical = await loadPersona(join(root, 'agent'))
+        await fs.writeFile(constitutionPath, agentConstitution(SESSION_PREAMBLE, canonical.text), { encoding: 'utf8', mode: 0o600 })
+      },
+      pin: (ids) => supervisor.pinConversation(ids),
+      close: (id) => supervisor.closeRun(id),
+      onView: (view) => { if (generation === unmuteAgentGeneration) notchController?.restoreAgentConversation(view) },
+    })
+    await lifecycle.initialize()
     if (generation !== unmuteAgentGeneration) {
+      lifecycle.dispose()
       index.close()
       await supervisor.dispose()
       return
@@ -1432,7 +1456,9 @@ async function initializeUnmuteAgent(): Promise<void> {
     unmuteAgentRegistry = registry
     unmuteAgentSupervisor = supervisor
     unmuteAgentController = controller
+    unmuteAgentLifecycle = lifecycle
     unmuteAgentIndex = index
+    lifecycle.resumeQueued()
     pendingIndex = null
     pendingSupervisor = null
     pendingController = null
@@ -1464,6 +1490,7 @@ async function initializeUnmuteAgent(): Promise<void> {
       reason: keychainAvailable ? 'storage-unavailable' : 'keychain-unavailable',
       providers,
     }
+    notchController?.agentUnavailable('Unmute Agent conversation is unavailable. Restore its encrypted recovery files or retry after storage/provider access recovers.')
     log.warn('unmute agent unavailable', {
       reason: unmuteAgentAvailability.reason,
       code: initializationFailureCode(error),
@@ -4026,25 +4053,8 @@ async function dispatchFromCaptureInner(
         // the mime type is what a delivery later opens it by.
         mimeType: captureMimeType(path),
       })),
-      // CONTINUITY FOLLOWS ATTENTION, NOT THE CLOCK. An explicit prior run
-      // still wins; otherwise the last conversation is resumed only if this
-      // utterance arrived shortly after it finished and it has not run long.
-      ...(options.priorAgentRunId
-        ? { priorRunId: options.priorAgentRunId }
-        : (() => {
-          const decision = nextConversation(lastAgentConversation, Date.now())
-          // ONE CLOCK FOR BOTH HALVES. Not resuming means the model is starting
-          // fresh, so the chat the user can still read must go with it — a
-          // conversation on screen that the Agent has forgotten is worse than
-          // an empty one. This is the purge, and it is deliberately the same
-          // decision rather than a second timer that could disagree with it.
-          if (!decision.resume) notchController?.agentPurged()
-          return decision.resume ? { priorRunId: decision.runId } : {}
-        })()),
+      ...(options.priorAgentRunId ? { priorRunId: options.priorAgentRunId } : {}),
     }
-    // The question goes up before the turn runs, so a failure still leaves it
-    // visible above the error rather than losing what was asked.
-    notchController?.agentAsked(transcript)
     // `route === 'agent'` means the user pressed (or switched to) the Agent's
     // own key. An explicit `destination` covers the scratchpad's Agent button,
     // which is the same statement made with a different gesture. Either way a
@@ -4079,16 +4089,7 @@ async function dispatchFromCaptureInner(
     const spoken = result.outcome === 'completed'
       ? (result.text?.trim() || 'Done.')
       : (result.error?.message || 'That did not land.')
-    notchController?.agentAnswered(spoken, result.outcome !== 'completed')
-    // Remember where this conversation got to, so the next utterance can tell
-    // a follow-up from a new subject.
-    if (result.agentRunId) {
-      lastAgentConversation = {
-        runId: result.agentRunId,
-        turns: (lastAgentConversation?.runId === result.agentRunId ? lastAgentConversation.turns : 0) + 1,
-        endedAt: Date.now(),
-      }
-    }
+    // The common durable lifecycle publishes the complete Agent conversation.
     pendingBeat = spoken
     return result.agentRunId || null
   }
@@ -4977,28 +4978,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // Auto-expand is controller state, not a helper command — the decision to
       // open the task surface is made here, before anything is sent.
       const applyAutoExpand = () => notchController?.setAutoExpand(settings.get('notchAutoExpand') !== false)
-      // THE PURGE RUNS ON A CLOCK, NOT ON THE NEXT THING YOU SAY.
-      //
-      // Checked lazily — only when the next utterance arrives — it would be
-      // correct about the MODEL and wrong about the SCREEN: the Agent starts
-      // fresh, but until you happen to speak, its card is still showing
-      // yesterday's answer and its chat still holds a conversation that no
-      // longer exists anywhere else. The clock closes that gap.
-      //
-      // Five minutes against a six-hour window is far more often than needed
-      // and still costs nothing: with no conversation it returns immediately.
-      const agentPurgeTimer = setInterval(() => {
-        if (!lastAgentConversation) return
-        if (nextConversation(lastAgentConversation, Date.now()).resume) return
-        log.event('agent-conversation-purged', {
-          runId: lastAgentConversation.runId,
-          turns: lastAgentConversation.turns,
-          idleMs: Date.now() - lastAgentConversation.endedAt,
-        })
-        lastAgentConversation = null
-        notchController?.agentPurged()
-      }, 5 * 60_000)
-      agentPurgeTimer.unref?.()
 
       notchController = new NotchController(notchClient, mgr, {
         // task runtime — same calls as remote:list/answer/kill/remove/resume/…
@@ -5124,7 +5103,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // "Add to <task>" button never appears on an already-open pad.
           try { broadcastScratchpad() } catch { /* nothing showing */ }
         },
-        agentSend: (text) => { void dispatchFromCapture(text, [], null, { destination: 'unmute-agent' }) },
+        agentSend: (text, submission) => new Promise<void>((resolve, reject) => {
+          void submitUnmuteAgent({ transcript: text, submissionId: submission.submissionId }, true, { revision: submission.revision, acknowledged: resolve }).catch(reject)
+        }),
+        agentDraftChanged: (text, revision) => unmuteAgentLifecycle?.setDraft(text, revision) ?? Promise.reject(new Error('Agent unavailable')),
+        agentRetry: async () => { await unmuteAgentLifecycle?.retry() },
         addressAgent: (on) => {
           if (orchestrateAgentAddressed === on) return
           orchestrateAgentAddressed = on
@@ -5286,6 +5269,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // app, which is the whole point. A listener of our own would only see
       // input aimed at us and would call you idle while you typed all day.
       new Presence(() => powerMonitor.getSystemIdleTime()))
+      if (unmuteAgentLifecycle) notchController.restoreAgentConversation(unmuteAgentLifecycle.view())
       applyAutoExpand()
       // Seed the pad panel. Without this a pad adopted from a previous run is
       // invisible until something else happens to change it.
@@ -6687,23 +6671,26 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     agentProvider: settings.get('unmuteAgentProvider'),
     unmuteAgentAvailable: settings.get('unmuteAgentAvailable') === true,
     unmuteAgentMaxProcesses: settings.get('unmuteAgentMaxProcesses'),
+    unmuteAgentConversationCeiling: settings.get('unmuteAgentConversationCeiling'),
   }))
   ipcMain.handle('remote:set-unmute-agent-provider', async (_e, provider: unknown) => {
     if (provider !== 'claude' && provider !== 'codex') return false
+    await unmuteAgentLifecycle?.requestProvider(provider)
     settings.set('unmuteAgentProvider', provider)
     const selectedReady = unmuteAgentAvailability.providers
       .find((candidate) => candidate.id === provider)?.available === true
-    if (settings.get('unmuteAgentAvailable') === true && unmuteAgentController) {
-      unmuteAgentAvailability = {
-        available: selectedReady,
-        ...(selectedReady ? {} : { reason: 'provider-unavailable' as const }),
-        providers: unmuteAgentAvailability.providers,
-      }
-    }
+    // Preferred provider is pending; the active conversation retains its actual identity.
     log.event('unmute-agent-provider-set', { provider, available: selectedReady })
     return true
   })
   ipcMain.handle('remote:get-agent-availability', async () => structuredClone(unmuteAgentAvailability))
+  ipcMain.handle('remote:agent-retry', async () => unmuteAgentLifecycle?.retry())
+  ipcMain.handle('remote:get-agent-conversation', async () => unmuteAgentLifecycle?.view())
+  ipcMain.handle('remote:set-agent-conversation-ceiling', async (_event, ceiling: unknown) => {
+    if (typeof ceiling !== 'number' || !Number.isSafeInteger(ceiling) || ceiling < 1) return false
+    settings.set('unmuteAgentConversationCeiling', ceiling)
+    return true
+  })
   ipcMain.handle('remote:agent-submit', async (_e, input: AgentInteractionInput) => {
     if (!unmuteAgentController) {
       return {

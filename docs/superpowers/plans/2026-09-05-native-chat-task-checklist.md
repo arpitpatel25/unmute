@@ -1,12 +1,12 @@
 # Unmute native chat: implementation and acceptance checklist
 
-Status: implementation authorized by the subsequent user request and in progress. See `2026-09-05-native-chat-reference-and-validation.md` for source-backed decisions and evidence. Unchecked acceptance items are not implied passes.
+Status: implementation complete in the feature branch, with focused automated checks, independent scoped review, and the integrated compile passing. Native visual and installed-app acceptance remains intentionally manual. See `2026-09-05-native-chat-reference-and-validation.md` for source-backed decisions and evidence. Unchecked acceptance items are not implied passes.
 
 Baseline: local `main` commit `15355de5`, branch `arpit/unmute-astra-remove-terminal`, September 5, 2026. This consolidates the original seven-part task list, the OpenMausBot investigation, the supplied Codex/Claude screenshots, and the subsequent composer and Unmute Agent requirements. It extends that scope rather than replacing it.
 
 Goal: make the notch a complete graphical chat interface for Claude and Codex tasks, with no terminal view required to understand or operate a task. Every user action, provider state, attachment, and failure must have a defined presentation and recovery path.
 
-This is a moderately detailed task inventory and future verification checklist, not implementation code or a claim that the listed features already work. Unchecked items include investigation, design decisions, implementation, and acceptance checks. Complete the final Unmute Agent lifecycle phase last, in its own independently revertible commit.
+This began as the moderately detailed implementation and verification inventory. The implementation has now been completed in the specified order, including the final Unmute Agent lifecycle phase in its own independently revertible commit; unchecked items remain hands-on acceptance work and are not implied passes.
 
 ## 1. Baseline and reference investigation
 

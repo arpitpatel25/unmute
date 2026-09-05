@@ -264,6 +264,7 @@ struct StageComposer: View {
     @State private var text = ""
     @State private var editorHeight: CGFloat = 30
     @State private var clientRevision = 0
+    @State private var agentSubmission: (revision: Int, id: String)?
     @State private var attachmentError: String? = nil
     @State private var newChatOpen = false
     @State private var editorSelection = NSRange(location: 0, length: 0)
@@ -486,6 +487,11 @@ struct StageComposer: View {
 
     private func send() {
         guard canSend && !sending else { return }
+        if taskId == "unmute-agent" {
+            if agentSubmission?.revision != clientRevision { agentSubmission = (clientRevision, UUID().uuidString) }
+            if let submission = agentSubmission { model.emit(.agentSend(submissionId: submission.id, revision: submission.revision)) }
+            return
+        }
         guard model.beginQuestion(taskId, question) else { return }
         model.emit(.sendDraft(id: taskId, reference: question?.reference))
     }

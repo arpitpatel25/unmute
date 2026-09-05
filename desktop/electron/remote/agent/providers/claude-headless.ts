@@ -194,6 +194,7 @@ export function headlessArgv(
     // reads a single prompt to EOF and exits, which is the per-turn driver.
     ...(streamingInput ? ['--input-format', 'stream-json'] : []),
     '--verbose',
+    ...(launch.model ? ['--model', launch.model] : []),
     '--append-system-prompt', systemPrompt,
     '--allowedTools', allowedTools,
     '--disallowedTools', AGENT_TOOL_DENYLIST,
@@ -231,7 +232,7 @@ export function headlessEvents(value: unknown): AgentProcessEvent[] {
 
   if (record.type === 'system' && record.subtype === 'init') {
     return typeof record.session_id === 'string'
-      ? [{ type: 'handle', sessionId: record.session_id }]
+      ? [{ type: 'handle', sessionId: record.session_id, observed: true, ...(typeof record.model === 'string' ? { model: record.model } : {}) }]
       : []
   }
 
@@ -358,6 +359,7 @@ class EventQueue implements AsyncIterable<AgentProcessEvent> {
 }
 
 export class HeadlessAgentProcess implements AgentProcessDriver {
+  hasDispatched = false
   private readonly queue = new EventQueue()
   readonly events: AsyncIterable<AgentProcessEvent> = this.queue
   private readonly spawn: HeadlessSpawner
@@ -406,6 +408,7 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
     this.drained = this.readStdout(child)
     child.onExit((code) => { void this.onExit(code) })
     void this.readStderr(child)
+    this.hasDispatched = true
     child.writePrompt(text)
   }
 

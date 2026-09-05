@@ -88,9 +88,9 @@ Staged files are private owned copies. Removing a tray reference retains the cop
 | Folder allocation/retention, request identity, maximum new-session policy | Implemented and scoped review passed, including native acknowledgment replay and selected-folder setup corrections |
 | Lifecycle/error feedback, rich results/diffs, history states, approval scope | Implemented; two scoped fix rounds and final re-review passed |
 | Layout and accessibility | Native bounds/support checks passed; visual/IME/VoiceOver/display acceptance still manual |
-| Unmute Agent persistence and exactly-20 reset | Deliberately not implemented yet; must follow the core commit and remain independently revertible |
+| Unmute Agent persistence and exactly-20 reset | Implemented after the core commit; bounded Agent gates, fix-round re-review, native checks, and the integrated compile passed. It remains independently revertible from the task-chat migration. |
 
-These statuses do not check off the broader manual acceptance statements in the checklist. The implementation is not complete until the remaining code gates and final build are finished.
+These statuses do not check off the broader manual acceptance statements in the checklist. Implementation and code gates are complete; installed-app, visual, accessibility, and real-gesture acceptance remains manual by design.
 
 - Real disposable Claude conversation: two turns retained a synthetic marker under one provider session; an explicit fork retained that marker under a distinct pinned child ID. No user project work performed.
 - Real disposable Codex conversation: two completed turns retained a synthetic marker under one thread. Existing unavailable/auth-required global MCP endpoints produced warnings; this work did not alter those endpoints.
@@ -102,7 +102,8 @@ These statuses do not check off the broader manual acceptance statements in the 
 - Actual macOS image decoding validates PNG/JPEG/GIF/WebP asynchronously from private captured-byte copies; valid-format and corrupt-input checks pass. It does not use Electron's PNG/JPEG-only `nativeImage` buffer decoder for GIF/WebP. Artifact helpers restrict URI protocols and reveal executable/automation files instead of launching them; four combined image/artifact tests pass.
 - Native focused composer/rendering checks: 52 passing; geometry/availability: 7 passing; Swift build passed. Other draft/input/provider checks are recorded in the temporary validation ledger.
 - Native staging integration follow-up: 48 focused Swift tests and native build passed, including actual windowless AppKit editor/private-pasteboard checks; 38 backend and 4 controller checks passed. Independent scoped review confirmed cancellation, error propagation, ordering/retry, policy injection, off-main decoding, stale undo, bounded bookkeeping and interrupted recovery. One small WebP Copy→Paste type mismatch remains assigned to the content pass; native visual acceptance is still manual.
-- Full worktree integration compile previously succeeded (native release, Electron main/preload and renderer). Final integrated build must be rerun after review fixes and the final Agent phase. Standalone typecheck has four engine-override module-resolution failures; integrated engine compile resolves those imports.
+- The final Agent gate passed 219/219 bounded tests; the three Important review findings were fixed and the directly affected gate passed 16/16 before an independent clean re-review. Persistence uses encrypted, versioned snapshots and exact provider resume; accepted message 20 settles before message 21 starts a fresh generation, with provider-observed acceptance and fail-closed recovery.
+- Final native composer/content-retention verification passed 41/41 tests. The final integrated worktree compile succeeded after the Agent phase (native release, SQLCipher binding, Electron main/preload and renderer). Standalone typecheck's four engine-override module-resolution failures remain an environment/tree limitation resolved by the integrated engine compile.
 
 ## Manual acceptance still required
 

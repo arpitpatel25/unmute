@@ -37,7 +37,7 @@ const FRESH = '11111111-2222-4333-8444-555555555555'
 test('the init event is where the conversation identity comes from', () => {
   assert.deepEqual(
     headlessEvents({ type: 'system', subtype: 'init', session_id: FRESH, tools: [] }),
-    [{ type: 'handle', sessionId: FRESH }],
+    [{ type: 'handle', sessionId: FRESH, observed: true }],
   )
 })
 
@@ -447,7 +447,7 @@ test('the CLI echo of the session id is kept as confirmation, not suppressed', a
   await settled()
   assert.deepEqual(
     seen.filter((e) => e.type === 'handle'),
-    [{ type: 'handle', sessionId: FRESH }, { type: 'handle', sessionId: FRESH }],
+    [{ type: 'handle', sessionId: FRESH }, { type: 'handle', sessionId: FRESH, observed: true }],
   )
 })
 

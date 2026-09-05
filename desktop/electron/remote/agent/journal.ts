@@ -25,6 +25,7 @@ export interface JournalAgentRun {
   id: string
   provider: AgentProviderId
   providerHandle?: string
+  model?: string
   state: AgentRunState
   createdAt: number
   lastUserAt: number
@@ -45,7 +46,31 @@ export interface AgentExchangeSummary {
 export interface AgentJournalSnapshot {
   runs: JournalAgentRun[]
   exchanges: AgentExchangeSummary[]
+  conversation?: AgentConversationRecord
 }
+
+export interface AcceptedSubmission {
+  submissionId: string
+  interactionId: string
+  acceptedAt: number
+  outcome?: 'completed' | 'failed' | 'interrupted'
+}
+export interface AgentConversationRecord {
+  generation: number
+  phase: 'ready' | 'sending' | 'reset-due' | 'recovery-required'
+  runId: string | null
+  provider: AgentProviderId | null
+  model?: string
+  effort: 'medium'
+  ceiling: number
+  accepted: AcceptedSubmission[]
+  snapshotId: string
+  prepared?: { submissionId: string; interactionId: string; candidateRunId: string; generation: number }
+  pendingProvider?: AgentProviderId
+  /** Fixed-size replay filter: false positives fail closed, never false negatives. */
+  retired?: string
+}
+export interface ConversationCheckpoint { conversation: AgentConversationRecord; runs: JournalAgentRun[] }
 
 export interface AppendExchangeInput extends AgentExchangeSummary {
   /** Values which must be removed if they accidentally occur in a summary. */
@@ -57,6 +82,7 @@ export interface AgentJournalStore {
   upsertRun(run: JournalAgentRun): Promise<void>
   removeRun(runId: string): Promise<void>
   appendExchange(exchange: AppendExchangeInput): Promise<void>
+  checkpointConversation?(checkpoint: ConversationCheckpoint): Promise<void>
 }
 
 export type AgentJournalErrorCode = 'invalid-journal' | 'journal-failed' | 'journal-full'
@@ -78,6 +104,7 @@ interface PersistedJournal {
   version: 1
   runs: JournalAgentRun[]
   exchanges: AgentExchangeSummary[]
+  conversation?: AgentConversationRecord
 }
 
 export interface AgentJournalOptions {
@@ -144,6 +171,7 @@ export class AgentJournal implements AgentJournalStore {
   removeRun(runId: string): Promise<void> {
     if (!ID.test(runId)) return Promise.reject(new AgentJournalError('journal-failed'))
     return this.mutate((journal) => {
+      if (pinned(journal, runId)) throw new AgentJournalError('journal-failed')
       journal.runs = journal.runs.filter(({ id }) => id !== runId)
     })
   }
@@ -167,6 +195,19 @@ export class AgentJournal implements AgentJournalStore {
   replaceRuns(runs: readonly JournalAgentRun[]): Promise<void> {
     const safeRuns = runs.map(validateRun)
     return this.mutate((journal) => { journal.runs = safeRuns })
+  }
+
+  checkpointConversation(value: ConversationCheckpoint): Promise<void> {
+    const conversation = validateConversation(value.conversation)
+    const runs = value.runs.map(validateRun)
+    return this.mutate(journal => {
+      for (const run of runs) {
+        journal.runs = journal.runs.filter(r => r.id !== run.id)
+        journal.runs.push(run)
+      }
+      if (conversation.runId && !journal.runs.some(r => r.id === conversation.runId && r.providerHandle && r.provider === conversation.provider)) throw new AgentJournalError('invalid-journal')
+      journal.conversation = conversation
+    })
   }
 
   private mutate(change: (journal: PersistedJournal) => void): Promise<void> {
@@ -198,7 +239,7 @@ export class AgentJournal implements AgentJournalStore {
 
     if (journal.runs.length > this.maxRuns) {
       const removable = journal.runs
-        .filter(({ state, providerWorkEnded }) => providerWorkEnded && isTerminal(state))
+        .filter(({ id, state, providerWorkEnded }) => !pinned(journal, id) && providerWorkEnded && isTerminal(state))
         .sort((a, b) => a.lastActivityAt - b.lastActivityAt)
       const remove = new Set(removable
         .slice(0, journal.runs.length - this.maxRuns)
@@ -211,7 +252,7 @@ export class AgentJournal implements AgentJournalStore {
       if (journal.exchanges.length > 0) journal.exchanges.shift()
       else {
         const candidate = journal.runs
-          .filter(({ state, providerWorkEnded }) => providerWorkEnded && isTerminal(state))
+          .filter(({ id, state, providerWorkEnded }) => !pinned(journal, id) && providerWorkEnded && isTerminal(state))
           .sort((a, b) => a.lastActivityAt - b.lastActivityAt)[0]
         if (!candidate) throw new AgentJournalError('journal-full')
         journal.runs = journal.runs.filter(({ id }) => id !== candidate.id)
@@ -270,7 +311,7 @@ function emptyJournal(): PersistedJournal {
 }
 
 function publicSnapshot(journal: PersistedJournal): AgentJournalSnapshot {
-  return structuredClone({ runs: journal.runs, exchanges: journal.exchanges })
+  return structuredClone({ runs: journal.runs, exchanges: journal.exchanges, ...(journal.conversation ? { conversation: journal.conversation } : {}) })
 }
 
 function validateJournal(value: unknown): PersistedJournal {
@@ -287,7 +328,26 @@ function validateJournal(value: unknown): PersistedJournal {
     version: 1,
     runs: journal.runs.map(validateRun),
     exchanges: journal.exchanges.map(validateExchange),
+    ...(journal.conversation ? { conversation: validateConversation(journal.conversation) } : {}),
   }
+}
+
+function pinned(journal: PersistedJournal, id: string): boolean {
+  return journal.conversation?.runId === id || journal.conversation?.prepared?.candidateRunId === id
+}
+
+function validateConversation(c: AgentConversationRecord): AgentConversationRecord {
+  if (!c || !Number.isSafeInteger(c.generation) || c.generation < 1
+    || !['ready', 'sending', 'reset-due', 'recovery-required'].includes(c.phase)
+    || (c.runId !== null && !ID.test(c.runId)) || (c.provider !== null && !isProvider(c.provider))
+    || c.effort !== 'medium' || !Number.isSafeInteger(c.ceiling) || c.ceiling < 1
+    || !ID.test(c.snapshotId) || !Array.isArray(c.accepted) || c.accepted.length > c.ceiling
+    || new Set(c.accepted.map(a => a.submissionId)).size !== c.accepted.length
+    || c.accepted.some(a => !ID.test(a.submissionId) || !ID.test(a.interactionId) || !timestamp(a.acceptedAt) || (a.outcome !== undefined && !['completed', 'failed', 'interrupted'].includes(a.outcome)))
+    || (c.pendingProvider !== undefined && !isProvider(c.pendingProvider))
+    || (c.retired !== undefined && !/^[0-9a-f]{8192}$/.test(c.retired))
+    || (c.prepared && (!ID.test(c.prepared.submissionId) || !ID.test(c.prepared.interactionId) || !ID.test(c.prepared.candidateRunId) || !Number.isSafeInteger(c.prepared.generation)))) throw new AgentJournalError('invalid-journal')
+  return structuredClone(c)
 }
 
 function validateRun(value: JournalAgentRun): JournalAgentRun {

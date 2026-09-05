@@ -153,6 +153,7 @@ struct TaskDetail: Codable {
     let sending: Bool?
     /// What this thread runs on, as Codex labels it ("5.6 Terra High").
     let modelLabel: String?
+    let agentCanRetry: Bool?
     /// Which backend runs this task. Absent ⇒ Claude (PTY-backed).
     let backend: String?       // "codex-desktop"
     /// Last few turns — the GUI-agent equivalent of the live terminal. A Codex
@@ -624,6 +625,8 @@ enum Event {
     case undoDraftAttachment(id: String, attachmentId: String)
     case redoDraftAttachment(id: String, attachmentId: String)
     case sendDraft(id: String, reference: QuestionReferenceP? = nil)
+    case agentSend(submissionId: String, revision: Int)
+    case agentRetry
     case cancelTaskFollowup(id: String, queueId: String)
     case restoreTaskFollowup(id: String, queueId: String)
     case queueSavedTaskFollowup(id: String, queueId: String)
@@ -737,6 +740,9 @@ enum Event {
         case .sendDraft(let id, let reference):
             var payload: [String: Any] = ["type": "sendDraft", "id": id]
             if let reference { payload["reference"] = reference.payload }; return payload
+        case .agentSend(let submissionId, let revision):
+            return ["type": "agentSend", "submissionId": submissionId, "revision": revision]
+        case .agentRetry: return ["type": "agentRetry"]
         case .cancelTaskFollowup(let id, let queueId): return ["type": "cancelTaskFollowup", "id": id, "queueId": queueId]
         case .restoreTaskFollowup(let id, let queueId): return ["type": "restoreTaskFollowup", "id": id, "queueId": queueId]
         case .queueSavedTaskFollowup(let id, let queueId): return ["type": "queueSavedTaskFollowup", "id": id, "queueId": queueId]

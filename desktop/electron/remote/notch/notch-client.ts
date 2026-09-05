@@ -178,6 +178,7 @@ export interface TaskDetailP {
   terminal?: boolean
   /** Last message that did not reach the agent (NOT a task failure). */
   deliveryError?: string
+  agentCanRetry?: boolean
   /** A message is in flight to the agent. */
   sending?: boolean
   /** Codex's label for the model/effort this thread runs on. */
@@ -460,6 +461,8 @@ export type NotchEvent =
   | { type: 'undoDraftAttachment'; id: string; attachmentId: string }
   | { type: 'redoDraftAttachment'; id: string; attachmentId: string }
   | { type: 'sendDraft'; id: string; reference?: import('../question-reference').QuestionReference }
+  | { type: 'agentSend'; submissionId: string; revision: number }
+  | { type: 'agentRetry' }
   | { type: 'cancelTaskFollowup' | 'restoreTaskFollowup' | 'queueSavedTaskFollowup' | 'recoverUncertainFollowup'; id: string; queueId: string }
   | { type: 'mute'; id: string }
   | { type: 'kill'; id: string }

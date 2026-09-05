@@ -99,16 +99,13 @@ export class AgentChat {
 
   restore(snapshot: AgentChatSnapshot): void {
     this.runId = snapshot.runId
-    this.items = snapshot.turns.slice(-AGENT_CHAT_MAX_TURNS)
+    this.items = structuredClone(snapshot.turns)
   }
 
   private push(turn: AgentChatTurn): void {
     const text = turn.text.trim()
     if (!text) return
-    this.items.push({ ...turn, text: text.slice(0, AGENT_CHAT_MAX_CHARS) })
-    if (this.items.length > AGENT_CHAT_MAX_TURNS) {
-      this.items.splice(0, this.items.length - AGENT_CHAT_MAX_TURNS)
-    }
+    this.items.push({ ...turn, text: turn.text })
   }
 }
 

@@ -187,6 +187,20 @@ function assertProviderError(error: unknown, code: AgentProviderError['code']): 
   return true
 }
 
+test('lifecycle acceptance waits for provider identity rather than a provisional local handle', async () => {
+  const { provider, processes } = harness('claude')
+  let accepted = false
+  const pending = provider.start(input('observed', { requireObservedAcceptance: true })).then(s => { accepted = true; return s })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(accepted, false)
+  processes[0].events.emit({ type: 'handle', sessionId: CLAUDE_ID, observed: true, model: 'actual-model' })
+  const session = await pending
+  assert.equal(session.model, 'actual-model')
+  processes[0].events.emit({ type: 'completion', outcome: 'failed' })
+  assert.equal((await session.completion).outcome, 'failed')
+  await provider.close(session.handle)
+})
+
 for (const kind of ['claude', 'codex'] as const) {
   test(`${kind}: fresh start and exact-handle resume use isolated provider argv`, async () => {
     const { provider, processes } = harness(kind)
@@ -728,13 +742,14 @@ test('Codex resume re-baselines exact archived history before spawn and emits on
         async spawn(opts) {
           spawns++
           assert.equal(opts.resumeSessionId, CODEX_ID)
-          await fs.appendFile(moved, [
+        },
+        async isReady() {},
+        writeStdin() {
+          void fs.appendFile(moved, [
             rolloutLine('event_msg', { type: 'task_started' }),
             rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Current final.' }),
           ].join('\n') + '\n')
         },
-        async isReady() {},
-        writeStdin() {},
         write() {},
         resize() {},
         onData() {},
@@ -751,8 +766,11 @@ test('Codex resume re-baselines exact archived history before spawn and emits on
       cwd,
       constitutionPath: join(home, 'constitution.md'),
     }))
-    const activities = []
-    for await (const activity of resumed.activity) activities.push(activity)
+    const activities = await completionWithin((async () => {
+      const values = []
+      for await (const activity of resumed.activity) values.push(activity)
+      return values
+    })())
     assert.equal(spawns, 1)
     assert.deepEqual(activities, [])
     assert.deepEqual(await resumed.completion, { outcome: 'completed', finalText: 'Current final.' })

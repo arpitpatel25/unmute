@@ -22,6 +22,8 @@ export interface AgentMcpContext {
 }
 
 export interface AgentStartInput {
+  requireObservedAcceptance?: boolean
+  model?: string
   runId: string
   interactionId: string
   cwd: string
@@ -56,6 +58,7 @@ export interface AgentCompletion {
 }
 
 export interface AgentSession {
+  readonly model?: string
   readonly handle: AgentSessionHandle
   readonly activity: AsyncIterable<AgentActivity>
   readonly completion: Promise<AgentCompletion>
@@ -71,6 +74,7 @@ export interface AgentProvider {
 }
 
 export type AgentProviderErrorCode =
+  | 'acceptance-uncertain'
   | 'invalid-handle'
   | 'provider-handle-missing'
   | 'session-active'
@@ -88,6 +92,7 @@ export class AgentProviderError extends Error {
 
 function publicErrorMessage(code: AgentProviderErrorCode): string {
   switch (code) {
+    case 'acceptance-uncertain': return 'Provider acceptance is uncertain. Input is retained; automatic replay is disabled.'
     case 'invalid-handle': return 'The Agent session handle is invalid.'
     case 'provider-handle-missing': return 'The provider did not establish a resumable session.'
     case 'session-active': return 'That Agent session already has an active turn.'
@@ -98,7 +103,7 @@ function publicErrorMessage(code: AgentProviderErrorCode): string {
 }
 
 export type AgentProcessEvent =
-  | { type: 'handle'; sessionId: string }
+  | { type: 'handle'; sessionId: string; observed?: boolean; model?: string }
   | { type: 'activity'; kind: AgentActivityKind; summary: string }
   | { type: 'completion'; outcome: AgentCompletion['outcome']; finalText?: string; failure?: AgentCompletion['failure'] }
   | { type: 'observer-failure' }
@@ -108,6 +113,7 @@ export type AgentProcessEvent =
   | { type: 'exit'; exitCode: number; stderrTail?: readonly string[] }
 
 export interface AgentProcessLaunch {
+  model?: string
   provider: AgentProviderId
   binary: string
   argv: string[]
@@ -124,6 +130,7 @@ export interface AgentProcessLaunch {
  * is intentionally a separate, non-authoritative event.
  */
 export interface AgentProcessDriver {
+  readonly hasDispatched?: boolean
   readonly events: AsyncIterable<AgentProcessEvent>
   start(launch: AgentProcessLaunch): Promise<void>
   submitUserTurn(text: string): Promise<void>
@@ -205,6 +212,8 @@ function deferred<T>(): Deferred<T> {
 }
 
 interface LiveSession {
+  observed: Deferred<void>
+  model?: string
   handle: AgentSessionHandle | null
   driver: AgentProcessDriver
   input: AgentStartInput
@@ -300,6 +309,7 @@ export class CliProviderRuntime implements AgentProvider {
     const driver = this.options.processFactory()
     const activity = new ActivityQueue()
     const live: LiveSession = {
+      observed: deferred<void>(),
       handle,
       driver,
       input,
@@ -310,12 +320,14 @@ export class CliProviderRuntime implements AgentProvider {
       settled: false,
       closed: false,
     }
+    void live.observed.promise.catch(() => {})
     if (handle) live.learnedHandle.resolve(handle)
 
     const sessionShape: AgentProcessLaunch['session'] = handle
       ? { kind: mode, id: handle.opaqueId }
       : { kind: 'fresh' }
     const launch: AgentProcessLaunch = {
+      ...(input.model ? { model: input.model } : {}),
       provider: this.id,
       binary: this.options.binary,
       argv: this.options.argv(sessionShape),
@@ -341,7 +353,7 @@ export class CliProviderRuntime implements AgentProvider {
         submitted = true
       } catch {
         await this.closeDriver(live)
-        throw new AgentProviderError('provider-unavailable')
+        throw new AgentProviderError(input.requireObservedAcceptance && driver.hasDispatched !== false ? 'acceptance-uncertain' : 'provider-unavailable')
       }
     }
 
@@ -353,7 +365,7 @@ export class CliProviderRuntime implements AgentProvider {
       )
     } catch {
       await this.closeDriver(live)
-      throw new AgentProviderError('provider-handle-missing')
+      throw new AgentProviderError(input.requireObservedAcceptance && driver.hasDispatched !== false ? 'acceptance-uncertain' : 'provider-handle-missing')
     }
     const key = this.key(learned)
     if (this.closed.has(key) || this.active.has(key)) {
@@ -368,10 +380,18 @@ export class CliProviderRuntime implements AgentProvider {
       } catch {
         this.active.delete(key)
         await this.closeDriver(live)
-        throw new AgentProviderError('provider-unavailable')
+        throw new AgentProviderError(input.requireObservedAcceptance && driver.hasDispatched !== false ? 'acceptance-uncertain' : 'provider-unavailable')
       }
     }
-    return { handle: learned, activity, completion: live.completion.promise }
+    if (input.requireObservedAcceptance) {
+      try { await withTimeout(live.observed.promise, this.options.handleTimeoutMs ?? 8_000) }
+      catch {
+        this.active.delete(key)
+        await this.closeDriver(live)
+        throw new AgentProviderError('acceptance-uncertain')
+      }
+    }
+    return { handle: learned, activity, completion: live.completion.promise, ...(live.model ? { model: live.model } : {}) }
   }
 
   private async consume(live: LiveSession): Promise<void> {
@@ -393,8 +413,13 @@ export class CliProviderRuntime implements AgentProvider {
             live.handle = { provider: this.id, opaqueId: event.sessionId }
             live.learnedHandle.resolve(live.handle)
           } else if (live.handle.opaqueId !== event.sessionId) {
+            live.observed.reject(new AgentProviderError('invalid-handle'))
             await this.failAndClose(live)
             break
+          }
+          if (event.observed === true) {
+            if (typeof event.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(event.model)) live.model = event.model
+            live.observed.resolve()
           }
           continue
         }
@@ -409,6 +434,7 @@ export class CliProviderRuntime implements AgentProvider {
           continue
         }
         if (event.type === 'completion') {
+          live.observed.reject(new AgentProviderError('acceptance-uncertain'))
           if (!live.handle) {
             live.learnedHandle.reject(new AgentProviderError('provider-handle-missing'))
             await this.closeDriver(live)
@@ -433,6 +459,7 @@ export class CliProviderRuntime implements AgentProvider {
           break
         }
         if (event.type === 'exit') {
+          live.observed.reject(new AgentProviderError('acceptance-uncertain'))
           if (!live.handle) {
             live.learnedHandle.reject(new AgentProviderError('provider-handle-missing'))
             await this.closeDriver(live)
@@ -442,6 +469,7 @@ export class CliProviderRuntime implements AgentProvider {
           break
         }
       }
+      live.observed.reject(new AgentProviderError('acceptance-uncertain'))
       if (!live.closed && live.handle && !live.settled) await this.failAndClose(live)
     } catch {
       if (!live.handle) {

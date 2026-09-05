@@ -2042,6 +2042,21 @@ test('the chat stays open while you read it', () => {
   assert.equal(h.client.last('setState')!.state, 'task', 'still expanded')
 })
 
+test('durable Agent restore shows actual provider/full chat and preserves newer draft while enqueue awaits', async () => {
+  let acknowledge!: () => void
+  const h = setup({ deps: { agentSend: async () => new Promise<void>(resolve => { acknowledge = resolve }) } })
+  const long = '🙂 full answer '.repeat(3000)
+  h.controller.restoreAgentConversation({ record: { generation: 2, phase: 'ready', provider: 'codex', model: 'observed-model', runId: 'r', effort: 'medium', ceiling: 20, accepted: [], snapshotId: 's' }, snapshot: { generation: 2, chat: { runId: 'r', turns: [{ role: 'agent', text: long, at: 1 }] }, draft: { text: 'first', revision: 1 }, queued: [] } })
+  h.client.fire({ type: 'pocketOpen' }); h.client.fire({ type: 'pocketExpand' }); h.flush()
+  assert.equal(h.client.last('showTask')!.task.backend, 'codex')
+  assert.equal(h.client.last('showTask')!.task.modelLabel, 'observed-model · medium')
+  assert.equal((h.client.last('showTask')!.task.blocks![0] as { text: string }).text, long)
+  h.client.fire({ type: 'sendDraft', id: 'unmute-agent' })
+  h.client.fire({ type: 'setDraftText', id: 'unmute-agent', text: 'new edit', clientRevision: 2 })
+  acknowledge(); await new Promise<void>(resolve => setImmediate(resolve)); h.flush()
+  assert.equal(h.client.last('showTask')!.task.draft?.text, 'new edit')
+})
+
 test('opening a task takes the surface from the chat, and keeps it', () => {
   // The other half: a stale agentOpen must not bring the chat back over the
   // task you switched to, nor when you then close that task.

@@ -24,9 +24,14 @@ test('a follow-up soon after resumes the same conversation', () => {
 // Unbounded continuity is genuinely harmful: context grows every turn,
 // yesterday's topic bleeds into today's unrelated question, and one poisoned
 // read contaminates every turn after it.
-test('an utterance long afterwards starts fresh', () => {
+test('idle never discards an established conversation', () => {
   const prior = conv('run-1', 2, 10_000)
-  assert.deepEqual(nextConversation(prior, 10_000 + AGENT_IDLE_WINDOW_MS + 1), { resume: false })
+  assert.deepEqual(nextConversation(prior, Number.MAX_SAFE_INTEGER), { resume: true, runId: 'run-1' })
+})
+
+test('message twenty settles before twenty-one must start fresh', () => {
+  assert.deepEqual(nextConversation(conv('r', 19, 1), 2), { resume: true, runId: 'r' })
+  assert.deepEqual(nextConversation(conv('r', 20, 1), 2), { resume: false })
 })
 
 test('the ceiling ends a conversation however lively it is', () => {

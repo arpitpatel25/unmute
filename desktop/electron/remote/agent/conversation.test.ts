@@ -30,10 +30,11 @@ test('the last answer is what the card shows, not the last turn', () => {
   assert.equal(c.lastAnswer()?.text, 'the answer')
 })
 
-test('old turns fall off the front, which is the end nobody is reading', () => {
+test('full conversation text never falls off a presentation limit', () => {
   const c = new AgentChat()
   for (let i = 0; i < AGENT_CHAT_MAX_TURNS + 20; i += 1) c.said(`turn ${i}`, i)
-  assert.equal(c.length, AGENT_CHAT_MAX_TURNS)
+  assert.equal(c.length, AGENT_CHAT_MAX_TURNS + 20)
+  assert.equal(c.snapshot().turns[0].text, 'turn 0')
   assert.equal(c.snapshot().turns.at(-1)!.text, `turn ${AGENT_CHAT_MAX_TURNS + 19}`)
 })
 

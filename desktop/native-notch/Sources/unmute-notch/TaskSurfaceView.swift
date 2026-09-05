@@ -20,6 +20,10 @@ struct TaskSurfaceView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let t {
                 header(t)
+                if t.id == "unmute-agent", t.agentCanRetry == true {
+                    Button("Retry retained message") { model.emit(.agentRetry) }
+                        .buttonStyle(.plain).foregroundColor(Theme.textDim)
+                }
                 ChatStatusView(model: model, task: t)
 
                 // THE ASK MOVED BELOW THE REASONING (see the strip further
@@ -90,7 +94,11 @@ struct TaskSurfaceView: View {
             // way to learn its backend, and then the expansion did not say
             // either — it was inferred from whether a terminal happened to be
             // offered.
-            ProviderMark(backend: t.backend, terminal: t.hasTerminal)
+            if t.id == "unmute-agent", t.backend == nil {
+                Image(systemName: "sparkles").foregroundColor(Theme.textDim)
+            } else {
+                ProviderMark(backend: t.backend, terminal: t.hasTerminal)
+            }
             if let origin = t.agentOriginPresentation {
                 Badge(text: origin.label, color: Theme.cReady)
             }

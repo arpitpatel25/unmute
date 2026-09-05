@@ -73,7 +73,7 @@ test('resume uses the exact Codex thread ID selected by the runtime', () => {
 test('Codex JSONL establishes the handle and completes with the final answer', () => {
   const parser = new CodexHeadlessEventParser()
   assert.deepEqual(parser.events({ type: 'thread.started', thread_id: THREAD_ID }), [
-    { type: 'handle', sessionId: THREAD_ID },
+    { type: 'handle', sessionId: THREAD_ID, observed: true },
   ])
   assert.deepEqual(parser.events({
     type: 'item.completed',
@@ -155,7 +155,7 @@ test('the headless process sends the prompt, learns the thread, and drains the a
   assert.equal(child.written, 'Create the requested session')
   assert.ok(spawns[0].includes('exec'))
   assert.deepEqual(await collected, [
-    { type: 'handle', sessionId: THREAD_ID },
+    { type: 'handle', sessionId: THREAD_ID, observed: true },
     { type: 'activity', kind: 'message', summary: 'Done.' },
     { type: 'completion', outcome: 'completed', finalText: 'Done.' },
     { type: 'exit', exitCode: 0 },
@@ -173,7 +173,7 @@ test('JSONL remains valid when a UTF-8 character is split across pipe chunks', a
   await driver.submitUserTurn('go')
   child.finish()
   assert.deepEqual(await collected, [
-    { type: 'handle', sessionId: THREAD_ID },
+    { type: 'handle', sessionId: THREAD_ID, observed: true },
     { type: 'activity', kind: 'message', summary: 'Done 🚀' },
     { type: 'completion', outcome: 'completed', finalText: 'Done 🚀' },
     { type: 'exit', exitCode: 0 },

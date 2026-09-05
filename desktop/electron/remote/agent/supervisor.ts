@@ -41,6 +41,7 @@ export interface AgentRunMcpContext extends Omit<AgentMcpContext, 'token'> {
 }
 
 export interface AgentRunInput extends Omit<AgentStartInput, 'runId' | 'mcp'> {
+  onAccepted?(run: AgentRun): Promise<void>
   runId?: string
   provider?: AgentProviderId
   mcp: AgentRunMcpContext
@@ -144,6 +145,9 @@ export class AgentRunSupervisor {
   private readonly timers: AgentSupervisorTimers
   private readonly runs = new Map<string, AgentRun>()
   private readonly live = new Map<string, LiveTurn>()
+  private pinned = new Set<string>()
+
+  pinConversation(runIds: readonly string[]): void { this.pinned = new Set(runIds) }
   private activeProcesses = 0
   private initialized?: Promise<void>
   private disposed = false
@@ -233,6 +237,7 @@ export class AgentRunSupervisor {
     this.assertUsable()
     const run = this.runs.get(runId)
     if (!run) throw new AgentSupervisorError('run-not-found')
+    if (input.requireObservedAcceptance && !run.providerHandle) throw new AgentSupervisorError('run-not-found')
     if (run.state === 'closed') throw new AgentSupervisorError('run-closed')
     if (!run.providerWorkEnded || this.live.has(runId)) throw new AgentSupervisorError('run-busy')
     this.validateTurnInput(runId, input)
@@ -324,6 +329,7 @@ export class AgentRunSupervisor {
     const at = this.now()
     const reaped: string[] = []
     for (const run of [...this.runs.values()]) {
+      if (this.pinned.has(run.id)) continue
       if (!run.providerWorkEnded || !isReapable(run.state) || run.completedAt === undefined
         || run.completedAt + this.idleMs > at) continue
       if (run.providerHandle) {
@@ -383,6 +389,7 @@ export class AgentRunSupervisor {
   private async load(): Promise<void> {
     let snapshot: AgentJournalSnapshot
     try { snapshot = await this.options.journal.read() } catch (error) { throw publicFailure(error) }
+    this.pinConversation([snapshot.conversation?.runId, snapshot.conversation?.prepared?.candidateRunId].filter((id): id is string => !!id))
     const at = this.now()
     for (const persisted of snapshot.runs) {
       const run = structuredClone(persisted)
@@ -413,6 +420,8 @@ export class AgentRunSupervisor {
     )
     const tokenExpiresAt = this.now() + positiveInteger(input.tokenTtlMs, this.tokenTtlMs)
     const providerInput: AgentStartInput = {
+      requireObservedAcceptance: input.requireObservedAcceptance,
+      model: run.model ?? input.model,
       runId: run.id,
       interactionId: input.interactionId,
       cwd: input.cwd,
@@ -429,9 +438,11 @@ export class AgentRunSupervisor {
       if (this.disposed) throw new AgentSupervisorError('run-closed')
       if (session.handle.provider !== run.provider) throw new AgentProviderError('invalid-handle')
       run.providerHandle = session.handle.opaqueId
+      if (session.model) run.model = session.model
       run.state = 'running'
       run.lastActivityAt = this.now()
-      await this.options.journal.upsertRun(run)
+      if (input.onAccepted) await input.onAccepted(structuredClone(run))
+      else await this.options.journal.upsertRun(run)
     } catch (error) {
       try { await provider.close(session.handle) } catch { /* prevent an untracked provider turn */ }
       throw error

@@ -1,0 +1,223 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, rm, unlink } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { AgentConversationLifecycle } from './lifecycle'
+import { AgentJournal } from './journal'
+import { AgentConversationStore } from './conversation-store'
+import { MemoryCrypto } from './memory/crypto'
+import type { AgentInteractionResult, AgentSubmissionContext } from './controller'
+
+async function harness(ceiling = 20) {
+  const root = await mkdtemp(join(tmpdir(), 'agent-lifecycle-'))
+  const journal = new AgentJournal({ root })
+  const store = new AgentConversationStore({ root: join(root, 'conversations'), crypto: new MemoryCrypto({ keyProvider: { getMasterKey: async () => Buffer.alloc(32, 4) } }) })
+  const calls: Array<{ text: string; prior?: string; context: AgentSubmissionContext; settle(outcome?: AgentInteractionResult['outcome']): void }> = []
+  let reject = false, uncertain = false, refreshes = 0
+  const options = { journal, store, ceiling: () => ceiling, selectedProvider: () => 'claude' as const,
+    prepareFresh: async () => { refreshes++ }, pin: (_ids: string[]) => {}, close: async (_id: string) => {},
+    controller: { async submit(input: { transcript: string; priorRunId?: string }, context: AgentSubmissionContext) {
+      const result = (outcome: AgentInteractionResult['outcome']): AgentInteractionResult => ({ interactionId: context.interactionId, agentRunId: context.runId, provider: context.provider, source: 'provider', presentation: 'transient', outcome, text: `answer ${input.transcript}` })
+      if (reject || uncertain) return { ...result('failed'), error: { code: uncertain ? 'acceptance-uncertain' as const : 'provider-unavailable' as const, message: 'retained error' } }
+      return new Promise<AgentInteractionResult>(resolve => calls.push({ text: input.transcript, prior: input.priorRunId, context, settle: (outcome = 'completed') => resolve(result(outcome)) }))
+    } } }
+  let lifecycle = new AgentConversationLifecycle(options)
+  await lifecycle.initialize()
+  async function waitCalls(n: number) { for (let i = 0; calls.length < n && i < 100; i++) await new Promise<void>(r => setTimeout(r, 2)); assert.equal(calls.length, n) }
+  async function accept(index: number) {
+    const c = calls[index]
+    await c.context.onAccepted({ id: c.context.runId, provider: c.context.provider, providerHandle: `handle-${c.context.runId}`, model: 'reported-model', state: 'running', createdAt: 1, lastUserAt: 1, lastActivityAt: 1, providerWorkEnded: false })
+  }
+  return { root, journal, store, calls, get lifecycle() { return lifecycle }, waitCalls, accept,
+    setReject: (value: boolean) => { reject = value }, setUncertain: (value: boolean) => { uncertain = value }, get refreshes() { return refreshes },
+    restart: async () => { lifecycle.dispose(); lifecycle = new AgentConversationLifecycle(options); await lifecycle.initialize(); return lifecycle },
+    cleanup: async () => { lifecycle.dispose(); await rm(root, { recursive: true, force: true }) } }
+}
+
+test('exactly twenty accepted turns settle before queued twenty-one starts fresh; full text/draft/replay survive', async () => {
+  const h = await harness()
+  try {
+    for (let i = 1; i <= 19; i++) {
+      const p = h.lifecycle.submit({ transcript: `m${i}`, submissionId: `s${i}` })
+      await h.waitCalls(i); await h.accept(i - 1); h.calls[i - 1].settle(); await p
+    }
+    await h.restart()
+    assert.equal(h.lifecycle.view().record.accepted.length, 19)
+    const p20 = h.lifecycle.submit({ transcript: 'm20', submissionId: 's20' })
+    await h.waitCalls(20); await h.accept(19)
+    const queued = await h.lifecycle.enqueue({ transcript: '秘密🙂'.repeat(10000), submissionId: 's21' })
+    await h.lifecycle.setDraft('typed during send', 5)
+    assert.equal(h.calls.length, 20)
+    h.calls[19].settle('interrupted'); await p20
+    await h.waitCalls(21)
+    assert.equal(h.calls[20].prior, undefined)
+    assert.equal(h.lifecycle.view().record.accepted.length, 20)
+    await h.accept(20)
+    assert.equal(h.lifecycle.view().record.accepted.length, 1)
+    assert.equal(h.lifecycle.view().snapshot.notice, 'Conversation cleared after 20 messages')
+    assert.equal(h.lifecycle.view().snapshot.chat.turns[0].text.length, 40000)
+    assert.equal(h.lifecycle.view().snapshot.draft.text, 'typed during send')
+    h.calls[20].settle(); await queued.completion
+    await h.lifecycle.submit({ transcript: 'm1 replay', submissionId: 's1' })
+    assert.equal(h.calls.length, 21)
+    assert.equal(h.refreshes, 2)
+  } finally { await h.cleanup() }
+})
+
+test('rejected fresh reset keeps old chat and queue; only explicit retry publishes a pending provider switch', async () => {
+  const h = await harness(1)
+  try {
+    const first = h.lifecycle.submit({ transcript: 'old', submissionId: 'first' })
+    await h.waitCalls(1); await h.accept(0); h.calls[0].settle(); await first
+    await h.lifecycle.requestProvider('codex')
+    h.setReject(true)
+    const failed = await h.lifecycle.submit({ transcript: 'next', submissionId: 'next' })
+    assert.equal(failed.outcome, 'failed')
+    assert.equal(h.lifecycle.view().record.provider, 'claude')
+    assert.equal(h.lifecycle.view().snapshot.chat.turns[0].text, 'old')
+    assert.equal(h.lifecycle.view().snapshot.queued.length, 1)
+    h.setReject(false)
+    const retry = h.lifecycle.retry()
+    await h.waitCalls(2); await h.accept(1); h.calls[1].settle(); await retry
+    assert.equal(h.lifecycle.view().record.provider, 'codex')
+    assert.match(h.lifecycle.view().snapshot.notice!, /Switched to Codex/)
+    assert.equal(h.lifecycle.view().record.accepted.length, 1)
+  } finally { await h.cleanup() }
+})
+
+test('prepared crash and unobserved write ambiguity fail closed without replay or count guesses', async () => {
+  const h = await harness()
+  try {
+    const pending = h.lifecycle.submit({ transcript: 'unknown', submissionId: 'unknown' })
+    await h.waitCalls(1)
+    await h.restart()
+    assert.equal(h.lifecycle.view().record.phase, 'recovery-required')
+    assert.equal(h.lifecycle.view().record.accepted.length, 0)
+    await h.lifecycle.retry()
+    assert.equal(h.calls.length, 1)
+    await assert.rejects(h.accept(0), /stale|stopped/i)
+    h.calls[0].settle(); await pending
+  } finally { await h.cleanup() }
+})
+
+test('restart at accepted twenty settles interruption and cannot send again to the old handle', async () => {
+  const h = await harness(1)
+  try {
+    const pending = h.lifecycle.submit({ transcript: 'boundary', submissionId: 'boundary' })
+    await h.waitCalls(1); await h.accept(0)
+    await h.restart()
+    assert.equal(h.lifecycle.view().record.phase, 'reset-due')
+    assert.equal(h.lifecycle.view().record.accepted[0].outcome, 'interrupted')
+    const next = h.lifecycle.submit({ transcript: 'fresh' })
+    await h.waitCalls(2); assert.equal(h.calls[1].prior, undefined)
+    await h.accept(1); h.calls[1].settle(); await next
+    h.calls[0].settle(); await pending
+  } finally { await h.cleanup() }
+})
+
+test('missing established journal never silently starts an empty conversation', async () => {
+  const h = await harness()
+  try {
+    await unlink(join(h.root, 'agent-journal.json'))
+    await assert.rejects(h.restart(), /restore|journal|recovery/i)
+  } finally { await h.cleanup() }
+})
+
+test('accepted replay is idempotent in flight and after failed completion; rejected retry counts once', async () => {
+  const h = await harness()
+  try {
+    h.setReject(true)
+    await h.lifecycle.submit({ transcript: 'first', submissionId: 'same' })
+    assert.equal(h.lifecycle.view().record.accepted.length, 0)
+    h.setReject(false)
+    const retry = h.lifecycle.retry()
+    await h.waitCalls(1); await h.accept(0)
+    const replay = h.lifecycle.submit({ transcript: 'retry body', submissionId: 'same' })
+    h.calls[0].settle('failed')
+    await retry; await replay
+    await h.lifecycle.submit({ transcript: 'again', submissionId: 'same' })
+    assert.equal(h.calls.length, 1)
+    assert.equal(h.lifecycle.view().record.accepted.length, 1)
+  } finally { await h.cleanup() }
+})
+
+test('write ambiguity and acceptance snapshot failure both preserve prepared input and block replay', async () => {
+  for (const mode of ['uncertain', 'storage'] as const) {
+    const h = await harness()
+    try {
+      if (mode === 'uncertain') h.setUncertain(true)
+      const p = h.lifecycle.submit({ transcript: 'retained', submissionId: 'retained' })
+      if (mode === 'storage') {
+        await h.waitCalls(1)
+        const write = h.store.write.bind(h.store)
+        h.store.write = async () => { h.store.write = write; throw new Error('disk full') }
+        await assert.rejects(h.accept(0), /uncertain/)
+        // The controller returns the acceptance uncertainty reported by the supervisor.
+        h.calls[0].settle('failed')
+      }
+      await p
+      assert.equal(h.lifecycle.view().record.accepted.length, 0)
+      assert.equal(h.lifecycle.view().snapshot.queued[0].input.transcript, 'retained')
+      assert.equal(h.lifecycle.view().record.phase, 'recovery-required')
+      await h.lifecycle.retry(); assert.equal(h.calls.length, mode === 'uncertain' ? 0 : 1)
+    } finally { await h.cleanup() }
+  }
+})
+
+test('failed initial publication remains retryable on restart before establishment', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bootstrap-'))
+  const journal = new AgentJournal({ root })
+  const store = new AgentConversationStore({ root: join(root, 'conversations'), crypto: new MemoryCrypto({ keyProvider: { getMasterKey: async () => Buffer.alloc(32, 8) } }) })
+  const options = { journal, store, selectedProvider: () => 'claude' as const, prepareFresh: async () => {}, pin: () => {}, close: async () => {}, controller: { submit: async (): Promise<AgentInteractionResult> => { throw new Error('Bootstrap must not dispatch') } } }
+  let lifecycle = new AgentConversationLifecycle(options)
+  try {
+    const checkpoint = journal.checkpointConversation.bind(journal)
+    journal.checkpointConversation = async () => { throw new Error('Initial publication failed') }
+    await assert.rejects(lifecycle.initialize(), /Initial publication failed/)
+    assert.equal(await store.established(), false)
+    lifecycle.dispose()
+    journal.checkpointConversation = checkpoint
+    lifecycle = new AgentConversationLifecycle(options)
+    await lifecycle.initialize()
+    assert.equal(await store.established(), true)
+    assert.equal(lifecycle.view().record.accepted.length, 0)
+    await unlink(join(root, 'agent-journal.json'))
+    lifecycle.dispose(); lifecycle = new AgentConversationLifecycle(options)
+    await assert.rejects(lifecycle.initialize(), /established.*missing/)
+  } finally { lifecycle.dispose(); await rm(root, { recursive: true, force: true }) }
+})
+
+for (const failedPublication of ['snapshot', 'journal'] as const) {
+  test(`completed response survives ${failedPublication} checkpoint failure and settlement retry without provider replay`, async () => {
+    const h = await harness()
+    try {
+      const transcript = 'Full answer 🙂'.repeat(3000)
+      const pending = h.lifecycle.submit({ transcript, submissionId: 'settled' })
+      await h.waitCalls(1); await h.accept(0)
+      if (failedPublication === 'snapshot') {
+        const write = h.store.write.bind(h.store)
+        h.store.write = async () => { h.store.write = write; throw new Error('Snapshot unavailable') }
+      } else {
+        const checkpoint = h.journal.checkpointConversation.bind(h.journal)
+        h.journal.checkpointConversation = async () => { h.journal.checkpointConversation = checkpoint; throw new Error('Journal unavailable') }
+      }
+      h.calls[0].settle()
+      const completed = await pending
+      assert.equal(completed.text, `answer ${transcript}`)
+      assert.equal(h.lifecycle.view().snapshot.chat.turns.at(-1)?.text, `answer ${transcript}`)
+      assert.equal(h.lifecycle.view().snapshot.settlementPending, true)
+      if (failedPublication === 'snapshot') {
+        await h.lifecycle.setDraft('newer draft', 9)
+        await h.lifecycle.retry()
+        assert.equal(h.lifecycle.view().snapshot.draft.text, 'newer draft')
+      } else await h.restart()
+      assert.equal(h.lifecycle.view().snapshot.settlementPending, undefined)
+      assert.equal(h.lifecycle.view().snapshot.chat.turns.length, 2)
+      assert.equal(h.lifecycle.view().snapshot.results?.settled.text, `answer ${transcript}`)
+      assert.equal(h.lifecycle.view().record.accepted[0].outcome, 'completed')
+      await h.lifecycle.submit({ transcript: 'replay', submissionId: 'settled' })
+      assert.equal(h.calls.length, 1)
+    } finally { await h.cleanup() }
+  })
+}

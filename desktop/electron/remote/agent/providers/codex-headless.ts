@@ -25,6 +25,7 @@ export function codexHeadlessArgv(launch: AgentProcessLaunch, systemPrompt: stri
     '-a', 'never',
     '-s', 'read-only',
     '-C', launch.cwd,
+    ...(launch.model ? ['-m', launch.model] : []),
     '-c', `developer_instructions=${JSON.stringify(systemPrompt)}`,
     // Left unset, this falls back to whatever the selected model's own
     // default happens to be — a model swap could silently carry it to high.
@@ -79,7 +80,7 @@ export class CodexHeadlessEventParser {
     const record = value as Record<string, unknown>
     if (record.type === 'thread.started') {
       return typeof record.thread_id === 'string'
-        ? [{ type: 'handle', sessionId: record.thread_id }]
+        ? [{ type: 'handle', sessionId: record.thread_id, observed: true, ...(typeof record.model === 'string' ? { model: record.model } : {}) }]
         : []
     }
     if (record.type === 'item.started') {
@@ -164,6 +165,7 @@ class EventQueue implements AsyncIterable<AgentProcessEvent> {
 }
 
 export class CodexHeadlessProcess implements AgentProcessDriver {
+  hasDispatched = false
   private readonly queue = new EventQueue()
   readonly events: AsyncIterable<AgentProcessEvent> = this.queue
   private readonly spawn: CodexHeadlessSpawner
@@ -198,6 +200,7 @@ export class CodexHeadlessProcess implements AgentProcessDriver {
     this.drained = this.readStdout(child)
     child.onExit((code) => { void this.onExit(code) })
     void this.readStderr(child)
+    this.hasDispatched = true
     child.writePrompt(text)
   }
 

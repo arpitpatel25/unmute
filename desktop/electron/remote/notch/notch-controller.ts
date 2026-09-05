@@ -23,7 +23,9 @@ import { ALWAYS_PRESENT, type PresenceLike } from '../presence'
 import { createLogger } from '../log'
 import { devEvent } from '../curator-devlog'
 import { nextFocusedComposer, type ComposerFocusEvent } from './composerFocus'
-import { AGENT_CHAT_MAX_TURNS, conciseLine } from '../agent/conversation'
+import { conciseLine } from '../agent/conversation'
+import { randomUUID } from 'node:crypto'
+import type { AgentConversationView } from '../agent/lifecycle'
 
 const log = createLogger('notch-controller')
 
@@ -158,7 +160,9 @@ export interface NotchControllerDeps {
   focus(id: string | null): void
   /** Run an Agent turn from typed text — the chat's composer. Optional: a host
    *  that does not wire it leaves the Agent voice-only. */
-  agentSend?(text: string): void
+  agentSend?(text: string, submission: { submissionId: string; revision: number }): Promise<void>
+  agentDraftChanged?(text: string, revision: number): Promise<void>
+  agentRetry?(): Promise<void>
   /** THE VOICE IS POINTED AT THE AGENT (its card is in front, or its chat is
    *  open). Separate from `focus`, which names a task and must never be handed
    *  an id the task runtime cannot resolve. Optional: a host that does not wire
@@ -483,6 +487,12 @@ export class NotchController {
   private agentOpen = false
   /** What is typed into the chat's composer and not yet sent. */
   private agentDraft = ''
+  private agentDraftRevision = 0
+  private agentProvider?: 'claude' | 'codex'
+  private agentModel?: string
+  private agentError?: string
+  private agentCanRetry = false
+  private agentEnqueue: { revision: number; submissionId: string } | null = null
   /** The pocket's order, nailed down for the duration of a visit. Null when
    *  the pocket is closed, so the next open re-sorts to what you last worked in. */
   private frozenOrder: string[] | null = null
@@ -559,6 +569,11 @@ export class NotchController {
     // Helper events → runtime. Every handler calls the SAME internals the old
     // IPC handlers call (via deps).
     const on = (type: string, fn: (e: NotchEvent) => void) => this.client.on(type, fn)
+    on('agentSend', e => {
+      const event = e as { submissionId: string; revision: number }
+      this.sendAgentDraft(event.submissionId, event.revision)
+    })
+    on('agentRetry', () => { void this.deps.agentRetry?.().catch(error => this.agentUnavailable((error as Error).message)) })
     on('tap', () => this.onTap())
     on('collapsed', () => {
       // THE HOLD DIES WITH THE CARD. Whether or not they pressed it again, a
@@ -630,7 +645,14 @@ export class NotchController {
       // THE AGENT'S DRAFT IS THE CONTROLLER'S, not the task runtime's. Handing
       // a draft store keyed by task id something that is not a task is how a
       // surface ends up writing into a record nothing owns.
-      if (draft.id === NotchController.AGENT_SLOT) { this.agentDraft = draft.text; return }
+      if (draft.id === NotchController.AGENT_SLOT) {
+        const revision = (e as { clientRevision?: number }).clientRevision ?? this.agentDraftRevision + 1
+        if (revision < this.agentDraftRevision) return
+        this.agentDraft = draft.text; this.agentDraftRevision = revision
+        void this.deps.agentDraftChanged?.(draft.text, revision).catch(error => this.agentUnavailable((error as Error).message))
+        this.scheduleReconcile()
+        return
+      }
       const { id, text, clientRevision } = e as { id: string; text: string; clientRevision?: number }
       devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'setDraftText', textChars: text.length })
       this.deps.setDraftText?.(id, text, clientRevision)
@@ -744,9 +766,7 @@ export class NotchController {
     on('sendDraft', (e) => {
       const { id, reference } = e as { id: string; reference?: QuestionReference }
       if (id === NotchController.AGENT_SLOT) {
-        const text = this.agentDraft.trim()
-        this.agentDraft = ''
-        if (text) this.deps.agentSend?.(text)
+        this.sendAgentDraft()
         return
       }
       if (reference && !this.acceptsReference(id, reference)) { this.rejectReference(id, reference); return }
@@ -1652,6 +1672,11 @@ export class NotchController {
       id: NotchController.AGENT_SLOT,
       title: 'Unmute',
       origin: 'unmute-agent',
+      backend: this.agentProvider,
+      modelLabel: this.agentModel ? `${this.agentModel} · medium` : 'Model not reported · medium',
+      deliveryError: this.agentError,
+      agentCanRetry: this.agentCanRetry,
+      canCompose: true,
       status: this.agentBusy ? 'processing' : this.agentLine?.failed ? 'failed' : 'ready',
       kind: 'session',
       alive: true,
@@ -1660,7 +1685,7 @@ export class NotchController {
       owned: false,
       resumable: false,
       blocks: this.agentBlocks,
-      draft: { text: this.agentDraft, attachments: [] },
+      draft: { text: this.agentDraft, attachments: [], clientRevision: this.agentDraftRevision },
       ...(this.agentBusy ? { activity: 'Thinking' } : {}),
     }
     this.client.send({ type: 'showTask', task: detail })
@@ -1844,7 +1869,6 @@ export class NotchController {
     this.agentBusy = true
     this.agentBlocks = [...this.agentBlocks,
       { kind: 'message', role: 'user', text: text.trim(), at: Date.now() }]
-    this.trimAgentBlocks()
     // WHAT THE CARD IS ABOUT TO SAY, and that it is now busy — so a card stuck
     // on "Thinking…" can be traced to the turn that never came back rather
     // than to the surface.
@@ -1862,7 +1886,6 @@ export class NotchController {
     this.agentBlocks = [...this.agentBlocks, failed
       ? { kind: 'error', message: text }
       : { kind: 'message', role: 'assistant', text, at }]
-    this.trimAgentBlocks()
     // UNREAD ONLY IF THEY ARE NOT ALREADY LOOKING AT IT. Coming to the front of
     // the pocket is how the Agent gets your attention; it does not need to when
     // it already has it, and marking it unread under an open chat would put a
@@ -1929,12 +1952,45 @@ export class NotchController {
     log.ui('agent-chat', { shown: false, why: 'another surface took the front' })
   }
 
-  /** A chat is not a log: the oldest turns fall off the front, which is the end
-   *  nobody is reading. */
-  private trimAgentBlocks(): void {
-    if (this.agentBlocks.length > AGENT_CHAT_MAX_TURNS) {
-      this.agentBlocks = this.agentBlocks.slice(-AGENT_CHAT_MAX_TURNS)
+  restoreAgentConversation({ record, snapshot }: AgentConversationView): void {
+    const previousAnswer = this.agentLine?.at
+    this.agentProvider = record.provider ?? undefined
+    this.agentModel = record.model
+    this.agentBusy = !snapshot.settlementPending && (record.phase === 'sending' || !!record.prepared && record.phase !== 'recovery-required')
+    this.agentError = snapshot.error
+    this.agentCanRetry = !!snapshot.settlementPending || !!snapshot.error && record.phase !== 'recovery-required' && snapshot.queued.length > 0
+    if (snapshot.draft.revision >= this.agentDraftRevision) {
+      this.agentDraft = snapshot.draft.text; this.agentDraftRevision = snapshot.draft.revision
     }
+    this.agentBlocks = snapshot.chat.turns.map(turn => turn.failed
+      ? { kind: 'error' as const, message: turn.text }
+      : { kind: 'message' as const, role: turn.role === 'user' ? 'user' as const : 'assistant' as const, text: turn.text, at: turn.at })
+    if (snapshot.notice) this.agentBlocks.unshift({ kind: 'message', role: 'assistant', text: snapshot.notice })
+    if (snapshot.error) this.agentBlocks.push({ kind: 'error', message: snapshot.error })
+    const answer = [...snapshot.chat.turns].reverse().find(t => t.role === 'agent')
+    this.agentLine = answer ? { text: conciseLine(answer.text), at: answer.at, failed: !!answer.failed } : null
+    if (answer && answer.at !== previousAnswer && !this.agentOpen) this.agentUnread = true
+    if (this.agentOpen) this.sendAgentDetail()
+    this.reconcile()
+  }
+
+  agentUnavailable(message: string): void {
+    this.agentError = message
+    if (this.agentOpen) this.sendAgentDetail()
+  }
+
+  private sendAgentDraft(submissionId?: string, revision = this.agentDraftRevision): void {
+    const text = this.agentDraft.trim()
+    if (!text || !this.deps.agentSend || revision !== this.agentDraftRevision) return
+    if (this.agentEnqueue?.revision === revision) return
+    const submission = { revision, submissionId: submissionId ?? randomUUID() }
+    this.agentEnqueue = submission
+    void this.deps.agentSend(text, submission).then(() => {
+      if (this.agentDraftRevision === revision && this.agentDraft.trim() === text) this.agentDraft = ''
+    }).catch(error => this.agentUnavailable((error as Error).message)).finally(() => {
+      if (this.agentEnqueue === submission) this.agentEnqueue = null
+      this.scheduleReconcile()
+    })
   }
 
   /** Live-settable from Settings → Appearance & notch. */

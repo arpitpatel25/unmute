@@ -39,6 +39,7 @@ export interface AgentCurrentContext {
 }
 
 export interface AgentInteractionInput {
+  submissionId?: string
   transcript: string
   attachments?: readonly CaptureAttachmentSource[]
   selectedText?: string
@@ -58,6 +59,7 @@ export interface AgentInteractionActivity {
 
 export interface AgentInteractionError {
   code:
+    | 'acceptance-uncertain'
     | 'invalid-request'
     | 'provider-unavailable'
     | 'provider-crashed'
@@ -74,6 +76,7 @@ export interface AgentInteractionError {
 }
 
 export interface AgentInteractionResult {
+  model?: string
   interactionId: string
   agentRunId: string
   provider?: AgentProviderId
@@ -98,6 +101,13 @@ export interface AgentControllerRuntime {
   constitutionPath: string
   environment: NodeJS.ProcessEnv
   mcp: AgentRunMcpContext
+}
+
+export interface AgentSubmissionContext {
+  interactionId: string
+  runId: string
+  provider: AgentProviderId
+  onAccepted: NonNullable<AgentRunInput['onAccepted']>
 }
 
 export interface AgentPresentationInput {
@@ -167,10 +177,10 @@ export class UnmuteAgentController {
     return { interaction: { ...live.interaction, intents: [...(live.interaction.intents ?? [])] } }
   }
 
-  async submit(input: AgentInteractionInput): Promise<AgentInteractionResult> {
+  async submit(input: AgentInteractionInput, context?: AgentSubmissionContext): Promise<AgentInteractionResult> {
     const validated = validateInput(input)
-    const interactionId = requireId(this.createInteractionId())
-    const runId = validated.priorRunId ?? requireId(this.createRunId())
+    const interactionId = requireId(context?.interactionId ?? this.createInteractionId())
+    const runId = validated.priorRunId ?? requireId(context?.runId ?? this.createRunId())
     const at = this.now()
     const principal: LiveInteraction['principal'] = {
       kind: 'unmute-agent',
@@ -206,12 +216,13 @@ export class UnmuteAgentController {
       }
 
 
-      provider = this.options.selectedProvider()
+      provider = context?.provider ?? this.options.selectedProvider()
       if (provider !== 'claude' && provider !== 'codex') {
         throw new ControllerFailure('provider-unavailable')
       }
       const runtime = validateRuntime(this.options.runtime())
       const recent = (await this.options.supervisor.recentExchanges())
+        .filter(exchange => validated.priorRunId === exchange.runId)
         .slice(-MAX_RECENT_EXCHANGES)
       const capabilities = this.options.capabilities.tools(principal)
       const transcript = providerTranscript(validated, handles, recent, capabilities)
@@ -225,6 +236,7 @@ export class UnmuteAgentController {
       })
 
       const turnInput: AgentResumeInput = {
+        ...(context ? { requireObservedAcceptance: true, onAccepted: context.onAccepted } : {}),
         interactionId,
         cwd: runtime.cwd,
         transcript,
@@ -240,6 +252,7 @@ export class UnmuteAgentController {
           provider,
         )
       providerTurnAccepted = true
+      provider = session.provider
 
       const pump = this.pumpActivity(session, interactionId)
       const completion = await session.completion
@@ -555,6 +568,7 @@ function controllerError(error: unknown): AgentInteractionError {
   if (error instanceof ControllerFailure) return publicError(error.code)
   const code = dependencyCode(error)
   switch (code) {
+    case 'acceptance-uncertain': return publicError('acceptance-uncertain')
     case 'provider-unavailable': return publicError('provider-unavailable')
     case 'provider-crashed': return publicError('provider-crashed')
     case 'resource-pressure': return publicError('resource-pressure')
@@ -585,6 +599,7 @@ function publicError(
   outcome?: AgentCompletion['outcome'],
 ): AgentInteractionError {
   const messages: Record<AgentInteractionError['code'], string> = {
+    'acceptance-uncertain': 'Provider acceptance is uncertain. Input is retained; automatic replay is disabled.',
     'invalid-request': 'The Agent request is invalid.',
     'provider-unavailable': 'The selected Agent provider is unavailable.',
     'provider-crashed': 'The Agent provider stopped unexpectedly. Retry this request in a fresh turn.',
