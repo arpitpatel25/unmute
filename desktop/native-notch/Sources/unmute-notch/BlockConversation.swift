@@ -56,8 +56,13 @@ struct BlockConversation: View {
     /// measure are both derived from it.
     @State private var width: CGFloat = 900
     @State private var restoreGate = ScrollRestoreGate()
+    /// The transcript stays hidden for its one layout pass so selecting a task
+    /// never exposes the mechanical jump from SwiftUI's default top position.
+    @State private var positionedTask: String?
+    @State private var positionToken = UUID()
 
-    /// Open on the last message's FIRST line, not on the thread's last pixel.
+    /// Open on the latest USER message's first line, not on the thread's last
+    /// pixel and not wherever this task happened to be read previously.
     ///
     /// Two separate bugs lived here, and only one of them was about anchoring.
     ///
@@ -76,17 +81,21 @@ struct BlockConversation: View {
     /// content end, so it simply sits at the bottom as before.
     private func restorePosition(_ proxy: ScrollViewProxy) {
         let task = id
-        // Capture before the new view's first preference delivery can replace it.
-        let saved = restoreGate.begin(task: task, savedAnchor: ConversationScrollMemory.shared.anchor(for: task))
+        let token = UUID()
+        positionToken = token
+        positionedTask = nil
+        _ = restoreGate.begin(task: task, savedAnchor: nil)
         DispatchQueue.main.async {
-            if let saved, turns.contains(where: { $0.id == saved }) {
-                proxy.scrollTo(saved, anchor: .top)
-            } else if let last = turns.last {
-                proxy.scrollTo(last.id, anchor: .top)
+            if let target = initialConversationAnchor(turns: turns) {
+                proxy.scrollTo(target, anchor: .top)
             }
-            // Keep the gate closed through the preference/follow callbacks
-            // caused by scrollTo itself.
-            DispatchQueue.main.async { restoreGate.finish(task: task) }
+            // Reveal only after the non-animated positioning transaction has
+            // been laid out. A fast Prev/Next cannot reveal a stale callback.
+            DispatchQueue.main.async {
+                guard positionToken == token else { return }
+                restoreGate.finish(task: task)
+                positionedTask = task
+            }
         }
     }
 
@@ -159,8 +168,9 @@ struct BlockConversation: View {
                     }
                     .padding(.bottom, 10)
                 }
-                // A THREAD OPENS AT THE START OF ITS LAST MESSAGE, and
-                // follows the live end as it grows.
+                .opacity(positionedTask == id ? 1 : 0)
+                // A THREAD OPENS AT ITS NEWEST USER TURN, and follows the live
+                // end as that turn grows.
                 .onAppear { restorePosition(proxy) }
                 .onChange(of: turns.count) { _ in
                     guard atBottom else { return }   // do not yank a reader back

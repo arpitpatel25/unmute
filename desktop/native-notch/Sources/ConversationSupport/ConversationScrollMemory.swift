@@ -1,5 +1,15 @@
 import Foundation
 
+/// The reading position used whenever a task is opened or selected.
+///
+/// A task can end with provider-only recovery output, so the final turn is not
+/// necessarily where the user last spoke. Prefer the newest turn that owns a
+/// prompt; if a legacy transcript has no prompts, keep the useful last-turn
+/// fallback.
+public func initialConversationAnchor(turns: [BlockTurn]) -> String? {
+    turns.last(where: { $0.prompt != nil })?.id ?? turns.last?.id
+}
+
 /// Small process-local cache: collapsing/reopening reconstructs the SwiftUI
 /// view, so view-local state cannot restore where each task was being read.
 public final class ConversationScrollMemory {

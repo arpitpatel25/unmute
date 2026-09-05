@@ -2,6 +2,29 @@ import XCTest
 @testable import ConversationSupport
 
 final class ConversationScrollMemoryTests: XCTestCase {
+    func testInitialAnchorIsTheNewestTurnContainingAUserPrompt() {
+        let meta = BlockTurnMeta(status: "done", durationMs: nil, startedAt: nil,
+            steps: 0, files: 0, added: 0, removed: 0, planDone: nil, planTotal: nil)
+        let turns = [
+            BlockTurn(id: "first", prompt: Block(kind: "message", role: "user", text: "one"), work: [], reply: nil, meta: meta, sources: []),
+            BlockTurn(id: "second", prompt: Block(kind: "message", role: "user", text: "two"), work: [], reply: nil, meta: meta, sources: []),
+            BlockTurn(id: "provider-tail", prompt: nil, work: [], reply: nil, meta: meta, sources: []),
+        ]
+
+        XCTAssertEqual(initialConversationAnchor(turns: turns), "second")
+    }
+
+    func testInitialAnchorFallsBackToNewestTurnWhenThereIsNoUserPrompt() {
+        let meta = BlockTurnMeta(status: "done", durationMs: nil, startedAt: nil,
+            steps: 0, files: 0, added: 0, removed: 0, planDone: nil, planTotal: nil)
+        let turns = [
+            BlockTurn(id: "first", prompt: nil, work: [], reply: nil, meta: meta, sources: []),
+            BlockTurn(id: "last", prompt: nil, work: [], reply: nil, meta: meta, sources: []),
+        ]
+
+        XCTAssertEqual(initialConversationAnchor(turns: turns), "last")
+    }
+
     func testStorageIsPerTaskAndBounded() {
         let memory = ConversationScrollMemory(limit: 2)
         memory.remember(task: "a", anchor: "a1")
