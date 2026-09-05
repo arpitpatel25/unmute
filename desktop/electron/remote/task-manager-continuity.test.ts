@@ -112,6 +112,24 @@ test('Codex reopen attaches exact history without inventing a user turn', async 
   assert.deepEqual(calls, ['resume:source-thread'])
 })
 
+test('restart repairs a persisted Codex identity that was incorrectly left unstarted', async () => {
+  const baseDir = await base()
+  const hub = { running: true, threadIdFor() { return undefined } }
+  const initial = new TaskManager({ executorFactory, codexHub: hub as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  const id = await initial.createChat({ provider: 'codex', cwd: baseDir })
+  const home = initial.get(id)!.home
+  const broken = JSON.parse(await fs.readFile(join(home, 'meta.json'), 'utf8'))
+  broken.sessionId = 'forked-child'; broken.codexRolloutId = 'forked-child'; broken.chatUnstarted = true
+  await fs.writeFile(join(home, 'meta.json'), JSON.stringify(broken))
+
+  const restarted = new TaskManager({ executorFactory, codexHub: hub as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  await restarted.rehydrate()
+  assert.notEqual(restarted.get(id)?.chatUnstarted, true)
+  assert.equal(JSON.parse(await fs.readFile(join(home, 'meta.json'), 'utf8')).chatUnstarted, false)
+})
+
 test('Codex fork uses native fork and persists the returned child and source', async () => {
   const baseDir = await base()
   const calls: Array<{ op: string; value?: string }> = []

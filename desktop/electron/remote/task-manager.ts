@@ -4092,6 +4092,10 @@ export class TaskManager extends EventEmitter {
       // one-offs use status.json to repair completed historical receipts.
       const persistedState = normalizeState(meta.state) as UiTaskState | undefined
       const structured = Boolean((meta as Task).claudeSessionSettings || (meta as Task).codexSessionSettings)
+      // A new Codex chat has no provider id. If an id is present, the provider
+      // already created or resumed the conversation and an old `unstarted`
+      // flag is only a torn continuation receipt.
+      const repairedStartedCodex = meta.agent === 'codex' && Boolean(meta.sessionId) && (meta as Task).chatUnstarted === true
       // Legacy CLI status files can remain at the launch scaffold forever.
       // Only an explicit completion of the latest native turn repairs that
       // receipt; an earlier answer followed by a new/aborted turn is not proof.
@@ -4136,7 +4140,7 @@ export class TaskManager extends EventEmitter {
         ...((meta as Task).managedProjectId ? { managedProjectId: (meta as Task).managedProjectId } : {}),
         ...((meta as Task).permissionReason ? { permissionReason: (meta as Task).permissionReason } : {}),
         ...(meta.model ? { model: meta.model } : {}),
-        ...((meta as Task).chatUnstarted ? { chatUnstarted: true } : {}),
+        ...((meta as Task).chatUnstarted && !repairedStartedCodex ? { chatUnstarted: true } : {}),
         ...((meta as Task).importedFromCli ? { importedFromCli: true } : {}),
         sessionOwnership: sessionOwnership(meta as Record<string, unknown>),
         kind: meta.kind ?? 'oneoff',
@@ -4194,7 +4198,7 @@ export class TaskManager extends EventEmitter {
       }
       this.tasks.set(id, task)
       this.emit('created', task)
-      if (persistedState !== recoveredState) await this.persistState(task)
+      if (persistedState !== recoveredState || repairedStartedCodex) await this.persistState(task)
       restored++
     }
     if (restored) log.event('rehydrated', { restored })
