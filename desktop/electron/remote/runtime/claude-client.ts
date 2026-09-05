@@ -17,6 +17,9 @@ export class PersistentClaudeTaskSession extends ClaudeTaskSession {
     this.apply(event)
   }
   private disconnected = () => {
+    this.attached = undefined
+    this.replaying = true
+    this.buffered = []
     this.runtimeState = { ...this.runtimeState, alive: false, followupUnavailable: true }
     this.remoteOptions.onEvent({ type: 'error', message: 'Background runtime connection lost; reconnect before sending again.' })
   }
@@ -31,14 +34,22 @@ export class PersistentClaudeTaskSession extends ClaudeTaskSession {
   override get followupBlocked(): boolean { return this.runtimeState.followupBlocked }
   override get followupUnavailable(): boolean { return this.detached || this.runtimeState.followupUnavailable }
   override get pid(): number | undefined { return this.runtimeState.pid }
-  override start(): Promise<void> { return this.attached ??= this.attach() }
+  override start(): Promise<void> {
+    return this.attached ??= this.attach().catch(error => {
+      this.attached = undefined
+      throw error
+    })
+  }
   private async attach(): Promise<void> {
     const { onEvent: _onEvent, spawn: _spawn, readImage: _readImage, ...options } = this.remoteOptions
     const opened = await this.rpc.call<ClaudeRuntimeState & { sequence: number }>('claude.open', this.sessionId, { ...options, sessionId: this.sessionId })
+    if (opened.sequence < this.sequence) this.sequence = 0
     while (this.sequence < opened.sequence) {
       const events = await this.rpc.call<ClaudeRuntimeEvent[]>('claude.replay', this.sessionId, this.sequence)
       if (!events.length) throw new Error('Background runtime replay is incomplete')
+      const before = this.sequence
       for (const event of events) this.apply(event)
+      if (this.sequence <= before) throw new Error('Background runtime replay did not advance')
     }
     this.runtimeState = opened
     this.models = opened.models

@@ -4708,6 +4708,21 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.warn('persistent runtime unavailable', { error: (error as Error).message })
     throw error
   })
+  persistentRuntime.on('reconnected', () => {
+    const runtime = persistentRuntime
+    if (!runtime) return
+    void (async () => {
+      await runtime.call('hello')
+      await (codexHub as PersistentCodexHub | null)?.reconnect()
+      if (unmuteAgentLifecycle instanceof AgentRuntimeClient) await unmuteAgentLifecycle.reconnect()
+      const sessions = await runtime.call<Array<{ sessionId: string; alive: boolean }>>('claude.list')
+      const live = new Set(sessions.filter(session => session.alive).map(session => session.sessionId))
+      await Promise.all(manager?.list().filter(task => task.claudeSessionSettings && live.has(task.sessionId))
+        .map(task => manager!.resume(task.id, { touchActivity: false })) ?? [])
+      notchController?.refresh()
+      log.event('persistent-runtime-recovered', { liveClaude: live.size })
+    })().catch(error => log.warn('persistent runtime recovery failed', { error: (error as Error).message }))
+  })
 
   const logDir = join(homedir(), '.unmute', 'remote', 'logs')
   const runId = String(Date.now())

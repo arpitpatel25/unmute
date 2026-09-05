@@ -27,10 +27,29 @@ export function runtimeExecutable(mainExecutable: string): string {
 /** A per-user-data daemon; dev worktrees do not attach to production runtimes. */
 export class PersistentRuntimeClient extends RuntimeRpcClient {
   private starting?: Promise<void>
+  private disposed = false
+  private retry?: ReturnType<typeof setTimeout>
   constructor(private root: string, private entry: string, private executable = runtimeExecutable(process.execPath)) {
     super(runtimeSocket(root))
+    this.on('disconnected', () => this.scheduleReconnect())
+  }
+  private scheduleReconnect(): void {
+    if (this.disposed || this.retry) return
+    this.retry = setTimeout(() => {
+      this.retry = undefined
+      void this.connect().then(() => { if (!this.disposed) this.emit('reconnected') })
+        .catch(() => this.scheduleReconnect())
+    }, 1_000)
+    this.retry.unref()
+  }
+  override disconnect(): void {
+    this.disposed = true
+    if (this.retry) clearTimeout(this.retry)
+    this.retry = undefined
+    super.disconnect()
   }
   override connect(): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error('Runtime client has been disposed'))
     if (this.connected) return Promise.resolve()
     return this.starting ??= this.ensure().finally(() => { this.starting = undefined })
   }
