@@ -31,6 +31,11 @@ function adapters(overrides: Partial<SessionAdapters> = {}): SessionAdapters & {
         sessionId: 'bbbbbbbb-1111-2222-3333-444444444444',
       }
     },
+    async search(input) {
+      asked.push({ operation: 'search', ...input })
+      return [{ sessionId: 'match', harness: 'codex' as const, path: '/rollout', modifiedAt: 1,
+        userText: 'pricing migration', artifacts: [], score: 2 }]
+    },
     ...overrides,
   } as SessionAdapters & { asked: any[] }
 }
@@ -105,6 +110,22 @@ test('fork fails closed when the adapter reuses provider identity', async () => 
   assert.equal(parse(result).error.code, 'fork-failed')
 })
 
+test('search returns bounded deterministic candidates without changing runtime state', async () => {
+  const a = adapters()
+  const result = await new SessionsCapability(a).call(ctx, 'sessions_search', {
+    query: 'pricing migration', limit: 8,
+  })
+  assert.equal(parse(result).result[0].sessionId, 'match')
+  assert.deepEqual(a.asked[0], { operation: 'search', query: 'pricing migration', limit: 8 })
+})
+
+test('search refuses empty queries and excessive limits', async () => {
+  const a = adapters()
+  assert.equal((await new SessionsCapability(a).call(ctx, 'sessions_search', { query: ' ' })).isError, true)
+  assert.equal((await new SessionsCapability(a).call(ctx, 'sessions_search', { query: 'pricing', limit: 99 })).isError, true)
+  assert.deepEqual(a.asked, [])
+})
+
 test('reopening without an intent asks for no follow-up at all', async () => {
   const a = adapters()
 
@@ -161,8 +182,9 @@ test('an expired agent run cannot reopen a session', async () => {
 test('the capability exposes distinct resume and fork tools only to the Agent', () => {
   const capability = new SessionsCapability(adapters())
 
-  assert.deepEqual(capability.tools.map((t) => t.name), ['session_resume', 'session_fork'])
+  assert.deepEqual(capability.tools.map((t) => t.name), ['sessions_search', 'session_resume', 'session_fork'])
   assert.deepEqual([...capability.roles], ['unmute-agent'])
-  assert.equal(capability.tools[0]!.consequence, 'reversible-write')
+  assert.equal(capability.tools[0]!.consequence, 'read')
   assert.equal(capability.tools[1]!.consequence, 'reversible-write')
+  assert.equal(capability.tools[2]!.consequence, 'reversible-write')
 })

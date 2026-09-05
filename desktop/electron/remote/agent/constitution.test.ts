@@ -11,6 +11,7 @@ import { AGENT_PRINCIPLES, agentConstitution } from './constitution'
  * tools that would answer. This is the test that keeps the fallback nameable.
  */
 test('the raw-search fallback is named, not merely permitted', () => {
+  assert.match(AGENT_PRINCIPLES, /mcp__unmute__sessions_search/)
   assert.match(AGENT_PRINCIPLES, /Glob, Grep and Read/)
   assert.match(AGENT_PRINCIPLES, /~\/\.claude\/projects/)
   assert.match(AGENT_PRINCIPLES, /~\/\.codex\/sessions/)
@@ -92,7 +93,7 @@ test('resuming sends the Agent to the transcripts, not to a withdrawn record', (
 
 /** Deleted tools must not still be advertised as available. */
 test('no removed tool is still named as if it existed', () => {
-  for (const gone of ['sessions_list', 'sessions_search', 'session_read', 'session_continue_in']) {
+  for (const gone of ['sessions_list', 'session_read', 'session_continue_in']) {
     assert.doesNotMatch(AGENT_PRINCIPLES, new RegExp(gone), `${gone} is gone but still named`)
   }
 })
@@ -141,6 +142,7 @@ test('it is told to find the file rather than guess at its path', () => {
 const TOOL_NAMES = [
   'memory_list', 'memory_store', 'memory_search', 'memory_get',
   'task_create', 'task_status', 'session_resume', 'session_fork',
+  'sessions_search',
   'unmute_history_search', 'unmute_history_copy',
   'notetaker_list', 'notetaker_read', 'notetaker_search', 'notetaker_open',
 ]

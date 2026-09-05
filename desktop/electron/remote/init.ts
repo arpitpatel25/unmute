@@ -104,6 +104,7 @@ import { HistoryCapability } from './agent/capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
 import { SessionsCapability } from './agent/capabilities/sessions'
 import { locateSession } from './agent/sessions/locate'
+import { searchSessionCatalog } from './agent/sessions/catalog'
 import { AgentContinuationService } from './agent/sessions/service'
 
 let unmuteAgentLifecycle: AgentConversationLifecycle | AgentRuntimeClient | null = null
@@ -1226,6 +1227,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
       // nothing here re-creates the index (or the sweep that maintained it)
       // deleted in cc48bbf.
       new SessionsCapability({
+        search: input => searchSessionCatalog(input.query, undefined, input.limit),
         resume: input => agentContinuations.resume(input),
         fork: input => agentContinuations.fork(input),
       }),
@@ -3872,6 +3874,10 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
   }
   if (method === 'sessions.resume') return agentContinuations.resume(args[0])
   if (method === 'sessions.fork') return agentContinuations.fork(args[0])
+  if (method === 'sessions.search') {
+    const input = args[0] as { query: string; limit?: number }
+    return searchSessionCatalog(input.query, undefined, input.limit)
+  }
   if (method === 'handoff.createTask') {
     if (!manager) throw new Error('Unmute Remote is not initialized')
     const input = args[0] as Parameters<typeof buildHandoffPrompt>[0] & { sourceSessions?: Array<{ sessionId: string; provider: 'claude' | 'codex' }>; cwd?: string; kind: 'oneoff' | 'session'; provider: AgentKind; agentRunId: string }

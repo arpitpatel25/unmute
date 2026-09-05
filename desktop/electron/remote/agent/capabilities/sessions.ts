@@ -4,6 +4,7 @@ import type {
   ToolDefinition,
   ToolResult,
 } from '../types.ts'
+import type { SessionCatalogEntry } from '../sessions/catalog.ts'
 
 /**
  * `sessions_list`, `sessions_search` and `session_read` were MCP tools over
@@ -24,6 +25,21 @@ import type {
  */
 
 const tools = [
+  {
+    name: 'sessions_search',
+    description: 'Search a bounded on-demand projection of Claude and Codex transcripts by'
+      + ' user-turn text and project. Returns full exact session ids, provider, cwd, time,'
+      + ' matching user text, and artifact references. Use it to find likely work quickly;'
+      + ' use Glob, Grep, and Read on raw transcripts when the query needs more precision.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['query'],
+      properties: {
+        query: { type: 'string', minLength: 2, maxLength: 500 },
+        limit: { type: 'integer', minimum: 1, maximum: 25 },
+      },
+    },
+    consequence: 'read',
+  },
   {
     name: 'session_resume',
     description: 'Pick a past session back up where it left off, keeping its entire history.'
@@ -83,6 +99,7 @@ export interface SessionActionResult {
 }
 
 export interface SessionAdapters {
+  search(input: { query: string; limit?: number }): Promise<SessionCatalogEntry[]>
   resume(input: { sessionId: string; intent?: string }): Promise<SessionActionResult>
   fork(input: { sessionId: string; intent?: string }): Promise<SessionActionResult>
 }
@@ -107,6 +124,20 @@ export class SessionsCapability implements CapabilityModule {
   async call(ctx: CapabilityCallContext, tool: string, input: unknown): Promise<ToolResult> {
     if (ctx.principal.kind !== 'unmute-agent' || ctx.principal.expiresAt <= ctx.now) {
       return fail('access-denied', 'Session history is unavailable')
+    }
+    if (tool === 'sessions_search') {
+      const value = (input ?? {}) as Record<string, unknown>
+      const query = typeof value.query === 'string' ? value.query.trim() : ''
+      const limit = value.limit === undefined ? undefined : value.limit
+      if (query.length < 2 || query.length > 500
+        || limit !== undefined && (!Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > 25)) {
+        return fail('invalid-input', 'Session query is invalid')
+      }
+      try {
+        return ok(await this.adapters.search({ query, ...(typeof limit === 'number' ? { limit } : {}) }))
+      } catch (error) {
+        return fail('search-failed', (error as Error).message || 'Sessions could not be searched')
+      }
     }
     if (tool !== 'session_resume' && tool !== 'session_fork') {
       return fail('unknown-tool', `Unknown tool: ${tool}`)
