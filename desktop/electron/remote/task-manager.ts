@@ -5833,18 +5833,18 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
-   * The user OPENED this card — revive a persistent session that isn't running.
+   * The user OPENED this card — revive its resumable provider runtime when it
+   * is not running.
    *
    * Startup normally reconnects to the detached runtime before the user gets
    * here. This remains the fallback for a machine restart or a runtime that was
    * deliberately aged out: OPENING the card is already the intent to resume,
    * so it should not stop at a redundant "session ended" panel.
    *
-   * Deliberately narrow, because the cost of being wrong is a spawned process:
-   *  • PERSISTENT SESSIONS ONLY. A one-off is opened to READ its result — often
-   *    long after it finished, sometimes after its dir was purged (nothing left
-   *    to resume anyway) — so it keeps the explicit Resume button.
-   *  • EXTERNAL BACKENDS ARE SKIPPED. A Codex thread has no PTY and was never
+   * A card is the conversation, not a process-management screen. Selecting it
+   * is therefore the one resume gesture for both sessions and errands; neither
+   * should make the user press a second button before the composer works.
+   * External backends are skipped: a Codex thread has no PTY and was never
    *    dead; resume() is a no-op for it (see the guard there).
    *  • ALREADY ALIVE is a no-op, and an in-flight respawn is absorbed by the
    *    open/resume single-flight guards. Both surfaces re-announce the open on
@@ -5856,7 +5856,7 @@ export class TaskManager extends EventEmitter {
    */
   opened(id: string): void {
     const task = this.tasks.get(id)
-    if (!task || (task.kind ?? 'oneoff') !== 'session') return
+    if (!task) return
     if (task.chatUnstarted || (!task.claudeSessionSettings && !task.codexSessionSettings && this.opts.claudeSessionOptions)) return
     if (isExternalAgent(task.agent)) return
     if (this.executors.get(id)?.alive) return

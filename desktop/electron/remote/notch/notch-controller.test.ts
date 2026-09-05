@@ -545,6 +545,15 @@ test('openDashboard builds the full cockpit payload', async () => {
   assert.ok(!cp.queue.some((q) => q.id === 'sh1'))
 })
 
+test('moving between expanded tasks silently opens each selected task', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', alive: false }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', alive: false }))
+  h.client.fire({ type: 'focusTask', id: 'a' })
+  h.client.fire({ type: 'next' })
+  assert.deepEqual(h.calls.opened, [['a'], ['b']])
+})
+
 test('clearFinished hides settled one-offs from the rail', async () => {
   const h = setup()
   put(h, makeTask({ id: 'o1', state: 'done', kind: 'oneoff', name: 'Done thing', alive: false }))

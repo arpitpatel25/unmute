@@ -1804,16 +1804,12 @@ export class NotchController {
     if (!this.frozenOrder) this.frozenOrder = this.pocketList().map((t) => t.id)
   }
 
-  /** Opening a persistent session makes it reachable without counting as work.
-   * TaskManager.opened owns both constraints: one-offs stay read-only, and an
-   * automatic relaunch preserves updatedAt so the wall never reorders merely
-   * because the user looked at an old thread. */
+  /** Opening a task makes its provider reachable without counting as work. */
   private onFocusTask(id: string): void {
     this.leaveAgent()
     this.engaged = 'cockpit'
     this.addressed(id)
     this.setFocus(id)
-    this.deps.opened?.(id)
     this.reconcile()
   }
 
@@ -2012,6 +2008,11 @@ export class NotchController {
     // pocketing and collapsing are covered by this one line too.
     this.applyComposerFocus({ kind: 'surface-changed', taskId: id })
     this.deps.focus(id) // focus IS the voice address (consent model)
+    // Every route onto the expanded task surface — dashboard selection,
+    // pocket expansion, Prev/Next, and programmatic open — has already set the
+    // engagement rung before it gets here. Make the task reachable as part of
+    // opening it; browsing the compact pocket remains process-free.
+    if (id && (this.engaged === 'cockpit' || this.engaged === 'task')) this.deps.opened?.(id)
     if (id) {
       // ACKNOWLEDGMENT IS NOT CLEARED HERE, and that was the bug behind "I
       // closed them and the bar still says three". Closing a finished thread

@@ -1505,7 +1505,7 @@ test('a session closed by the quit switch comes back FINISHED, not failed; a one
   assert.match(tm.get(oid)!.error!.reason, /Interrupted by an app restart/)
 })
 
-test('opening a persistent session revives it with no Resume tap; a one-off is left alone', { timeout: 5000 }, async () => {
+test('opening any resumable owned task revives it with no Resume tap', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   let spawns = 0
   const sid = await seedInterrupted(baseDir, 'session')
@@ -1527,12 +1527,12 @@ test('opening a persistent session revives it with no Resume tap; a one-off is l
   assert.equal(tm.get(sid)!.updatedAt, activityBeforeOpen,
     'automatic relaunch is liveness, not new task activity')
 
-  // A one-off is opened to READ its result — resuming it would spawn a REPL
-  // behind the user's back (and after a purge there is nothing to resume).
+  const oneoffActivityBeforeOpen = tm.get(oid)!.updatedAt
   tm.opened(oid)
-  await new Promise((r) => setTimeout(r, 120))
-  assert.equal(spawns, 1, 'one-off keeps its explicit Resume button')
-  assert.equal(tm.isAlive(oid), false)
+  await waitFor(() => tm.isAlive(oid))
+  assert.equal(spawns, 2, 'an interrupted errand is silently made reachable too')
+  assert.equal(tm.get(oid)!.updatedAt, oneoffActivityBeforeOpen,
+    'automatic restore never makes an old task look newly active')
   tm.killAll()
 })
 
