@@ -32,6 +32,52 @@ const MARKUP = /```|^\s*[-*]\s|\*\*|^#{1,6}\s/m
 
 export const CORPUS: EvalCase[] = [
   {
+    name: 'an ordinary follow-up resumes rather than forks',
+    because: 'Resume and fork used to share one operation, so continuing exact work silently created a child.',
+    utterance: 'Continue the exact pricing migration conversation we worked on yesterday.',
+    check: (calls) => {
+      if (calls.some(call => call.tool === 'session_fork')) return 'ordinary continuation was forked'
+      return calls.some(call => call.tool === 'session_resume') ? null : 'exact work was not resumed'
+    },
+  },
+  {
+    name: 'reopen only sends no synthetic prompt',
+    because: 'Opening a conversation used to inject “Continue from where we left off” as a user turn.',
+    utterance: 'Reopen the exact billing session from yesterday; do not ask it to do anything yet.',
+    check: (calls) => {
+      const resumed = calls.find(call => call.tool === 'session_resume')
+      return resumed && !(resumed.args as Record<string, unknown>).intent ? null : 'reopen injected a user turn'
+    },
+  },
+  {
+    name: 'an alternate path uses native fork',
+    because: 'An independent experiment must preserve the original rather than resume or start blank.',
+    utterance: 'Branch the migration conversation and try the alternate database approach, preserving the original.',
+    check: (calls) => calls.some(call => call.tool === 'session_fork') ? null : 'alternate work did not fork',
+  },
+  {
+    name: 'several prior conversations synthesize into one new task',
+    because: 'Providers cannot natively merge histories; the new session needs bounded background and provenance.',
+    utterance: 'Continue the launch discussion using both the pricing conversation and the positioning conversation.',
+    check: (calls) => {
+      const created = calls.find(call => call.tool === 'task_create')
+      if (!created) return 'no synthesized task was created'
+      const input = created.args as Record<string, unknown>
+      if (!input.context) return 'synthesis carried no bounded context'
+      return Array.isArray(input.sourceSessions) && input.sourceSessions.length >= 2
+        ? null : 'synthesis did not preserve its sources'
+    },
+  },
+  {
+    name: 'start clean creates a genuinely fresh task',
+    because: 'Explicitly fresh work must not inherit or search for a previous session.',
+    utterance: 'Start clean in a new Codex session and plan the migration from scratch.',
+    check: (calls) => {
+      if (calls.some(call => call.tool === 'session_resume' || call.tool === 'session_fork')) return 'fresh work inherited a session'
+      return calls.some(call => call.tool === 'task_create') ? null : 'fresh task was not created'
+    },
+  },
+  {
     name: 'launching a session is done, not drafted',
     because: 'THE 25 AUGUST FIELD FAILURE. Asked to "launch the session, submit the initial '
       + 'prompt", the Agent answered "this session is restricted to preparing drafts" and '

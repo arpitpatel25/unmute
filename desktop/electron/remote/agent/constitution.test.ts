@@ -53,13 +53,32 @@ test('the record is named by path, so there is one place to look', () => {
  */
 test('carrying work across harnesses is composed, and described honestly', () => {
   assert.match(AGENT_PRINCIPLES, /read what you need, write the account yourself/)
-  assert.match(AGENT_PRINCIPLES, /Never paste session identifiers into a task/)
+  assert.match(AGENT_PRINCIPLES, /Never paste session identifiers into the context prose/)
   assert.match(AGENT_PRINCIPLES, /never "moved them to Codex"/)
 })
 
 test('resuming needs no name for the session', () => {
   assert.match(AGENT_PRINCIPLES, /session_resume/)
   assert.match(AGENT_PRINCIPLES, /never answer a question about their own past with a question/)
+})
+
+test('continuation policy keeps resume, fork, synthesis, and fresh work distinct', () => {
+  assert.match(AGENT_PRINCIPLES, /mcp__unmute__session_fork/)
+  assert.match(AGENT_PRINCIPLES, /same conversation/i)
+  assert.match(AGENT_PRINCIPLES, /alternative|branch/i)
+  assert.match(AGENT_PRINCIPLES, /several sessions|multiple sessions/i)
+  assert.match(AGENT_PRINCIPLES, /start clean|fresh/i)
+})
+
+test('reopening never manufactures a continuation prompt', () => {
+  assert.match(AGENT_PRINCIPLES, /omit intent/i)
+  assert.doesNotMatch(AGENT_PRINCIPLES, /Continue from where we left off/)
+})
+
+test('synthesis preserves exact source and artifact provenance', () => {
+  assert.match(AGENT_PRINCIPLES, /sourceSessions/)
+  assert.match(AGENT_PRINCIPLES, /artifacts/)
+  assert.match(AGENT_PRINCIPLES, /decisions, constraints/i)
 })
 
 /**
@@ -121,7 +140,7 @@ test('it is told to find the file rather than guess at its path', () => {
 
 const TOOL_NAMES = [
   'memory_list', 'memory_store', 'memory_search', 'memory_get',
-  'task_create', 'task_status', 'session_resume',
+  'task_create', 'task_status', 'session_resume', 'session_fork',
   'unmute_history_search', 'unmute_history_copy',
   'notetaker_list', 'notetaker_read', 'notetaker_search', 'notetaker_open',
 ]

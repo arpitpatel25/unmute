@@ -1571,6 +1571,28 @@ export class TaskManager extends EventEmitter {
     this.emit('updated', task)
   }
 
+  async mergeContinuationProvenance(taskId: string, input: {
+    mode: 'resume' | 'fork' | 'synthesis' | 'fresh'
+    sources?: Array<{ sessionId: string; provider: 'claude' | 'codex' }>
+    artifacts?: Array<{ kind: 'file' | 'url' | 'identifier'; value: string; label?: string }>
+    confidence?: number
+  }): Promise<void> {
+    const task = this.tasks.get(taskId)
+    if (!task) return
+    task.continuationMode = input.mode
+    task.continuationSources = input.sources?.map(source => ({ ...source }))
+    task.continuationArtifacts = input.artifacts?.map(artifact => ({ ...artifact }))
+    task.continuationConfidence = input.confidence
+    this.mergeMeta(task, {
+      continuationMode: task.continuationMode,
+      continuationSources: task.continuationSources,
+      continuationArtifacts: task.continuationArtifacts,
+      continuationConfidence: task.continuationConfidence,
+    }, 'continuation-provenance')
+    await this.metaChains.get(taskId)
+    this.emit('updated', task)
+  }
+
   async presentAgentResult(input: {
     agentRunId: string
     intent: string
@@ -3886,7 +3908,7 @@ export class TaskManager extends EventEmitter {
       if (this.tasks.has(id)) continue
       if (await this.recordRetired(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result'] }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result']; continuationMode?: Task['continuationMode']; continuationSources?: Task['continuationSources']; continuationArtifacts?: Task['continuationArtifacts']; continuationConfidence?: number }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { meta = {} }
       if (!meta.intent) {
         // meta.json is missing, empty, or unparseable — see atomic-file.ts for
@@ -3911,7 +3933,7 @@ export class TaskManager extends EventEmitter {
           .catch((e) => log.child({ taskId: id }).warn('rehydrate: could not persist recovered meta.json', { error: (e as Error).message }))
       }
       if (!meta.intent) continue // unreachable after the reconstruction above, but keeps `meta.intent` narrowed to `string` below
-      if (meta.origin === 'unmute-agent' && meta.agentRunId) {
+      if (meta.origin === 'unmute-agent' && meta.agentRunId && !(meta as Task).sessionOwnership) {
         const now0 = this.clock()
         const task: Task = {
           id,
@@ -3935,6 +3957,10 @@ export class TaskManager extends EventEmitter {
           result: meta.result,
           shelved: meta.shelved || undefined,
           note: meta.note || undefined,
+          continuationMode: meta.continuationMode,
+          continuationSources: meta.continuationSources,
+          continuationArtifacts: meta.continuationArtifacts,
+          continuationConfidence: meta.continuationConfidence,
           ...this.groupFromMeta(meta),
         }
         this.tasks.set(id, task)
@@ -4132,6 +4158,10 @@ export class TaskManager extends EventEmitter {
         shelved: meta.shelved || undefined,
         note: meta.note || undefined,
         spawnedBy: meta.spawnedBy || undefined,
+        continuationMode: meta.continuationMode,
+        continuationSources: meta.continuationSources,
+        continuationArtifacts: meta.continuationArtifacts,
+        continuationConfidence: meta.continuationConfidence,
         ...this.groupFromMeta(meta),
       }
       if (task.claudeSessionSettings) {

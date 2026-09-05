@@ -97,3 +97,32 @@ test('Codex fork uses native fork and persists the returned child and source', a
     { sessionId: 'source-thread', provider: 'codex' },
   ])
 })
+
+test('synthesis provenance survives task rehydration', async () => {
+  const baseDir = await base()
+  let sequence = 0
+  const hub = {
+    async startThread() { return { threadId: `thread-${++sequence}`, url: 'ws://localhost' } },
+    async send() { return true },
+    threadIdFor() { return undefined },
+  }
+  const options = { executorFactory, codexHub: hub as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' as const }
+  const first = new TaskManager(options)
+  const taskId = await first.dispatch('continue the combined work', { agent: 'codex', kind: 'session', cwd: baseDir })
+  first.mergeAgentOrigin(taskId, 'agent-run')
+  await first.mergeContinuationProvenance(taskId, {
+    mode: 'synthesis',
+    sources: [{ sessionId: 'aaaaaaaa-1111-2222-8333-444444444444', provider: 'claude' }],
+    artifacts: [{ kind: 'url', value: 'https://docs.example.test/brief', label: 'Brief' }],
+  })
+  const second = new TaskManager(options)
+  await second.rehydrate()
+  assert.equal(second.get(taskId)?.continuationMode, 'synthesis')
+  assert.deepEqual(second.get(taskId)?.continuationSources, [
+    { sessionId: 'aaaaaaaa-1111-2222-8333-444444444444', provider: 'claude' },
+  ])
+  assert.deepEqual(second.get(taskId)?.continuationArtifacts, [
+    { kind: 'url', value: 'https://docs.example.test/brief', label: 'Brief' },
+  ])
+})

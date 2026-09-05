@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HandoffCapability, type HandoffAdapters } from './handoff.ts'
+import { buildHandoffPrompt, HandoffCapability, type HandoffAdapters } from './handoff.ts'
 import type { CapabilityCallContext, McpPrincipal, ToolResult } from '../types.ts'
 
 const NOW = 10_000
@@ -67,6 +67,63 @@ test('carried context reaches the new session as content, not identifiers', asyn
   assert.equal(parse(result).ok, true)
   assert.equal(calls[0].context, 'Three earlier sessions covered ad copy, the landing page and competitor pricing.')
   assert.equal(calls[0].intent, 'carry on with the marketing work', 'the request itself stays unembellished')
+})
+
+test('synthesis carries validated source identities, cwd, and exact artifacts separately', async () => {
+  const a = adapters()
+  const sources = [
+    { sessionId: 'aaaaaaaa-1111-2222-8333-444444444444', provider: 'claude' },
+    { sessionId: 'bbbbbbbb-1111-4222-8333-444444444444', provider: 'codex' },
+  ]
+  const artifacts = [
+    { kind: 'file', value: '/Users/me/report.csv', label: 'Revenue report' },
+    { kind: 'url', value: 'https://docs.example.test/brief' },
+    { kind: 'identifier', value: 'sheet_123' },
+  ]
+
+  const result = await new HandoffCapability(a).call(ctx, 'task_create', {
+    intent: 'continue the combined launch work', kind: 'session', provider: 'codex',
+    context: 'The launch plan was approved; pricing remains unresolved.',
+    sourceSessions: sources, artifacts, cwd: '/Users/me/launch',
+  })
+
+  assert.equal(parse(result).ok, true)
+  assert.deepEqual(a.created[0].sourceSessions, sources)
+  assert.deepEqual(a.created[0].artifacts, artifacts)
+  assert.equal(a.created[0].cwd, '/Users/me/launch')
+})
+
+test('synthesis refuses truncated source ids and malformed provenance', async () => {
+  const badValues = [
+    { sourceSessions: [{ sessionId: 'short', provider: 'claude' }] },
+    { sourceSessions: [{ sessionId: 'aaaaaaaa-1111-2222-8333-444444444444', provider: 'desktop' }] },
+    { sourceSessions: Array.from({ length: 13 }, () => ({ sessionId: 'aaaaaaaa-1111-2222-8333-444444444444', provider: 'codex' })) },
+    { artifacts: [{ kind: 'other', value: 'x' }] },
+    { artifacts: [{ kind: 'url', value: '' }] },
+    { cwd: 'relative/project' },
+  ]
+  for (const extra of badValues) {
+    const a = adapters()
+    const result = await new HandoffCapability(a).call(ctx, 'task_create', {
+      intent: 'continue', kind: 'session', ...extra,
+    })
+    assert.equal(result.isError, true)
+    assert.deepEqual(a.created, [])
+  }
+})
+
+test('synthesis prompt separates background, exact references, and the current request', () => {
+  const prompt = buildHandoffPrompt({
+    intent: 'add the new customer', context: 'Earlier work established the billing workflow.',
+    artifacts: [
+      { kind: 'url', value: 'https://admin.example.test/customer/42', label: 'Customer' },
+      { kind: 'identifier', value: 'acct_42' },
+    ],
+  })
+  assert.ok(prompt.indexOf('Earlier work established') < prompt.indexOf('https://admin.example.test/customer/42'))
+  assert.ok(prompt.indexOf('https://admin.example.test/customer/42') < prompt.indexOf('add the new customer'))
+  assert.match(prompt, /Customer \(url\): https:\/\/admin\.example\.test\/customer\/42/)
+  assert.match(prompt, /identifier: acct_42/)
 })
 
 test('context is optional, and an oversized one is refused', async () => {
