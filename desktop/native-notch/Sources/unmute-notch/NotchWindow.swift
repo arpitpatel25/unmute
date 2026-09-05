@@ -117,7 +117,11 @@ final class NotchWindow: NSPanel {
         resizeBorder = v
     }
 
-    func present() { orderFrontRegardless() }
+    var attachmentPickerOpen = false
+    func present() {
+        guard !attachmentPickerOpen else { return }
+        orderFrontRegardless()
+    }
 
     /// AppKit owns window movement. SwiftUI receives the matching state change
     /// in AppController's single transaction; this method only changes geometry.

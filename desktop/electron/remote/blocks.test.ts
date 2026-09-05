@@ -114,6 +114,12 @@ test('a failed command makes the turn failed, not merely done', () => {
   assert.equal(meta.status, 'failed')
 })
 
+test('provider completion wins over recovered tool failures without changing the tool', () => {
+  const command = cmd('retryable failure', { status: 'failed', exitCode: 1 })
+  assert.equal(turnMetaOf([command, { kind: 'turnEnd', outcome: 'completed' }]).status, 'done')
+  assert.equal(turnMetaOf([command, { kind: 'turnEnd', outcome: 'failed' }]).status, 'failed')
+})
+
 test('plan progress is counted from the newest plan block', () => {
   const meta = turnMetaOf([
     { kind: 'plan', steps: [{ text: 'a', status: 'done' }, { text: 'b', status: 'todo' }] },

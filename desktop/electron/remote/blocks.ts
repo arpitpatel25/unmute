@@ -213,7 +213,7 @@ export function turnMetaOf(work: Block[], durationMs?: number): TurnMeta {
 
   // Running beats failed: a turn that hit an error and kept going is still
   // working, and calling it failed would settle a card that is still moving.
-  const status: TurnMeta['status'] = outcome === 'cancelled' ? 'cancelled' : outcome === 'failed' ? 'failed' : running && !outcome ? 'running' : failed ? 'failed' : cancelled ? 'cancelled' : denied ? 'denied' : 'done'
+  const status: TurnMeta['status'] = outcome === 'cancelled' ? 'cancelled' : outcome === 'failed' ? 'failed' : outcome === 'completed' ? 'done' : running ? 'running' : failed ? 'failed' : cancelled ? 'cancelled' : denied ? 'denied' : 'done'
   // The turn's own reported wall time wins over anything the caller guessed.
   const ms = reported ?? durationMs
   return {

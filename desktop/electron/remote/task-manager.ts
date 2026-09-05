@@ -3980,7 +3980,23 @@ export class TaskManager extends EventEmitter {
       // one-offs use status.json to repair completed historical receipts.
       const persistedState = normalizeState(meta.state) as UiTaskState | undefined
       const structured = Boolean((meta as Task).claudeSessionSettings || (meta as Task).codexSessionSettings)
-      const recoveredState = structured
+      // Legacy CLI status files can remain at the launch scaffold forever.
+      // Only an explicit completion of the latest native turn repairs that
+      // receipt; an earlier answer followed by a new/aborted turn is not proof.
+      let nativeCompleted = false
+      if (!structured && meta.agent === 'codex' && !isSession && !terminal) {
+        const rollout = await findRollout(meta.codexRolloutId ?? meta.sessionId ?? id)
+        if (rollout) {
+          const events = await readRolloutEvents(rollout).catch(() => [])
+          for (const event of events) {
+            if (event.type !== 'event_msg') continue
+            const type = event.payload?.type
+            if (type === 'task_complete') nativeCompleted = true
+            else if (type === 'task_started' || type === 'user_message' || type === 'turn_aborted' || type === 'turn_failed') nativeCompleted = false
+          }
+        }
+      }
+      const recoveredState = nativeCompleted ? 'done' : structured
         ? (terminal ? status!.state : persistedState === 'done' || persistedState === 'failed' ? persistedState : 'failed')
         : meta.agent === 'codex' && isSession
         ? persistedState ?? (terminal ? status!.state : 'done')
@@ -4032,7 +4048,7 @@ export class TaskManager extends EventEmitter {
         result: status?.result,
         error: structured
           ? (recoveredState === 'failed' ? { reason: 'Session disconnected — resume to continue' } : undefined)
-          : terminal ? status?.error : (isSession ? undefined : { reason: 'Interrupted by an app restart — resume to continue' }),
+          : nativeCompleted ? undefined : terminal ? status?.error : (isSession ? undefined : { reason: 'Interrupted by an app restart — resume to continue' }),
         question: structured ? undefined : status?.question,
         surface: meta.surface,
         mode: meta.mode ?? 'managed',

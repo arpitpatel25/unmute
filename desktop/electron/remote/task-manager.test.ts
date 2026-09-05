@@ -288,6 +288,42 @@ test('rehydrate preserves each CLI provider for inactive cards and resume', asyn
   tm.stopMaintenance()
 })
 
+test('legacy Codex recovery requires latest native completion and preserves explicit failures', async () => {
+  const baseDir = await tmpBase()
+  const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-recovery-'))
+  const prevHome = process.env.HOME
+  process.env.HOME = fakeHome
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, pollMs: 9999 })
+  try {
+    const cases = [
+      { events: ['task_started', 'task_complete'], status: 'processing', expected: 'done' },
+      { events: ['task_complete', 'task_started'], status: 'processing', expected: 'failed' },
+      { events: ['task_complete', 'turn_aborted'], status: 'processing', expected: 'failed' },
+      { events: ['task_complete'], status: 'failed', expected: 'failed' },
+      { events: [], status: 'processing', expected: 'failed' },
+    ]
+    const ids: string[] = []
+    const rolloutDir = path.join(fakeHome, '.codex', 'sessions', '2026', '09', '05')
+    await fs.mkdir(rolloutDir, { recursive: true })
+    for (const c of cases) {
+      const id = randomUUID(), sessionId = randomUUID()
+      ids.push(id)
+      const dir = path.join(baseDir, 'local', id)
+      await fs.mkdir(dir, { recursive: true })
+      await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ intent: 'historical task', agent: 'codex', sessionId, state: 'failed' }))
+      await fs.writeFile(path.join(dir, 'status.json'), JSON.stringify({ state: c.status }))
+      await fs.writeFile(path.join(rolloutDir, `rollout-test-${sessionId}.jsonl`), c.events.map(type => JSON.stringify({ type: 'event_msg', payload: { type } })).join('\n') + '\n')
+    }
+    await tm.rehydrate()
+    cases.forEach((c, i) => assert.equal(tm.get(ids[i])?.state, c.expected))
+    assert.equal(tm.get(ids[0])?.error, undefined)
+  } finally {
+    tm.stopMaintenance()
+    process.env.HOME = prevHome
+    await fs.rm(fakeHome, { recursive: true, force: true })
+  }
+})
+
 test('rehydrate self-heals a task whose meta.json was truncated to empty, by reconstructing it from the matching codex rollout', async () => {
   const baseDir = await tmpBase()
   const root = path.join(baseDir, 'local')

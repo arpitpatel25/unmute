@@ -505,14 +505,16 @@ struct StageComposer: View {
     }
 
     private func pickFiles() {
-        let owner = NSApp.windows.first { $0 is NotchWindow && $0.isVisible }
+        let owner = NSApp.windows.first { $0 is NotchWindow && $0.isVisible } as? NotchWindow
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         panel.prompt = "Attach"
+        owner?.attachmentPickerOpen = true
         owner?.orderOut(nil)
         panel.begin { response in
-            owner?.orderFrontRegardless()
+            owner?.attachmentPickerOpen = false
+            owner?.present()
             guard response == .OK else { return }
             for url in panel.urls {
                 // The backend consumes the handoff file. Never give it the
