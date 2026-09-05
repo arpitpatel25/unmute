@@ -372,6 +372,24 @@ test('next walks the crank and comes back around', () => {
   assert.equal(h.client.last('showTask')!.task.id, first) // came back around
 })
 
+test('expanded next keeps the visible task and voice focus aligned when the Agent is first', () => {
+  const h = setup()
+  h.controller.agentAnswered('An unread Agent response')
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B' }))
+  put(h, makeTask({ id: 'c', state: 'done', kind: 'session', name: 'C' }))
+
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketMove', delta: 1 }) // Agent → A
+  h.client.fire({ type: 'pocketExpand' })
+  h.client.fire({ type: 'next' })
+
+  const visible = h.client.last('showTask')!.task.id
+  assert.equal(visible, 'b')
+  assert.deepEqual(h.calls.focus?.at(-1), [visible],
+    'Right Option must address the same task the expanded surface shows')
+})
+
 test('prev cranks backward (reverse rotation of next)', () => {
   const h = setup()
   put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))

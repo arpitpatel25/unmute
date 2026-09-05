@@ -1791,12 +1791,21 @@ export class NotchController {
 
   private crankStep(delta: number): void {
     this.holdOrder()
-    const order = this.pocketOrder()
-    const n = order.length
+    // Move in the SAME index space the native carousel renders. The Agent can
+    // occupy slot zero while unread; indexing the task-only order made the UI
+    // show task B while voice focus silently moved to task C. Footer arrows
+    // remain task navigation, so step across the Agent rather than opening it.
+    const slots = this.pocketSlots()
+    const n = slots.length
     if (!n) return
-    this.pocketAt = (this.pocketAt + delta + n * 2) % n
-    this.setFocus(order[this.pocketAt] ?? null)
-    this.reconcile()
+    for (let walked = 0; walked < n; walked++) {
+      this.pocketAt = (this.pocketAt + delta + n * 2) % n
+      const slot = slots[this.pocketAt]
+      if (slot?.kind === 'agent') continue
+      this.setFocus(slot?.id ?? null)
+      this.reconcile()
+      return
+    }
   }
 
   /** Nail the pocket's order down for this visit. Idempotent. */
