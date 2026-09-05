@@ -679,6 +679,31 @@ test('remove kills the session and retires the row while preserving the legacy p
   await tm.rehydrate(); assert.equal(tm.get(id), undefined)
 })
 
+test('remove interrupts and releases an owned Codex thread before retiring its row', async () => {
+  const baseDir = await tmpBase()
+  const calls: string[] = []
+  let taskId = ''
+  const hub = {
+    async startThread(id: string) { taskId = id; return { threadId: 'owned-thread', url: 'ws://127.0.0.1:1' } },
+    async send() { return true },
+    threadIdFor(id: string) { return id === taskId ? 'owned-thread' : undefined },
+    async stopAndRelease(id: string) { calls.push(`stop-and-release:${id}`); return true },
+    async interrupt() { throw new Error('remove must use authoritative hub lifecycle state') },
+    release() { throw new Error('remove must not release independently of confirmed stop') },
+    stop() {},
+  }
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(), codexHub: hub as never,
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  const id = await tm.dispatch('keep this thread bounded', { agent: 'codex' })
+
+  await tm.remove(id)
+
+  assert.deepEqual(calls, [`stop-and-release:${id}`])
+  assert.equal(tm.get(id), undefined)
+})
+
 test('killAll terminates every session and marks running tasks stopped (PRD §10.4)', async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })

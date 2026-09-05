@@ -458,6 +458,25 @@ export class CodexHub {
     finally { st.stopping = false }
   }
 
+  /** Stop any provider-owned work, then forget only the local task mapping. */
+  async stopAndRelease(taskId: string): Promise<boolean> {
+    const st = this.byTask.get(taskId)
+    if (!st) return true
+    await st.submissionFinished
+    if (this.byTask.get(taskId) !== st) return true
+    // A disconnected submission may have reached Codex without returning its
+    // turn id. Releasing that uncertainty would make running work invisible.
+    if (st.disconnected || st.stopping) return false
+    if (st.turnId) {
+      const interrupted = await this.interrupt(taskId)
+      // The turn may have completed between the check and interrupt(). That is
+      // safe to release; an unchanged live id or disconnect is not.
+      if (!interrupted && (st.turnId || st.disconnected)) return false
+    }
+    this.release(taskId)
+    return true
+  }
+
   /** Name the thread — a real task title, from Codex's own naming. */
   async rename(taskId: string, name: string): Promise<void> {
     const st = this.byTask.get(taskId)

@@ -105,6 +105,13 @@ open class AttachmentTextView: NSTextView {
             for url in urls { stageFile(url) }
             return
         }
+        if let pasted = composerPasteboard.string(forType: .string), stagingTaskId == "unmute-agent" {
+            // Agent durability currently owns a text draft, not task attachment
+            // records. Keep even very large paste literal so it reaches that
+            // draft instead of disappearing into an unsupported task ID.
+            insertText(pasted, replacementRange: selectedRange())
+            return
+        }
         if let pasted = composerPasteboard.string(forType: .string),
            shouldCollapseComposerPaste(pasted, policy: pastePolicy) {
             let displayName = "Pasted text · \(pasted.components(separatedBy: "\n").count) lines"

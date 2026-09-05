@@ -673,6 +673,17 @@ test('send and interrupt name the right thread', async () => {
   assert.equal(hub.threadIdFor('task-a'), 'th_1')
 })
 
+test('stopAndRelease confirms the active turn stopped before forgetting its task mapping', async () => {
+  const { hub, calls } = makeHub()
+  await hub.startThread('task-a', { cwd: '/tmp/a', approvalPolicy: 'never', sandbox: 'workspace-write' })
+  await hub.send('task-a', 'working')
+
+  assert.equal(await hub.stopAndRelease('task-a'), true)
+
+  assert.ok(calls.some((call) => call.method === 'turn/interrupt'))
+  assert.equal(hub.threadIdFor('task-a'), undefined)
+})
+
 test('a task with no thread fails softly rather than throwing into dispatch', async () => {
   const { hub } = makeHub()
   assert.equal(await hub.send('ghost', 'hi'), false)

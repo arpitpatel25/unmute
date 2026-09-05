@@ -54,6 +54,25 @@ final class ComposerEditorIntegrationTests: XCTestCase {
         wait(for: [delivered], timeout: 3)
     }
 
+    func testAgentLargePasteRemainsLiteralTextInsteadOfAnUnsupportedAttachment() {
+        let board = NSPasteboard(name: .init("unmute-agent-paste-test-\(UUID())"))
+        defer { board.releaseGlobally() }
+        let pasted = "a large pasted value"
+        board.setString(pasted, forType: .string)
+        let editor = AttachmentTextView()
+        editor.composerPasteboard = board
+        editor.pastePolicy = .init(characterThreshold: 1, lineThreshold: 1)
+        editor.stagingTaskId = "unmute-agent"
+        let staged = expectation(description: "Agent paste must not stage an attachment")
+        staged.isInverted = true
+        editor.onImagePaste = { _, _, _, _, _, _ in staged.fulfill() }
+
+        editor.paste(nil)
+
+        XCTAssertEqual(editor.string, pasted)
+        wait(for: [staged], timeout: 0.1)
+    }
+
     func testOldTaskCompletionCannotRegisterUndoIntoReusedEditor() {
         final class Editor: AttachmentTextView {
             let manager = UndoManager()

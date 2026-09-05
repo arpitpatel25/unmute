@@ -3767,6 +3767,16 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     tlog.ui('task-row.removed', {})
     const task = this.tasks.get(id)
+    // Owned app-server threads have no PTY for hardKill() to close. Stop the
+    // live turn before dropping its routing entry; otherwise removal hides a
+    // task that Codex is still executing in the background.
+    if (task?.codexSessionSettings && this.opts.codexHub?.threadIdFor(id)) {
+      if (!(await this.opts.codexHub.stopAndRelease(id))) {
+        task.deliveryError = 'Could not stop Codex, so the conversation was not removed.'
+        this.emit('updated', task)
+        throw new Error(task.deliveryError)
+      }
+    }
     // A durable external tombstone precedes removal. Legacy homes may contain
     // user projects (including files named like receipts); preserve all bytes.
     if (task) await this.retireRecord(id)
