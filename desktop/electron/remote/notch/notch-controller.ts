@@ -88,6 +88,7 @@ export interface TaskLite {
   question?: import('./notch-client').QuestionP | null
   questionAcknowledgment?: { reference: QuestionReference; state: 'pending' | 'accepted' }
   history?: import('../codex/app-server-events').HistoryState
+  chatUnstarted?: boolean
   turnOutcome?: import('../blocks').TurnOutcome
   mcpStatuses?: import('../codex/app-server-events').McpStatus[]
   mcpGap?: { integration?: string; fixCommand: string; message: string } | null
@@ -2500,7 +2501,7 @@ export class NotchController {
       modelLabel: t.codexModelLabel || t.model || undefined,
       activity: headlineFor(t),
       question: t.question ?? undefined,
-      history: t.history ?? { phase: t.blocks?.length ? 'ready' : 'loading' },
+      history: t.history ?? { phase: t.blocks?.length ? 'ready' : t.chatUnstarted ? 'empty' : 'loading' },
       turnOutcome: t.turnOutcome,
       mcpStatuses: t.mcpStatuses,
       questionAcknowledgment: t.questionAcknowledgment ?? this.answerStates.get(t.id),

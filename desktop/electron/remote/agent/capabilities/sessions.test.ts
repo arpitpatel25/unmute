@@ -10,6 +10,24 @@ const agent: McpPrincipal = {
 const ctx: CapabilityCallContext = {
   principal: agent, now: NOW, interaction: { id: 'ix-1', active: true, transcript: 'carry on with the migration' },
 }
+
+test('one interaction cannot fork the same source again by changing its wording', async () => {
+  const a = adapters()
+  const c = new SessionsCapability(a)
+  const first = await c.call(ctx, 'session_fork', { sessionId: 'source-session' })
+  const retry = await c.call(ctx, 'session_fork', { sessionId: 'source-session', intent: 'different title' })
+  assert.deepEqual(retry, first)
+  assert.equal(a.asked.length, 1)
+})
+
+test('permanent fork failure is cached for this interaction and says not to retry', async () => {
+  let attempts = 0
+  const c = new SessionsCapability(adapters({ fork: async () => { attempts++; throw new Error('Unknown Codex runtime command') } }))
+  await c.call(ctx, 'session_fork', { sessionId: 'source-session' })
+  const result = parse(await c.call(ctx, 'session_fork', { sessionId: 'source-session', intent: 'retry' }))
+  assert.equal(attempts, 1)
+  assert.equal(result.error.retryable, false)
+})
 function parse(r: ToolResult): any { return JSON.parse(String(r.content[0]!.text)) }
 
 function adapters(overrides: Partial<SessionAdapters> = {}): SessionAdapters & { asked: any[] } {
@@ -148,7 +166,8 @@ test('a session that cannot be reopened comes back as an error the Agent can rea
   assert.equal(result.isError, true)
   assert.deepEqual(parse(result).error, {
     code: 'resume-failed',
-    message: 'That session is not on this machine',
+    message: 'That session is not on this machine. Do not retry this operation in this interaction or create a replacement task.',
+    retryable: false,
   })
 })
 

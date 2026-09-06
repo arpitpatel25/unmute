@@ -33,7 +33,7 @@ function fakeServer() {
 }
 
 test('native fork passes the exact source and registers only the returned child', async () => {
-  const { hub, calls } = makeHub()
+  const { hub, calls, patches } = makeHub()
   const options = { cwd: '/project', approvalPolicy: 'never', sandbox: 'danger-full-access' }
 
   const result = await hub.forkThread('child-task', 'source-thread', options)
@@ -41,6 +41,7 @@ test('native fork passes the exact source and registers only the returned child'
   assert.equal(result.threadId, 'fork_1')
   assert.equal(result.forkedFromId, 'source-thread')
   assert.equal(hub.threadIdFor('child-task'), 'fork_1')
+  assert.ok(patches.some(p => p.history?.phase === 'ready'))
   assert.deepEqual(calls.find(call => call.method === 'thread/fork')?.params, {
     threadId: 'source-thread', cwd: '/project', approvalPolicy: 'never',
     sandbox: 'danger-full-access', config: {},

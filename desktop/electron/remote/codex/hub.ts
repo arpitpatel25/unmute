@@ -325,8 +325,13 @@ export class CodexHub {
       if (result.thread?.forkedFromId && result.thread.forkedFromId !== sourceThreadId) {
         throw new Error('Codex fork returned inconsistent source identity')
       }
+      let historyError: string | undefined
+      const turns = await this.loadHistory(srv, threadId, result).catch(error => {
+        historyError = (error as Error).message
+        return result.thread?.turns ?? []
+      })
       const blocks = new CodexBlockStream()
-      for (const turn of result.thread?.turns ?? []) {
+      for (const turn of turns) {
         blocks.push({ method: 'turn/started', params: { threadId, turn } })
         for (const item of turn.items ?? []) {
           blocks.push({ method: 'item/completed', params: { threadId, turnId: turn.id, item } })
@@ -339,15 +344,17 @@ export class CodexHub {
       const st: ThreadState = {
         taskId, threadId, pending: null, pendingQueue: [], blocks,
         options: { ...options, model },
-        completedTurns: new Set((result.thread?.turns ?? [])
+        completedTurns: new Set(turns
           .filter(turn => ['completed', 'interrupted', 'failed'].includes(turn.status ?? ''))
           .map(turn => turn.id)),
       }
-      st.turnId = result.thread?.turns?.find(turn => turn.status === 'inProgress')?.id
+      st.turnId = turns.find(turn => turn.status === 'inProgress')?.id
       this.byThread.set(threadId, st)
       this.byTask.set(taskId, st)
       const snapshot = blocks.snapshot()
       if (snapshot.blocks.length) this.deps.onPatch({ taskId, blocks: snapshot.blocks })
+      this.deps.onPatch({ taskId, history: historyError
+        ? { phase: 'partial', reason: historyError, canRetry: true } : { phase: 'ready' } })
       log.event('codex-thread-forked', { taskId, threadId, forkedFromId: sourceThreadId })
       return { threadId, forkedFromId: sourceThreadId }
     } finally {

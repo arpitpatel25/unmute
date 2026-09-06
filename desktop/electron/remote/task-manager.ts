@@ -389,6 +389,8 @@ export interface Task {
    * label into an entry on first load.
    */
   groupId?: string
+  /** Receipt is staged until native continuation establishes its identity. */
+  continuationPending?: boolean
   state: UiTaskState
   createdAt: number
   updatedAt: number
@@ -996,7 +998,12 @@ export class TaskManager extends EventEmitter {
   }
 
   list(): Task[] {
-    return [...this.tasks.values()].sort((a, b) => b.createdAt - a.createdAt)
+    return [...this.tasks.values()].filter(t => !t.continuationPending).sort((a, b) => b.createdAt - a.createdAt)
+  }
+
+  override emit(event: string | symbol, ...args: any[]): boolean {
+    if ((event === 'created' || event === 'updated') && args[0]?.continuationPending) return false
+    return super.emit(event, ...args)
   }
 
   get(id: string): Task | undefined {
@@ -1118,7 +1125,7 @@ export class TaskManager extends EventEmitter {
   }
 
   /** Allocate a durable project and a separate conversation receipt. */
-  async createChat(options: NewChatOptions): Promise<string> {
+  async createChat(options: NewChatOptions, continuationPending = false): Promise<string> {
     if (!['claude', 'codex'].includes(options.provider)) throw new Error('Unsupported conversation provider')
     const policy = this.newChatPolicy(options.provider, options.permission)
     const id = randomUUID(), now = this.clock()
@@ -1126,7 +1133,7 @@ export class TaskManager extends EventEmitter {
     const project = await this.projectFor(options), { cwd } = project
     await fs.mkdir(home, { recursive: true, mode: 0o700 })
     const task: Task = {
-      ...project, permissionReason: policy.permissionReason,
+      ...project, permissionReason: policy.permissionReason, continuationPending,
       id, intent: 'New conversation', sessionId: options.provider === 'claude' ? randomUUID() : '',
       agent: options.provider, home, cwd, kind: 'session', state: 'done', chatUnstarted: true, sessionOwnership: 'unmute',
       createdAt: now, updatedAt: now, lastHeartbeatMs: now, lastMtimeMs: now,
@@ -1148,23 +1155,28 @@ export class TaskManager extends EventEmitter {
     sessionId: string
     cwd: string
     intent?: string
+    title?: string
+    group?: string
   }): Promise<{ taskId: string; sessionId: string }> {
-    const taskId = await this.createChat({ provider: input.harness, cwd: input.cwd, permission: 'maximum' })
+    const taskId = await this.createChat({ provider: input.harness, cwd: input.cwd, permission: 'maximum' }, true)
     const task = this.tasks.get(taskId)!
+    this.continuationPresentation(task, input, false)
+    try {
     task.sessionId = input.sessionId
     if (input.harness === 'codex') task.codexRolloutId = input.sessionId
     task.chatUnstarted = false
-    task.intent = input.intent?.trim() || 'Continued conversation'
     task.continuationMode = 'resume'
     task.continuationSources = [{ sessionId: input.sessionId, provider: input.harness }]
     await this.persistState(task)
     if (!(await this.resume(taskId))) {
       throw new Error(task.resumeError || task.deliveryError || `Could not resume ${input.harness} session`)
     }
+    await this.publishContinuation(task)
     if (input.intent?.trim() && !(await this.deliverDraft(taskId, input.intent.trim(), []))) {
       throw new Error(task.deliveryError || `Could not send the current request to ${input.harness}`)
     }
     return { taskId, sessionId: input.sessionId }
+    } catch (error) { await this.abandonUnpublishedContinuation(task); throw error }
   }
 
   /** Create a provider-native child and persist the exact source/child pair. */
@@ -1173,11 +1185,14 @@ export class TaskManager extends EventEmitter {
     sessionId: string
     cwd: string
     intent?: string
+    title?: string
+    group?: string
   }): Promise<{ taskId: string; sessionId: string }> {
-    const taskId = await this.createChat({ provider: input.harness, cwd: input.cwd, permission: 'maximum' })
+    const taskId = await this.createChat({ provider: input.harness, cwd: input.cwd, permission: 'maximum' }, true)
     const task = this.tasks.get(taskId)!
+    this.continuationPresentation(task, input, true)
+    try {
     task.chatUnstarted = false
-    task.intent = input.intent?.trim() || 'Branched conversation'
     task.continuationMode = 'fork'
     task.continuationSources = [{ sessionId: input.sessionId, provider: input.harness }]
 
@@ -1195,12 +1210,35 @@ export class TaskManager extends EventEmitter {
       await this.persistState(task)
       await this.connectClaude(task, false)
     }
-    await this.persistState(task)
-    this.emit('updated', task)
+    await this.publishContinuation(task)
     if (input.intent?.trim() && !(await this.deliverDraft(taskId, input.intent.trim(), []))) {
       throw new Error(task.deliveryError || `Could not send the current request to ${input.harness}`)
     }
     return { taskId, sessionId: task.sessionId }
+    } catch (error) { await this.abandonUnpublishedContinuation(task); throw error }
+  }
+
+  private continuationPresentation(task: Task, input: { sessionId: string; cwd: string; title?: string; group?: string; intent?: string }, fork: boolean): void {
+    const source = this.list().find(t => t.sessionId === input.sessionId || t.codexRolloutId === input.sessionId)
+    const title = input.title?.trim() || source?.name || source?.intent || input.intent?.trim() || basename(input.cwd)
+    task.name = (input.title?.trim() || `${title}${fork ? ' — branch' : ''}`).slice(0, 160)
+    task.intent = input.intent?.trim() || task.name
+    if (input.group?.trim()) this.setGroup(task.id, input.group.trim())
+    else if (source?.group) { task.group = source.group; task.groupId = source.groupId }
+    else this.setGroup(task.id, basename(input.cwd))
+  }
+
+  private async publishContinuation(task: Task): Promise<void> {
+    task.continuationPending = false
+    try { await this.persistState(task) } catch (error) { task.continuationPending = true; throw error }
+    this.emit('created', task)
+  }
+
+  private async abandonUnpublishedContinuation(task: Task): Promise<void> {
+    if (!task.continuationPending) return // a delivered child must never be deleted on follow-up failure
+    await this.retireRecord(task.id)
+    this.tasks.delete(task.id)
+    // Preserve receipt/provider history for diagnosis; never kill a source session.
   }
 
   private async connectClaude(task: Task, resume: boolean): Promise<void> {
@@ -1587,6 +1625,7 @@ export class TaskManager extends EventEmitter {
     task.continuationArtifacts = input.artifacts?.map(artifact => ({ ...artifact }))
     task.continuationConfidence = input.confidence
     this.mergeMeta(task, {
+      continuationPending: task.continuationPending,
       continuationMode: task.continuationMode,
       continuationSources: task.continuationSources,
       continuationArtifacts: task.continuationArtifacts,
@@ -3805,7 +3844,11 @@ export class TaskManager extends EventEmitter {
     this.mergeMeta(task, {
       state: task.state, updatedAt: task.updatedAt,
       intent: task.intent,
+      name: task.name,
+      group: task.group,
+      groupId: task.groupId,
       chatUnstarted: task.chatUnstarted === true,
+      continuationPending: task.continuationPending === true,
       sessionOwnership: task.sessionOwnership,
       ...(task.sessionId ? { sessionId: task.sessionId } : {}),
       ...(task.codexRolloutId ? { codexRolloutId: task.codexRolloutId } : {}),
@@ -3926,6 +3969,7 @@ export class TaskManager extends EventEmitter {
       const dir = join(root, id)
       let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result']; continuationMode?: Task['continuationMode']; continuationSources?: Task['continuationSources']; continuationArtifacts?: Task['continuationArtifacts']; continuationConfidence?: number }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { meta = {} }
+      if ((meta as Task).continuationPending) continue
       if (!meta.intent) {
         // meta.json is missing, empty, or unparseable — see atomic-file.ts for
         // the write-side bug that can cause this. Before giving up, try to

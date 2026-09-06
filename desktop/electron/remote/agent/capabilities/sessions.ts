@@ -53,6 +53,8 @@ const tools = [
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['sessionId'],
       properties: {
+        title: { type: 'string', maxLength: 160, description: 'Conversation title only; never sent as a message. Omit to inherit.' },
+        group: { type: 'string', maxLength: 32, description: 'Workspace group label. Omit to inherit the source group.' },
         sessionId: {
           type: 'string', minLength: 1,
           description: 'The id of a session you found on disk — a Claude transcript is named'
@@ -77,6 +79,8 @@ const tools = [
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['sessionId'],
       properties: {
+        title: { type: 'string', maxLength: 160, description: 'Conversation title only; never sent as a message. Omit to inherit.' },
+        group: { type: 'string', maxLength: 32, description: 'Workspace group label. Omit to inherit the source group.' },
         sessionId: {
           type: 'string', minLength: 1,
           description: 'The full exact provider session id to fork.',
@@ -100,8 +104,8 @@ export interface SessionActionResult {
 
 export interface SessionAdapters {
   search(input: { query: string; limit?: number }): Promise<SessionCatalogEntry[]>
-  resume(input: { sessionId: string; intent?: string }): Promise<SessionActionResult>
-  fork(input: { sessionId: string; intent?: string }): Promise<SessionActionResult>
+  resume(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult>
+  fork(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult>
 }
 
 function ok(result: unknown): ToolResult {
@@ -109,7 +113,7 @@ function ok(result: unknown): ToolResult {
 }
 function fail(code: string, message: string): ToolResult {
   return {
-    content: [{ type: 'text', text: JSON.stringify({ ok: false, error: { code, message } }) }],
+    content: [{ type: 'text', text: JSON.stringify({ ok: false, error: { code, message, retryable: false } }) }],
     isError: true,
   }
 }
@@ -120,6 +124,7 @@ export class SessionsCapability implements CapabilityModule {
   readonly tools = tools
 
   constructor(private readonly adapters: SessionAdapters) {}
+  private operations = new Map<string, { expiresAt: number; result: Promise<ToolResult> }>()
 
   async call(ctx: CapabilityCallContext, tool: string, input: unknown): Promise<ToolResult> {
     if (ctx.principal.kind !== 'unmute-agent' || ctx.principal.expiresAt <= ctx.now) {
@@ -148,12 +153,21 @@ export class SessionsCapability implements CapabilityModule {
     if (!sessionId) return fail('invalid-input', 'Session query is invalid')
     const intent = typeof value.intent === 'string' ? value.intent.trim() : ''
     if (intent.length > 2000) return fail('invalid-input', 'Session query is invalid')
-
+    const title = typeof value.title === 'string' ? value.title.trim() : ''
+    const group = typeof value.group === 'string' ? value.group.trim() : ''
+    if (title.length > 160 || group.length > 32) return fail('invalid-input', 'Title or group is too long')
+    for (const [key, entry] of this.operations) if (entry.expiresAt <= ctx.now) this.operations.delete(key)
+    const key = JSON.stringify([ctx.principal.runId, ctx.principal.interactionId, tool, sessionId])
+    const previous = this.operations.get(key)
+    if (previous) return previous.result
+    const pending = (async (): Promise<ToolResult> => {
     try {
       const operation = tool === 'session_resume' ? 'resume' : 'fork'
       const result = await this.adapters[operation]({
         sessionId,
         ...(intent ? { intent } : {}),
+        ...(title ? { title } : {}),
+        ...(group ? { group } : {}),
       })
       if (result.operation !== operation || result.sourceSessionId !== sessionId) {
         throw new Error(`Provider returned inconsistent ${operation} identity`)
@@ -167,7 +181,10 @@ export class SessionsCapability implements CapabilityModule {
       return ok(result)
     } catch (error) {
       return fail(`${tool === 'session_resume' ? 'resume' : 'fork'}-failed`,
-        (error as Error).message || `That session could not be ${tool === 'session_resume' ? 'resumed' : 'forked'}`)
+        `${(error as Error).message || 'Continuation failed'}. Do not retry this operation in this interaction or create a replacement task.`)
     }
+    })()
+    this.operations.set(key, { expiresAt: ctx.principal.expiresAt, result: pending })
+    return pending
   }
 }

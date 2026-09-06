@@ -132,6 +132,7 @@ import { CodexHub, type CodexInputMetadata } from './codex/hub'
 import { CodexAppServer } from './codex/app-server-client'
 import { PersistentRuntimeClient } from './runtime/client'
 import { PersistentCodexHub } from './runtime/codex-client'
+import { CompatibleCodexRuntime } from './runtime/codex-routing'
 import { PersistentClaudeTaskSession } from './runtime/claude-client'
 import { AgentRuntimeClient } from './runtime/agent-client'
 import { registerRuntimeHost } from './runtime/host-bridge'
@@ -630,7 +631,10 @@ async function getSetupStatus() {
 }
 
 let manager: TaskManager | null = null
+let continuationInteractionId: string | undefined
 const agentContinuations = new AgentContinuationService({
+  interactionId: () => continuationInteractionId,
+  operationRoot: join(homedir(), '.unmute', 'remote', 'continuation-operations'),
   manager: () => manager,
   locate: locateSession,
   scratchRoot: join(homedir(), '.unmute', 'remote', 'local'),
@@ -958,6 +962,7 @@ function presentUnmuteAgentActivity(activity: AgentInteractionActivity): UnmuteA
 
 function broadcastUnmuteAgentActivity(activity: AgentInteractionActivity | UnmuteAgentActivitySnapshot): void {
   const snapshot = 'state' in activity ? activity : presentUnmuteAgentActivity(activity)
+  if (snapshot.interactionId) continuationInteractionId = snapshot.interactionId
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed()) window.webContents.send('remote:agent-activity', snapshot)
   }
@@ -1701,6 +1706,7 @@ async function performSendTaskDraft(id: string, source: TaskReplySource, onSnaps
 let codexHub: CodexHub | null = null
 /** Detached provider owner. The Electron UI only holds this reconnectable socket. */
 let persistentRuntime: PersistentRuntimeClient | null = null
+let codexRuntimeRouting: CompatibleCodexRuntime | null = null
 let releaseRuntimeHost: (() => void) | null = null
 let persistentRuntimeReady: Promise<void> = Promise.resolve()
 
@@ -2290,6 +2296,9 @@ function serializeTask(t: Task) {
     // how blocks came to be built, persisted, and then silently dropped one
     // step before the wire: every other layer had them and this one did not.
     blocks: t.blocks ?? null,
+    history: t.history,
+    chatUnstarted: t.chatUnstarted,
+    turnOutcome: t.turnOutcome,
     chatWritable: !t.importedFromCli && !!(t.claudeSessionSettings || t.codexSessionSettings),
     sessionPermission: t.claudeSessionSettings?.permissionMode ?? t.codexSessionSettings?.sandbox,
     chatResumable: !t.importedFromCli,
@@ -4814,7 +4823,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // reference: the hub is constructed BEFORE the manager it feeds, and closing
   // over a `manager` that is still undefined is how a stream of events would
   // land silently on nothing.
-  codexHub = new PersistentCodexHub(persistentRuntime!, {
+  codexRuntimeRouting = new CompatibleCodexRuntime(persistentRuntime!,
+    new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v2'), join(__dirname, 'unmute-runtime.js')))
+  codexHub = new PersistentCodexHub(codexRuntimeRouting, {
     approvalCap: taskId => ({ fullAccessAllowed: manager?.chatFullAccessAllowed(taskId) === true, roots: settings.get('sandboxRoots') ?? [] }),
     loadPlans: async (taskId, threadId) => {
       const task = manager?.get(taskId)
@@ -6073,6 +6084,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // app-server and its active threads alive.
     try { codexHub?.stop() } catch (e) { log.warn('codex hub shutdown failed', { error: (e as Error).message }) }
     releaseRuntimeHost?.(); releaseRuntimeHost = null
+    codexRuntimeRouting?.disconnect(); codexRuntimeRouting = null
     persistentRuntime?.disconnect(); persistentRuntime = null
   })
   // Prove the App Server transport in THIS build, once, at launch. Backgrounded

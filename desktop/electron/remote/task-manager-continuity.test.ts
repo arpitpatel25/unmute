@@ -13,6 +13,40 @@ function executorFactory(): never {
   throw new Error('continuity must not use a terminal executor')
 }
 
+test('failed native fork never publishes a card or resurrects a draft on restart', async () => {
+  const baseDir = await base()
+  const hub = { running: true, threadIdFor() { return undefined }, async forkThread() { throw new Error('Unknown Codex runtime command') } }
+  const options = { executorFactory, codexHub: hub as never, baseDir }
+  const tm = new TaskManager(options)
+  const visible: string[] = []
+  tm.on('created', task => visible.push(task.id))
+  await assert.rejects(tm.forkProviderSession({ harness: 'codex', sessionId: 'source', cwd: baseDir }))
+  assert.deepEqual(visible, [])
+  assert.deepEqual(tm.list(), [])
+  const restarted = new TaskManager(options)
+  await restarted.rehydrate()
+  assert.deepEqual(restarted.list(), [])
+})
+
+test('fork inherits name and group, and a supplied title is not a user message', async () => {
+  const baseDir = await base()
+  const hub = { running: true, threadIdFor() { return undefined },
+    async forkThread() { return { threadId: 'child', forkedFromId: 'source' } },
+    async send() { throw new Error('Naming must not send a prompt') } }
+  const tm = new TaskManager({ executorFactory, codexHub: hub as never, baseDir })
+  const sourceId = await tm.createChat({ provider: 'codex', cwd: baseDir })
+  const source = tm.get(sourceId)!
+  source.sessionId = 'source'; source.name = 'Notetaker models'; source.group = 'Unmute'; source.groupId = 'unmute-group'
+  const result = await tm.forkProviderSession({ harness: 'codex', sessionId: 'source', cwd: baseDir, title: 'ASR experiment' })
+  const child = tm.get(result.taskId)!
+  assert.equal(child.name, 'ASR experiment')
+  assert.equal(child.group, 'Unmute')
+  assert.equal(child.groupId, 'unmute-group')
+  const saved = JSON.parse(await fs.readFile(join(child.home, 'meta.json'), 'utf8'))
+  assert.equal(saved.continuationPending, false)
+  assert.equal(saved.name, 'ASR experiment')
+})
+
 test('Codex attach resumes the exact provider thread and submits only the current request', async () => {
   const baseDir = await base()
   const calls: Array<{ op: string; value?: string }> = []

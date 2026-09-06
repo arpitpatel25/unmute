@@ -2,6 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { AgentContinuationService } from './service.ts'
 import type { LocatedSession } from './locate.ts'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const located: LocatedSession = {
   sessionId: 'source-session', harness: 'codex', path: '/rollout.jsonl', cwd: '/project',
@@ -57,6 +60,31 @@ test('fork calls only the explicit provider fork operation', async () => {
   assert.deepEqual(calls, [{ op: 'fork', input: {
     harness: 'codex', sessionId: 'source-session', cwd: '/project', intent: 'try another route',
   } }])
+})
+
+test('host-side retries share one fork even when an older agent varies intent', async () => {
+  const { service, calls } = fixture()
+  service.deps.interactionId = () => 'interaction-one'
+  const [a, b] = await Promise.all([
+    service.fork({ sessionId: 'source-session', title: 'Notetaker branch', group: 'Unmute' }),
+    service.fork({ sessionId: 'source-session', intent: 'try again' }),
+  ])
+  assert.deepEqual(a, b)
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].input, { harness: 'codex', sessionId: 'source-session', cwd: '/project', title: 'Notetaker branch', group: 'Unmute' })
+})
+
+test('completed continuation receipt prevents a second fork after service restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'continuation-receipt-'))
+  const first = fixture()
+  first.service.deps.operationRoot = root
+  first.service.deps.interactionId = () => 'same-request'
+  const result = await first.service.fork({ sessionId: 'source-session' })
+  const restarted = fixture()
+  restarted.service.deps.operationRoot = root
+  restarted.service.deps.interactionId = () => 'same-request'
+  assert.deepEqual(await restarted.service.fork({ sessionId: 'source-session' }), result)
+  assert.equal(restarted.calls.length, 0)
 })
 
 test('unknown exact id is refused rather than prefix matched', async () => {

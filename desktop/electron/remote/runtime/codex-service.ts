@@ -21,6 +21,7 @@ export class CodexRuntimeService {
   private bin: string | null = null
   private writes = new Map<string, Promise<void>>()
   private registrations = new Map<string, Promise<unknown>>()
+  private forks = new Map<string, { source: string; result: Promise<unknown> }>()
   constructor(private root: string, private emit: (event: CodexRuntimeEvent) => void, overrides: Pick<CodexHubDeps, 'makeServer'> = {}) {
     this.hub = new CodexHub({
       ...overrides, resolveBin: async () => this.bin,
@@ -87,7 +88,16 @@ export class CodexRuntimeService {
     switch (method) {
       case 'startThread': return this.register(id, async () => this.hub.threadIdFor(id) ? { threadId: this.hub.threadIdFor(id), url: this.hub.url } : this.hub.startThread(id, rest[0]))
       case 'resumeThread': return this.register(id, () => this.hub.resumeThread(id, rest[0], rest[1], false))
-      case 'forkThread': return this.register(id, () => this.hub.forkThread(id, rest[0], rest[1]))
+      case 'forkThread': {
+        const previous = this.forks.get(id)
+        if (previous) {
+          if (previous.source !== rest[0]) throw new Error('Fork operation cannot change its source')
+          return previous.result
+        }
+        const result = this.register(id, () => this.hub.forkThread(id, rest[0], rest[1]))
+        this.forks.set(id, { source: rest[0], result })
+        return result
+      }
       case 'send': return this.hub.send(id, rest[0], rest[1])
       case 'sendNewTurn': return this.hub.sendNewTurn(id, rest[0], rest[1], rest[2])
       case 'answer': { const accepted = this.hub.answer(id, rest[0], rest[1]); return { accepted, mirror: this.mirror(id) } }
