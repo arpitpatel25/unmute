@@ -1037,6 +1037,14 @@ export class TaskManager extends EventEmitter {
     return [...this.tasks.values()].filter((t) => !TERMINAL.includes(t.state)).length
   }
 
+  /** Is this task's session actually alive right now (PTY / persistent runtime)?
+   *  The Agent needs this to tell an open conversation from a card that merely
+   *  still exists: a live session takes a follow-up as it is and never needs
+   *  resuming. */
+  isLive(id: string): boolean {
+    return this.executors.get(id)?.alive === true
+  }
+
   /** Any task mid-turn ('processing')? Feeds the curator's idle-preference gate
    *  (a background sweep defers while a task is actively working). */
   hasProcessingTask(): boolean {

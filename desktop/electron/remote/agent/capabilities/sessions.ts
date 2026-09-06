@@ -4,7 +4,6 @@ import type {
   ToolDefinition,
   ToolResult,
 } from '../types.ts'
-import type { SessionCatalogEntry } from '../sessions/catalog.ts'
 import { requireAgentMetadata, requireWorkspaceLabel } from '../metadata'
 
 /**
@@ -20,9 +19,20 @@ import { requireAgentMetadata, requireWorkspaceLabel } from '../metadata'
  * a judgement call. The Agent composes context itself and passes it to
  * `task_create`, which is the general operation; resuming is the narrow case.
  *
+ * `sessions_search` came BACK after that and had to go again. It read 64 KB
+ * from the head of a transcript and 64 KB from the tail and dropped the
+ * middle — 0.369% of a real 33.9 MB session — then required every token of the
+ * query to match, so "opened" or "wrong" discarded a session outright. It
+ * returned a confident nothing, 22 times, for a session that was on disk the
+ * whole time. What replaces it is not a better search: it is a file. The
+ * user's own turns, verbatim, at ~/.unmute/remote/session-index/, read with
+ * the Grep the Agent already holds.
+ *
  * Resume and fork are here because they are provider identity operations the
  * Agent cannot perform through filesystem tools. They remain separate so one
- * can never silently degrade into the other.
+ * can never silently degrade into the other. `sessions_open` and
+ * `session_close` are here for the same reason: only the app knows what is
+ * open, and only the app can take a card back.
  */
 
 const tools = [
@@ -39,21 +49,6 @@ const tools = [
     consequence: 'read',
   },
   {
-    name: 'sessions_search',
-    description: 'Search a bounded on-demand projection of Claude and Codex transcripts by'
-      + ' user-turn text and project. Returns full exact session ids, provider, cwd, time,'
-      + ' matching user text, and artifact references. Use it to find likely work quickly;'
-      + ' use Glob, Grep, and Read on raw transcripts when the query needs more precision.',
-    inputSchema: {
-      type: 'object', additionalProperties: false, required: ['query'],
-      properties: {
-        query: { type: 'string', minLength: 2, maxLength: 500 },
-        limit: { type: 'integer', minimum: 1, maximum: 25 },
-      },
-    },
-    consequence: 'read',
-  },
-  {
     name: 'session_resume',
     description: 'Pick a past session back up where it left off, keeping its entire history.'
       + ' Works for ANY session on this machine, including ones Unmute never started, and it'
@@ -66,7 +61,7 @@ const tools = [
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['sessionId', 'title', 'group'],
       properties: {
-        title: { type: 'string', minLength: 3, maxLength: 160, description: 'Descriptive title; preserve the source title from sessions_search when present. Never sent as a message.' },
+        title: { type: 'string', minLength: 3, maxLength: 160, description: 'Descriptive title; preserve the existing card title from sessions_open when present. Never sent as a message.' },
         group: { type: 'string', minLength: 1, maxLength: 32, description: 'Exact existing workspace label from workspaces_list. Preserve the source workspace when present.' },
         sessionId: {
           type: 'string', minLength: 1,
@@ -92,7 +87,7 @@ const tools = [
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['sessionId', 'title', 'group'],
       properties: {
-        title: { type: 'string', minLength: 3, maxLength: 160, description: 'Descriptive title; preserve the source title from sessions_search when present. Never sent as a message.' },
+        title: { type: 'string', minLength: 3, maxLength: 160, description: 'Descriptive title; preserve the existing card title from sessions_open when present. Never sent as a message.' },
         group: { type: 'string', minLength: 1, maxLength: 32, description: 'Exact existing workspace label from workspaces_list. Preserve the source workspace when present.' },
         sessionId: {
           type: 'string', minLength: 1,
@@ -106,7 +101,47 @@ const tools = [
     },
     consequence: 'reversible-write',
   },
+  {
+    name: 'sessions_open',
+    description: 'What is open in Unmute right now: every session that already has a card,'
+      + ' whether it is still live, and what it is called. Nothing on disk records this. A'
+      + ' session that is already open does not need resuming — a follow-up can land on it as'
+      + ' it is. The titles and workspaces here are the existing ones; carry them through when'
+      + ' you resume or fork.',
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } },
+    },
+    consequence: 'read',
+  },
+  {
+    name: 'session_close',
+    description: 'Remove a session card from Unmute — the undo for having opened the wrong'
+      + ' one. Takes the taskId of the card, not a provider session id. It closes the CARD:'
+      + ' the transcript stays on disk exactly where it was and can be resumed again, so never'
+      + ' say the conversation was deleted. Closing one that is already gone succeeds quietly.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['taskId'],
+      properties: { taskId: { type: 'string', minLength: 1, maxLength: 128 } },
+    },
+    consequence: 'reversible-write',
+  },
 ] as const satisfies readonly ToolDefinition[]
+
+/** A card that exists in Unmute right now. `live` is the process; `state` is
+ *  what the card shows. Both are returned because "open" covers a session still
+ *  running AND one parked waiting on the user. */
+export interface OpenSessionEntry {
+  taskId: string
+  sessionId: string
+  provider?: 'claude' | 'codex'
+  cwd?: string
+  title?: string
+  workspace?: string
+  state: string
+  live: boolean
+  updatedAt: number
+}
 
 export interface SessionActionResult {
   taskId: string
@@ -118,7 +153,8 @@ export interface SessionActionResult {
 export interface SessionAdapters {
   createWorkspace(group: string): Promise<{ id: string; label: string }>
   workspaces(): Promise<Array<{ id: string; label: string }>>
-  search(input: { query: string; limit?: number }): Promise<SessionCatalogEntry[]>
+  open(input: { limit?: number }): Promise<OpenSessionEntry[]>
+  close(input: { taskId: string }): Promise<{ taskId: string; closed: boolean }>
   resume(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult>
   fork(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult>
 }
@@ -157,19 +193,20 @@ export class SessionsCapability implements CapabilityModule {
       try { return ok(await this.adapters.workspaces()) }
       catch { return fail('search-failed', 'Workspaces could not be listed') }
     }
-    if (tool === 'sessions_search') {
-      const value = (input ?? {}) as Record<string, unknown>
-      const query = typeof value.query === 'string' ? value.query.trim() : ''
-      const limit = value.limit === undefined ? undefined : value.limit
-      if (query.length < 2 || query.length > 500
-        || limit !== undefined && (!Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > 25)) {
-        return fail('invalid-input', 'Session query is invalid')
+    if (tool === 'sessions_open') {
+      const limit = (input as Record<string, unknown> | undefined)?.limit
+      if (limit !== undefined && (!Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > 100)) {
+        return fail('invalid-input', 'Session limit is invalid')
       }
-      try {
-        return ok(await this.adapters.search({ query, ...(typeof limit === 'number' ? { limit } : {}) }))
-      } catch (error) {
-        return fail('search-failed', (error as Error).message || 'Sessions could not be searched')
-      }
+      try { return ok(await this.adapters.open(typeof limit === 'number' ? { limit } : {})) }
+      catch { return fail('open-failed', 'Open sessions could not be listed') }
+    }
+    if (tool === 'session_close') {
+      const raw = (input as Record<string, unknown> | undefined)?.taskId
+      const taskId = typeof raw === 'string' ? raw.trim() : ''
+      if (!taskId || taskId.length > 128) return fail('invalid-input', 'Task id is invalid')
+      try { return ok(await this.adapters.close({ taskId })) }
+      catch (error) { return fail('close-failed', (error as Error).message || 'That card could not be closed') }
     }
     if (tool !== 'session_resume' && tool !== 'session_fork') {
       return fail('unknown-tool', `Unknown tool: ${tool}`)

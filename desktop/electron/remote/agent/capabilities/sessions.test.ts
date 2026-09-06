@@ -60,10 +60,14 @@ function adapters(overrides: Partial<SessionAdapters> = {}): SessionAdapters & {
       }
     },
     async workspaces() { return [{ id: 'unmute', label: 'Unmute' }] },
-    async search(input) {
-      asked.push({ operation: 'search', ...input })
-      return [{ sessionId: 'match', harness: 'codex' as const, path: '/rollout', modifiedAt: 1,
-        userText: 'pricing migration', artifacts: [], score: 2 }]
+    async open(input) {
+      asked.push({ operation: 'open', ...input })
+      return [{ taskId: 'task-7', sessionId: 'live-1', provider: 'codex' as const, cwd: '/repo',
+        title: 'Pricing migration', workspace: 'Unmute', state: 'processing', live: true, updatedAt: 5 }]
+    },
+    async close(input) {
+      asked.push({ operation: 'close', ...input })
+      return { taskId: input.taskId, closed: true }
     },
     ...overrides,
   } as SessionAdapters & { asked: any[] }
@@ -142,19 +146,38 @@ test('fork fails closed when the adapter reuses provider identity', async () => 
   assert.equal(parse(result).error.code, 'fork-failed')
 })
 
-test('search returns bounded deterministic candidates without changing runtime state', async () => {
+test('open sessions report liveness so a live card is not resumed', async () => {
   const a = adapters()
-  const result = await new SessionsCapability(a).call(ctx, 'sessions_search', {
-    query: 'pricing migration', limit: 8,
-  })
-  assert.equal(parse(result).result[0].sessionId, 'match')
-  assert.deepEqual(a.asked[0], { operation: 'search', query: 'pricing migration', limit: 8 })
+  const result = await new SessionsCapability(a).call(ctx, 'sessions_open', { limit: 8 })
+  assert.equal(parse(result).result[0].taskId, 'task-7')
+  assert.equal(parse(result).result[0].live, true)
+  assert.deepEqual(a.asked[0], { operation: 'open', limit: 8 })
 })
 
-test('search refuses empty queries and excessive limits', async () => {
+test('open refuses an out-of-range limit and takes no argument otherwise', async () => {
   const a = adapters()
-  assert.equal((await new SessionsCapability(a).call(ctx, 'sessions_search', { query: ' ' })).isError, true)
-  assert.equal((await new SessionsCapability(a).call(ctx, 'sessions_search', { query: 'pricing', limit: 99 })).isError, true)
+  assert.equal((await new SessionsCapability(a).call(ctx, 'sessions_open', { limit: 0 })).isError, true)
+  assert.equal((await new SessionsCapability(a).call(ctx, 'sessions_open', { limit: 101 })).isError, true)
+  assert.deepEqual(a.asked, [])
+  assert.equal((await new SessionsCapability(a).call(ctx, 'sessions_open', {})).isError, undefined)
+})
+
+/**
+ * The Agent once had to tell the user "I don't have a tool that closes or stops
+ * a task" and hand the cleanup back to them. A wrong resume is only cheap if
+ * the Agent can take it back itself.
+ */
+test('closing a card is the undo, and reports what it closed', async () => {
+  const a = adapters()
+  const result = await new SessionsCapability(a).call(ctx, 'session_close', { taskId: 'task-7' })
+  assert.deepEqual(parse(result).result, { taskId: 'task-7', closed: true })
+  assert.deepEqual(a.asked[0], { operation: 'close', taskId: 'task-7' })
+})
+
+test('closing refuses a missing or empty task id', async () => {
+  const a = adapters()
+  assert.equal((await new SessionsCapability(a).call(ctx, 'session_close', {})).isError, true)
+  assert.equal((await new SessionsCapability(a).call(ctx, 'session_close', { taskId: '  ' })).isError, true)
   assert.deepEqual(a.asked, [])
 })
 
@@ -230,9 +253,19 @@ test('an expired agent run cannot reopen a session', async () => {
 test('the capability exposes distinct resume and fork tools only to the Agent', () => {
   const capability = new SessionsCapability(adapters())
 
-  assert.deepEqual(capability.tools.map((t) => t.name), ['workspaces_create', 'workspaces_list', 'sessions_search', 'session_resume', 'session_fork'])
+  assert.deepEqual(capability.tools.map((t) => t.name), ['workspaces_create', 'workspaces_list', 'session_resume', 'session_fork', 'sessions_open', 'session_close'])
   assert.deepEqual([...capability.roles], ['unmute-agent'])
-  assert.equal(capability.tools[1]!.consequence, 'read')
-  assert.equal(capability.tools[3]!.consequence, 'reversible-write')
-  assert.equal(capability.tools[4]!.consequence, 'reversible-write')
+  // Keyed by name, not position: adding a tool must not silently reclassify one.
+  const consequence = Object.fromEntries(capability.tools.map(t => [t.name, t.consequence]))
+  assert.deepEqual(consequence, {
+    workspaces_create: 'reversible-write',
+    workspaces_list: 'read',
+    session_resume: 'reversible-write',
+    session_fork: 'reversible-write',
+    sessions_open: 'read',
+    // NOT 'destructive': that demands a matching intent flag on the interaction,
+    // and the undo has to fire on "no, the other one" and nothing more. It is
+    // honest too — the card goes, the transcript stays and can be resumed again.
+    session_close: 'reversible-write',
+  })
 })

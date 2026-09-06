@@ -110,7 +110,8 @@ export class AgentRuntimeService {
         new SessionsCapability({
           createWorkspace: group => this.host('sessions.createWorkspace', [group]),
           workspaces: () => this.host('sessions.workspaces', []),
-          search: input => this.host('sessions.search', [input]),
+          open: input => this.host('sessions.open', [input]),
+          close: input => this.host('sessions.close', [input]),
           resume: input => this.host('sessions.resume', [input]),
           fork: input => this.host('sessions.fork', [input]),
         }),

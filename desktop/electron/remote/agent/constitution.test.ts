@@ -5,16 +5,48 @@ import { AGENT_PRINCIPLES, agentConstitution } from './constitution'
 
 /**
  * `a64ab19` replaced the paragraph telling the Agent to Glob and Grep the disk
- * with one describing the index — and left both tools in the allowlist. It kept
+ * with one describing an index — and left both tools in the allowlist. It kept
  * the capability and lost the instruction to use it, which is an Agent that
  * behaves LESS capable than a bare Claude Code session while holding the exact
- * tools that would answer. This is the test that keeps the fallback nameable.
+ * tools that would answer. This is the test that keeps the raw disk nameable.
  */
-test('the raw-search fallback is named, not merely permitted', () => {
-  assert.match(AGENT_PRINCIPLES, /mcp__unmute__sessions_search/)
+test('the raw-search path is named, not merely permitted', () => {
   assert.match(AGENT_PRINCIPLES, /Glob, Grep and Read/)
   assert.match(AGENT_PRINCIPLES, /~\/\.claude\/projects/)
   assert.match(AGENT_PRINCIPLES, /~\/\.codex\/sessions/)
+})
+
+/**
+ * FIELD FAILURE (2026-09-06). `sessions_search` read 64 KB from a transcript's
+ * head and 64 KB from its tail — 0.369% of a real 33.9 MB session — and made
+ * every query token mandatory, so "opened" or "wrong" discarded a session
+ * outright. The Agent called it 22 times over 144s and $2.15 and never found a
+ * session that was on disk the whole time; a bare Claude Code session found it
+ * with one grep. A tool over readable data caps the Agent at the queries its
+ * schema author imagined, so the replacement is a FILE, and no prose may send
+ * the Agent to a query tool first.
+ */
+test('no tool stands between the Agent and the transcripts', () => {
+  assert.doesNotMatch(AGENT_PRINCIPLES, /sessions_search/)
+  assert.doesNotMatch(AGENT_PRINCIPLES, /Start with mcp__unmute__/)
+})
+
+test('the verbatim turn index is described, with its limits, and never mandated', () => {
+  assert.match(AGENT_PRINCIPLES, /session-index/)
+  assert.match(AGENT_PRINCIPLES, /turns\.jsonl/)
+  assert.match(AGENT_PRINCIPLES, /USER TURNS ONLY/)
+  // Naming what it OMITS is what lets the Agent decide to go past it.
+  assert.match(AGENT_PRINCIPLES, /no assistant replies/)
+  assert.match(AGENT_PRINCIPLES, /no summary of any kind/)
+})
+
+test('what is open, and the undo, are both named', () => {
+  assert.match(AGENT_PRINCIPLES, /mcp__unmute__sessions_open/)
+  assert.match(AGENT_PRINCIPLES, /mcp__unmute__session_close/)
+  // Closing a card must never be described as deleting the conversation.
+  assert.match(AGENT_PRINCIPLES, /never say a conversation was deleted/)
+  // The undo is the Agent's to call, not a chore handed back to the user.
+  assert.match(AGENT_PRINCIPLES, /rather than something to ask them to do/)
 })
 
 test('there is one retrieval rule and it points at the transcripts', () => {
@@ -93,7 +125,7 @@ test('resuming sends the Agent to the transcripts, not to a withdrawn record', (
 
 /** Deleted tools must not still be advertised as available. */
 test('no removed tool is still named as if it existed', () => {
-  for (const gone of ['sessions_list', 'session_read', 'session_continue_in']) {
+  for (const gone of ['sessions_list', 'sessions_search', 'session_read', 'session_continue_in']) {
     assert.doesNotMatch(AGENT_PRINCIPLES, new RegExp(gone), `${gone} is gone but still named`)
   }
 })
@@ -142,7 +174,7 @@ test('it is told to find the file rather than guess at its path', () => {
 const TOOL_NAMES = [
   'memory_list', 'memory_store', 'memory_search', 'memory_get',
   'task_create', 'task_status', 'session_resume', 'session_fork',
-  'sessions_search',
+  'sessions_open', 'session_close',
   'unmute_history_search', 'unmute_history_copy',
   'notetaker_list', 'notetaker_read', 'notetaker_search', 'notetaker_open',
 ]

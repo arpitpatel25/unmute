@@ -104,7 +104,7 @@ import { HistoryCapability } from './agent/capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
 import { SessionsCapability } from './agent/capabilities/sessions'
 import { locateSession } from './agent/sessions/locate'
-import { searchSessionCatalog } from './agent/sessions/catalog'
+import { SessionTurnIndex } from './agent/sessions/turn-index'
 import { AgentContinuationService } from './agent/sessions/service'
 import { validateContinuationSources } from './agent/sessions/sources'
 import { isDescriptiveTitle, requireWorkspaceLabel } from './agent/metadata'
@@ -640,15 +640,41 @@ async function createAgentWorkspace(group: unknown) {
   await groupRegistry.flush()
   return { id: entry.id, label: entry.label }
 }
-async function searchAgentSessions(query: string, limit?: number) {
-  const results = await searchSessionCatalog(query, undefined, limit)
-  return results.map(entry => {
-    const source = manager?.list().find(task => task.sessionId === entry.sessionId || task.codexRolloutId === entry.sessionId)
-    const workspace = groupRegistry?.get(source?.groupId) || groupRegistry?.find(source?.group)
-    return { ...entry, ...(isDescriptiveTitle(source?.name, source?.cwd) ? { title: source.name } : {}),
-      ...(workspace ? { group: workspace.label, groupId: workspace.id } : {}) }
-  })
+/** What the Agent cannot read off the disk: which sessions Unmute is holding
+ *  open. A live card takes a follow-up as it is, so knowing this is what keeps
+ *  the Agent from resuming a conversation that never went away. */
+function openAgentSessions(limit?: number) {
+  if (!manager) return []
+  return manager.list()
+    .filter(task => task.state === 'needs-user' || manager!.isLive(task.id))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, limit ?? 50)
+    .map(task => {
+      const workspace = groupRegistry?.get(task.groupId) || groupRegistry?.find(task.group)
+      return {
+        taskId: task.id,
+        sessionId: task.codexRolloutId ?? task.sessionId,
+        state: task.state,
+        live: manager!.isLive(task.id),
+        updatedAt: task.updatedAt,
+        ...(task.agent === 'claude' || task.agent === 'codex' ? { provider: task.agent } : {}),
+        ...(task.cwd ? { cwd: task.cwd } : {}),
+        ...(isDescriptiveTitle(task.name, task.cwd) ? { title: task.name! } : {}),
+        ...(workspace ? { workspace: workspace.label } : {}),
+      }
+    })
 }
+
+/** The undo. Removing a card is an Unmute operation, not a provider one: the
+ *  transcript is untouched and the session can be resumed again by id. Closing
+ *  one that is already gone is a success, so a correction never fails twice. */
+async function closeAgentSession(taskId: string) {
+  if (!manager) throw new Error('Unmute Remote is not initialized')
+  if (!manager.get(taskId)) return { taskId, closed: false }
+  await manager.remove(taskId)
+  return { taskId, closed: true }
+}
+const turnIndex = new SessionTurnIndex()
 let continuationInteractionId: string | undefined
 const agentContinuations = new AgentContinuationService({
   interactionId: () => continuationInteractionId,
@@ -1247,13 +1273,16 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
       // PICKING PAST WORK BACK UP. The Agent finds the session itself, with
       // the Grep and Read it already holds; this is only the part it cannot
       // do — spawning a process that carries the conversation, and giving it
-      // a card. Lookup is on demand and costs a walk and a 64 KB read, so
-      // nothing here re-creates the index (or the sweep that maintained it)
-      // deleted in cc48bbf.
+      // a card, seeing which cards are open, and taking one back. Retrieval is
+      // Grep and Read over the transcripts and over the verbatim user-turn
+      // index SessionTurnIndex maintains — a FILE, deliberately not a tool,
+      // because a tool over readable data caps the Agent at the queries its
+      // schema author imagined. That is what sessions_search did.
       new SessionsCapability({
         createWorkspace: createAgentWorkspace,
         workspaces: async () => (groupRegistry?.list() ?? []).map(({ id, label }) => ({ id, label })),
-        search: input => searchAgentSessions(input.query, input.limit),
+        open: async input => openAgentSessions(input.limit),
+        close: input => closeAgentSession(input.taskId),
         resume: input => agentContinuations.resume(input),
         fork: input => agentContinuations.fork(input),
       }),
@@ -3910,10 +3939,8 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
   if (method === 'sessions.fork') return agentContinuations.fork(args[0])
   if (method === 'sessions.workspaces') return (groupRegistry?.list() ?? []).map(({ id, label }) => ({ id, label }))
   if (method === 'sessions.createWorkspace') return createAgentWorkspace(args[0])
-  if (method === 'sessions.search') {
-    const input = args[0] as { query: string; limit?: number }
-    return searchAgentSessions(input.query, input.limit)
-  }
+  if (method === 'sessions.open') return openAgentSessions((args[0] as { limit?: number } | undefined)?.limit)
+  if (method === 'sessions.close') return closeAgentSession((args[0] as { taskId: string }).taskId)
   if (method === 'handoff.createTask') {
     if (!manager) throw new Error('Unmute Remote is not initialized')
     const input = args[0] as Parameters<typeof buildHandoffPrompt>[0] & { title: string; group: string; sourceSessions?: Array<{ sessionId: string; provider: 'claude' | 'codex' }>; cwd?: string; kind: 'oneoff' | 'session'; provider: AgentKind; agentRunId: string }
@@ -5720,6 +5747,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // dirs from past runs. Kills any leftover session + erases OUR scratch dir +
     // row. Runs once now then hourly. Never touches ~/.claude.
     manager?.startMaintenance()
+    // The user's own turns, verbatim, kept current by tailing both transcript
+    // roots. Pure file work — no model call and no tokens — so it runs whether
+    // or not anyone ever speaks to the Agent.
+    turnIndex.start().catch(error => log.warn('turn index failed to start', { error: (error as Error).message }))
     // Forget machine-authored streams nothing has used in weeks. Runs AFTER
     // rehydrate, so a task that still holds an entry is counted as a member
     // before anything is dropped. User-named streams never decay.
@@ -7371,6 +7402,7 @@ export function _resetForTest(): void {
   disposeUnmuteAgent()
   disposeMcpServer()
   try { manager?.stopMaintenance() } catch { /* ignore */ }
+  try { turnIndex.stop() } catch { /* ignore */ }
   manager = null
   completeFn = null
   try { router?.dispose() } catch { /* ignore */ }
