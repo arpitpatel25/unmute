@@ -28,6 +28,8 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-markdown.git", from: "0.8.0")
     ],
     targets: [
+        .target(name: "IPCSupport", path: "Sources/IPCSupport"),
+        .testTarget(name: "IPCSupportTests", dependencies: ["IPCSupport"], path: "Tests/IPCSupportTests"),
         .target(
             name: "LifecycleSupport",
             path: "Sources/LifecycleSupport"
@@ -159,6 +161,7 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "Markdown", package: "swift-markdown"),
                 "MarkdownSupport",
+                "IPCSupport",
                 "ConversationSupport",
                 "StageSupport",
                 "WallPresentationSupport",

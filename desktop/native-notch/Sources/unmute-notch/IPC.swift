@@ -1,5 +1,6 @@
 import Foundation
 import ConversationSupport
+import IPCSupport
 
 // The v2 wire protocol between Electron main and this helper.
 // Line-delimited JSON, one object per line, UTF-8.
@@ -813,7 +814,7 @@ enum IPC {
     static func startReadLoop(onCommand: @escaping (Command) -> Void) {
         Thread.detachNewThread {
             let input = FileHandle.standardInput
-            var buffer = Data()
+            var framer = JSONLineFramer()
             while true {
                 let chunk = input.availableData
                 if chunk.isEmpty { // EOF — parent gone
@@ -828,10 +829,7 @@ enum IPC {
                     Lifecycle.shutdownNow(reason: "stdin-eof", onCommand: onCommand)
                     return
                 }
-                buffer.append(chunk)
-                while let nl = buffer.firstIndex(of: 0x0A) {
-                    let lineData = buffer.subdata(in: buffer.startIndex..<nl)
-                    buffer.removeSubrange(buffer.startIndex...nl)
+                framer.append(chunk) { lineData in
                     if let line = String(data: lineData, encoding: .utf8),
                        !line.trimmingCharacters(in: .whitespaces).isEmpty {
                         let cmd = Command.decode(line)
