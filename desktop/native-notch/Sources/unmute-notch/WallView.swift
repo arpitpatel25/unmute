@@ -2,7 +2,7 @@ import SwiftUI
 import WallPresentationSupport
 
 // The Orchestrator wall — group sections of cards plus the sidebar (queue /
-// one-offs / skills / shelf), the away digest, doorbell and the
+// one-offs / shelf), the away digest, doorbell and the
 // route offer. Clicking a card emits focusTask (the voice address) and the
 // Stage takes over (StageView).
 //
@@ -13,16 +13,6 @@ import WallPresentationSupport
 struct WallView: View {
     @ObservedObject var model: NotchModel
     let topInset: CGFloat
-    /// The row awaiting confirmation, if any. Import puts a card on the wall
-    /// that was not there a moment ago, so a stray click in a scrolling list
-    /// must not do it.
-    @State private var confirmImport: ImportableP? = nil
-    /// The import rail is open by default — it is how you discover the feature —
-    /// but collapsible, because once you have brought in what you wanted it is
-    /// the longest thing on the rail and the least useful.
-    @State private var importOpen = true
-    /// Backends whose full list the user asked for.
-    @State private var importExpanded: Set<String> = []
     /// Presentation-only views over the wall. The engine still owns the task
     /// data, order, folds and Today query; these never mutate a task.
     @State private var selectedView: WallViewMode
@@ -58,12 +48,12 @@ struct WallView: View {
                 // SURFACE. It describes the work in the centre, while the
                 // activity rail keeps its own rows reachable all the way down.
                 main
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(alignment: .bottom) { bottomChrome }
                 rail
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .topLeading) { hoverCard }
         .onAppear { activateLaunchView() }
         .onChange(of: data.hiddenTotal) { _ in revealAllIfNeeded() }
         .onChange(of: data.showingAll) { _ in revealAllIfNeeded() }
@@ -94,20 +84,12 @@ struct WallView: View {
                     groupSection(group)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(.horizontal, Theme.gutter)
             .padding(.top, 18)
             .padding(.bottom, 60)
         }
         .scrollEdge(topInset + 18)
-        .alert("Import this session?",
-               isPresented: Binding(get: { confirmImport != nil },
-                                    set: { if !$0 { confirmImport = nil } }),
-               presenting: confirmImport) { row in
-            Button("Import") { model.emit(.importSession(sessionId: row.sessionId)); confirmImport = nil }
-            Button("Cancel", role: .cancel) { confirmImport = nil }
-        } message: { row in
-            Text("\(row.title) — from \(row.project). It keeps its full history and nothing starts running until you speak to it.")
-        }
     }
 
     /// One compact, cutout-safe header. `topInset` keeps this entire row below
@@ -479,55 +461,6 @@ struct WallView: View {
                         }
                     }
                 }
-                // PROJECTS and SUGGESTIONS were here and are gone.
-                //
-                // Projects listed directories with no action attached — you
-                // could not do anything with one from the rail. Suggestions was
-                // the curator's review inbox, and the curator is parked
-                // (CURATOR_PARKED, remote/init.ts), so it can never receive
-                // anything again. An inbox that cannot fill reads as broken.
-                //
-                // The rail is now four sections that can each be acted on:
-                // Queue, One-offs, Skills, Shelf.
-                // Skills: curator-authored first, then the vocabulary.
-                if !data.unmuteSkills.isEmpty {
-                    railSection("Unmute skills") {
-                        ForEach(data.unmuteSkills, id: \.name) { skillRow($0) }
-                    }
-                }
-                if !data.skills.isEmpty {
-                    railSection("Skills") {
-                        ForEach(model.skillsExpanded ? data.skills : Array(data.skills.prefix(6)),
-                                id: \.name) { skillRow($0) }
-                        if data.skills.count > 6 {
-                            QuietButton(label: model.skillsExpanded
-                                        ? "Show less" : "\(data.skills.count - 6) more…") {
-                                model.skillsExpanded.toggle()
-                            }
-                        }
-                    }
-                }
-                // IMPORT A CLI SESSION — the rail.
-                //
-                // Sessions this machine already has and unmute does not: threads
-                // you started in your own terminal, in either CLI. Adopting one
-                // puts it on the wall with its history and starts nothing.
-                //
-                // GROUPED BY BACKEND, which reverses the original call. The rail
-                // interleaved both CLIs by recency on the reasoning that "you do
-                // not think of it per-backend" — but it did that under a heading
-                // that said "Other Claude Code sessions", so Codex threads were
-                // listed under Claude's name. Once each row has to say which CLI
-                // it is anyway, a group header carries that once instead of every
-                // row repeating it.
-                //
-                // CAPPED, because this list is long. Forty sessions pushed the
-                // shelf and everything under it off the bottom of the rail; three
-                // per backend answers "is there anything to bring in" and the rest
-                // is one tap away.
-                if let rows = data.importable, !rows.isEmpty {
-                    importRail(rows)
-                }
                 // Shelf.
                 if !data.shelf.isEmpty {
                     railSection("Shelf · \(data.shelf.count)") {
@@ -592,97 +525,6 @@ struct WallView: View {
     }
 
 
-    /// How many rows of each backend show before the expander.
-    private static let importPreview = 3
-
-    /// The import rail: one heading, a group per CLI, each capped until asked.
-    @ViewBuilder private func importRail(_ rows: [ImportableP]) -> some View {
-        let groups: [(String, [ImportableP])] = [
-            ("claude", rows.filter { ($0.agent ?? "claude") == "claude" }),
-            ("codex",  rows.filter { $0.agent == "codex" }),
-        ].filter { !$0.1.isEmpty }
-
-        VStack(alignment: .leading, spacing: 4) {
-            // THE WHOLE HEADING IS THE TOGGLE. A caret alone is a small target
-            // on a dense rail, and this section is the one a user collapses
-            // permanently once they have imported what they wanted.
-            Button(action: { importOpen.toggle() }) {
-                HStack(spacing: 6) {
-                    SectionLabel(text: "Import a CLI session · \(rows.count)")
-                    Image(systemName: importOpen ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundColor(Theme.textFaint)
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Sessions already on this Mac that unmute doesn't know about — started in Claude Code or Codex in your own terminal. Importing brings one onto the wall with its history; nothing is started.")
-            .padding(.bottom, 3)
-
-            if importOpen {
-                ForEach(groups, id: \.0) { backend, all in
-                    let expanded = importExpanded.contains(backend)
-                    let shown = expanded ? all : Array(all.prefix(Self.importPreview))
-                    // The backend's own mark, so the group says which CLI without
-                    // spending a word on it.
-                    HStack(spacing: 6) {
-                        ProviderMark(backend: backend, terminal: true)
-                        Text(backend == "codex" ? "Codex CLI" : "Claude Code CLI")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(Theme.textFaint)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 8).padding(.top, 4)
-
-                    ForEach(shown, id: \.sessionId) { r in importRow(r) }
-
-                    if all.count > Self.importPreview {
-                        Button(action: {
-                            if expanded { importExpanded.remove(backend) } else { importExpanded.insert(backend) }
-                        }) {
-                            Text(expanded
-                                 ? "Show fewer"
-                                 : "\(all.count - Self.importPreview) more")
-                                .font(.system(size: 10.5, weight: .medium))
-                                .foregroundColor(Theme.textDim)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, 8).padding(.bottom, 2)
-                    }
-                }
-            }
-        }
-    }
-
-    private func importRow(_ r: ImportableP) -> some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(r.title).font(Theme.fBody)
-                    .foregroundColor(Theme.text).lineLimit(1)
-                Text("\(r.project) · \(r.age)")
-                    .font(.system(size: 10))
-                    .foregroundColor(Theme.textFaint).lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            // Confirms before adopting. Import is cheap and reversible, but it
-            // puts a card on the wall that was not there a second ago, and a
-            // list you scroll should not act on a stray click.
-            Button(action: { confirmImport = r }) {
-                Text("Import")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundColor(Theme.textDim)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Theme.raised))
-                    .overlay(RoundedRectangle(cornerRadius: 6)
-                        .stroke(Theme.hairline, lineWidth: 0.5))
-            }
-            .buttonStyle(.plain)
-            .help("Bring this session onto the wall — it keeps its history and starts nothing")
-        }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-    }
-
     private func railSection<Content: View>(_ title: String,
                                             trailing: (String, () -> Void)? = nil,
                                             @ViewBuilder content: () -> Content) -> some View {
@@ -697,36 +539,6 @@ struct WallView: View {
             .padding(.bottom, 3)
             content()
         }
-    }
-
-    private func skillRow(_ s: SkillP) -> some View {
-        HStack(spacing: 7) {
-            Button(action: { model.emit(.pinSkill(name: s.name, pinned: !s.pinned)) }) {
-                Image(systemName: s.pinned ? "star.fill" : "star")
-                    .font(.system(size: 10.5))
-                    .foregroundColor(s.pinned ? Theme.pinGold : Theme.textFaint)
-            }
-            .buttonStyle(.plain)
-            .help(s.pinned ? "Unpin" : "Pin — rank first")
-
-            Text(s.name).font(Theme.fBody).foregroundColor(Theme.text).lineLimit(1)
-            if s.origin == "unmute" { Badge(text: "unmute", color: Theme.cReady) }
-            Spacer(minLength: 0)
-            NumText(text: s.runs > 0 ? "\(s.runs)×" : (s.lastUsed ?? ""))
-        }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .contentShape(Rectangle())
-        // Capture the row's window-space frame so the detail card can anchor
-        // BESIDE it (field feedback: it must never float at a far corner).
-        .background(GeometryReader { geo in
-            Color.clear.onChange(of: model.hoverSkill?.name) { hovered in
-                if hovered == s.name { model.hoverSkillFrame = geo.frame(in: .global) }
-            }
-        })
-        .onHover { over in model.hoverSkill = over ? s : nil }
-        // Tap-to-invoke: types `/name ` unsubmitted into the focused, live task.
-        .onTapGesture { model.emit(.tapSkill(name: s.name)) }
-        .help("Say its name to use it · tap to type /\(s.name) into the focused task")
     }
 
     // MARK: floating chrome
@@ -754,7 +566,7 @@ struct WallView: View {
         HStack(spacing: 7) {
             Image(systemName: model.capturePhase == nil ? "mic" : "mic.fill")
                 .font(.system(size: 11))
-            Text(voiceChipText).font(Theme.fSub)
+            Text(voiceChipText).font(Theme.fSub).lineLimit(1).truncationMode(.tail)
         }
         .foregroundColor(model.capturePhase != nil ? Theme.cWorking : Theme.textDim)
         .padding(.horizontal, 12).padding(.vertical, 7)
@@ -807,33 +619,7 @@ struct WallView: View {
         }
     }
 
-    // MARK: skill hover card
 
-    @ViewBuilder private var hoverCard: some View {
-        if let s = model.hoverSkill {
-            let cardW: CGFloat = 280
-            let f = model.hoverSkillFrame
-            // Anchor beside the hovered row: to its LEFT (the rail hugs the right
-            // edge), vertically aligned with the row; clamped on-surface.
-            let x = max(8, f.minX - cardW - 12)
-            let y = max(topInset, f.minY - 10)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(s.name).font(Theme.fBodyMed).foregroundColor(Theme.text)
-                Text((s.description?.isEmpty == false) ? s.description!
-                     : "No description in this skill's frontmatter.")
-                    .font(Theme.fSub).foregroundColor(Theme.textDim)
-                    .fixedSize(horizontal: false, vertical: true)
-                NumText(text: "Last used \(s.lastUsed ?? "—") · say its name to use it")
-            }
-            .padding(12)
-            .frame(width: cardW, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color(red: 0.10, green: 0.11, blue: 0.13)))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.hairline, lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.5), radius: 20, y: 8)
-            .offset(x: x, y: y)
-            .allowsHitTesting(false)
-        }
-    }
 }
 
 /// A sidebar row with a hover surface, so it reads as a target before you touch

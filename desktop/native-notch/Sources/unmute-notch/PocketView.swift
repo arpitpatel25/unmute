@@ -321,9 +321,7 @@ struct PocketRow: View {
                 if listening {
                     AimedChip(level: model.captureLevel, compact: true)
                 } else {
-                    Text(PocketFace.saying(for: slot))
-                        .font(.system(size: 12))
-                        .foregroundColor(Theme.text.opacity(0.68))
+                    MarkdownText(text: PocketFace.saying(for: slot), size: 12, color: Theme.text.opacity(0.68))
                         .lineLimit(1).truncationMode(.tail)
                 }
                 if model.pocket.slots.count > 1 {
@@ -449,9 +447,8 @@ struct PocketCard: View {
                 // DROPPED, NOT FILLED. A row of fixed height holding an echo of
                 // the footer is a third of this card spent saying nothing new.
                 if let saying = model.toast ?? PocketFace.ask(for: slot) {
-                    Text(saying)
-                        .font(.system(size: 12))
-                        .foregroundColor(model.toast == nil ? Theme.text.opacity(0.72) : Theme.cError)
+                    MarkdownText(text: saying, size: 12,
+                                 color: model.toast == nil ? Theme.text.opacity(0.72) : Theme.cError)
                         .lineLimit(2).truncationMode(.tail)
                         .frame(maxWidth: .infinity, minHeight: Self.askHeight,
                                maxHeight: Self.askHeight, alignment: .topLeading)

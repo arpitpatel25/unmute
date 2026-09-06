@@ -376,7 +376,7 @@ struct NotchGeometry: Equatable {
     var taskSize: NSSize { taskSize(terminal: true) }
 
     /// Cockpit: the survey surface.
-    var cockpitSize: NSSize { expandedSize(fill: SurfaceFill.cockpit) }
+    var cockpitSize: NSSize { taskSize }
 
     /// Centre horizontally; pin the shape's TOP edge flush to the screen's top
     /// edge (frame.maxY). The expanded panel is the ONE surface allowed to

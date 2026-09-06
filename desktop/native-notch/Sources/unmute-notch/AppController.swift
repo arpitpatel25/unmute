@@ -851,19 +851,11 @@ final class AppController: NSObject, NotchResizing {
             // Only the expanded surfaces are resizable; the resting states are
             // fixed.
             if userScale != 1 {
-                var w = size.width * userScale
-                var h = size.height * userScale
-                // The cockpit never goes below the fill selected for this visit.
-                if state == .cockpit {
-                    let minimum = geometry.expandedSize(fill: activeSurfaceFill)
-                    w = max(w, minimum.width)
-                    h = max(h, minimum.height)
-                }
+                let w = size.width * userScale
+                let h = size.height * userScale
                 size = NSSize(width: round(w), height: round(h))
             }
-            if state == .task || model.stageTask != nil {
-                size = ChatSurfaceSize.bound(size, screen: geometry.screenFrame.size, expanded: state == .cockpit)
-            }
+            size = ChatSurfaceSize.bound(size, screen: geometry.screenFrame.size)
             return (geometry.topPinnedFrame(width: size.width, height: size.height),
                     geometry.panelPlacement,
                     BarContent())
