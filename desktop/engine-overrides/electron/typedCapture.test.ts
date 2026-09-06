@@ -28,8 +28,11 @@ test('typed capture bypasses audio, preserves destination, and rejects stale/dou
   finally { Module._load = load }
   manager.startRemoteCapture('original-task', false, undefined, true)
   const id = manager.getCurrentSession().sessionId
+  // Even callers carrying the old remembered preference must start with voice.
+  assert.equal(manager.getCurrentSession().typedInput, false)
+  assert.equal(events.some(e => e[0] === 'recording:start'), true)
+  await manager.prepareTypedCapture('original-task')
   assert.equal(manager.getCurrentSession().typedInput, true)
-  assert.equal(events.some(e => e[0] === 'recording:start'), false)
   manager.receiveAudio(Buffer.from('late microphone data'), 10, 'dictation', id)
   manager.receiveAudioChunk(Buffer.from('late chunk'), 0, 'dictation', id)
   assert.equal(manager.getCurrentSession().dictationAudio, null)
@@ -43,6 +46,7 @@ test('typed capture bypasses audio, preserves destination, and rejects stale/dou
   assert.equal(deliveries[0][0], 'Keep my exact words.')
   assert.equal(deliveries[0][2], 'original-task')
   manager.startRemoteCapture(null, true, undefined, true)
+  await manager.prepareTypedCapture(null)
   const agentId = manager.getCurrentSession().sessionId
   manager.getCurrentSession().selectedText = 'Captured selection'
   await manager.submitTypedCapture(agentId, 'Explain this')
@@ -50,6 +54,7 @@ test('typed capture bypasses audio, preserves destination, and rejects stale/dou
   assert.equal(deliveries[1][0], '> Captured selection\n\nExplain this')
   assert.deepEqual(deliveries[1][3], { route: 'agent', typedInput: true })
   manager.startRemoteCapture('cancelled-task', false, undefined, true)
+  await manager.prepareTypedCapture('cancelled-task')
   const cancelledId = manager.getCurrentSession().sessionId
   manager.cancelSession()
   assert.equal(await manager.submitTypedCapture(cancelledId, 'must not send'), false)
@@ -57,5 +62,12 @@ test('typed capture bypasses audio, preserves destination, and rejects stale/dou
   manager.startRemoteCapture('voice-task')
   assert.equal(manager.getCurrentSession().typedInput, false)
   assert.equal(events.some(e => e[0] === 'recording:start'), true)
+  await manager.prepareTypedCapture('voice-task')
+  const voiceId = manager.getCurrentSession().sessionId
+  events.length = 0
+  assert.equal(manager.resumeVoiceCapture(voiceId), true)
+  assert.equal(manager.getCurrentSession().typedInput, false)
+  assert.equal(events.filter(e => e[0] === 'recording:start').length, 1)
+  assert.equal(await manager.submitTypedCapture(voiceId, 'stale typed draft'), false)
   manager.cancelSession()
 })

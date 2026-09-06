@@ -55,8 +55,7 @@ private struct TypedCaptureView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField("Type your request…", text: $draft.text, axis: .vertical)
-                .lineLimit(2...4)
+            TextField("Type your request…", text: $draft.text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 16))
                 .focused($focused)
@@ -64,7 +63,7 @@ private struct TypedCaptureView: View {
             HStack {
                 Button(action: voice) { Label("Use microphone", systemImage: "mic") }
                 Spacer()
-                Text("Same shortcut to send").font(.caption).foregroundStyle(.secondary)
+                Text("Enter or shortcut to send").font(.caption).foregroundStyle(.secondary)
                 Button("Cancel", action: cancel)
                 Button(action: submit) { Image(systemName: "arrow.up.circle.fill").font(.title2) }
                     .accessibilityLabel("Send request")

@@ -211,7 +211,7 @@ import type { ScratchpadEntryP, ScratchpadPayloadP, ChatConfigP } from './notch/
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
 // don't entangle with engine internals. main.ts passes its real instances.
 interface SessionManagerLike {
-  startRemoteCapture(targetTaskId?: string | null, agentAddressed?: boolean, composerDictation?: ComposerDictationDelivery, typedInput?: boolean): void
+  startRemoteCapture(targetTaskId?: string | null, agentAddressed?: boolean, composerDictation?: ComposerDictationDelivery): void
   prepareTypedCapture?(targetTaskId?: string | null): Promise<string | null>
   submitTypedCapture?(sessionId: string, text: string): Promise<boolean>
   resumeVoiceCapture?(sessionId: string): boolean
@@ -304,7 +304,6 @@ export function recordCapturedDictation(input: {
 type PermissionMode = 'prompt' | 'auto-approve'
 
 interface RemoteSettings {
-  shortcutTypingMode?: boolean
   permissionMode: PermissionMode
   // The dictation key already exists as an OSS setting; we read it to DERIVE
   // the Remote key (PRD §2.4.4). Stored here only as a cache/fallback.
@@ -4691,7 +4690,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       const token = await deps.sessionManager.prepareTypedCapture?.(shortcutTarget)
       if (!token || !shortcutCapture || generation !== typingGeneration) return
       typingToken = token
-      settings.set('shortcutTypingMode', true)
       pillController?.hide()
       notchClient.send({ type: 'typedCapture', action: 'show', token })
       if (submitAfterPreparation) {
@@ -5542,7 +5540,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         } else if (e.type === 'typedCaptureVoice') {
           if (!deps.sessionManager.resumeVoiceCapture?.(typingToken)) return
           deps.keyboardManager.setTypedCaptureActive?.(false)
-          settings.set('shortcutTypingMode', false)
           notchClient?.send({ type: 'typedCapture', action: 'hide', token: typingToken })
           typingToken = null
           pillController?.push({ canType: true })
@@ -5923,9 +5920,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // and no second copy of a rule that already exists.
       shortcutCapture = true
       shortcutTarget = liveVoiceTarget()
-      deps.sessionManager.startRemoteCapture(null, false, undefined, settings.get('shortcutTypingMode') === true)
+      deps.sessionManager.startRemoteCapture(null, false)
       pillController?.push({ canType: true })
-      if (settings.get('shortcutTypingMode') === true) void showTyping()
       broadcastCapturePhase('listening', liveVoiceTarget()) // ADDITIVE observer — the capture itself is untouched
     } else if (e.type === 'agent-start') {
       log.event('agent-key', { phase: 'start', lane: 'agent', address: 'agent' })
@@ -5947,9 +5943,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // that address itself now; there is no module-level copy to set.
       shortcutCapture = true
       shortcutTarget = null
-      deps.sessionManager.startRemoteCapture(null, true, undefined, settings.get('shortcutTypingMode') === true)
+      deps.sessionManager.startRemoteCapture(null, true)
       pillController?.push({ canType: true })
-      if (settings.get('shortcutTypingMode') === true) void showTyping()
       broadcastCapturePhase('listening', null)
     } else if (e.type === 'capture-route') {
       // THE LIVE CAPTURE CHANGED LANES. Nothing here starts, stops or touches

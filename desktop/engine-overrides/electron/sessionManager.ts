@@ -1096,7 +1096,7 @@ export class SessionManager {
   //
   // Set by the keyboard 'remote-start'/'remote-stop' events (main.ts).
 
-  startRemoteCapture(targetTaskId: string | null = null, agentAddressed = false, composerDictation?: ComposerDictationDelivery, typedInput = false): void {
+  startRemoteCapture(targetTaskId: string | null = null, agentAddressed = false, composerDictation?: ComposerDictationDelivery): void {
     if (this.isProcessing) {
       console.log('[session] ⛔ Remote capture blocked — still processing')
       this.onSessionRejected?.()
@@ -1110,7 +1110,8 @@ export class SessionManager {
     //
     // openedByHeldKey: right-Option and right-Command are both physically held
     // through the press that starts them, so both defer the selection grab.
-    this.startSession('dictation', 'remote', targetTaskId, agentAddressed, true, composerDictation, typedInput)
+    // Typing is an explicit switch for this invocation, never a remembered mode.
+    this.startSession('dictation', 'remote', targetTaskId, agentAddressed, true, composerDictation)
   }
 
   /** Capture selection before the typing panel takes keyboard focus. */
