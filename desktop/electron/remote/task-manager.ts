@@ -24,6 +24,7 @@ import { promises as fs, watch as fsWatch, constants as fsConstants } from 'node
 import { EventEmitter } from 'node:events'
 import type { FollowupGate, FollowupRecord, NewTurnOutcome, FollowupTurnEnded } from './task-followup'
 import { createLogger, remoteLogDir } from './log'
+import { diagnosticError } from './diagnostics'
 import { writeFileAtomic } from './atomic-file'
 import { reconstructTaskMeta } from './meta-reconstruct'
 import { tapPty } from './pty-tap'
@@ -1204,6 +1205,7 @@ export class TaskManager extends EventEmitter {
       }
       task.sessionId = result.threadId
       task.codexRolloutId = result.threadId
+      await this.persistState(task)
     } else {
       if (task.sessionId === input.sessionId) task.sessionId = randomUUID()
       task.claudeForkFromSessionId = input.sessionId
@@ -1211,6 +1213,15 @@ export class TaskManager extends EventEmitter {
       await this.connectClaude(task, false)
     }
     await this.publishContinuation(task)
+    if (input.harness === 'codex') {
+      try { await this.opts.codexHub!.refreshTask(taskId) }
+      catch (error) {
+        log.warn('fork-history-refresh-failed', { taskId, sessionId: task.sessionId, ...diagnosticError(error) })
+        task.history = { phase: task.blocks?.length ? 'partial' : 'failed', canRetry: true,
+          reason: 'The fork was created, but its history could not be loaded. Retry loading this conversation.' }
+        this.emit('updated', task)
+      }
+    }
     if (input.intent?.trim() && !(await this.deliverDraft(taskId, input.intent.trim(), []))) {
       throw new Error(task.deliveryError || `Could not send the current request to ${input.harness}`)
     }

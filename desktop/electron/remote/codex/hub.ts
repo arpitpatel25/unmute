@@ -167,6 +167,8 @@ interface ThreadState {
 }
 
 export interface CodexHubDeps {
+  /** Durable identity receipt, before potentially large history processing. */
+  onForkConfirmed?: (taskId: string, result: { threadId: string; forkedFromId: string }) => Promise<void>
   approvalCap?: (taskId: string) => import('./app-server-events').ApprovalCap
   loadPlans?: (taskId: string, threadId: string) => Promise<Array<Extract<import('../blocks').Block, { kind: 'plan' }>>>
   savePlans?: (taskId: string, threadId: string, plans: Array<Extract<import('../blocks').Block, { kind: 'plan' }>>) => Promise<void>
@@ -184,6 +186,8 @@ export interface CodexHubDeps {
 }
 
 export class CodexHub {
+  /** Remote adapters refresh their projection after the manager saves identity. */
+  async refreshTask(_taskId: string): Promise<void> {}
   private followupListeners = new Set<(event: { type: 'ended'; event: FollowupTurnEnded } | { type: 'changed' | 'disarm'; taskId: string }) => void>()
   private generations = new WeakMap<ThreadState, number>()
   private nextGeneration = 0
@@ -325,6 +329,8 @@ export class CodexHub {
       if (result.thread?.forkedFromId && result.thread.forkedFromId !== sourceThreadId) {
         throw new Error('Codex fork returned inconsistent source identity')
       }
+      await this.deps.onForkConfirmed?.(taskId, { threadId, forkedFromId: sourceThreadId })
+      log.event('codex-fork-identity-confirmed', { taskId, threadId, forkedFromId: sourceThreadId })
       let historyError: string | undefined
       const turns = await this.loadHistory(srv, threadId, result).catch(error => {
         historyError = (error as Error).message

@@ -17,7 +17,8 @@ test('Codex holds one structured connection across turns and filters completion 
   const requests: Array<{ method: string; params: any }> = []
   let connections = 0, closes = 0, turns = 0
   let notification!: (method: string, params: any) => void
-  const driver = new CodexPersistentProcess({ readSystemPrompt: async () => 'EXACT CONSTITUTION', connect: async (_launch, notify) => {
+  const audit: Array<{ event: string; fields: any }> = []
+  const driver = new CodexPersistentProcess({ audit: (event, fields) => audit.push({ event, fields }), readSystemPrompt: async () => 'EXACT CONSTITUTION', connect: async (_launch, notify) => {
     connections++; notification = notify
     return { request: async (method, params: any) => {
       requests.push({ method, params })
@@ -30,6 +31,8 @@ test('Codex holds one structured connection across turns and filters completion 
   const collecting = (async () => { for await (const event of driver.events) events.push(event) })()
   await driver.start(launch)
   await driver.submitUserTurn('one')
+  notification('item/started', { threadId: id, turnId: 'turn-1', item: { id: 'tool-1', type: 'mcpToolCall', server: 'unmute', tool: 'sessions_fork', arguments: { token: 'private-input' } } })
+  notification('item/completed', { threadId: id, turnId: 'turn-1', item: { id: 'tool-1', type: 'mcpToolCall', server: 'unmute', tool: 'sessions_fork', result: 'private-output' } })
   notification('turn/completed', { threadId: id, turn: { id: 'stale', status: 'completed' } })
   notification('item/completed', { threadId: id, turnId: 'turn-1', item: { type: 'agentMessage', text: 'first answer' } })
   notification('turn/completed', { threadId: id, turn: { id: 'turn-1', status: 'completed' } })
@@ -38,6 +41,10 @@ test('Codex holds one structured connection across turns and filters completion 
   notification('turn/completed', { threadId: id, turn: { id: 'turn-2', status: 'interrupted' } })
   await driver.close(); await collecting
   assert.equal(connections, 1)
+  assert.equal(audit.filter(e => e.event === 'agent-provider-item').length, 3)
+  assert.ok(audit.some(e => e.fields.itemId === 'tool-1' && e.fields.phase === 'completed'))
+  assert.ok(!JSON.stringify(audit).includes('private-input'))
+  assert.ok(!JSON.stringify(audit).includes('private-output'))
   assert.equal(closes, 1)
   assert.deepEqual(events.filter(e => e.type === 'completion'), [
     { type: 'completion', outcome: 'completed', finalText: 'first answer' },

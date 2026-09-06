@@ -7,10 +7,19 @@ import { ComputerRuntimeService } from './computer-service'
 import { RuntimeHostBridge } from './host-bridge'
 import { AgentRuntimeService } from './agent-service'
 import { RuntimeTaskIntercom } from './task-intercom'
+import { configureRemoteLogging, setConsoleMirror } from '../log'
+import { diagnostic, diagnosticError } from '../diagnostics'
 
 async function main(): Promise<void> {
   const root = process.argv[2]
   if (!root || !isAbsolute(root)) throw new Error('Runtime requires an absolute storage root')
+  // Detached workers have ignored stdio. Their own sink must exist before any
+  // provider or tool starts, independently of the GUI's logging lifetime.
+  configureRemoteLogging({ dir: join(root, 'logs'), runId: `runtime-${process.pid}-${Date.now()}`, synchronous: true })
+  setConsoleMirror(false)
+  diagnostic('runtime-started', { root, protocolVersion: 3 })
+  process.on('uncaughtExceptionMonitor', error => diagnostic('runtime-uncaught-exception', diagnosticError(error)))
+  process.on('exit', code => diagnostic('runtime-exit', { code }))
   // Providers are created lazily after the exclusive listening socket is held.
   let claude: ClaudeRuntimeService | undefined
   let codex: CodexRuntimeService | undefined
@@ -19,7 +28,7 @@ async function main(): Promise<void> {
   const intercom = new RuntimeTaskIntercom((method, args) => host.call(method, args))
   const computer = new ComputerRuntimeService(event => server.emit('computer.activity', event))
   const server = new RuntimeRpcServer(runtimeSocket(root), async (method, args) => {
-    if (method === 'runtime.info') return { version: 2, pid: process.pid, capabilities: ['codex.forkThread'] }
+    if (method === 'runtime.info') return { version: 3, pid: process.pid, capabilities: ['codex.forkThread', 'codex.forkResult', 'codex.targetedSnapshot'] }
     if (method === 'hello') { host.connected(); return { version: 1, pid: process.pid } }
     if (method === 'host.accept') return host.accept(String(args[0]))
     if (method === 'host.response') return host.response(String(args[0]), args[1], args[2] as string | undefined)
@@ -41,6 +50,7 @@ async function main(): Promise<void> {
   })
   await server.listen()
   const shutdown = () => {
+    diagnostic('runtime-shutdown-started', {})
     claude?.close(); codex?.close(); computer.close(); intercom.close()
     void Promise.resolve(agent?.close()).finally(() => server.close()).finally(() => process.exit(0))
   }

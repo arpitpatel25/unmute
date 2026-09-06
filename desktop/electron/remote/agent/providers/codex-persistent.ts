@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
 import type { AgentProcessDriver, AgentProcessEvent, AgentProcessLaunch } from '../provider'
+import { diagnostic, type DiagnosticSink } from '../../diagnostics'
 
 /** The app-server lacks exec's ignore-user-config/ignore-rules loader flags.
  * Give it a private, empty home instead. Only auth and native conversation
@@ -32,6 +33,7 @@ export interface CodexAgentConnection {
   close(): Promise<void>
 }
 interface Options {
+  audit?: DiagnosticSink
   resolveResumePath?(id: string, home: string): Promise<string | undefined>
   readSystemPrompt?(path: string): Promise<string>
   connect?(launch: AgentProcessLaunch, onNotification: (method: string, params: any) => void, onExit: () => void): Promise<CodexAgentConnection>
@@ -134,6 +136,12 @@ export class CodexPersistentProcess implements AgentProcessDriver {
     }
     if (!this.turnId || (params.turnId ?? params.turn?.id) !== this.turnId) return
     const item = params.item
+    if (method === 'item/started' || method === 'item/completed') {
+      (this.options.audit ?? diagnostic)('agent-provider-item', { provider: 'codex', taskId: this.launch?.taskId,
+        sessionId: this.threadId, turnId: this.turnId, phase: method.slice(5), itemId: item?.id,
+        itemType: item?.type, server: item?.server, tool: item?.tool, status: item?.status,
+        isError: !!item?.error })
+    }
     if (method === 'item/completed' && item?.type === 'agentMessage' && typeof item.text === 'string') {
       this.finalText = item.text
       this.queue.emit({ type: 'activity', kind: 'message', summary: item.text })

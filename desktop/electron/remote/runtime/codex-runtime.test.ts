@@ -8,6 +8,122 @@ import { CodexRuntimeService } from './codex-service'
 import { PersistentCodexHub } from './codex-client'
 import type { CodexAppServer, ServerRequest } from '../codex/app-server-client'
 import type { HubPatch } from '../codex/hub'
+import { createServer } from 'node:net'
+
+test('fork status returns durable identity while provider history is still loading', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fork-slow-history-'))
+  let release!: (value: any) => void
+  let entered!: () => void
+  const loading = new Promise<void>(resolve => { entered = resolve })
+  const provider = {
+    running: true, url: '', async start() {}, stop() {}, on() { return () => {} }, onRequest() {}, notify() {},
+    async request(method: string) {
+      if (method === 'thread/fork') return { thread: { id: 'child', turns: [] }, turnsBackwardsCursor: 'older' }
+      if (method === 'thread/turns/list') { entered(); return new Promise(resolve => { release = resolve }) }
+      return {}
+    },
+  } as unknown as CodexAppServer
+  const service = new CodexRuntimeService(root, () => {}, { makeServer: () => provider })
+  await service.invoke('prepare', ['task', { bin: '/codex' }])
+  const fork = service.invoke('forkThread', ['task', 'source', { cwd: '/tmp' }])
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await loading
+    const result = await Promise.race([service.invoke('forkResult', ['task', 'source']),
+      new Promise(resolve => { timer = setTimeout(() => resolve('blocked-on-history'), 200) })])
+    assert.deepEqual(result, { threadId: 'child', forkedFromId: 'source' })
+  } finally { clearTimeout(timer); release({ data: [] }); await fork; service.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('a real socket loss after provider acceptance recovers the same child without retrying the fork', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fork-socket-loss-'))
+  let forkCalls = 0
+  const server = createServer(socket => {
+    let buffer = ''
+    socket.on('data', bytes => {
+      buffer += bytes.toString()
+      const newline = buffer.indexOf('\n')
+      if (newline < 0) return
+      const frame = JSON.parse(buffer.slice(0, newline))
+      buffer = buffer.slice(newline + 1)
+      if (frame.method === 'codex.forkThread') { forkCalls++; socket.end(); return }
+      const result = frame.method === 'codex.forkResult' ? { threadId: 'child', forkedFromId: 'source' } : true
+      socket.write(JSON.stringify({ id: frame.id, result }) + '\n')
+    })
+  })
+  await new Promise<void>(resolve => server.listen(join(root, 'rpc.sock'), resolve))
+  const rpc = new RuntimeRpcClient(join(root, 'rpc.sock'), 1000)
+  const hub = new PersistentCodexHub(rpc, { resolveBin: async () => '/codex', onPatch() {} })
+  try {
+    assert.equal((await hub.forkThread('task', 'source', { cwd: '/tmp' } as any)).threadId, 'child')
+    assert.equal(forkCalls, 1)
+  } finally { hub.stop(); rpc.disconnect(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }) }
+})
+
+test('a confirmed fork does not fail when history refresh fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fork-confirm-'))
+  const methods: string[] = []
+  const server = new RuntimeRpcServer(join(root, 'rpc.sock'), async method => {
+    methods.push(method)
+    if (method === 'codex.forkThread') return { threadId: 'child', forkedFromId: 'source' }
+    if (method === 'codex.snapshot') throw new Error('History connection lost')
+    return true
+  })
+  await server.listen()
+  const rpc = new RuntimeRpcClient(join(root, 'rpc.sock'))
+  const hub = new PersistentCodexHub(rpc, { resolveBin: async () => '/codex', onPatch() {} })
+  try {
+    assert.deepEqual(await hub.forkThread('task', 'source', { cwd: '/tmp' } as any), { threadId: 'child', forkedFromId: 'source' })
+    assert.equal(hub.threadIdFor('task'), 'child')
+    assert.equal(methods.filter(m => m === 'codex.forkThread').length, 1)
+  } finally { hub.stop(); rpc.disconnect(); await server.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('lost fork acknowledgement is recovered by status without issuing another fork', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fork-recover-'))
+  const methods: string[] = []
+  const server = new RuntimeRpcServer(join(root, 'rpc.sock'), async method => {
+    methods.push(method)
+    if (method === 'codex.forkThread') throw new Error('Runtime disconnected; submission may have been accepted')
+    if (method === 'codex.forkResult') return { threadId: 'child', forkedFromId: 'source' }
+    if (method === 'codex.snapshot') return { running: true, url: '', tasks: [] }
+    return true
+  })
+  await server.listen()
+  const rpc = new RuntimeRpcClient(join(root, 'rpc.sock'))
+  const hub = new PersistentCodexHub(rpc, { resolveBin: async () => '/codex', onPatch() {} })
+  try {
+    assert.equal((await hub.forkThread('task', 'source', { cwd: '/tmp' } as any)).threadId, 'child')
+    assert.equal(methods.filter(m => m === 'codex.forkThread').length, 1)
+    assert.ok(methods.includes('codex.forkResult'))
+  } finally { hub.stop(); rpc.disconnect(); await server.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('fork receipt survives a worker restart and retry resumes the exact child', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fork-receipt-'))
+  const calls: Array<{ method: string; threadId?: string }> = []
+  const provider = {
+    running: true, url: '', async start() {}, stop() {}, on() { return () => {} }, onRequest() {}, notify() {},
+    async request(method: string, args: any) {
+      calls.push({ method, threadId: args?.threadId })
+      if (method === 'thread/fork') return { thread: { id: 'child', forkedFromId: 'source', turns: [] } }
+      if (method === 'thread/resume') return { thread: { id: 'child', turns: [] } }
+      return {}
+    },
+  } as unknown as CodexAppServer
+  const first = new CodexRuntimeService(root, () => {}, { makeServer: () => provider })
+  const second = new CodexRuntimeService(root, () => {}, { makeServer: () => provider })
+  try {
+    await first.invoke('prepare', ['task', { bin: '/codex' }])
+    await first.invoke('forkThread', ['task', 'source', { cwd: '/tmp' }])
+    first.close()
+    assert.deepEqual(await second.invoke('forkResult', ['task', 'source']), { threadId: 'child', forkedFromId: 'source' })
+    await second.invoke('prepare', ['task', { bin: '/codex' }])
+    assert.deepEqual(await second.invoke('forkThread', ['task', 'source', { cwd: '/tmp' }]), { threadId: 'child', forkedFromId: 'source' })
+    assert.equal(calls.filter(c => c.method === 'thread/fork').length, 1)
+    assert.ok(calls.some(c => c.method === 'thread/resume' && c.threadId === 'child'))
+  } finally { first.close(); second.close(); await rm(root, { recursive: true, force: true }) }
+})
 
 test('UI reconnect replays pending approval and keeps the original provider thread alive', async () => {
   const root = await mkdtemp(join(tmpdir(), 'codex-daemon-'))

@@ -4,6 +4,8 @@ import { sameQuestion, type QuestionReference } from '../question-reference'
 import type { FollowupGate, NewTurnOutcome } from '../task-followup'
 import type { RuntimeRpcClient } from './rpc'
 import type { CodexMirror, CodexRuntimeEvent, CodexPreparation } from './codex-service'
+import { createLogger } from '../log'
+const log = createLogger('codex-projection')
 
 /** UI projection only. Closing this adapter never terminates daemon work. */
 export class PersistentCodexHub extends CodexHub {
@@ -26,6 +28,14 @@ export class PersistentCodexHub extends CodexHub {
     this.remoteRunning = snapshot.running; this.remoteUrl = snapshot.url
     this.mirrors.clear()
     for (const mirror of snapshot.tasks) { this.mirrors.set(mirror.taskId, mirror); this.callbacks.onPatch(mirror.patch) }
+  }
+  override async refreshTask(id: string): Promise<void> {
+    const snapshot = await this.rpc.call<{ running: boolean; url: string; tasks: CodexMirror[] }>('codex.snapshot', id)
+    this.remoteRunning = snapshot.running; this.remoteUrl = snapshot.url
+    const mirror = snapshot.tasks.find(task => task.taskId === id)
+    if (!mirror) throw new Error('Fork exists but history is not yet available')
+    this.mirrors.set(id, mirror); this.callbacks.onPatch(mirror.patch)
+    log.event('task-history-refreshed', { taskId: id, tasks: snapshot.tasks.length })
   }
   private async prepare(id: string, thread?: string): Promise<void> {
     const p: CodexPreparation = {
@@ -55,8 +65,23 @@ export class PersistentCodexHub extends CodexHub {
   }
   override async forkThread(id: string, source: string, options: StartThreadOpts): Promise<{ threadId: string; forkedFromId: string }> {
     await this.prepare(id, source)
-    const result = await this.rpc.call<{ threadId: string; forkedFromId: string }>('codex.forkThread', id, source, options)
-    await this.reconnect()
+    type Result = { threadId: string; forkedFromId: string }
+    let result: Result
+    try { result = await this.rpc.call<Result>('codex.forkThread', id, source, options) }
+    catch (error) {
+      log.event('fork-confirmation-recovery-started', { taskId: id, sourceSessionId: source })
+      // Query the same operation. NEVER issue a second provider fork on ambiguity.
+      const recovered = await this.rpc.call<Result | null>('codex.forkResult', id, source).catch(() => null)
+      if (!recovered) throw error
+      result = recovered
+      log.event('fork-confirmation-recovered', { taskId: id, sourceSessionId: source, sessionId: result.threadId })
+    }
+    if (!result.threadId || result.threadId === source || result.forkedFromId !== source) throw new Error('Inconsistent fork identity')
+    const old = this.mirrors.get(id)
+    this.mirrors.set(id, { ...old, taskId: id, threadId: result.threadId,
+      patch: old?.patch ?? { taskId: id, history: { phase: 'loading' } },
+      gate: old?.gate ?? { kind: 'unavailable', reason: 'Loading fork history.' } })
+    // Return identity first: the manager persists/publishes before refreshing.
     return result
   }
   override async send(id: string, text: string, options: Parameters<CodexHub['send']>[2] = {}): Promise<boolean> {

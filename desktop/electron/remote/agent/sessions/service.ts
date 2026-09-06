@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { writeFileAtomic } from '../../atomic-file'
+import { diagnostic, diagnosticError } from '../../diagnostics'
 
 interface ContinuationManager {
   setName?(id: string, name: string): void
@@ -36,8 +37,10 @@ export class AgentContinuationService {
     const interaction = this.deps.interactionId?.()
     if (!interaction) return action()
     const key = JSON.stringify([interaction, operation, sessionId])
+    diagnostic('continuation-requested', { interactionId: interaction, operation, sourceSessionId: sessionId,
+      operationId: createHash('sha256').update(key).digest('hex') })
     const previous = this.operations.get(key)
-    if (previous) return previous
+    if (previous) { diagnostic('continuation-retry-deduplicated', { interactionId: interaction, operation, sourceSessionId: sessionId }); return previous }
     const pending = this.recordOperation(key, action)
     this.operations.set(key, pending)
     // Bound retained completed interactions; retries in the current interaction stay pinned.
@@ -60,8 +63,10 @@ export class AgentContinuationService {
     try {
       const result = await action()
       await writeFileAtomic(file, JSON.stringify({ result }))
+      diagnostic('continuation-result-persisted', { operationId: createHash('sha256').update(key).digest('hex'), result })
       return result
     } catch (error) {
+      diagnostic('continuation-failed', { operationId: createHash('sha256').update(key).digest('hex'), ...diagnosticError(error) })
       await writeFileAtomic(file, JSON.stringify({ error: (error as Error).message }))
       throw error
     }

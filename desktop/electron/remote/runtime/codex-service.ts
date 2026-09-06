@@ -25,6 +25,7 @@ export class CodexRuntimeService {
   constructor(private root: string, private emit: (event: CodexRuntimeEvent) => void, overrides: Pick<CodexHubDeps, 'makeServer'> = {}) {
     this.hub = new CodexHub({
       ...overrides, resolveBin: async () => this.bin,
+      onForkConfirmed: (id, result) => this.save(id, result.forkedFromId, 'fork', () => result),
       threadConfig: async id => this.prepared.get(id)?.config ?? {},
       approvalCap: id => this.prepared.get(id)?.cap ?? { roots: [], fullAccessAllowed: false },
       loadPlans: (id, thread) => this.read(id, thread, 'plans', []),
@@ -74,7 +75,8 @@ export class CodexRuntimeService {
   }
   async invoke(method: string, args: unknown[]): Promise<unknown> {
     const [id, ...rest] = args as any[]
-    if (method === 'snapshot') return { running: this.hub.running, url: this.hub.url, tasks: [...this.patches.keys()].map(id => this.mirror(id)) }
+    if (method === 'snapshot') return { running: this.hub.running, url: this.hub.url,
+      tasks: [...this.patches.keys()].filter(key => !id || key === id).map(id => this.mirror(id)) }
     if (method === 'prepare') {
       const p = rest[0] as CodexPreparation
       this.bin = p.bin; this.prepared.set(id, p)
@@ -86,6 +88,16 @@ export class CodexRuntimeService {
       return true
     }
     switch (method) {
+      case 'forkResult': {
+        const previous = this.forks.get(id)
+        if (previous && previous.source !== rest[0]) throw new Error('Fork operation cannot change its source')
+        const receipt = await this.read(id, rest[0], 'fork', null)
+        if (receipt) return receipt
+        if (previous) {
+          try { return await previous.result } catch { /* read the durable provider identity below */ }
+        }
+        return this.read(id, rest[0], 'fork', null)
+      }
       case 'startThread': return this.register(id, async () => this.hub.threadIdFor(id) ? { threadId: this.hub.threadIdFor(id), url: this.hub.url } : this.hub.startThread(id, rest[0]))
       case 'resumeThread': return this.register(id, () => this.hub.resumeThread(id, rest[0], rest[1], false))
       case 'forkThread': {
@@ -94,7 +106,15 @@ export class CodexRuntimeService {
           if (previous.source !== rest[0]) throw new Error('Fork operation cannot change its source')
           return previous.result
         }
-        const result = this.register(id, () => this.hub.forkThread(id, rest[0], rest[1]))
+        const result = this.register(id, async () => {
+          const receipt = await this.read<{ threadId: string; forkedFromId: string } | null>(id, rest[0], 'fork', null)
+          if (receipt) {
+            if (!receipt.threadId || receipt.threadId === rest[0] || receipt.forkedFromId !== rest[0]) throw new Error('Invalid durable fork identity')
+            await this.hub.resumeThread(id, receipt.threadId, rest[1])
+            return receipt
+          }
+          return this.hub.forkThread(id, rest[0], rest[1])
+        })
         this.forks.set(id, { source: rest[0], result })
         return result
       }

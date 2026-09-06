@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { RuntimeRpcClient } from './rpc'
+import { diagnostic, diagnosticError } from '../diagnostics'
 
 interface HostRequest { id: string; method: string; args: unknown[] }
 /** UI-only actions wait for a connected UI. Accepted actions are never replayed. */
@@ -9,6 +10,7 @@ export class RuntimeHostBridge {
   call(method: string, args: unknown[]): Promise<any> {
     return new Promise((resolve, reject) => {
       const request = { id: randomUUID(), method, args }
+      diagnostic('agent-host-request-started', { requestId: request.id, method })
       this.pending.set(request.id, { request, accepted: false, resolve, reject })
       this.emit(request)
     })
@@ -16,6 +18,7 @@ export class RuntimeHostBridge {
   connected(): void {
     for (const [id, pending] of this.pending) {
       if (pending.accepted) {
+        diagnostic('agent-host-request-uncertain', { requestId: id, method: pending.request.method, reason: 'ui-reconnected-after-acceptance' })
         pending.reject(new Error('The app disconnected during this action. Check its outcome before retrying.'))
         this.pending.delete(id)
       } else this.emit(pending.request)
@@ -25,12 +28,15 @@ export class RuntimeHostBridge {
     const pending = this.pending.get(id)
     if (!pending || pending.accepted) return false
     pending.accepted = true
+    diagnostic('agent-host-request-accepted', { requestId: id, method: pending.request.method })
     return true
   }
   response(id: string, result: unknown, error?: string): void {
     const pending = this.pending.get(id)
     if (!pending || !pending.accepted) return
     this.pending.delete(id)
+    diagnostic('agent-host-request-completed', { requestId: id, method: pending.request.method,
+      outcome: error ? 'error' : 'success', ...(error ? diagnosticError(new Error(error)) : {}) })
     if (error) pending.reject(new Error(error)); else pending.resolve(result)
   }
 }
@@ -42,7 +48,7 @@ export function registerRuntimeHost(rpc: RuntimeRpcClient, invoke: (method: stri
       let result: unknown, error: string | undefined
       try { result = await invoke(request.method, request.args) } catch (e) { error = (e as Error).message }
       await rpc.call('host.response', request.id, result, error)
-    })().catch(() => { /* The daemon retains acceptance uncertainty across UI disconnect. */ })
+    })().catch(error => { diagnostic('agent-host-response-undelivered', { requestId: request.id, method: request.method, ...diagnosticError(error) }) })
   }
   rpc.on('host.request', receive)
   return () => rpc.off('host.request', receive)

@@ -4823,8 +4823,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // reference: the hub is constructed BEFORE the manager it feeds, and closing
   // over a `manager` that is still undefined is how a stream of events would
   // land silently on nothing.
-  codexRuntimeRouting = new CompatibleCodexRuntime(persistentRuntime!,
-    new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v2'), join(__dirname, 'unmute-runtime.js')))
+  // Preserve both generations' live owners. Only new forks use the worker
+  // that implements durable confirmation/status and targeted history.
+  codexRuntimeRouting = new CompatibleCodexRuntime(
+    new CompatibleCodexRuntime(persistentRuntime!,
+      new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v2'), join(__dirname, 'unmute-runtime.js'))),
+    new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v3'), join(__dirname, 'unmute-runtime.js')))
   codexHub = new PersistentCodexHub(codexRuntimeRouting, {
     approvalCap: taskId => ({ fullAccessAllowed: manager?.chatFullAccessAllowed(taskId) === true, roots: settings.get('sandboxRoots') ?? [] }),
     loadPlans: async (taskId, threadId) => {

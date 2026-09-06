@@ -25,6 +25,20 @@ const memory: CapabilityModule = {
   async call() { return { content: [{ type: 'text', text: 'found' }] } },
 }
 
+test('every capability attempt records correlated start and outcome without raw inputs', async () => {
+  const events: Array<{ event: string; fields: any }> = []
+  const registry = new CapabilityRegistry([memory], (event, fields) => events.push({ event, fields }))
+  await registry.call(agent, 'memory_search', { query: 'private text', password: 'secret' }, { now: 1000 })
+  await assert.rejects(registry.call(agent, 'missing_tool', { token: 'secret' }, { now: 1000 }))
+  assert.equal(events.filter(e => e.event === 'agent-tool-started').length, 2)
+  const ends = events.filter(e => e.event === 'agent-tool-completed')
+  assert.deepEqual(ends.map(e => e.fields.outcome), ['success', 'rejected'])
+  for (const end of ends) assert.ok(events.some(e => e.event === 'agent-tool-started' && e.fields.callId === end.fields.callId))
+  assert.equal(ends[0].fields.interactionId, 'ix-1')
+  assert.ok(!JSON.stringify(events).includes('private text'))
+  assert.ok(!JSON.stringify(events).includes('secret'))
+})
+
 test('shows only tools available to each principal and rejects unavailable calls', async () => {
   const registry = new CapabilityRegistry([tasks, memory])
 

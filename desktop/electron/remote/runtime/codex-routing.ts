@@ -1,4 +1,5 @@
 import { RuntimeRpcClient } from './rpc'
+import { diagnostic } from '../diagnostics'
 
 /** Rolling compatibility: existing threads keep their owner. Only new forks
  * use the current worker. No daemon or in-progress turn is killed to upgrade. */
@@ -15,7 +16,7 @@ export class CompatibleCodexRuntime extends RuntimeRpcClient {
   override get connected(): boolean { return this.legacy.connected || this.current.connected }
   override async connect(): Promise<void> { await this.legacy.connect() }
   override async call<T = any>(method: string, ...args: unknown[]): Promise<T> {
-    if (method === 'codex.snapshot') {
+    if (method === 'codex.snapshot' && !args.length) {
       const [old, current] = await Promise.all([
         this.legacy.call<any>(method), this.current.call<any>(method),
       ])
@@ -27,7 +28,11 @@ export class CompatibleCodexRuntime extends RuntimeRpcClient {
     if (method === 'codex.prepare') this.preparations.set(id, args)
     if (method === 'codex.forkThread') {
       const info = await this.current.call<{ capabilities: string[] }>('runtime.info')
-      if (!info.capabilities.includes(method)) throw new Error('Background runtime needs an update; do not retry this fork')
+      if (!['codex.forkThread', 'codex.forkResult', 'codex.targetedSnapshot'].every(cap => info.capabilities?.includes(cap))) {
+        diagnostic('codex-runtime-incompatible', { taskId: id, capabilities: info.capabilities })
+        throw new Error('Background runtime needs an update; do not retry this fork')
+      }
+      diagnostic('codex-fork-routed', { taskId: id, sourceSessionId: args[1], capabilities: info.capabilities })
       this.owned.add(id)
       const preparation = this.preparations.get(id)
       if (preparation) await this.current.call('codex.prepare', ...preparation)
@@ -37,6 +42,7 @@ export class CompatibleCodexRuntime extends RuntimeRpcClient {
   override disconnect(): void {
     this.legacy.off('codex.event', this.oldEvent)
     this.current.off('codex.event', this.newEvent)
+    if (this.legacy instanceof CompatibleCodexRuntime) this.legacy.disconnect()
     this.current.disconnect() // disconnect UI only; current worker also persists
   }
 }

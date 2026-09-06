@@ -30,6 +30,7 @@ import { agentConstitution } from '../agent/constitution'
 import { SESSION_PREAMBLE } from '../session-policy'
 import { startMcpServer, MCP_PATH, type McpServer } from '../mcp-server'
 import { createLogger } from '../log'
+import { diagnostic } from '../diagnostics'
 
 export type AgentRuntimeConfig = { masterKey: string; selectedProvider: AgentProviderId; maxActiveProcesses?: number; conversationCeiling?: number; notetaker?: boolean }
 export type AgentRuntimeEvent = { kind: 'view'; view: AgentConversationView } | { kind: 'activity'; activity: AgentInteractionActivity }
@@ -128,7 +129,12 @@ export class AgentRuntimeService {
           const endpoint = `http://127.0.0.1:${this.mcp!.port}${MCP_PATH}`
           return { cwd: dirname(constitutionPath), constitutionPath, environment: process.env,
             mcp: { endpoint, config: JSON.stringify({ mcpServers: { unmute: { type: 'http', url: endpoint, headers: { Authorization: 'Bearer ${UNMUTE_MCP_TOKEN}' } } } }) } }
-        }, onActivity: activity => { this.activity = activity; this.emit({ kind: 'activity', activity }) },
+        }, onActivity: activity => {
+          this.activity = activity
+          diagnostic('agent-interaction-activity', { interactionId: activity.interactionId, runId: activity.agentRunId,
+            provider: activity.provider, kind: activity.kind })
+          this.emit({ kind: 'activity', activity })
+        },
       })
       this.mcp = await startMcpServer({ resolveCaller: token => token ? tokens.resolve(token) : null,
         capabilityContext: principal => this.controller!.interactionContext(principal),
@@ -173,7 +179,13 @@ export class AgentRuntimeService {
       case 'view': return this.lifecycle.view()
       case 'enqueue': {
         const queued = await this.lifecycle.enqueue(a[0], a[1])
-        void queued.completion.then(result => { this.completions.set(queued.submissionId, result); this.emit({ kind: 'completion', submissionId: queued.submissionId, result }) })
+        diagnostic('agent-request-enqueued', { submissionId: queued.submissionId })
+        void queued.completion.then(result => {
+          diagnostic('agent-request-completed', { submissionId: queued.submissionId, interactionId: result.interactionId,
+            runId: result.agentRunId, provider: result.provider, sessionId: result.providerSessionId,
+            outcome: result.outcome, errorCode: result.error?.code })
+          this.completions.set(queued.submissionId, result); this.emit({ kind: 'completion', submissionId: queued.submissionId, result })
+        })
         return { submissionId: queued.submissionId }
       }
       case 'submit': return this.lifecycle.submit(a[0])

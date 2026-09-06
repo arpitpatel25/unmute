@@ -43,22 +43,23 @@ export function agentTraceSinks(provider: string): {
   onTrace: (trace: AgentTrace) => void
   onSpawn: (info: { argv: string[]; cwd: string; session: AgentProcessLaunch['session'] }) => void
 } {
+  let sessionId: string | undefined
   return {
     onSpawn: ({ argv, cwd, session }) => {
-      // THE ARGV, EVERY TIME. `--resume` where `--session-id` belonged failed
-      // every Agent turn for a day, and the difference was one token nobody
-      // was writing down.
+      sessionId = session.id
+      // Keep launch mode and flag names, not credential-bearing values.
       log.event('spawn', {
         provider,
         session: session.kind,
         sessionId: session.id ?? null,
         cwd,
-        argv: summariseArgv(argv).join(' '),
+        flags: argv.filter(arg => arg.startsWith('--')).map(arg => arg.split('=')[0]),
       })
     },
     onTrace: (trace) => {
       switch (trace.kind) {
         case 'session':
+          sessionId = trace.sessionId
           log.event('session', {
             provider,
             sessionId: trace.sessionId,
@@ -68,27 +69,27 @@ export function agentTraceSinks(provider: string): {
           })
           return
         case 'thinking':
-          log.event('thinking', { chars: trace.chars, text: trace.text })
+          log.event('thinking', { provider, sessionId, chars: trace.chars })
           return
         case 'says':
-          log.event('says', { chars: trace.chars, text: trace.text })
+          log.event('says', { provider, sessionId, chars: trace.chars })
           return
         case 'tool':
-          // The name alone was all the activity event kept, and "using Read"
-          // does not say which file, which is the whole question.
-          log.event('tool-call', { tool: trace.tool, id: trace.id, input: trace.input })
+          // Trace every tool, including provider-native tools that bypass MCP.
+          // Do not copy file contents, commands or credentials into audit logs.
+          log.event('tool-call', { provider, sessionId, tool: trace.tool, id: trace.id, inputChars: trace.input?.length })
           return
         case 'toolResult':
           log.event('tool-result', {
-            id: trace.id, ok: trace.ok, chars: trace.chars, preview: trace.preview,
+            provider, sessionId, id: trace.id, ok: trace.ok, chars: trace.chars,
           })
           return
         case 'result':
           log.event('turn-result', {
+            provider, sessionId,
             ok: trace.ok,
             subtype: trace.subtype,
             chars: trace.chars,
-            text: trace.text,
             durationMs: trace.durationMs,
             costUsd: trace.costUsd,
             turns: trace.turns,

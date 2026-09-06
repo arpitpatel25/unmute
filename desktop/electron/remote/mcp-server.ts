@@ -19,6 +19,7 @@
 // and tool CALLS are rejected with an instructive error.
 
 import http from 'node:http'
+import { diagnostic } from './diagnostics'
 import { createLogger } from './log'
 import { HOOK_PATH } from './session-policy'
 import { normalizeState } from './status-file'
@@ -332,12 +333,14 @@ async function handleRequest(
       const toolName = msg.params?.name as string | undefined
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
       if (!caller) {
+        diagnostic('mcp-tool-rejected', { requestId: msg.id, tool: toolName, reason: 'unauthenticated' })
         // Unidentified callers can handshake but not act — the message teaches.
         respond(rpcResult(msg.id, toolText(
           'Unmute rejected this call: no valid task identity. Only sessions spawned by Unmute carry the per-task token (UNMUTE_MCP_TOKEN) required to create tasks.', true)))
         return
       }
       if (!toolName || (!knownTaskTools.has(toolName) && !knownExtensionTools.has(toolName))) {
+        diagnostic('mcp-tool-rejected', { requestId: msg.id, tool: toolName, reason: 'unknown-tool', principal: caller.kind })
         respond(rpcError(msg.id, -32602, `unknown tool: ${toolName}`))
         return
       }

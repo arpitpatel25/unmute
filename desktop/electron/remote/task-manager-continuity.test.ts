@@ -13,6 +13,29 @@ function executorFactory(): never {
   throw new Error('continuity must not use a terminal executor')
 }
 
+test('fork identity is durable before history refresh and refresh failure is retryable, not another card', async () => {
+  const baseDir = await base()
+  let tm: TaskManager
+  const visible: string[] = []
+  const hub = { running: true, threadIdFor() { return undefined },
+    async forkThread() { return { threadId: 'child', forkedFromId: 'source' } },
+    async refreshTask(id: string) {
+      const task = tm.get(id)!
+      const saved = JSON.parse(await fs.readFile(join(task.home, 'meta.json'), 'utf8'))
+      assert.equal(saved.sessionId, 'child')
+      assert.equal(saved.continuationPending, false)
+      throw new Error('history disconnected')
+    } }
+  tm = new TaskManager({ executorFactory, codexHub: hub as never, baseDir })
+  tm.on('created', task => visible.push(task.id))
+  try {
+    const result = await tm.forkProviderSession({ harness: 'codex', sessionId: 'source', cwd: baseDir })
+    assert.deepEqual(visible, [result.taskId])
+    assert.equal(tm.get(result.taskId)?.history?.canRetry, true)
+    assert.equal(tm.get(result.taskId)?.history?.phase, 'failed')
+  } finally { await fs.rm(baseDir, { recursive: true, force: true }) }
+})
+
 test('failed native fork never publishes a card or resurrects a draft on restart', async () => {
   const baseDir = await base()
   const hub = { running: true, threadIdFor() { return undefined }, async forkThread() { throw new Error('Unknown Codex runtime command') } }

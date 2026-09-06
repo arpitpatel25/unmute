@@ -40,6 +40,7 @@ const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, e
 interface LoggerConfig {
   minLevel: LogLevel
   fileStream: WriteStream | null
+  synchronousFile?: string
   // Mirror to console as well as file. Default true — we want both surfaces.
   console: boolean
 }
@@ -68,17 +69,21 @@ export function remoteLogDir(): string | null { return currentLogDir }
  *
  * Returns the absolute path of the log file so the UI can offer "reveal logs".
  */
-export function configureRemoteLogging(opts: { dir: string; runId: string; minLevel?: LogLevel }): string {
+export function configureRemoteLogging(opts: { dir: string; runId: string; minLevel?: LogLevel; synchronous?: boolean }): string {
   try {
     mkdirSync(opts.dir, { recursive: true })
     currentLogDir = opts.dir
     const file = join(opts.dir, `remote-${opts.runId}.log`)
-    config.fileStream = createWriteStream(file, { flags: 'a' })
+    config.fileStream?.end()
+    config.synchronousFile = opts.synchronous ? file : undefined
+    config.fileStream = opts.synchronous ? null : createWriteStream(file, { flags: 'a', mode: 0o600 })
+    config.fileStream?.on('error', error => { console.error('[remote:log] file sink failed:', (error as NodeJS.ErrnoException).code) })
     currentLogFilePath = file
     if (opts.minLevel) config.minLevel = opts.minLevel
     // First line of every run: a banner so log files are self-describing.
     const banner = `\n==== unmute-remote run ${opts.runId} @ ${new Date().toISOString()} ====\n`
-    config.fileStream.write(banner)
+    if (opts.synchronous) appendFileSync(file, banner, { mode: 0o600 })
+    else config.fileStream!.write(banner)
     return file
   } catch (e) {
     // Never let logging setup crash the app — fall back to console-only.
@@ -144,6 +149,10 @@ function emit(
   }
   if (config.fileStream) {
     try { config.fileStream.write(line + '\n') } catch { /* never throw from logging */ }
+  }
+  if (config.synchronousFile) {
+    try { appendFileSync(config.synchronousFile, line + '\n', { mode: 0o600 }) }
+    catch { console.error('[remote:log] synchronous file sink failed') }
   }
 }
 
