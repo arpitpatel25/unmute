@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { cwdFromPrefix, defaultRoots, type Harness, type SessionRoots } from './locate'
+import { cwdFromPrefix, defaultRoots, readSessionProvenance, type Harness, type SessionRoots } from './locate'
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
 const WINDOW_BYTES = 128 * 1024
@@ -103,6 +103,7 @@ export async function searchSessionCatalog(
       const haystack = `${turns}\n${cwdFromPrefix(text) ?? ''}`.toLowerCase()
       const matches = tokens.map(token => haystack.split(token).length - 1)
       if (matches.some(count => count === 0)) continue
+      if ((await readSessionProvenance(path, harness, sessionId, text)).kind !== 'main') continue
       const forkedFromId = /"forkedFromId"\s*:\s*"([^"]+)"/.exec(text)?.[1]
       results.push({
         sessionId, harness, path, modifiedAt, userText: turns,

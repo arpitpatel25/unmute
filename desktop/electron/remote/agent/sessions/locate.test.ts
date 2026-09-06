@@ -121,3 +121,89 @@ test('the read is bounded, so a cwd past the prefix is given up rather than chas
   assert.equal(found?.harness, 'claude', 'the session is still located')
   assert.equal(found?.cwd, undefined, 'but the whole file was not read to find its cwd')
 })
+
+test('Codex review child is classified from structured metadata, not its parent session_id', async () => {
+  const r = await roots()
+  const id = '01a073da-1210-7350-8f45-0209839d74be'
+  const parent = '01a073ca-74d6-7c92-af61-c5030ad0fcbf'
+  await writeCodex(r, '2026/09/06', id, JSON.stringify({ type: 'session_meta', payload: {
+    id, session_id: parent, cwd: '/project', parent_thread_id: parent,
+    source: { subagent: { thread_spawn: { parent_thread_id: parent, depth: 1, agent_path: '/root/review' } } },
+    thread_source: 'subagent', base_instructions: { text: 'x'.repeat(100_000) },
+  } }))
+  const found = await locateSession(id, r)
+  assert.equal(found?.sessionId, id)
+  assert.equal(found?.provenance?.kind, 'subagent')
+  assert.equal(found?.provenance?.parentSessionId, parent)
+})
+
+test('explicit main source remains eligible with oversized instructions and native fork provenance', async () => {
+  const r = await roots()
+  const id = '01a073ca-74d6-7c92-af61-c5030ad0fcbf'
+  await writeCodex(r, '2026/09/06', id, JSON.stringify({ type: 'session_meta', payload: {
+    id, cwd: '/project', source: 'vscode', forked_from_id: 'another-main-session',
+    base_instructions: { text: 'x'.repeat(100_000) },
+  } }))
+  assert.equal((await locateSession(id, r))?.provenance?.kind, 'main')
+})
+
+test('child exclusion fields after oversized instructions cannot be lost by the bounded prefix', async () => {
+  const r = await roots()
+  const id = '01a073da-1210-7350-8f45-0209839d74be'
+  await writeCodex(r, '2026/09/06', id, JSON.stringify({ type: 'session_meta', payload: {
+    id, source: 'cli', base_instructions: { text: 'x'.repeat(100_000) },
+    thread_source: 'subagent', agent_path: '/root/review',
+  } }))
+  assert.equal((await locateSession(id, r))?.provenance?.kind, 'subagent')
+})
+
+test('malformed characters inside discarded instruction strings do not become valid provenance', async () => {
+  const r = await roots()
+  const id = '01a073ca-74d6-7c92-af61-c5030ad0fcbf'
+  for (const invalid of ['\n', '\\q', '\\uZZZZ']) {
+    await writeCodex(r, '2026/09/06', id,
+      '{"type":"session_meta","payload":{"id":"' + id + '","source":"cli","base_instructions":{"text":"' + 'x'.repeat(70_000) + invalid + '"}}}')
+    assert.equal((await locateSession(id, r))?.provenance?.kind, 'unknown')
+  }
+})
+
+test('user content cannot impersonate main provenance and missing metadata is unknown', async () => {
+  const r = await roots()
+  const id = '01a073ca-74d6-7c92-af61-c5030ad0fcbf'
+  await writeCodex(r, '2026/09/06', id, JSON.stringify({ type: 'event_msg', payload: {
+    type: 'user_message', message: '{"type":"session_meta","payload":{"source":"cli"}}',
+  } }))
+  assert.equal((await locateSession(id, r))?.provenance?.kind, 'unknown')
+})
+
+test('Claude sidechain flags exclude children and false flags identify main conversations', async () => {
+  const r = await roots()
+  for (const isSidechain of [true, false]) {
+    const id = isSidechain ? 'child' : 'main'
+    await writeClaude(r, '-Users-me-work', id, JSON.stringify({
+      type: 'user', sessionId: id, cwd: '/project', isSidechain,
+      message: { role: 'user', content: 'text about isSidechain and source is not metadata' },
+    }))
+    assert.equal((await locateSession(id, r))?.provenance?.kind, isSidechain ? 'subagent' : 'main')
+  }
+})
+
+test('Claude provenance after a large first user message is verified without trusting a partial record', async () => {
+  const r = await roots()
+  for (const child of [true, false]) {
+    const id = child ? 'child' : 'main'
+    await writeClaude(r, '-Users-me-work', id, '{"type":"queue-operation"}\n' + JSON.stringify({
+      type: 'user', sessionId: id, isSidechain: false,
+      message: { content: 'x'.repeat(100_000) }, ...(child ? { agentId: 'review-child' } : {}),
+    }))
+    assert.equal((await locateSession(id, r))?.provenance?.kind, child ? 'subagent' : 'main')
+  }
+})
+
+test('a transcript under Claude subagents cannot be treated as main even with a false sidechain flag', async () => {
+  const r = await roots()
+  await writeClaude(r, '-Users-me-work/parent/subagents', 'child', JSON.stringify({
+    type: 'user', sessionId: 'child', isSidechain: false, cwd: '/project',
+  }))
+  assert.equal((await locateSession('child', r))?.provenance?.kind, 'subagent')
+})
