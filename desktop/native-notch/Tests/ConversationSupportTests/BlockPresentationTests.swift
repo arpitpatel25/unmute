@@ -2,6 +2,18 @@ import XCTest
 @testable import ConversationSupport
 
 final class BlockPresentationTests: XCTestCase {
+    func testSuccessfulTurnOverridesRecoverableToolFailure() {
+        let blocks = [Block(kind: "command", status: "failed"),
+                      Block(kind: "turnEnd", outcome: "completed")]
+        XCTAssertEqual(BlockPresentation.meta(of: blocks).status, "done")
+        XCTAssertEqual(blocks[0].status, "failed", "individual errors remain visible")
+    }
+
+    func testExplicitFailedAndCancelledTurnsRemainUnsuccessful() {
+        for outcome in ["failed", "cancelled"] {
+            XCTAssertEqual(BlockPresentation.meta(of: [Block(kind: "turnEnd", outcome: outcome)]).status, outcome)
+        }
+    }
 
     private func msg(_ role: String, _ text: String) -> Block {
         Block(kind: "message", role: role, text: text)

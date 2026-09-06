@@ -10,9 +10,6 @@ struct ComposerControls: View {
     let dictate: () -> Void
     let cancelDictation: () -> Void
     let newConversation: () -> Void
-    @State private var setupPinned = false
-    @State private var setupHovered = false
-    @State private var hoverToken = UUID()
 
     private var fields: [ComposerSetupField] {
         composerSetupFields(hasModels: !config.models.isEmpty,
@@ -20,31 +17,18 @@ struct ComposerControls: View {
                             hasPermissions: !config.permissions.isEmpty)
     }
 
-    private var setupVisible: Bool { setupPinned || setupHovered }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Button {
-                    setupPinned.toggle()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "command")
-                        Text("Task setup")
-                        Image(systemName: setupVisible ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundColor(Theme.textFaint)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(fields, id: \.self) { field in
+                            setupControl(field)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
                     }
-                    .foregroundColor(Theme.textDim)
-                    .padding(.horizontal, 9).padding(.vertical, 5)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(setupVisible ? Theme.raisedHover : Theme.raised))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(setupVisible ? "Close task setup" : "Open task setup")
-                .onHover(perform: updateSetupHover)
-                .popover(isPresented: setupPresentation, arrowEdge: .bottom) {
-                    setupPanel.onHover(perform: updateSetupHover)
-                }
+                .frame(height: 28)
 
                 Spacer(minLength: 8)
 
@@ -73,26 +57,6 @@ struct ComposerControls: View {
         }
         .font(.system(size: 11.5))
         .buttonStyle(.borderless)
-        .animation(Theme.hover, value: setupVisible)
-    }
-
-    private var setupPresentation: Binding<Bool> {
-        Binding(get: { setupVisible }, set: { shown in
-            if !shown { setupPinned = false; setupHovered = false }
-        })
-    }
-
-    private var setupPanel: some View {
-        VStack(spacing: 2) {
-            ForEach(fields, id: \.self) { field in
-                setupControl(field)
-            }
-        }
-        .padding(7)
-        .frame(width: 300)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.plane))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.composerEdge, lineWidth: 0.75))
-        .shadow(color: Color.black.opacity(0.5), radius: 16, y: 7)
     }
 
     @ViewBuilder
@@ -141,18 +105,6 @@ struct ComposerControls: View {
         .accessibilityLabel("\(field): \(choices.first(where: { $0.id == selected })?.label ?? fallback)")
     }
 
-    private func updateSetupHover(_ inside: Bool) {
-        let token = UUID()
-        hoverToken = token
-        if inside {
-            setupHovered = true
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                guard hoverToken == token else { return }
-                setupHovered = false
-            }
-        }
-    }
 }
 
 private struct SetupRowLabel: View {
@@ -160,16 +112,14 @@ private struct SetupRowLabel: View {
     let value: String
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text(label).foregroundColor(Theme.textDim)
-            Spacer(minLength: 12)
-            Text(value).foregroundColor(Theme.text).lineLimit(1)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundColor(Theme.textFaint)
+        HStack(spacing: 5) {
+            if label == "Working folder" { Image(systemName: "folder") }
+            Text(value).lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: label == "Working folder" ? 180 : 150)
         }
-        .padding(.horizontal, 10)
-        .frame(maxWidth: .infinity, minHeight: 38)
+        .foregroundColor(Theme.textDim)
+        .frame(minHeight: 28)
+        .accessibilityLabel("\(label): \(value)")
         .contentShape(Rectangle())
     }
 }

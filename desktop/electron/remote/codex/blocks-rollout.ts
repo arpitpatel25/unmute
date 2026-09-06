@@ -201,7 +201,7 @@ export function blocksFromRollout(text: string): RolloutBlocks {
       case 'task_complete': {
         const textOut = str(p.last_agent_message)
         const d = num(p.duration_ms)
-        blocks.push({ kind: 'turnEnd', ...(d !== undefined ? { durationMs: d } : {}) })
+        blocks.push({ kind: 'turnEnd', outcome: 'completed', ...(d !== undefined ? { durationMs: d } : {}) })
         if (textOut) blocks.push({ kind: 'message', role: 'assistant', text: textOut })
         if (d !== undefined) lastTurnDurationMs = d
         break

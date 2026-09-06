@@ -70,6 +70,7 @@ test('the reply comes from task_complete, which is where the final text lives', 
   const m = only(blocks, 'message').filter((x) => x.role === 'assistant')
   assert.equal(m.length, 1, 'agent_message and task_complete must not both emit')
   assert.equal(m[0].text, 'the answer')
+  assert.equal(only(blocks, 'turnEnd')[0].outcome, 'completed')
 })
 
 test('agent_reasoning becomes a reasoning block', () => {

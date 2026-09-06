@@ -203,7 +203,9 @@ public enum BlockPresentation {
         // A turn with a start and no end is still going, whatever its steps say
         // — the last command can have finished while the model keeps thinking.
         if startedAt != nil && !ended { running = true }
-        let status = outcome == "cancelled" ? "cancelled" : outcome == "failed" ? "failed" : running && !ended ? "running" : failed ? "failed" : cancelled ? "cancelled" : denied ? "denied" : "done"
+        // The provider's final outcome outranks intermediate tool errors.
+        // A failed search/command that the agent recovered from is not a failed turn.
+        let status = outcome == "completed" ? "done" : outcome == "cancelled" ? "cancelled" : outcome == "failed" ? "failed" : running && !ended ? "running" : failed ? "failed" : cancelled ? "cancelled" : denied ? "denied" : "done"
         return BlockTurnMeta(status: status, durationMs: durationMs, startedAt: startedAt,
                              steps: steps, files: files, added: added, removed: removed,
                              planDone: planDone, planTotal: planTotal)
