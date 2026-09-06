@@ -1,5 +1,6 @@
 import type { SessionActionResult } from '../capabilities/sessions'
-import type { LocatedSession } from './locate'
+import { requireMainSession, type LocatedSession } from './locate'
+import { resolveAgentMetadata, type WorkspaceRegistry, type MetadataSource } from '../metadata'
 import { isReapedScratchCwd, planFork, planResume } from './resume'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
@@ -10,14 +11,14 @@ import { diagnostic, diagnosticError } from '../../diagnostics'
 interface ContinuationManager {
   setName?(id: string, name: string): void
   setGroup?(id: string, group: string): void
-  list(): Array<{ id: string; sessionId: string; codexRolloutId?: string }>
+  list(): Array<{ id: string; sessionId: string; codexRolloutId?: string } & MetadataSource>
   resume(taskId: string): Promise<boolean>
   deliverDraft(taskId: string, text: string, attachments: readonly string[]): Promise<boolean>
   attachProviderSession(input: {
-    harness: 'claude' | 'codex'; sessionId: string; cwd: string; intent?: string; title?: string; group?: string
+    harness: 'claude' | 'codex'; sessionId: string; cwd: string; intent?: string; title?: string; group?: string; groupId?: string
   }): Promise<{ taskId: string; sessionId: string }>
   forkProviderSession(input: {
-    harness: 'claude' | 'codex'; sessionId: string; cwd: string; intent?: string; title?: string; group?: string
+    harness: 'claude' | 'codex'; sessionId: string; cwd: string; intent?: string; title?: string; group?: string; groupId?: string
   }): Promise<{ taskId: string; sessionId: string }>
 }
 
@@ -26,6 +27,7 @@ export interface AgentContinuationDeps {
   operationRoot?: string
   manager(): ContinuationManager | null
   locate(sessionId: string): Promise<LocatedSession | null>
+  workspaces?(): WorkspaceRegistry | null
   scratchRoot: string
   ensureDirectory(path: string): Promise<void>
 }
@@ -81,6 +83,7 @@ export class AgentContinuationService {
   private async locate(sessionId: string): Promise<LocatedSession> {
     const located = await this.deps.locate(sessionId)
     if (!located) throw new Error('That session is not on this machine')
+    requireMainSession(located)
     return located
   }
 
@@ -89,13 +92,14 @@ export class AgentContinuationService {
   }
 
   async resume(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult> {
-    return this.once('resume', input.sessionId, () => this.resumeOnce(input))
-  }
-  private async resumeOnce(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult> {
-    const manager = this.manager()
     const located = await this.locate(input.sessionId)
+    return this.once('resume', input.sessionId, () => this.resumeOnce(input, located))
+  }
+  private async resumeOnce(input: { sessionId: string; intent?: string; title?: string; group?: string }, located: LocatedSession): Promise<SessionActionResult> {
+    const manager = this.manager()
     const existing = manager.list().find(task =>
       task.sessionId === input.sessionId || task.codexRolloutId === input.sessionId)
+    const metadata = resolveAgentMetadata({ ...input, cwd: located.cwd }, this.deps.workspaces?.(), existing)
     const plan = planResume({
       located,
       ...(existing ? { existingTaskId: existing.id } : {}),
@@ -103,9 +107,9 @@ export class AgentContinuationService {
     })
     if (plan.action === 'refuse') throw new Error(plan.reason)
     if (plan.action === 'wake') {
+      if (existing?.name !== metadata.title) manager.setName?.(plan.taskId, metadata.title)
+      if (existing?.groupId !== metadata.groupId || existing?.group !== metadata.group) manager.setGroup?.(plan.taskId, metadata.group)
       if (!(await manager.resume(plan.taskId))) throw new Error('That session could not be resumed')
-      if (input.title?.trim()) manager.setName?.(plan.taskId, input.title.trim())
-      if (input.group?.trim()) manager.setGroup?.(plan.taskId, input.group.trim())
       if (plan.followUp && !(await manager.deliverDraft(plan.taskId, plan.followUp, []))) {
         throw new Error('The session resumed, but the current request could not be delivered')
       }
@@ -116,7 +120,7 @@ export class AgentContinuationService {
     }
     await this.restoreScratch(plan.cwd)
     const { action: _action, ...attachment } = plan
-    const result = await manager.attachProviderSession({ ...attachment, ...(input.title ? { title: input.title } : {}), ...(input.group ? { group: input.group } : {}) })
+    const result = await manager.attachProviderSession({ ...attachment, ...metadata })
     if (result.sessionId !== input.sessionId) throw new Error('Resume changed the provider session identity')
     return {
       ...result, operation: 'resume', sourceSessionId: input.sessionId,
@@ -124,16 +128,18 @@ export class AgentContinuationService {
   }
 
   async fork(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult> {
-    return this.once('fork', input.sessionId, () => this.forkOnce(input))
-  }
-  private async forkOnce(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult> {
-    const manager = this.manager()
     const located = await this.locate(input.sessionId)
+    return this.once('fork', input.sessionId, () => this.forkOnce(input, located))
+  }
+  private async forkOnce(input: { sessionId: string; intent?: string; title?: string; group?: string }, located: LocatedSession): Promise<SessionActionResult> {
+    const manager = this.manager()
+    const source = manager.list().find(task => task.sessionId === input.sessionId || task.codexRolloutId === input.sessionId)
+    const metadata = resolveAgentMetadata({ ...input, cwd: located.cwd }, this.deps.workspaces?.(), source)
     const plan = planFork({ located, ...(input.intent ? { intent: input.intent } : {}) })
     if (plan.action === 'refuse') throw new Error(plan.reason)
     await this.restoreScratch(plan.cwd)
     const { action: _action, ...fork } = plan
-    const result = await manager.forkProviderSession({ ...fork, ...(input.title ? { title: input.title } : {}), ...(input.group ? { group: input.group } : {}) })
+    const result = await manager.forkProviderSession({ ...fork, ...metadata })
     if (result.sessionId === input.sessionId) throw new Error('Fork reused the source provider session identity')
     return {
       ...result, operation: 'fork', sourceSessionId: input.sessionId,

@@ -4,6 +4,23 @@ import { buildHandoffPrompt, HandoffCapability, type HandoffAdapters } from './h
 import type { CapabilityCallContext, McpPrincipal, ToolResult } from '../types.ts'
 
 const NOW = 10_000
+test('handoff requires descriptive title and workspace before creating a task', async () => {
+  for (const metadata of [{}, { title: 'Untitled', group: 'Unmute' }, { title: 'Send resume to Rishi', group: 'Ungrouped' }]) {
+    const a = adapters()
+    const result = await new HandoffCapability(a).call(ctx, 'task_create', { intent: 'send it', kind: 'oneoff', ...metadata })
+    assert.equal(result.isError, true)
+    assert.equal(a.created.length, 0)
+  }
+})
+
+test('carried transcript context cannot omit its source identities', async () => {
+  const a = adapters()
+  const result = await new HandoffCapability(a).call(ctx, 'task_create', {
+    title: 'Repair billing migration', group: 'Unmute', intent: 'continue', kind: 'session', context: 'Earlier sessions found the billing bug.',
+  })
+  assert.equal(result.isError, true)
+  assert.deepEqual(a.created, [])
+})
 const agent: McpPrincipal = {
   kind: 'unmute-agent', runId: 'run-1', interactionId: 'ix-1', expiresAt: 20_000, provider: 'codex',
 }
@@ -25,6 +42,7 @@ function adapters(overrides: Partial<HandoffAdapters> = {}): HandoffAdapters & {
 test('outside work becomes a task, and the run that caused it is recorded', async () => {
   const a = adapters()
   const result = await new HandoffCapability(a).call(ctx, 'task_create', {
+    title: 'Send resume to Rishi', group: 'Unmute',
     intent: 'send the resume to Rishi', kind: 'oneoff',
   })
   assert.deepEqual(parse(result), { ok: true, result: { taskId: 'task-9', status: 'created' } })
@@ -37,6 +55,7 @@ test('outside work becomes a task, and the run that caused it is recorded', asyn
 test('an explicit provider overrides the Agent provider', async () => {
   const a = adapters()
   await new HandoffCapability(a).call(ctx, 'task_create', {
+    title: 'Send resume to Rishi', group: 'Unmute',
     intent: 'continue this in Claude', kind: 'session', provider: 'claude',
   })
   assert.equal(a.created[0].kind, 'session')
@@ -59,10 +78,12 @@ test('carried context reaches the new session as content, not identifiers', asyn
     taskStatus: async () => null,
   })
   const result = await cap.call(ctx, 'task_create', {
+    title: 'Send resume to Rishi', group: 'Unmute',
     intent: 'carry on with the marketing work',
     kind: 'session',
     provider: 'codex',
     context: 'Three earlier sessions covered ad copy, the landing page and competitor pricing.',
+    sourceSessions: [{ sessionId: 'aaaaaaaa-1111-4222-8333-444444444444', provider: 'codex' }],
   })
   assert.equal(parse(result).ok, true)
   assert.equal(calls[0].context, 'Three earlier sessions covered ad copy, the landing page and competitor pricing.')
@@ -82,6 +103,7 @@ test('synthesis carries validated source identities, cwd, and exact artifacts se
   ]
 
   const result = await new HandoffCapability(a).call(ctx, 'task_create', {
+    title: 'Send resume to Rishi', group: 'Unmute',
     intent: 'continue the combined launch work', kind: 'session', provider: 'codex',
     context: 'The launch plan was approved; pricing remains unresolved.',
     sourceSessions: sources, artifacts, cwd: '/Users/me/launch',
@@ -105,6 +127,7 @@ test('synthesis refuses truncated source ids and malformed provenance', async ()
   for (const extra of badValues) {
     const a = adapters()
     const result = await new HandoffCapability(a).call(ctx, 'task_create', {
+    title: 'Send resume to Rishi', group: 'Unmute',
       intent: 'continue', kind: 'session', ...extra,
     })
     assert.equal(result.isError, true)
@@ -132,10 +155,11 @@ test('context is optional, and an oversized one is refused', async () => {
     createTask: async (input) => { calls.push(input); return { taskId: 't' } },
     taskStatus: async () => null,
   })
-  await cap.call(ctx, 'task_create', { intent: 'send it', kind: 'oneoff', provider: 'claude' })
+  await cap.call(ctx, 'task_create', { title: 'Send resume to Rishi', group: 'Unmute', intent: 'send it', kind: 'oneoff', provider: 'claude' })
   assert.equal(calls[0].context, undefined)
 
   const huge = await cap.call(ctx, 'task_create', {
+    title: 'Send resume to Rishi', group: 'Unmute',
     intent: 'send it', kind: 'oneoff', provider: 'claude', context: 'x'.repeat(24_001),
   })
   assert.equal(parse(huge).ok, false)
@@ -154,7 +178,7 @@ test('an empty or oversized intent never reaches the Orchestrator', async () => 
     { intent: 'ok', kind: 'oneoff', context: 42 },
     { intent: 'ok', kind: 'oneoff', context: 'x'.repeat(24_001) },
   ]) {
-    assert.equal((await new HandoffCapability(a).call(ctx, 'task_create', bad)).isError, true)
+    assert.equal((await new HandoffCapability(a).call(ctx, 'task_create', { title: 'Send resume to Rishi', group: 'Unmute', ...bad })).isError, true)
   }
   assert.deepEqual(a.created, [])
 })
@@ -178,7 +202,7 @@ test('status is readable and a missing task says so', async () => {
 
 test('a failure to create is reported without leaking why', async () => {
   const a = adapters({ async createTask() { throw new Error('/private/path/exploded') } })
-  const result = await new HandoffCapability(a).call(ctx, 'task_create', { intent: 'x', kind: 'oneoff' })
+  const result = await new HandoffCapability(a).call(ctx, 'task_create', { title: 'Send resume to Rishi', group: 'Unmute', intent: 'x', kind: 'oneoff' })
   assert.equal(parse(result).error.code, 'handoff-failed')
   assert.equal(String(result.content[0]!.text).includes('/private'), false)
 })

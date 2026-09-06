@@ -6,6 +6,7 @@ import type {
 } from '../types.ts'
 import type { ProviderId } from '../../providers.ts'
 import { isAbsolute } from 'node:path'
+import { requireAgentMetadata } from '../metadata'
 
 /**
  * Handing outside work to the Orchestrator.
@@ -74,8 +75,10 @@ const tools = [
       + ' You do NOT do the work and you do NOT wait for it: say that you have made a task,'
       + ' never that the thing is done.',
     inputSchema: {
-      type: 'object', additionalProperties: false, required: ['intent', 'kind'],
+      type: 'object', additionalProperties: false, required: ['intent', 'kind', 'title', 'group'],
       properties: {
+        title: { type: 'string', minLength: 3, maxLength: 160, description: 'A descriptive conversation title, stored as metadata only.' },
+        group: { type: 'string', minLength: 1, maxLength: 32, description: 'Exact existing canonical workspace label from workspaces_list.' },
         intent: {
           type: 'string', minLength: 1, maxLength: MAX_INTENT_LENGTH,
           description: 'What the person asked for, in their own terms — and NOTHING MORE.'
@@ -154,6 +157,8 @@ export interface HandoffAdapters {
   /** Creates a real Orchestrator task. Records origin so the card can show
    *  that the Agent made it and not the user (Law IV). */
   createTask(input: {
+    title: string
+    group: string
     intent: string
     context?: string
     sourceSessions?: ContinuationSource[]
@@ -207,6 +212,8 @@ export class HandoffCapability implements CapabilityModule {
     const value = (input ?? {}) as Record<string, unknown>
     try {
       if (tool === 'task_create') {
+        let metadata
+        try { metadata = requireAgentMetadata(value) } catch { return fail('invalid-input') }
         const intent = typeof value.intent === 'string' ? value.intent.trim() : ''
         if (!intent || intent.length > MAX_INTENT_LENGTH) return fail('invalid-input')
         const kind = typeof value.kind === 'string' && TASK_KINDS.includes(value.kind as TaskKind)
@@ -228,6 +235,7 @@ export class HandoffCapability implements CapabilityModule {
         }
         const carried = typeof context === 'string' ? context.trim() : ''
         const sourceSessions = value.sourceSessions
+        if (carried && (!Array.isArray(sourceSessions) || sourceSessions.length === 0)) return fail('invalid-input')
         if (sourceSessions !== undefined && (
           !Array.isArray(sourceSessions) || sourceSessions.length > MAX_SOURCES
           || sourceSessions.some(source => {
@@ -255,6 +263,7 @@ export class HandoffCapability implements CapabilityModule {
           return fail('invalid-input')
         }
         const created = await this.adapters.createTask({
+          ...metadata,
           intent,
           kind,
           provider,

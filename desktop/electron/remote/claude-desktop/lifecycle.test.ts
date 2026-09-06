@@ -167,6 +167,19 @@ test('no driver configured ⇒ no adoption, and no crash', async () => {
 
 // ── polling ───────────────────────────────────────────────────────────────
 
+test('provider polling preserves an explicit Agent conversation title', async t => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Provider generated title' }] })
+  const m = await makeManager(d, base)
+  t.after(() => m.shutdown())
+  const [id] = await m.adoptClaudeDesktop()
+  const task = m.get(id)!
+  task.origin = 'unmute-agent'
+  task.name = 'Repair billing migration'
+  await poll(m, id)
+  assert.equal(task.name, 'Repair billing migration')
+})
+
 test('the FIRST poll seeds the baseline — an old chat must not light up as working', async () => {
   // Caught against the real store: every one of 8 adopted conversations, all
   // finished days earlier, showed `processing` because the first read compared
@@ -524,6 +537,19 @@ test('a delivery failure is NOT a task failure', async () => {
   assert.equal(m.get(id)!.deliveryError, 'row-not-found')
   assert.notEqual(m.get(id)!.state, 'failed')
   m.killAll(); m.stopMaintenance()
+})
+
+test('an Agent display title never replaces the native Desktop address for a reply', async t => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Provider billing title' }] })
+  const act = fakeActuatorFull()
+  const m = await managerFull(d, fakeAx(), act, base)
+  t.after(() => m.shutdown())
+  const [id] = await m.adoptClaudeDesktop()
+  m.get(id)!.origin = 'unmute-agent'; m.get(id)!.name = 'Repair billing migration'
+  assert.equal((await m.sendClaudeDesktop(id, 'continue')).ok, true)
+  assert.deepEqual(act.sent, [{ title: 'Provider billing title', text: 'continue' }])
+  assert.equal(m.get(id)!.name, 'Repair billing migration')
 })
 
 test('sending is refused while the task is blocked on a prompt', async () => {

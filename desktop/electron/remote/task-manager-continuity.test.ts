@@ -4,6 +4,52 @@ import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TaskManager } from './task-manager.ts'
+import { GroupRegistry } from './group-registry.ts'
+
+test('Claude Desktop agent handoff has metadata before adoption publishes the card', async t => {
+  const baseDir = await base()
+  const groupRegistry = new GroupRegistry({ path: join(baseDir, 'groups.json'), idFactory: () => 'canonical-group' })
+  groupRegistry.define('Unmute')
+  let created = false
+  const driver = { async list() { return created ? [{ sessionId: 'desktop-session', title: 'New task', cwd: baseDir, createdAt: Date.now(), lastActivityAt: Date.now(), model: null }] : [] } }
+  const actuator = { async createTask(text: string) {
+    assert.equal(text, 'repair billing'); created = true
+    assert.deepEqual(await tm.adoptClaudeDesktop(), [], 'background discovery must wait for handoff metadata')
+    return { ok: true }
+  } }
+  const tm = new TaskManager({ executorFactory, claudeDesktopDriver: driver as never, claudeActuator: actuator as never, baseDir, groupRegistry })
+  t.after(() => tm.shutdown())
+  const first: unknown[] = []
+  tm.on('created', task => first.push({ name: task.name, group: task.group, groupId: task.groupId }))
+  const id = await tm.dispatch('repair billing', { agent: 'claude-code-desktop', agentMetadata: { title: 'Repair billing migration', group: 'Unmute', agentRunId: 'run' } })
+  assert.deepEqual(first, [{ name: 'Repair billing migration', group: 'Unmute', groupId: 'canonical-group' }])
+  assert.equal(JSON.parse(await fs.readFile(join(tm.get(id)!.home, 'meta.json'), 'utf8')).name, 'Repair billing migration')
+  const restarted = new TaskManager({ executorFactory, baseDir, groupRegistry })
+  t.after(() => restarted.shutdown())
+  await restarted.rehydrate()
+  assert.equal(restarted.get(id)?.sessionId, 'desktop-session')
+  assert.equal(restarted.get(id)?.agent, 'claude-code-desktop')
+  assert.equal(restarted.get(id)?.origin, 'unmute-agent')
+  await groupRegistry.flush()
+})
+
+test('agent dispatch publishes and persists its canonical metadata on the first created event', async () => {
+  const baseDir = await base()
+  const groupRegistry = new GroupRegistry({ path: join(baseDir, 'groups.json'), idFactory: () => 'canonical-group' })
+  groupRegistry.define('Unmute')
+  const sent: string[] = []
+  const hub = { running: true, async startThread() { return { threadId: 'new-thread' } }, async send(_id: string, text: string) { sent.push(text); return true } }
+  const tm = new TaskManager({ executorFactory, codexHub: hub as never, baseDir, groupRegistry })
+  const first: unknown[] = []
+  tm.on('created', task => first.push({ name: task.name, group: task.group, groupId: task.groupId, origin: task.origin }))
+  const id = await tm.dispatch('repair billing', { agent: 'codex', agentMetadata: { title: 'Repair billing migration', group: 'unmute', agentRunId: 'run' } } as any)
+  assert.deepEqual(first, [{ name: 'Repair billing migration', group: 'Unmute', groupId: 'canonical-group', origin: 'unmute-agent' }])
+  assert.deepEqual(sent, ['repair billing'])
+  const saved = JSON.parse(await fs.readFile(join(tm.get(id)!.home, 'meta.json'), 'utf8'))
+  assert.equal(saved.name, 'Repair billing migration')
+  assert.equal(saved.groupId, 'canonical-group')
+  await groupRegistry.flush()
+})
 
 async function base(): Promise<string> {
   return fs.mkdtemp(join(tmpdir(), 'unmute-continuity-'))
@@ -12,6 +58,75 @@ async function base(): Promise<string> {
 function executorFactory(): never {
   throw new Error('continuity must not use a terminal executor')
 }
+
+test('unresolved Desktop handoff retains metadata across restart and refuses ambiguous adoption', async t => {
+  const baseDir = await base()
+  const groupRegistry = new GroupRegistry({ path: join(baseDir, 'groups.json'), idFactory: () => 'canonical-group' })
+  groupRegistry.define('Unmute')
+  let ids: string[] = []
+  const driver = {
+    async list() { return ids.map(sessionId => ({ sessionId, title: 'Provider title', cwd: baseDir, createdAt: Date.now(), lastActivityAt: Date.now(), model: null })) },
+    async snapshot(id: string) { return { snapshot: { turns: [{ role: 'user', text: id === 'manual' ? 'plan a holiday' : 'repair billing' }] } } },
+  }
+  const first = new TaskManager({ executorFactory, baseDir, groupRegistry, claudeDesktopDriver: driver as never, claudeActuator: { async createTask() { return { ok: true } } } as never })
+  t.after(() => first.shutdown())
+  const unresolved = await first.createClaudeDesktop('repair billing', { tries: 1, waitMs: 0, agentMetadata: { title: 'Repair billing migration', group: 'Unmute', agentRunId: 'run' } })
+  assert.equal(unresolved.id, undefined)
+  const restarted = new TaskManager({ executorFactory, baseDir, groupRegistry, claudeDesktopDriver: driver as never })
+  t.after(() => restarted.shutdown())
+  ids = ['candidate-a', 'candidate-b', 'manual']
+  const manual = await restarted.adoptClaudeDesktop()
+  assert.equal(manual.length, 1)
+  assert.equal(restarted.get(manual[0])?.sessionId, 'manual')
+  assert.equal(restarted.get(manual[0])?.origin, undefined)
+  ids = ['candidate-a']
+  const seen: string[] = []
+  restarted.on('created', task => seen.push(task.name!))
+  const [id] = await restarted.adoptClaudeDesktop()
+  assert.deepEqual(seen, ['Repair billing migration'])
+  assert.equal(restarted.get(id)?.groupId, 'canonical-group')
+  assert.equal(restarted.get(id)?.sessionId, 'candidate-a')
+  await groupRegistry.flush()
+})
+
+test('an unacknowledged Desktop create cannot claim a later unrelated conversation', async t => {
+  const baseDir = await base()
+  const groupRegistry = new GroupRegistry({ path: join(baseDir, 'groups.json') })
+  groupRegistry.define('Unmute')
+  let created = false
+  const driver = { async list() { return created ? [{ sessionId: 'unrelated', title: 'Other work', createdAt: Date.now(), lastActivityAt: Date.now(), model: null }] : [] } }
+  const first = new TaskManager({ executorFactory, baseDir, groupRegistry, claudeDesktopDriver: driver as never,
+    claudeActuator: { async createTask() { throw new Error('transport disconnected') } } as never })
+  t.after(() => first.shutdown())
+  await assert.rejects(first.createClaudeDesktop('repair billing', { agentMetadata: { title: 'Repair billing migration', group: 'Unmute', agentRunId: 'run' } }))
+  created = true
+  const restarted = new TaskManager({ executorFactory, baseDir, groupRegistry, claudeDesktopDriver: driver as never })
+  t.after(() => restarted.shutdown())
+  assert.deepEqual(await restarted.adoptClaudeDesktop(), [])
+  await groupRegistry.flush()
+})
+
+test('an expired Desktop receipt neither captures future chats nor prevents a new Agent request', async t => {
+  const baseDir = await base()
+  const groupRegistry = new GroupRegistry({ path: join(baseDir, 'groups.json') })
+  groupRegistry.define('Unmute')
+  let clock = Date.now(), visible = false
+  const driver = {
+    async list() { return visible ? [{ sessionId: 'future', title: 'Later work', createdAt: clock, lastActivityAt: clock, model: null }] : [] },
+    async snapshot() { return { snapshot: { turns: [{ role: 'user', text: 'repair billing' }] } } },
+  }
+  const m = new TaskManager({ executorFactory, baseDir, groupRegistry, now: () => clock, claudeDesktopDriver: driver as never,
+    claudeActuator: { async createTask() { return { ok: true } } } as never })
+  t.after(() => m.shutdown())
+  const metadata = { title: 'Repair billing migration', group: 'Unmute', agentRunId: 'first-run' }
+  await m.createClaudeDesktop('repair billing', { tries: 1, waitMs: 0, agentMetadata: metadata })
+  clock += 120_001; visible = true
+  const [id] = await m.adoptClaudeDesktop()
+  assert.equal(m.get(id)?.origin, undefined)
+  assert.equal(m.get(id)?.sessionId, 'future')
+  assert.equal((await m.createClaudeDesktop('new work', { tries: 1, waitMs: 0, agentMetadata: metadata })).ok, true)
+  await groupRegistry.flush()
+})
 
 test('fork identity is durable before history refresh and refresh failure is retryable, not another card', async () => {
   const baseDir = await base()
@@ -62,12 +177,12 @@ test('fork inherits name and group, and a supplied title is not a user message',
   source.sessionId = 'source'; source.name = 'Notetaker models'; source.group = 'Unmute'; source.groupId = 'unmute-group'
   const result = await tm.forkProviderSession({ harness: 'codex', sessionId: 'source', cwd: baseDir, title: 'ASR experiment' })
   const child = tm.get(result.taskId)!
-  assert.equal(child.name, 'ASR experiment')
+  assert.equal(child.name, 'Notetaker models')
   assert.equal(child.group, 'Unmute')
   assert.equal(child.groupId, 'unmute-group')
   const saved = JSON.parse(await fs.readFile(join(child.home, 'meta.json'), 'utf8'))
   assert.equal(saved.continuationPending, false)
-  assert.equal(saved.name, 'ASR experiment')
+  assert.equal(saved.name, 'Notetaker models')
 })
 
 test('Codex attach resumes the exact provider thread and submits only the current request', async () => {

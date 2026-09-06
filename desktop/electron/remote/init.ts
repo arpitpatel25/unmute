@@ -106,6 +106,8 @@ import { SessionsCapability } from './agent/capabilities/sessions'
 import { locateSession } from './agent/sessions/locate'
 import { searchSessionCatalog } from './agent/sessions/catalog'
 import { AgentContinuationService } from './agent/sessions/service'
+import { validateContinuationSources } from './agent/sessions/sources'
+import { isDescriptiveTitle, requireWorkspaceLabel } from './agent/metadata'
 
 let unmuteAgentLifecycle: AgentConversationLifecycle | AgentRuntimeClient | null = null
 import { CodexCliProvider } from './agent/providers/codex'
@@ -133,6 +135,7 @@ import { CodexAppServer } from './codex/app-server-client'
 import { PersistentRuntimeClient } from './runtime/client'
 import { PersistentCodexHub } from './runtime/codex-client'
 import { CompatibleCodexRuntime } from './runtime/codex-routing'
+import { CompatibleAgentRuntime, recoverAgentRuntime } from './runtime/agent-routing'
 import { PersistentClaudeTaskSession } from './runtime/claude-client'
 import { AgentRuntimeClient } from './runtime/agent-client'
 import { registerRuntimeHost } from './runtime/host-bridge'
@@ -631,12 +634,28 @@ async function getSetupStatus() {
 }
 
 let manager: TaskManager | null = null
+async function createAgentWorkspace(group: unknown) {
+  if (!groupRegistry) throw new Error('Workspaces are not initialized')
+  const entry = groupRegistry.resolve(requireWorkspaceLabel(group))!
+  await groupRegistry.flush()
+  return { id: entry.id, label: entry.label }
+}
+async function searchAgentSessions(query: string, limit?: number) {
+  const results = await searchSessionCatalog(query, undefined, limit)
+  return results.map(entry => {
+    const source = manager?.list().find(task => task.sessionId === entry.sessionId || task.codexRolloutId === entry.sessionId)
+    const workspace = groupRegistry?.get(source?.groupId) || groupRegistry?.find(source?.group)
+    return { ...entry, ...(isDescriptiveTitle(source?.name, source?.cwd) ? { title: source.name } : {}),
+      ...(workspace ? { group: workspace.label, groupId: workspace.id } : {}) }
+  })
+}
 let continuationInteractionId: string | undefined
 const agentContinuations = new AgentContinuationService({
   interactionId: () => continuationInteractionId,
   operationRoot: join(homedir(), '.unmute', 'remote', 'continuation-operations'),
   manager: () => manager,
   locate: locateSession,
+  workspaces: () => groupRegistry,
   scratchRoot: join(homedir(), '.unmute', 'remote', 'local'),
   ensureDirectory: path => fs.mkdir(path, { recursive: true }).then(() => undefined),
 })
@@ -1232,7 +1251,9 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
       // nothing here re-creates the index (or the sweep that maintained it)
       // deleted in cc48bbf.
       new SessionsCapability({
-        search: input => searchSessionCatalog(input.query, undefined, input.limit),
+        createWorkspace: createAgentWorkspace,
+        workspaces: async () => (groupRegistry?.list() ?? []).map(({ id, label }) => ({ id, label })),
+        search: input => searchAgentSessions(input.query, input.limit),
         resume: input => agentContinuations.resume(input),
         fork: input => agentContinuations.fork(input),
       }),
@@ -1246,6 +1267,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
       new HandoffCapability({
         async createTask(input) {
           if (!manager) throw new Error('Unmute Remote is not initialized')
+          await validateContinuationSources(input.sourceSessions, locateSession, input.context)
           // The same dispatch the right-Option key uses. A hand-off is an
           // ordinary Orchestrator task in every respect except that the card
           // can say the Agent asked for it rather than the user (Law IV).
@@ -1257,6 +1279,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
           const taskId = await manager.dispatch(seeded, {
             kind: input.kind,
             agent: input.provider,
+            agentMetadata: { title: input.title, group: input.group, agentRunId: input.agentRunId },
             ...(input.cwd ? { cwd: input.cwd } : {}),
           })
           manager.mergeAgentOrigin(taskId, input.agentRunId)
@@ -1471,7 +1494,7 @@ async function initializeUnmuteAgent(): Promise<void> {
     unmuteAgentAvailability = { available: false, reason: 'disabled', providers: await probeUnmuteAgentProviders() }
     return
   }
-  const runtime = persistentRuntime
+  const runtime = agentRuntimeRouting
   if (!runtime) throw new Error('Persistent runtime is unavailable')
   unmuteAgentAvailability = { available: false, reason: 'initializing', providers: [] }
   let key: Buffer | undefined
@@ -1707,6 +1730,8 @@ let codexHub: CodexHub | null = null
 /** Detached provider owner. The Electron UI only holds this reconnectable socket. */
 let persistentRuntime: PersistentRuntimeClient | null = null
 let codexRuntimeRouting: CompatibleCodexRuntime | null = null
+let agentRuntimeRouting: CompatibleAgentRuntime | null = null
+let releaseAgentRuntimeHost: (() => void) | null = null
 let releaseRuntimeHost: (() => void) | null = null
 let persistentRuntimeReady: Promise<void> = Promise.resolve()
 
@@ -3883,15 +3908,18 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
   }
   if (method === 'sessions.resume') return agentContinuations.resume(args[0])
   if (method === 'sessions.fork') return agentContinuations.fork(args[0])
+  if (method === 'sessions.workspaces') return (groupRegistry?.list() ?? []).map(({ id, label }) => ({ id, label }))
+  if (method === 'sessions.createWorkspace') return createAgentWorkspace(args[0])
   if (method === 'sessions.search') {
     const input = args[0] as { query: string; limit?: number }
-    return searchSessionCatalog(input.query, undefined, input.limit)
+    return searchAgentSessions(input.query, input.limit)
   }
   if (method === 'handoff.createTask') {
     if (!manager) throw new Error('Unmute Remote is not initialized')
-    const input = args[0] as Parameters<typeof buildHandoffPrompt>[0] & { sourceSessions?: Array<{ sessionId: string; provider: 'claude' | 'codex' }>; cwd?: string; kind: 'oneoff' | 'session'; provider: AgentKind; agentRunId: string }
+    const input = args[0] as Parameters<typeof buildHandoffPrompt>[0] & { title: string; group: string; sourceSessions?: Array<{ sessionId: string; provider: 'claude' | 'codex' }>; cwd?: string; kind: 'oneoff' | 'session'; provider: AgentKind; agentRunId: string }
+    await validateContinuationSources(input.sourceSessions, locateSession, input.context)
     const seeded = buildHandoffPrompt(input)
-    const taskId = await manager.dispatch(seeded, { kind: input.kind, agent: input.provider, ...(input.cwd ? { cwd: input.cwd } : {}) })
+    const taskId = await manager.dispatch(seeded, { kind: input.kind, agent: input.provider, agentMetadata: { title: input.title, group: input.group, agentRunId: input.agentRunId }, ...(input.cwd ? { cwd: input.cwd } : {}) })
     manager.mergeAgentOrigin(taskId, input.agentRunId)
     await manager.mergeContinuationProvenance(taskId, {
       mode: input.sourceSessions?.length ? 'synthesis' : 'fresh',
@@ -4569,7 +4597,7 @@ async function dispatchFromCaptureInner(
         const taskManager = manager
         if (!decision.name) manager.setName(newId, provisionalName(decision.intent || raw))
         void decision.enrich.then((late) => {
-          if (late.name) taskManager.setName(newId, late.name)
+          if (late.name && taskManager.get(newId)?.origin !== 'unmute-agent') taskManager.setName(newId, late.name)
           // Assign-once still holds: only fill a group the task does not have.
           if (late.group && !taskManager.get(newId)?.group) taskManager.setGroup(newId, late.group)
           log.event('late-label-applied', { taskId: newId, name: late.name ?? null, group: late.group ?? null })
@@ -4710,6 +4738,28 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const runtimeRoot = join(app.getPath('userData'), 'persistent-runtime')
   persistentRuntime = new PersistentRuntimeClient(runtimeRoot, join(__dirname, 'unmute-runtime.js'))
   releaseRuntimeHost = registerRuntimeHost(persistentRuntime, invokeRuntimeHost)
+  const agentWorker = new PersistentRuntimeClient(join(app.getPath('userData'), 'persistent-runtime-agent-metadata-v1'), join(__dirname, 'unmute-runtime.js'))
+  releaseAgentRuntimeHost = registerRuntimeHost(agentWorker, invokeRuntimeHost)
+  agentRuntimeRouting = new CompatibleAgentRuntime(persistentRuntime, agentWorker)
+  agentRuntimeRouting.on('reconnected', () => {
+    if (unmuteAgentLifecycle instanceof AgentRuntimeClient) {
+      const client = unmuteAgentLifecycle
+      const runtime = agentRuntimeRouting!
+      void agentWorker.call('hello').then(() => recoverAgentRuntime(runtime, async () => {
+        if (settings.get('unmuteAgentAvailable') !== true || unmuteAgentLifecycle !== client) return false as const
+        const root = join(app.getPath('userData'), 'unmute-agent')
+        const keyProvider = new SafeStorageKeyProvider({ root: join(root, 'memory'), protectedValueStore: safeStorage })
+        const key = await keyProvider.getMasterKey()
+        try {
+          if (settings.get('unmuteAgentAvailable') !== true || unmuteAgentLifecycle !== client) return false as const
+          await client.configure({ masterKey: key.toString('base64'), selectedProvider: settings.get('unmuteAgentProvider'),
+            maxActiveProcesses: settings.get('unmuteAgentMaxProcesses'), conversationCeiling: settings.get('unmuteAgentConversationCeiling') ?? 20,
+            notetaker: !!notetakerAdapters })
+        } finally { key.fill(0) }
+      }, () => client.reconnect())).catch(error => log.warn('Agent runtime recovery failed', { error: (error as Error).message }))
+    }
+  })
+  agentWorker.on('computer.activity', event => broadcastAxActivity(event as Parameters<typeof broadcastAxActivity>[0]))
   persistentRuntime.on('computer.activity', event => broadcastAxActivity(event as Parameters<typeof broadcastAxActivity>[0]))
   persistentRuntimeReady = persistentRuntime.call('hello').then(info => {
     log.event('persistent-runtime-connected', info as Record<string, unknown>)
@@ -6088,6 +6138,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // app-server and its active threads alive.
     try { codexHub?.stop() } catch (e) { log.warn('codex hub shutdown failed', { error: (e as Error).message }) }
     releaseRuntimeHost?.(); releaseRuntimeHost = null
+    releaseAgentRuntimeHost?.(); releaseAgentRuntimeHost = null
+    agentRuntimeRouting?.disconnect(); agentRuntimeRouting = null
     codexRuntimeRouting?.disconnect(); codexRuntimeRouting = null
     persistentRuntime?.disconnect(); persistentRuntime = null
   })
@@ -6147,7 +6199,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       disposeUnmuteAgent()
       await initializeUnmuteAgent()
     } else {
-      await persistentRuntime?.call('agent.disable').catch(() => {})
+      await agentRuntimeRouting?.call('agent.disable').catch(() => {})
       disposeUnmuteAgent()
     }
     log.event('unmute-agent-availability', { enabled: on === true })
@@ -6876,7 +6928,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:set-agent-conversation-ceiling', async (_event, ceiling: unknown) => {
     if (typeof ceiling !== 'number' || !Number.isSafeInteger(ceiling) || ceiling < 1) return false
     settings.set('unmuteAgentConversationCeiling', ceiling)
-    await persistentRuntime?.call('agent.update', { conversationCeiling: ceiling })
+    await agentRuntimeRouting?.call('agent.update', { conversationCeiling: ceiling })
     return true
   })
   ipcMain.handle('remote:agent-submit', async (_e, input: AgentInteractionInput) => {

@@ -108,6 +108,8 @@ export class AgentRuntimeService {
         new MemoryCapability(memory),
         new HistoryCapability({ recent: ms => this.host('history.recent', [ms]), copy: id => this.host('history.copy', [id]) }),
         new SessionsCapability({
+          createWorkspace: group => this.host('sessions.createWorkspace', [group]),
+          workspaces: () => this.host('sessions.workspaces', []),
           search: input => this.host('sessions.search', [input]),
           resume: input => this.host('sessions.resume', [input]),
           fork: input => this.host('sessions.fork', [input]),

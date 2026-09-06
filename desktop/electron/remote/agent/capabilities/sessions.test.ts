@@ -4,6 +4,16 @@ import { SessionsCapability, type SessionAdapters } from './sessions.ts'
 import type { CapabilityCallContext, McpPrincipal, ToolResult } from '../types.ts'
 
 const NOW = 10_000
+test('resume and fork refuse missing or placeholder presentation before dispatch', async () => {
+  for (const tool of ['session_resume', 'session_fork']) {
+    for (const metadata of [{}, { title: 'New conversation', group: 'Unmute' }, { title: 'Repair billing migration', group: '' }]) {
+      const a = adapters()
+      const result = await new SessionsCapability(a).call(ctx, tool, { sessionId: 'source-session', ...metadata })
+      assert.equal(result.isError, true)
+      assert.equal(a.asked.length, 0)
+    }
+  }
+})
 const agent: McpPrincipal = {
   kind: 'unmute-agent', runId: 'run-1', interactionId: 'ix-1', expiresAt: 20_000, provider: 'claude',
 }
@@ -14,7 +24,7 @@ const ctx: CapabilityCallContext = {
 test('one interaction cannot fork the same source again by changing its wording', async () => {
   const a = adapters()
   const c = new SessionsCapability(a)
-  const first = await c.call(ctx, 'session_fork', { sessionId: 'source-session' })
+  const first = await c.call(ctx, 'session_fork', { sessionId: 'source-session', title: 'Repair billing migration', group: 'Unmute' })
   const retry = await c.call(ctx, 'session_fork', { sessionId: 'source-session', intent: 'different title' })
   assert.deepEqual(retry, first)
   assert.equal(a.asked.length, 1)
@@ -23,7 +33,7 @@ test('one interaction cannot fork the same source again by changing its wording'
 test('permanent fork failure is cached for this interaction and says not to retry', async () => {
   let attempts = 0
   const c = new SessionsCapability(adapters({ fork: async () => { attempts++; throw new Error('Unknown Codex runtime command') } }))
-  await c.call(ctx, 'session_fork', { sessionId: 'source-session' })
+  await c.call(ctx, 'session_fork', { sessionId: 'source-session', title: 'Repair billing migration', group: 'Unmute' })
   const result = parse(await c.call(ctx, 'session_fork', { sessionId: 'source-session', intent: 'retry' }))
   assert.equal(attempts, 1)
   assert.equal(result.error.retryable, false)
@@ -49,6 +59,7 @@ function adapters(overrides: Partial<SessionAdapters> = {}): SessionAdapters & {
         sessionId: 'bbbbbbbb-1111-2222-3333-444444444444',
       }
     },
+    async workspaces() { return [{ id: 'unmute', label: 'Unmute' }] },
     async search(input) {
       asked.push({ operation: 'search', ...input })
       return [{ sessionId: 'match', harness: 'codex' as const, path: '/rollout', modifiedAt: 1,
@@ -63,6 +74,7 @@ test('a past session is reopened as a card, and the id is reported back', async 
 
   const result = await new SessionsCapability(a).call(ctx, 'session_resume', {
     sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+    title: 'Repair billing migration', group: 'Unmute',
     intent: 'carry on with the migration',
   })
 
@@ -83,6 +95,7 @@ test('fork is a separate operation and reports the provider child identity', asy
 
   const result = await new SessionsCapability(a).call(ctx, 'session_fork', {
     sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+    title: 'Repair billing migration', group: 'Unmute',
     intent: 'try the alternate migration',
   })
 
@@ -96,6 +109,7 @@ test('fork is a separate operation and reports the provider child identity', asy
   })
   assert.deepEqual(a.asked[0], {
     operation: 'fork', sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+    title: 'Repair billing migration', group: 'Unmute',
     intent: 'try the alternate migration',
   })
 })
@@ -108,7 +122,7 @@ test('resume fails closed when the adapter changes provider identity', async () 
         sessionId: 'different-session',
       }
     },
-  })).call(ctx, 'session_resume', { sessionId: 'source-session' })
+  })).call(ctx, 'session_resume', { sessionId: 'source-session', title: 'Repair billing migration', group: 'Unmute' })
 
   assert.equal(result.isError, true)
   assert.equal(parse(result).error.code, 'resume-failed')
@@ -122,7 +136,7 @@ test('fork fails closed when the adapter reuses provider identity', async () => 
         sessionId: input.sessionId,
       }
     },
-  })).call(ctx, 'session_fork', { sessionId: 'source-session' })
+  })).call(ctx, 'session_fork', { sessionId: 'source-session', title: 'Repair billing migration', group: 'Unmute' })
 
   assert.equal(result.isError, true)
   assert.equal(parse(result).error.code, 'fork-failed')
@@ -144,10 +158,25 @@ test('search refuses empty queries and excessive limits', async () => {
   assert.deepEqual(a.asked, [])
 })
 
+test('workspace discovery returns canonical ids and labels without dispatching work', async () => {
+  const a = adapters()
+  const result = await new SessionsCapability(a).call(ctx, 'workspaces_list', {})
+  assert.deepEqual(parse(result).result, [{ id: 'unmute', label: 'Unmute' }])
+  assert.deepEqual(a.asked, [])
+})
+
+test('workspace creation is deliberate, validated and limited to the active interaction', async () => {
+  const a = adapters({ createWorkspace: async group => ({ id: 'billing', label: group }) })
+  const capability = new SessionsCapability(a)
+  assert.deepEqual(parse(await capability.call(ctx, 'workspaces_create', { group: 'Billing' })).result, { id: 'billing', label: 'Billing' })
+  assert.equal((await capability.call(ctx, 'workspaces_create', { group: 'Ungrouped' })).isError, true)
+  assert.equal((await capability.call({ ...ctx, interaction: { id: 'ix-1', active: false } }, 'workspaces_create', { group: 'Billing' })).isError, true)
+})
+
 test('reopening without an intent asks for no follow-up at all', async () => {
   const a = adapters()
 
-  await new SessionsCapability(a).call(ctx, 'session_resume', { sessionId: 'abc' })
+  await new SessionsCapability(a).call(ctx, 'session_resume', { sessionId: 'abc', title: 'Repair billing migration', group: 'Unmute' })
 
   assert.equal('intent' in a.asked[0], false, 'an absent intent must not become an empty one')
 })
@@ -161,7 +190,7 @@ test('a session that cannot be reopened comes back as an error the Agent can rea
     async resume() { throw new Error('That session is not on this machine') },
   })
 
-  const result = await new SessionsCapability(a).call(ctx, 'session_resume', { sessionId: 'abc' })
+  const result = await new SessionsCapability(a).call(ctx, 'session_resume', { sessionId: 'abc', title: 'Repair billing migration', group: 'Unmute' })
 
   assert.equal(result.isError, true)
   assert.deepEqual(parse(result).error, {
@@ -184,7 +213,7 @@ test('a task principal cannot reopen the user\'s sessions', async () => {
   const task: McpPrincipal = { kind: 'task', taskId: 't-1' } as McpPrincipal
 
   const result = await new SessionsCapability(adapters()).call(
-    { principal: task, now: NOW }, 'session_resume', { sessionId: 'abc' },
+    { principal: task, now: NOW }, 'session_resume', { sessionId: 'abc', title: 'Repair billing migration', group: 'Unmute' },
   )
 
   assert.equal(parse(result).error.code, 'access-denied')
@@ -192,7 +221,7 @@ test('a task principal cannot reopen the user\'s sessions', async () => {
 
 test('an expired agent run cannot reopen a session', async () => {
   const result = await new SessionsCapability(adapters()).call(
-    { principal: agent, now: 30_000 }, 'session_resume', { sessionId: 'abc' },
+    { principal: agent, now: 30_000 }, 'session_resume', { sessionId: 'abc', title: 'Repair billing migration', group: 'Unmute' },
   )
 
   assert.equal(parse(result).error.code, 'access-denied')
@@ -201,9 +230,9 @@ test('an expired agent run cannot reopen a session', async () => {
 test('the capability exposes distinct resume and fork tools only to the Agent', () => {
   const capability = new SessionsCapability(adapters())
 
-  assert.deepEqual(capability.tools.map((t) => t.name), ['sessions_search', 'session_resume', 'session_fork'])
+  assert.deepEqual(capability.tools.map((t) => t.name), ['workspaces_create', 'workspaces_list', 'sessions_search', 'session_resume', 'session_fork'])
   assert.deepEqual([...capability.roles], ['unmute-agent'])
-  assert.equal(capability.tools[0]!.consequence, 'read')
-  assert.equal(capability.tools[1]!.consequence, 'reversible-write')
-  assert.equal(capability.tools[2]!.consequence, 'reversible-write')
+  assert.equal(capability.tools[1]!.consequence, 'read')
+  assert.equal(capability.tools[3]!.consequence, 'reversible-write')
+  assert.equal(capability.tools[4]!.consequence, 'reversible-write')
 })

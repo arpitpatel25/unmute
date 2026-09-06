@@ -8,11 +8,12 @@
 
 **Scope:** Unmute Agent only; ordinary dictation, manual tasks, and provider execution semantics remain unchanged. Preserve existing history and user files.
 
-- [ ] Add failing provenance tests for Codex child vs main, Claude sidechains, incomplete/unknown records, legitimate main forks, and oversized metadata.
-- [ ] Implement bounded structured provenance projection; filter catalog; expose execution guard with useful parent-session diagnostics.
-- [ ] Add failing metadata tests for required title/workspace, inheritance, canonical resolution, prompt separation, and pre-publication stamping.
-- [ ] Implement capability schemas, workspace discovery, host enforcement, and both handoff host paths. Validate synthesis sources too.
-- [ ] Run targeted and broader regression suites; review diff and resolve failures.
+- [x] Add failing provenance tests for Codex child vs main, Claude sidechains, incomplete/unknown records, legitimate main forks, and oversized metadata.
+- [x] Implement bounded structured provenance projection; filter catalog; expose execution guard with useful parent-session diagnostics.
+- [x] Add failing metadata tests for required title/workspace, inheritance, canonical resolution, prompt separation, and pre-publication stamping.
+- [x] Implement capability schemas, workspace discovery, host enforcement, and both handoff host paths. Validate synthesis sources too.
+- [x] Ensure an idle-only Agent worker handover loads the new tool schemas after installation; preserve running task workers and recover a restarted Agent worker using fresh configuration.
+- [x] Run targeted and broader regression suites; review diff and resolve scoped failures. Provenance: 19 passing; metadata/continuity: 76 passing; socket handover/restart: 6 passing; encrypted memory under Electron: 15 passing. Broad host-Node suite has native ABI mismatch and pre-existing timing/hanging tests; standalone typecheck has five existing wired-tree import errors. Packaged build remains the integration gate.
 - [ ] Commit scoped changes; build next signed/notarized dev version with temporary verbose logging, restore logging switches, install recoverably, verify signature/version and launch.
 
 ## Acceptance checks

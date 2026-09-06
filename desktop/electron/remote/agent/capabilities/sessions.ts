@@ -5,6 +5,7 @@ import type {
   ToolResult,
 } from '../types.ts'
 import type { SessionCatalogEntry } from '../sessions/catalog.ts'
+import { requireAgentMetadata, requireWorkspaceLabel } from '../metadata'
 
 /**
  * `sessions_list`, `sessions_search` and `session_read` were MCP tools over
@@ -25,6 +26,18 @@ import type { SessionCatalogEntry } from '../sessions/catalog.ts'
  */
 
 const tools = [
+  {
+    name: 'workspaces_create',
+    description: 'Deliberately create a workspace when workspaces_list has no suitable existing workspace. Matching labels reuse the canonical existing workspace.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['group'], properties: { group: { type: 'string', minLength: 1, maxLength: 32 } } },
+    consequence: 'reversible-write',
+  },
+  {
+    name: 'workspaces_list',
+    description: 'List existing canonical workspace ids and labels to use when creating, resuming, or forking a conversation.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+    consequence: 'read',
+  },
   {
     name: 'sessions_search',
     description: 'Search a bounded on-demand projection of Claude and Codex transcripts by'
@@ -51,10 +64,10 @@ const tools = [
       + ' context yourself and use task_create. Say you have reopened it only once this'
       + ' returns a task id.',
     inputSchema: {
-      type: 'object', additionalProperties: false, required: ['sessionId'],
+      type: 'object', additionalProperties: false, required: ['sessionId', 'title', 'group'],
       properties: {
-        title: { type: 'string', maxLength: 160, description: 'Conversation title only; never sent as a message. Omit to inherit.' },
-        group: { type: 'string', maxLength: 32, description: 'Workspace group label. Omit to inherit the source group.' },
+        title: { type: 'string', minLength: 3, maxLength: 160, description: 'Descriptive title; preserve the source title from sessions_search when present. Never sent as a message.' },
+        group: { type: 'string', minLength: 1, maxLength: 32, description: 'Exact existing workspace label from workspaces_list. Preserve the source workspace when present.' },
         sessionId: {
           type: 'string', minLength: 1,
           description: 'The id of a session you found on disk — a Claude transcript is named'
@@ -77,10 +90,10 @@ const tools = [
       + ' wants the original preserved. Find the full source id in transcripts first. This is'
       + ' not a resume and never falls back to a blank task.',
     inputSchema: {
-      type: 'object', additionalProperties: false, required: ['sessionId'],
+      type: 'object', additionalProperties: false, required: ['sessionId', 'title', 'group'],
       properties: {
-        title: { type: 'string', maxLength: 160, description: 'Conversation title only; never sent as a message. Omit to inherit.' },
-        group: { type: 'string', maxLength: 32, description: 'Workspace group label. Omit to inherit the source group.' },
+        title: { type: 'string', minLength: 3, maxLength: 160, description: 'Descriptive title; preserve the source title from sessions_search when present. Never sent as a message.' },
+        group: { type: 'string', minLength: 1, maxLength: 32, description: 'Exact existing workspace label from workspaces_list. Preserve the source workspace when present.' },
         sessionId: {
           type: 'string', minLength: 1,
           description: 'The full exact provider session id to fork.',
@@ -103,6 +116,8 @@ export interface SessionActionResult {
 }
 
 export interface SessionAdapters {
+  createWorkspace(group: string): Promise<{ id: string; label: string }>
+  workspaces(): Promise<Array<{ id: string; label: string }>>
   search(input: { query: string; limit?: number }): Promise<SessionCatalogEntry[]>
   resume(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult>
   fork(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult>
@@ -130,6 +145,18 @@ export class SessionsCapability implements CapabilityModule {
     if (ctx.principal.kind !== 'unmute-agent' || ctx.principal.expiresAt <= ctx.now) {
       return fail('access-denied', 'Session history is unavailable')
     }
+    if (tool === 'workspaces_create') {
+      if (ctx.interaction?.active !== true || ctx.interaction.id !== ctx.principal.interactionId) return fail('access-denied', 'Workspace creation requires an active interaction')
+      let group: string
+      try { group = requireWorkspaceLabel((input as Record<string, unknown>)?.group) }
+      catch (error) { return fail('invalid-input', (error as Error).message) }
+      try { return ok(await this.adapters.createWorkspace(group)) }
+      catch { return fail('workspace-failed', 'Workspace could not be created') }
+    }
+    if (tool === 'workspaces_list') {
+      try { return ok(await this.adapters.workspaces()) }
+      catch { return fail('search-failed', 'Workspaces could not be listed') }
+    }
     if (tool === 'sessions_search') {
       const value = (input ?? {}) as Record<string, unknown>
       const query = typeof value.query === 'string' ? value.query.trim() : ''
@@ -155,11 +182,11 @@ export class SessionsCapability implements CapabilityModule {
     if (intent.length > 2000) return fail('invalid-input', 'Session query is invalid')
     const title = typeof value.title === 'string' ? value.title.trim() : ''
     const group = typeof value.group === 'string' ? value.group.trim() : ''
-    if (title.length > 160 || group.length > 32) return fail('invalid-input', 'Title or group is too long')
     for (const [key, entry] of this.operations) if (entry.expiresAt <= ctx.now) this.operations.delete(key)
     const key = JSON.stringify([ctx.principal.runId, ctx.principal.interactionId, tool, sessionId])
     const previous = this.operations.get(key)
     if (previous) return previous.result
+    try { requireAgentMetadata({ title, group }) } catch (error) { return fail('invalid-input', (error as Error).message) }
     const pending = (async (): Promise<ToolResult> => {
     try {
       const operation = tool === 'session_resume' ? 'resume' : 'fork'

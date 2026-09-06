@@ -20,6 +20,8 @@
 import { basename, dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { resolveAgentMetadata, isDescriptiveTitle, type AgentMetadata } from './agent/metadata'
+
 import { promises as fs, watch as fsWatch, constants as fsConstants } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import type { FollowupGate, FollowupRecord, NewTurnOutcome, FollowupTurnEnded } from './task-followup'
@@ -30,6 +32,9 @@ import { reconstructTaskMeta } from './meta-reconstruct'
 import { tapPty } from './pty-tap'
 import { ReconcileScheduler } from './reconcile-scheduler'
 import { AppendFileCache } from './append-file-cache'
+
+type AgentDispatchMetadata = AgentMetadata & { agentRunId: string }
+type DesktopHandoffReceipt = { id: string; before: string[]; metadata: AgentDispatchMetadata; acknowledged: boolean; intent: string; startedAt: number }
 
 function sessionOwnership(meta: Record<string, unknown>): 'unmute' | 'external' | 'unknown' {
   if (meta.importedFromCli || meta.sessionOwnership === 'external') return 'external'
@@ -1064,7 +1069,7 @@ export class TaskManager extends EventEmitter {
       case 'claude-code-desktop':
         return async (intent, opts) => {
           if (opts?.attachments?.length) throw new Error('ATTACHMENT_DELIVERY_UNAVAILABLE: claude-desktop')
-          const res = await this.createClaudeDesktop(intent)
+          const res = await this.createClaudeDesktop(intent, { agentMetadata: opts?.agentMetadata })
           if (!res.ok) throw new Error(`CLAUDE_DESKTOP_UNAVAILABLE: ${res.reason ?? 'unknown'}`)
           if (res.id) return res.id
           // Created, but the store had not written it yet. The work HAS started
@@ -1158,6 +1163,7 @@ export class TaskManager extends EventEmitter {
     intent?: string
     title?: string
     group?: string
+    groupId?: string
   }): Promise<{ taskId: string; sessionId: string }> {
     const taskId = await this.createChat({ provider: input.harness, cwd: input.cwd, permission: 'maximum' }, true)
     const task = this.tasks.get(taskId)!
@@ -1188,6 +1194,7 @@ export class TaskManager extends EventEmitter {
     intent?: string
     title?: string
     group?: string
+    groupId?: string
   }): Promise<{ taskId: string; sessionId: string }> {
     const taskId = await this.createChat({ provider: input.harness, cwd: input.cwd, permission: 'maximum' }, true)
     const task = this.tasks.get(taskId)!
@@ -1229,14 +1236,14 @@ export class TaskManager extends EventEmitter {
     } catch (error) { await this.abandonUnpublishedContinuation(task); throw error }
   }
 
-  private continuationPresentation(task: Task, input: { sessionId: string; cwd: string; title?: string; group?: string; intent?: string }, fork: boolean): void {
+  private continuationPresentation(task: Task, input: { sessionId: string; cwd: string; title?: string; group?: string; groupId?: string; intent?: string }, _fork: boolean): void {
     const source = this.list().find(t => t.sessionId === input.sessionId || t.codexRolloutId === input.sessionId)
-    const title = input.title?.trim() || source?.name || source?.intent || input.intent?.trim() || basename(input.cwd)
-    task.name = (input.title?.trim() || `${title}${fork ? ' — branch' : ''}`).slice(0, 160)
-    task.intent = input.intent?.trim() || task.name
-    if (input.group?.trim()) this.setGroup(task.id, input.group.trim())
-    else if (source?.group) { task.group = source.group; task.groupId = source.groupId }
-    else this.setGroup(task.id, basename(input.cwd))
+    const title = isDescriptiveTitle(source?.name, source?.cwd) ? source.name : input.title?.trim() || source?.intent || input.intent?.trim()
+    task.name = title?.slice(0, 160)
+    task.intent = input.intent?.trim() || task.name || task.intent
+    if (input.groupId) { task.group = input.group; task.groupId = input.groupId }
+    else if (source?.group) { task.group = this.opts.groupRegistry?.get(source.groupId)?.label || source.group; task.groupId = source.groupId }
+    else if (input.group?.trim()) this.setGroup(task.id, input.group.trim())
   }
 
   private async publishContinuation(task: Task): Promise<void> {
@@ -1336,6 +1343,7 @@ export class TaskManager extends EventEmitter {
     await fs.mkdir(home, { recursive: true, mode: 0o700 })
     const task: Task = {
       ...project, permissionReason: policy.permissionReason,
+      ...this.agentPresentation(opts.agentMetadata),
       id, sessionId, intent, home, cwd, agent: 'claude', sessionOwnership: 'unmute',
       claudeSessionSettings: { ...this.opts.claudeChoice?.({ ...project, home }), ...policy.claude },
       ...(opts.forkFromSessionId ? { claudeForkFromSessionId: opts.forkFromSessionId } : {}),
@@ -1369,7 +1377,15 @@ export class TaskManager extends EventEmitter {
     return id
   }
 
-  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[]; unrouted?: boolean } = {}): Promise<string> {
+  private agentPresentation(input?: AgentDispatchMetadata, sessionOwnership: 'unmute' | 'external' = 'unmute', cwd?: string): Partial<Task> {
+    if (!input) return {}
+    const metadata = resolveAgentMetadata({ ...input, cwd }, this.opts.groupRegistry)
+    if (!input.agentRunId?.trim()) throw new Error('Agent run identity is required')
+    return { name: metadata.title, group: metadata.group, groupId: metadata.groupId, origin: 'unmute-agent', agentRunId: input.agentRunId, sessionOwnership }
+  }
+
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[]; unrouted?: boolean; agentMetadata?: AgentDispatchMetadata } = {}): Promise<string> {
+    this.agentPresentation(opts.agentMetadata, 'unmute', opts.cwd)
     // Provider-native routes own dispatch acknowledgement. Codex must not fall
     // through to Claude's PTY submit-and-verify path, which can resend prompts.
     const route = this.dispatchRoute(opts.agent)
@@ -1424,6 +1440,7 @@ export class TaskManager extends EventEmitter {
     // field ABSENT, never present-and-empty (D6, §3).
     const task: Task = {
       id, intent, sessionId, kind, runtimePinned: kind === 'session', state: 'processing', createdAt: now, updatedAt: now,
+      ...this.agentPresentation(opts.agentMetadata),
       // Nothing classified this one — see Task.unrouted.
       ...(opts.unrouted ? { unrouted: true } : {}),
       cwd: runCwd, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
@@ -1465,7 +1482,7 @@ export class TaskManager extends EventEmitter {
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
-      await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, runtimePinned: task.runtimePinned, agent, createdAt: now, lastUserInputAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}), ...(task.model ? { model: task.model } : {}) }))
+      await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, runtimePinned: task.runtimePinned, agent, createdAt: now, lastUserInputAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...this.agentPresentation(opts.agentMetadata), ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}), ...(task.model ? { model: task.model } : {}) }))
       devEvent(tlog, 'dispatch-memory', { surface, mode, injectedRecipes: task.injectedRecipes })
 
       // Named, not left to the picker — see the task literal above. `browser`
@@ -1971,7 +1988,7 @@ export class TaskManager extends EventEmitter {
 
   private async dispatchCodexDesktop(
     intent: string,
-    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; project?: string | null; agent?: AgentKind; model?: string; attachments?: readonly string[] },
+    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; project?: string | null; agent?: AgentKind; model?: string; attachments?: readonly string[]; agentMetadata?: AgentDispatchMetadata },
   ): Promise<string> {
     const driver = this.opts.codexDriver
     if (!driver) throw new Error('CODEX_UNAVAILABLE: not-configured')
@@ -2043,6 +2060,7 @@ export class TaskManager extends EventEmitter {
       id,
       intent,
       sessionId: created.threadId,   // the Codex thread IS this task's session handle
+      ...this.agentPresentation(opts.agentMetadata, 'external'),
       agent: 'codex-desktop',
       codexThreadId: created.threadId,
       codexDomThreadId: created.domThreadId,
@@ -2069,6 +2087,7 @@ export class TaskManager extends EventEmitter {
 
     await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({
       id, intent, sessionId: created.threadId, kind, createdAt: now, surface, mode: 'managed',
+      ...this.agentPresentation(opts.agentMetadata, 'external'),
       agent: 'codex-desktop', codexThreadId: created.threadId,
       codexDomThreadId: created.domThreadId, codexProject: opts.project ?? null,
       state: 'processing', updatedAt: now,
@@ -2098,7 +2117,7 @@ export class TaskManager extends EventEmitter {
    */
   private async dispatchCodexCli(
     intent: string,
-    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; cwd?: string; project?: string | null; model?: string; effort?: string; attachments?: readonly string[] },
+    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; cwd?: string; project?: string | null; model?: string; effort?: string; attachments?: readonly string[]; agentMetadata?: AgentDispatchMetadata },
   ): Promise<string> {
     const hub = this.opts.codexHub
     if (!hub) throw new Error('CODEX_CLI_UNAVAILABLE: no app-server hub')
@@ -2125,6 +2144,7 @@ export class TaskManager extends EventEmitter {
       id,
       intent,
       sessionId: '',               // Filled only after thread/start acknowledges.
+      ...this.agentPresentation(opts.agentMetadata),
       agent: 'codex',
       sessionOwnership: 'unmute',
       codexSessionSettings: sessionSettings,
@@ -2153,6 +2173,7 @@ export class TaskManager extends EventEmitter {
     task.codexRolloutId = threadId
     await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({
       id, intent, sessionId: threadId, kind, createdAt: now, surface, mode: 'managed',
+      ...this.agentPresentation(opts.agentMetadata),
       agent: 'codex', sessionOwnership: 'unmute', codexRolloutId: threadId, state: 'processing', updatedAt: now,
       ...project, permissionReason: policy.permissionReason, codexSessionSettings: sessionSettings,
       ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
@@ -2339,7 +2360,30 @@ export class TaskManager extends EventEmitter {
     }
   }
 
-  async adoptClaudeDesktop(opts: { windowMs?: number; cap?: number; only?: ReadonlySet<string> } = {}): Promise<string[]> {
+  private claudeAgentCreations = 0
+  private desktopReceiptWrites: Promise<void> = Promise.resolve()
+  private desktopReceiptPath(): string {
+    return join(this.opts.baseDir, `pending-agent-desktop-${this.opts.userKey ?? 'local'}.json`)
+  }
+  private async desktopReceipts(): Promise<DesktopHandoffReceipt[]> {
+    await this.desktopReceiptWrites
+    try { return JSON.parse(await fs.readFile(this.desktopReceiptPath(), 'utf8')) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
+  }
+  private updateDesktopReceipts(update: (receipts: DesktopHandoffReceipt[]) => DesktopHandoffReceipt[]): Promise<void> {
+    const pending = this.desktopReceiptWrites.then(async () => {
+      let receipts: DesktopHandoffReceipt[] = []
+      try { receipts = JSON.parse(await fs.readFile(this.desktopReceiptPath(), 'utf8')) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      await fs.mkdir(this.opts.baseDir, { recursive: true })
+      await writeFileAtomic(this.desktopReceiptPath(), JSON.stringify(update(receipts)))
+    })
+    this.desktopReceiptWrites = pending.catch(() => {})
+    return pending
+  }
+
+  async adoptClaudeDesktop(opts: { windowMs?: number; cap?: number; only?: ReadonlySet<string>; agentMetadata?: AgentDispatchMetadata } = {}): Promise<string[]> {
+    if (this.claudeAgentCreations && !opts.agentMetadata) return []
     const driver = this.opts.claudeDesktopDriver
     if (!driver) return []
     // SEVEN DAYS, not one. Measured on a real machine the day this shipped:
@@ -2359,6 +2403,23 @@ export class TaskManager extends EventEmitter {
     } catch {
       return []   // store unreadable this sweep; try again next time
     }
+    const receipts = await this.desktopReceipts()
+    const firstUserText = new Map<string, string | undefined>()
+    for (const meta of found) {
+      if (!receipts.some(receipt => !receipt.before.includes(meta.sessionId))) continue
+      const view = await driver.snapshot?.(meta.sessionId).catch(() => null)
+      firstUserText.set(meta.sessionId, view?.snapshot.turns.find(turn => turn.role === 'user')?.text)
+    }
+    const receiptCandidates = new Map(receipts.map(receipt => [receipt.id, found.filter(meta => {
+      if (receipt.before.includes(meta.sessionId)) return false
+      const until = (receipt.startedAt || 0) + 120_000
+      if (meta.createdAt > 0 && (meta.createdAt < receipt.startedAt || meta.createdAt > until)) return false
+      const first = firstUserText.get(meta.sessionId)
+      if (first !== undefined) return first === receipt.intent
+      // Quarantine only the creation's bounded time window while its transcript
+      // is unreadable. An unresolved receipt never owns every future chat.
+      return meta.createdAt > 0 ? meta.createdAt >= receipt.startedAt && meta.createdAt <= until : now <= until
+    })] as const))
 
     // Already-adopted session ids, so a re-run is a no-op.
     const known = new Set(
@@ -2389,6 +2450,15 @@ export class TaskManager extends EventEmitter {
 
     const adopted: string[] = []
     for (const meta of found) {
+      if (this.claudeAgentCreations && !opts.agentMetadata) break
+      const pending = receipts.filter(receipt => receiptCandidates.get(receipt.id)?.some(candidate => candidate.sessionId === meta.sessionId))
+      // A store diff can identify one new conversation. It cannot distinguish
+      // multiple new conversations, so keep their receipt and publish none.
+      if (pending.length > 1 || pending.some(receipt => !receipt.acknowledged || receiptCandidates.get(receipt.id)?.length !== 1
+        || firstUserText.get(meta.sessionId) !== receipt.intent && opts.agentMetadata?.agentRunId !== receipt.metadata.agentRunId)) continue
+      const receipt = pending[0]
+      if (opts.agentMetadata && !receipt) continue
+      const agentMetadata = receipt?.metadata ?? opts.agentMetadata
       if (adopted.length >= cap) break
       // `only` names EXACTLY which conversations to take. Used by creation,
       // where the task has already been identified by diffing the store — an
@@ -2398,9 +2468,14 @@ export class TaskManager extends EventEmitter {
       // The user threw this card away. Adoption must never overrule that.
       if (this.claudeDismissed.has(meta.sessionId)) continue
       if (meta.archived) continue
-      if (known.has(meta.sessionId)) continue
+      if (known.has(meta.sessionId)) {
+        if (receipt && this.list().some(task => task.claudeDesktopSessionId === meta.sessionId && task.agentRunId === receipt.metadata.agentRunId)) {
+          await this.updateDesktopReceipts(items => items.filter(item => item.id !== receipt.id))
+        }
+        continue
+      }
       // A conversation we were told to take is wanted regardless of age.
-      if (!opts.only && meta.lastActivityAt > 0 && now - meta.lastActivityAt > windowMs) continue
+      if (!opts.only && !receipt && meta.lastActivityAt > 0 && now - meta.lastActivityAt > windowMs) continue
 
       const id = randomUUID()
       const dir = join(this.opts.baseDir, this.opts.userKey ?? 'local', id)
@@ -2414,6 +2489,7 @@ export class TaskManager extends EventEmitter {
         // an invented sentence.
         intent: meta.title ?? meta.cwd ?? 'Claude Desktop task',
         ...(meta.title ? { name: meta.title } : {}),
+        ...this.agentPresentation(agentMetadata, 'external'),
         sessionId: meta.sessionId,
         agent: 'claude-code-desktop',
         ...(model ? { model } : {}),
@@ -2441,11 +2517,14 @@ export class TaskManager extends EventEmitter {
 
       await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({
         id, intent: task.intent, sessionId: meta.sessionId, kind: 'session',
+        ...this.agentPresentation(agentMetadata, 'external'),
         createdAt: task.createdAt, mode: 'managed',
         agent: 'claude-code-desktop', claudeDesktopSessionId: meta.sessionId,
         state: 'done', updatedAt: now,
         ...(model ? { model } : {}),
-      })).catch(() => {})
+      })).catch(error => { if (agentMetadata) throw error })
+
+      if (receipt) await this.updateDesktopReceipts(items => items.filter(item => item.id !== receipt.id))
 
       this.emit('created', task)
       adopted.push(id)
@@ -2474,29 +2553,41 @@ export class TaskManager extends EventEmitter {
    * one that was not there. Taking "the newest" without a before-set is exactly
    * how the Codex backend once bound two cards to a single thread.
    */
-  async createClaudeDesktop(intent: string, opts: { tries?: number; waitMs?: number } = {}): Promise<{ ok: boolean; id?: string; reason?: string }> {
+  async createClaudeDesktop(intent: string, opts: { tries?: number; waitMs?: number; agentMetadata?: AgentDispatchMetadata } = {}): Promise<{ ok: boolean; id?: string; reason?: string }> {
+    this.agentPresentation(opts.agentMetadata)
     const driver = this.opts.claudeDesktopDriver
     const actuator = this.opts.claudeActuator
     if (!driver || !actuator) return { ok: false, reason: 'no-backend' }
     if (!intent.trim()) return { ok: false, reason: 'empty-intent' }
 
     const before = new Set((await driver.list()).map((t) => t.sessionId))
+    if (opts.agentMetadata) this.claudeAgentCreations++
+    try {
+    const receipt = opts.agentMetadata ? { id: randomUUID(), before: [...before], metadata: opts.agentMetadata, acknowledged: false, intent, startedAt: this.clock() } : undefined
+    if (receipt) await this.updateDesktopReceipts(items => {
+      if (items.some(item => this.clock() - (item.startedAt || 0) < 120_000)) {
+        throw new Error('A prior Desktop handoff is unresolved; wait for reconciliation before creating another')
+      }
+      return [...items, receipt]
+    })
     const res = await actuator.createTask(intent)
     if (!res.ok) {
+      if (receipt) await this.updateDesktopReceipts(items => items.filter(item => item.id !== receipt.id))
       log.warn('claude-desktop-create-failed', { reason: res.reason ?? 'unknown' })
       return { ok: false, reason: res.reason ?? 'failed' }
     }
+    if (receipt) await this.updateDesktopReceipts(items => items.map(item => item.id === receipt.id ? { ...item, acknowledged: true } : item))
 
     // The store is written asynchronously, so poll rather than read once.
     const tries = opts.tries ?? 10
     const waitMs = opts.waitMs ?? 500
     for (let i = 0; i < tries; i++) {
       const fresh = (await driver.list()).filter((t) => !before.has(t.sessionId))
-      if (fresh.length) {
+      if (fresh.length && (!opts.agentMetadata || fresh.length === 1)) {
         // Newest by activity among the genuinely NEW ones — the before-set has
         // already excluded every pre-existing conversation.
         const created = fresh.sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0]
-        const [id] = await this.adoptClaudeDesktop({ only: new Set([created.sessionId]), cap: 1 })
+        const [id] = await this.adoptClaudeDesktop({ only: new Set([created.sessionId]), cap: 1, agentMetadata: opts.agentMetadata })
         log.event('claude-desktop-create-resolved', { sessionId: created.sessionId, attempts: i + 1, adopted: !!id })
         return { ok: true, id }
       }
@@ -2506,6 +2597,9 @@ export class TaskManager extends EventEmitter {
     // Saying so beats claiming failure for work that DID start.
     log.warn('claude-desktop-create-unresolved', {})
     return { ok: true, reason: 'id-unresolved' }
+    } finally {
+      if (opts.agentMetadata) this.claudeAgentCreations--
+    }
   }
 
   /**
@@ -2554,13 +2648,20 @@ export class TaskManager extends EventEmitter {
    * Refuses while the task is blocked: typing prose at a permission prompt puts
    * the text somewhere unpredictable and leaves the prompt unanswered.
    */
+  private async claudeDesktopAddress(task: Task): Promise<string | undefined> {
+    if (task.origin !== 'unmute-agent') return task.name
+    if (!task.claudeDesktopSessionId) return undefined
+    const native = await this.opts.claudeDesktopDriver?.find(task.claudeDesktopSessionId)
+    return native?.title || undefined
+  }
+
   async sendClaudeDesktop(id: string, text: string): Promise<{ ok: boolean; reason?: string }> {
     const task = this.tasks.get(id)
     if (!task || task.agent !== 'claude-code-desktop') return { ok: false, reason: 'not-a-claude-desktop-task' }
     const actuator = this.opts.claudeActuator
     if (!actuator) return { ok: false, reason: 'no-actuator' }
     if (task.state === 'needs-user') return { ok: false, reason: 'answer-the-prompt-first' }
-    const title = task.name
+    const title = await this.claudeDesktopAddress(task)
     if (!title) return { ok: false, reason: 'no-title-to-address' }
 
     this.noteFollowUp(task) // graduation (§5) — counts the attempt, same as followUp()
@@ -2752,7 +2853,7 @@ export class TaskManager extends EventEmitter {
     // The app's own title beats our generated name once it exists — it is what
     // the user sees in Claude Desktop, so showing something else in Unmute
     // makes the two lists impossible to line up.
-    if (meta.title && meta.title !== task.name) task.name = meta.title
+    if (meta.title && meta.title !== task.name && task.origin !== 'unmute-agent') task.name = meta.title
     if (snap.lastAgentMessage && snap.lastAgentMessage !== task.threadContext) {
       task.threadContext = snap.lastAgentMessage
     }
@@ -2771,6 +2872,7 @@ export class TaskManager extends EventEmitter {
       const titles = [...this.tasks.values()]
         .map((t) => t.name)
         .filter((t): t is string => !!t)
+      if (meta.title && !titles.includes(meta.title)) titles.push(meta.title)
       const ax = await this.claudeAx(titles)
       if (ax.treeAlive) {
         // The app's own word for this task, shown verbatim. No vocabulary is
@@ -4063,6 +4165,7 @@ export class TaskManager extends EventEmitter {
           intent: meta.intent,
           name: meta.name,
           sessionId: meta.claudeDesktopSessionId,
+          ...(meta.origin ? { origin: meta.origin, agentRunId: meta.agentRunId, sessionOwnership: sessionOwnership(meta as Record<string, unknown>) } : {}),
           agent: 'claude-code-desktop',
           // REPLAYED, never re-resolved. A receipt written before this field
           // existed simply has no `model` and the card stays agent-only — the
@@ -4097,6 +4200,7 @@ export class TaskManager extends EventEmitter {
           intent: meta.intent,
           name: meta.name,
           sessionId: meta.codexThreadId,
+          ...(meta.origin ? { origin: meta.origin, agentRunId: meta.agentRunId, sessionOwnership: sessionOwnership(meta as Record<string, unknown>) } : {}),
           agent: 'codex-desktop',
           ...(meta.model ? { model: meta.model } : {}),
           codexThreadId: meta.codexThreadId,
@@ -4183,6 +4287,7 @@ export class TaskManager extends EventEmitter {
         // Pre-sessionId receipts won't carry one; fall back to the task id so the
         // field is always present (older tasks simply aren't session-pinned).
         sessionId: meta.sessionId ?? id,
+        ...(meta.origin ? { origin: meta.origin, agentRunId: meta.agentRunId } : {}),
         // THE RECEIPT IS THE PROVIDER TRUTH. Dropping this field made a Codex
         // CLI task indistinguishable from a legacy untagged Claude task after
         // relaunch: every inactive surface drew Claude, and resume constructed
@@ -5474,10 +5579,11 @@ export class TaskManager extends EventEmitter {
       if (attachments.length) {
         selected('claude-desktop-native-composer', { actuatorAvailable: !!this.opts.claudeActuator, conversationAddressable: !!task.name })
         const actuator = this.opts.claudeActuator
-        if (!actuator || !task.name) return outcome(false, 'claude-actuator-or-conversation-unavailable', { draftRetained: true })
+        const title = await this.claudeDesktopAddress(task)
+        if (!actuator || !title) return outcome(false, 'claude-actuator-or-conversation-unavailable', { draftRetained: true })
         emitTaskReplyStep(tlog, trace, 'provider-call', 'started', { operation: 'sendWithAttachmentsTo' })
         const result = await actuator.sendWithAttachmentsTo(
-          task.name,
+          title,
           text,
           () => pasteDesktopTaskImages(text, attachments, (stage, fields) => {
             emitTaskReplyStep(tlog, trace, `pasteboard-${stage}`, stage.includes('failed') ? 'failed' : 'succeeded', fields)
