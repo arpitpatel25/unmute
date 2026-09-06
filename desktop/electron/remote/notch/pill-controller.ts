@@ -49,6 +49,7 @@ export interface PillCoachingP {
 /** Everything the surface draws. Every field optional — the helper decodes
  *  partial payloads, so a level-only update is one tiny line. */
 export interface PillStateP {
+  canType?: boolean
   phase?: PillPhase
   kind?: PillKind
   /** Immutable address captured at Right Option key-down. When present, model
@@ -93,6 +94,7 @@ export interface PillStateP {
 
 /** Gestures the surface sends back. Each maps 1:1 onto an existing handler. */
 export interface PillControllerDeps {
+  typeInstead?(): void
   /** Finish the current capture now (the pill's stop button). */
   stop(): void
   /** Discard it. */
@@ -177,6 +179,7 @@ export class PillController {
   private onEvent(e: { type: string; [k: string]: unknown }): void {
     const value = typeof e.value === 'string' ? e.value : ''
     switch (e.type) {
+      case 'pillTypeInstead': if (this.last.canType) this.deps.typeInstead?.(); break
       case 'pillStop':        this.deps.stop(); break
       case 'pillCancel':      this.deps.cancel(); break
       case 'pillUndo':        this.deps.undo(); break

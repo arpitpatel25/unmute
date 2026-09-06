@@ -152,6 +152,8 @@ interface SessionState {
    *  this can. It decides the pad's origin, and therefore which destinations
    *  the scratchpad offers when a capture is held. */
   agentAddressed: boolean
+  /** Typed shortcut input never enters the STT pipeline. */
+  typedInput?: boolean
   /**
    * WHERE THIS UTTERANCE IS GOING — the one truth, of which `kind` and
    * `agentAddressed` above are two views.
@@ -908,7 +910,7 @@ export class SessionManager {
     return this.usePipeline
   }
 
-  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation', remoteTargetId: string | null = null, agentAddressed = false, openedByHeldKey = false, composerDictation?: ComposerDictationDelivery): void {
+  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation', remoteTargetId: string | null = null, agentAddressed = false, openedByHeldKey = false, composerDictation?: ComposerDictationDelivery, typedInput = false): void {
     console.log('[session] startSession called, mode:', mode, '| kind:', kind, '| isProcessing:', this.isProcessing, '| currentSession:', this.currentSession?.sessionId || 'null')
     if (!this.telemetryReady) {
       this.telemetryReady = true
@@ -985,6 +987,7 @@ export class SessionManager {
         // by hand, and never one without the others.
         kind,
         agentAddressed,
+        typedInput: kind === 'remote' && typedInput,
         route,
         remoteTargetId: kind === 'remote' ? remoteTargetId : null,
         ...(kind === 'remote' && composerDictation ? { composerDictation } : {}),
@@ -1028,7 +1031,7 @@ export class SessionManager {
     // 4th arg = capture KIND ('dictation' | 'remote'); the base onRecordingStart
     // bridge ignores it, the additive remoteOnCaptureKind listener reads it to
     // show the Remote badge on the pill.
-    sendToWidget('recording:start', mode, this.currentSession.sessionId, this.currentSession.kind)
+    if (!this.currentSession.typedInput) sendToWidget('recording:start', mode, this.currentSession.sessionId, this.currentSession.kind)
     console.log('[session] HUD shown, recording:start sent for mode:', mode, 'kind:', this.currentSession.kind)
 
     // Capture arms with the mic and disarms with it — the recording window is
@@ -1093,7 +1096,7 @@ export class SessionManager {
   //
   // Set by the keyboard 'remote-start'/'remote-stop' events (main.ts).
 
-  startRemoteCapture(targetTaskId: string | null = null, agentAddressed = false, composerDictation?: ComposerDictationDelivery): void {
+  startRemoteCapture(targetTaskId: string | null = null, agentAddressed = false, composerDictation?: ComposerDictationDelivery, typedInput = false): void {
     if (this.isProcessing) {
       console.log('[session] ⛔ Remote capture blocked — still processing')
       this.onSessionRejected?.()
@@ -1107,7 +1110,44 @@ export class SessionManager {
     //
     // openedByHeldKey: right-Option and right-Command are both physically held
     // through the press that starts them, so both defer the selection grab.
-    this.startSession('dictation', 'remote', targetTaskId, agentAddressed, true, composerDictation)
+    this.startSession('dictation', 'remote', targetTaskId, agentAddressed, true, composerDictation, typedInput)
+  }
+
+  /** Capture selection before the typing panel takes keyboard focus. */
+  async prepareTypedCapture(targetTaskId: string | null = null): Promise<string | null> {
+    const session = this.currentSession
+    if (!session || session.kind !== 'remote' || session.status !== 'recording' || this.isProcessing) return null
+    session.typedInput = true
+    session.remoteTargetId = targetTaskId
+    this.resetChunkState()
+    session.dictationAudio = null
+    session.dictationTranscript = null
+    sendToWidget('pill:event', { type: 'typing' })
+    await new Promise(resolve => setTimeout(resolve, 80))
+    if (!this.isCurrentSession(session)) return null
+    await this.captureSelection('dictation')
+    return this.isCurrentSession(session) ? session.sessionId : null
+  }
+
+  async submitTypedCapture(sessionId: string, text: string): Promise<boolean> {
+    const session = this.currentSession
+    if (!session || session.sessionId !== sessionId || !session.typedInput || session.status !== 'recording' || this.isProcessing) return false
+    if (!text.trim()) { this.cancelSession(); return false }
+    this.isProcessing = true
+    resumeAfterCapture()
+    try { endSegment(Date.now()) } catch { /* same best-effort capture seam */ }
+    this.onRecordingStopped?.()
+    const command = session.selectedText ? `> ${session.selectedText}\n\n${text}` : text
+    await this.dispatchRemoteAndFinish(command, session, setTimeout(() => {}, 0))
+    return true
+  }
+
+  resumeVoiceCapture(sessionId: string): boolean {
+    const session = this.currentSession
+    if (!session || session.sessionId !== sessionId || !session.typedInput || this.isProcessing) return false
+    session.typedInput = false
+    sendToWidget('recording:start', 'dictation', session.sessionId, session.kind)
+    return true
   }
 
   /**
@@ -1127,6 +1167,7 @@ export class SessionManager {
    */
   setCaptureRoute(route: CaptureRoute): boolean {
     const session = this.currentSession
+    if (session?.typedInput) return false
     if (!session) {
       console.warn('[session] ⛔ route switch ignored — no capture is live')
       return false
@@ -1188,6 +1229,7 @@ export class SessionManager {
    * a chain window that will never resolve it.
    */
   async finishCapture(): Promise<void> {
+    if (this.currentSession?.typedInput) return
     await this.stopRecording('dictation')
 
     // Deferred selection grab — see startSession. The held trigger has now been
@@ -1390,6 +1432,7 @@ export class SessionManager {
         // AFTER currentSession is nulled, so there is nothing left to ask.
         .then(() => dispatchFromCapture(cmd, session.captureAttachments, session.remoteTargetId, {
           route: session.route,
+          ...(session.typedInput ? { typedInput: true } : {}),
           ...(session.composerDictation ? { composerDictation: session.composerDictation } : {}),
         }))
         .catch((e) => {
@@ -1450,6 +1493,7 @@ export class SessionManager {
    * this can never reject a clip on the normal path.
    */
   private isForeignSessionAudio(sessionId?: string): boolean {
+    if (this.currentSession?.typedInput) return true
     if (!sessionId) return false
     return sessionId !== this.currentSession?.sessionId &&
            sessionId !== this.cancelledSession?.sessionId
@@ -1728,6 +1772,7 @@ export class SessionManager {
   }
 
   async processSession(): Promise<void> {
+    if (this.currentSession?.typedInput) return
     const session = this.currentSession
     if (!session) {
       console.warn('[session] processSession called but no current session!')
@@ -2869,6 +2914,7 @@ export class SessionManager {
   }
 
   private async captureSelection(mode: 'dictation' | 'instruction'): Promise<void> {
+    const owner = this.currentSession
     console.log('[session] Attempting to capture selected text, mode:', mode)
     // OBSERVATION IS SUSPENDED FOR THE WHOLE SEQUENCE, not corrected after it.
     // captureSelectedText clears the pasteboard, has osascript copy into it,
@@ -2887,7 +2933,7 @@ export class SessionManager {
       // for this utterance. A copy made DURING the capture is a different
       // thing entirely — clipboardWatch sees it and it lands where it happened.
       const selectedText = await captureSelectedText()
-      if (selectedText && this.currentSession) {
+      if (selectedText && this.currentSession && this.currentSession === owner) {
         this.currentSession.selectedText = selectedText
         this.currentSession.selectedTextRole = mode === 'dictation' ? 'quote' : 'context'
         console.log('[session] Captured selected text:', JSON.stringify(selectedText.substring(0, 80)))

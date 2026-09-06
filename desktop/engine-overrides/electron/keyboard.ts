@@ -327,7 +327,12 @@ export class KeyboardManager extends EventEmitter {
    * down — the recorder, the session, the open capture segment and the
    * scratchpad all carry straight through.
    */
+  private typedCaptureActive = false
+  onRemoteKeyReleased?: () => void
+  setTypedCaptureActive(active: boolean): void { this.typedCaptureActive = active }
+
   private applyRouteSwitch(to: CaptureRoute): void {
+    if (this.typedCaptureActive) return
     const from = this.liveRoute()
     this.dictationActive = to === 'cursor'
     this.remoteActive = to === 'task'
@@ -601,6 +606,7 @@ export class KeyboardManager extends EventEmitter {
   }
 
   private handleRemoteKeyUp(): void {
+    this.onRemoteKeyReleased?.()
     // Tap-toggle ignores key-up — the capture ends on the SECOND tap or on
     // Escape, never on release. (Mirrors dictation tap-toggle.)
   }

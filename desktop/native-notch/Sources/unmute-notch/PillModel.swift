@@ -187,6 +187,7 @@ struct PillState: Codable, Equatable {
     var offline: PillOfflineReason? = nil
     /// Undo is offered for a short window after a paste.
     var canUndo: Bool = false
+    var canType: Bool = false
 
     static let hidden = PillState()
 
@@ -208,6 +209,7 @@ struct PillState: Codable, Equatable {
         kind         = (try? c.decodeIfPresent(PillKind.self, forKey: .kind)) as? PillKind ?? .dictation
         taskId       = try? c.decodeIfPresent(String.self, forKey: .taskId)
         level        = v(.level, 0)
+        canType      = v(.canType, false)
         elapsed      = v(.elapsed, 0)
         maxSeconds   = v(.maxSeconds, 300)
         message      = try? c.decodeIfPresent(String.self, forKey: .message)
@@ -236,6 +238,7 @@ struct PillState: Codable, Equatable {
 
 /// Gestures the input surface sends back.
 enum PillEvent {
+    case typeInstead
     case stop                       // finish this capture now
     case cancel                     // discard it
     case undo
@@ -254,6 +257,7 @@ enum PillEvent {
 
     var json: [String: Any] {
         switch self {
+        case .typeInstead:          return ["type": "pillTypeInstead"]
         case .stop:                 return ["type": "pillStop"]
         case .cancel:               return ["type": "pillCancel"]
         case .undo:                 return ["type": "pillUndo"]

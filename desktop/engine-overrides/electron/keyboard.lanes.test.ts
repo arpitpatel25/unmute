@@ -35,6 +35,20 @@ function fresh(): { km: KeyboardManager; events: Emitted[] } {
 
 const key = (km: KeyboardManager, e: string) => km.handleKey(e as unknown as KeyEvent)
 
+test('typing keeps its shortcut lane while other lane keys are pressed, then submits normally', () => {
+  const { km, events } = fresh()
+  let releases = 0
+  km.onRemoteKeyReleased = () => { releases++ }
+  opt(km)
+  km.setTypedCaptureActive(true)
+  fn(km)
+  cmdDouble(km)
+  assert.equal(events.some(e => e.type === 'capture-route'), false)
+  opt(km)
+  assert.equal(events.filter(e => e.type === 'remote-stop').length, 1)
+  assert.equal(releases, 2)
+})
+
 /** fn, one tap. */
 function fn(km: KeyboardManager): void { key(km, 'fn-down'); key(km, 'fn-up') }
 /** right-Option, one tap. */
