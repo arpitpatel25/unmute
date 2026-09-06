@@ -731,7 +731,6 @@ export default function WidgetApp() {
   // the answer is only ever needed at the moment the pill appears.
   const [agentPicker, setAgentPicker] = useState<{ current: string; options: Array<{ id: string; label: string; available: boolean }> } | null>(null)
   const stateRef = useRef<WidgetState>('hidden')
-  const typingRequested = useRef(false)
 
   const { analyserNode, maxDurationSeconds, noisyEnvironment, tooQuiet, startRecording, stopRecording } = useAudioRecorder()
   const mic = useMicSource()
@@ -930,7 +929,6 @@ export default function WidgetApp() {
     window.addEventListener('unmute:phone-mic-zombie', onZombie)
 
     api.onRecordingStart(async (mode, sessionId) => {
-      typingRequested.current = false
       console.log(`[widget:ux] EVENT recording:start mode=${mode} session=${sessionId ?? 'none'} (state was ${stateRef.current})`)
       clearAutoHide()
       // Resolve the capture device for THIS recording: the iPhone mic when
@@ -952,7 +950,6 @@ export default function WidgetApp() {
       setState(mode === 'dictation' ? 'dictation-active' : 'instruction-active')
       try {
         await startRecording(resolvedDeviceId, mode, sessionId)
-        if (typingRequested.current) { await stopRecording(); setState('hidden'); return }
         if (resolvedDeviceId) playClickSound('start') // phone mic is live NOW
         // Labels are permission-gated: before the first capture the device
         // list may carry empty labels (iPhone undetectable). Now that a
@@ -1207,7 +1204,6 @@ export default function WidgetApp() {
   usePillState(pillState, nativePill)
   usePillTicker(recordingNow, elapsedSec, nativePill, analyserNode)
   usePillEvents({
-    typing: () => { typingRequested.current = true; void stopRecording(); clearAutoHide(); setState('hidden') },
     stop: () => { void handleStop() },
     cancel: () => { void handleCancel() },
     undo: handleUndo,

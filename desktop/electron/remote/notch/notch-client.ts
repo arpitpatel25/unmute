@@ -389,7 +389,6 @@ export type NotchCommand =
   | { type: 'capturePhase'; phase: string; target?: string }
   | { type: 'pocket'; data: PocketP }
   | { type: 'pill'; state: PillStateP }
-  | { type: 'typedCapture'; action: 'show' | 'hide' | 'submit'; token: string }
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
   | { type: 'agentActivity'; activity: UnmuteAgentActivityP }
   /**

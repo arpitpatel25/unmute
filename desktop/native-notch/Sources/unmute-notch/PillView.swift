@@ -380,15 +380,6 @@ struct PillView: View {
     /// one radius, no exceptions. Restored.
     private var cluster: some View {
         HStack(spacing: 8) {
-            if s.canType && s.phase == .recording {
-                Button { model.emit(.typeInstead) } label: {
-                    Image(systemName: "keyboard").frame(width: 44, height: 44)
-                }
-                .buttonStyle(.plain)
-                .background(Color.black, in: Capsule())
-                .help("Type instead of speaking")
-                .accessibilityLabel("Type instead of speaking")
-            }
             if chipsVisible && s.kind == .remote {
                 // AGENT + MODEL AS ONE CONTROL, exactly as the original builds
                 // it: the agent determines which models exist, so

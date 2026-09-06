@@ -19,7 +19,6 @@ final class AppController: NSObject, NotchResizing {
     // already covers the pill.
     private let pillModel = PillModel()
     private var pillWindow: PillWindow!
-    private lazy var typedCaptureWindow = TypedCaptureWindow()
     private var pillHost: NSHostingView<AnyView>!
     // The pad — held work, waiting for a destination. It is drawn INSIDE the
     // pill's panel, as one more element in the cluster's row (PillView.pad), so
@@ -594,11 +593,6 @@ final class AppController: NSObject, NotchResizing {
             pillWindow.sharingType = sharing
             NotchLog.log("CMD screenCaptureVisibility show=\(show)")
 
-        case let .typedCapture(action, token):
-            typedCaptureWindow.sharingType = pillWindow.sharingType
-            if action == "show" { typedCaptureWindow.show(token: token) }
-            else if action == "submit" { typedCaptureWindow.submit() }
-            else { typedCaptureWindow.orderOut(nil) }
         case let .pill(state):
             // Logged at phase granularity only — the level field changes every
             // frame during a capture and would drown the log.

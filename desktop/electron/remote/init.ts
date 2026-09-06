@@ -212,9 +212,6 @@ import type { ScratchpadEntryP, ScratchpadPayloadP, ChatConfigP } from './notch/
 // don't entangle with engine internals. main.ts passes its real instances.
 interface SessionManagerLike {
   startRemoteCapture(targetTaskId?: string | null, agentAddressed?: boolean, composerDictation?: ComposerDictationDelivery): void
-  prepareTypedCapture?(targetTaskId?: string | null): Promise<string | null>
-  submitTypedCapture?(sessionId: string, text: string): Promise<boolean>
-  resumeVoiceCapture?(sessionId: string): boolean
   stopRemoteCapture(): Promise<void>
   cancelSession?(): void
   onComposerDictationQueued?: ((token: string) => void) | null
@@ -232,8 +229,6 @@ interface SessionManagerLike {
   onSessionEnded?: ((identity?: { sessionId: string; composerDictationToken?: string }) => void) | null
 }
 interface KeyboardManagerLike {
-  onRemoteKeyReleased?: () => void
-  setTypedCaptureActive?(active: boolean): void
   on(event: 'keyboard', cb: (e: { type: string }) => void): unknown
   /** Clears the Orchestrator and Agent locks. Never dictation's — that lane is
    *  the user's way out when something else is wedged.
@@ -3988,7 +3983,6 @@ export interface CaptureDispatchOptions {
    * utterance it belongs to. Nothing outlives the capture that set it.
   */
   route?: CaptureRoute
-  typedInput?: boolean
   /** Immutable composer address stamped at capture creation and spent once. */
   composerDictation?: ComposerDictationDelivery
 }
@@ -4091,15 +4085,15 @@ async function dispatchFromCaptureInner(
   // rule every task already follows — you address what you can see.
   const addressedToAgent = options.route === 'agent'
     || options.destination === 'unmute-agent'
-    || (!options.typedInput && orchestrateAgentAddressed)
-  const addressedTaskId = addressedToAgent ? null : (options.typedInput ? targetTaskId : targetTaskId ?? orchestrateFocusId)
+    || orchestrateAgentAddressed
+  const addressedTaskId = addressedToAgent ? null : (targetTaskId ?? orchestrateFocusId)
   if (addressedTaskId && manager.list().some((t) => t.id === addressedTaskId)) {
     const fid = addressedTaskId
     // Hygiene: the deterministic path skips the router, so it must not skip
     // CLEANUP — an STT misfire ("Happy Rates!") would land verbatim otherwise.
     // Best-effort: without a wired completeFn the raw transcript passes through
     // (status quo); delivery stays deterministic either way.
-    const text = completeFn && !options.typedInput ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
+    const text = completeFn ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
     // Right-Option capture and the visible composer are one draft. Captured
     // images stay as attachments rather than being rendered as filesystem paths.
     let trace: TaskReplyTrace | null = null
@@ -4388,8 +4382,6 @@ async function dispatchFromCaptureInner(
         [...targetable, ...finished, ...coldSessions, ...wall]
           .filter(mine).map((t) => t.id),
       )
-      // Routing may choose a destination, but typed input needs no STT repair.
-      if (options.typedInput) decision.intent = raw
       if (decision.targetTaskId && !offeredIds.has(decision.targetTaskId)) {
         log.warn('router named a task outside its own snapshot — ignoring', {
           engine: useCodex ? 'codex' : 'claude',
@@ -4629,7 +4621,7 @@ async function dispatchFromCaptureInner(
 
   // 3. Nothing to route among → straight to a new task. Cleanup is optional (the
   //    executor tolerates raw); use the managed LLM only if it's wired.
-  const cleaned = completeFn && !options.typedInput ? (await cleanIntent(raw, completeFn)).intent : raw
+  const cleaned = completeFn ? (await cleanIntent(raw, completeFn)).intent : raw
   if (!cleaned) { log.warn('empty intent after cleanup — not dispatching', {}); return null }
   return manager.dispatch(cleaned, { mode: injectionDisabled() ? 'raw' : undefined, attachments })
 }
@@ -4667,62 +4659,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   captureHistory.cleanup()
   if (manager) return manager
 
-  let shortcutCapture = false
-  let shortcutTarget: string | null = null
-  let typingToken: string | null = null
-  let preparingTyping = false
-  let typingGeneration = 0
-  let submitAfterPreparation = false
-  let releaseTypingTrigger: (() => void) | null = null
-  let typingTriggerReleased: Promise<void> = Promise.resolve()
-  deps.keyboardManager.onRemoteKeyReleased = () => {
-    releaseTypingTrigger?.()
-    releaseTypingTrigger = null
-  }
-  const showTyping = async () => {
-    if (!shortcutCapture || preparingTyping || typingToken || !notchClient) return
-    preparingTyping = true
-    const generation = ++typingGeneration
-    deps.keyboardManager.setTypedCaptureActive?.(true)
-    try {
-      await typingTriggerReleased
-      if (!shortcutCapture || generation !== typingGeneration) return
-      const token = await deps.sessionManager.prepareTypedCapture?.(shortcutTarget)
-      if (!token || !shortcutCapture || generation !== typingGeneration) return
-      typingToken = token
-      pillController?.hide()
-      notchClient.send({ type: 'typedCapture', action: 'show', token })
-      if (submitAfterPreparation) {
-        submitAfterPreparation = false
-        notchClient.send({ type: 'typedCapture', action: 'submit', token })
-      }
-    } finally { if (generation === typingGeneration) preparingTyping = false }
-  }
-  const finishShortcut = () => {
-    if (typingToken) {
-      notchClient?.send({ type: 'typedCapture', action: 'submit', token: typingToken })
-    } else if (preparingTyping) {
-      submitAfterPreparation = true
-    } else {
-      void deps.sessionManager.stopRemoteCapture()
-    }
-  }
-
   // Session teardown happens before the detached remote queue necessarily
   // drains. A queued token stays claimable; every other ending abandons the
   // active token so empty/error/cancel paths cannot wedge or leak dictation.
   const previousSessionEnded = deps.sessionManager.onSessionEnded
   deps.sessionManager.onSessionEnded = (identity) => {
-    deps.keyboardManager.setTypedCaptureActive?.(false)
-    shortcutCapture = false
-    typingGeneration++
-    preparingTyping = false
-    releaseTypingTrigger?.()
-    releaseTypingTrigger = null
-    submitAfterPreparation = false
-    typingToken = null
-    notchClient?.send({ type: 'typedCapture', action: 'hide', token: '' })
-    pillController?.push({ canType: false })
     try { previousSessionEnded?.(identity) }
     finally {
       const abandoned = identity?.composerDictationToken
@@ -5527,26 +5468,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           if (!w.isDestroyed()) w.webContents.send('pill:event', { type, value })
         }
       }
-      notchClient.on('event', (event) => {
-        const e = event as unknown as { type: string; token?: string; text?: string }
-        if (!typingToken || e.token !== typingToken) return
-        if (e.type === 'typedCaptureSubmit' && typeof e.text === 'string') {
-          const token = typingToken
-          typingToken = null // exactly one delivery, including repeated hotkey taps
-          notchClient?.send({ type: 'typedCapture', action: 'hide', token })
-          void deps.sessionManager.submitTypedCapture?.(token, e.text)
-        } else if (e.type === 'typedCaptureCancel') {
-          deps.sessionManager.cancelSession?.()
-        } else if (e.type === 'typedCaptureVoice') {
-          if (!deps.sessionManager.resumeVoiceCapture?.(typingToken)) return
-          deps.keyboardManager.setTypedCaptureActive?.(false)
-          notchClient?.send({ type: 'typedCapture', action: 'hide', token: typingToken })
-          typingToken = null
-          pillController?.push({ canType: true })
-        }
-      })
       pillController = new PillController(notchClient, {
-        typeInstead: () => { void showTyping() },
         stop:        () => toWidget('stop'),
         cancel:      () => toWidget('cancel'),
         undo:        () => toWidget('undo'),
@@ -5899,7 +5821,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       return
     }
     if (e.type === 'remote-start') {
-      typingTriggerReleased = new Promise(resolve => { releaseTypingTrigger = resolve })
       // WHICH KEY, AND WHAT IT DECIDED. Every diagnosis on 18 August meant
       // reconstructing ownership from timestamps; the address is now stated
       // here, at key-down, where it is decided.
@@ -5918,10 +5839,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // in step with the surface — pocket open aims at the slot under the
       // index, pocket closed means the router and a new task. No new state,
       // and no second copy of a rule that already exists.
-      shortcutCapture = true
-      shortcutTarget = liveVoiceTarget()
-      deps.sessionManager.startRemoteCapture(null, false)
-      pillController?.push({ canType: true })
+      deps.sessionManager.startRemoteCapture(null)
       broadcastCapturePhase('listening', liveVoiceTarget()) // ADDITIVE observer — the capture itself is untouched
     } else if (e.type === 'agent-start') {
       log.event('agent-key', { phase: 'start', lane: 'agent', address: 'agent' })
@@ -5941,10 +5859,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // Addressed at the AGENT, not at whatever task happens to be in focus —
       // that is the whole point of giving it its own key. The session carries
       // that address itself now; there is no module-level copy to set.
-      shortcutCapture = true
-      shortcutTarget = null
       deps.sessionManager.startRemoteCapture(null, true)
-      pillController?.push({ canType: true })
       broadcastCapturePhase('listening', null)
     } else if (e.type === 'capture-route') {
       // THE LIVE CAPTURE CHANGED LANES. Nothing here starts, stops or touches
@@ -5954,7 +5869,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       const route = (e as { route?: CaptureRoute }).route
       if (!route) return
       const moved = deps.sessionManager.setCaptureRoute?.(route) ?? false
-      pillController?.push({ canType: shortcutCapture && route !== 'cursor' })
       log.event('capture-route', { route, applied: moved })
       if (!moved) return
       if (route !== 'cursor') void router?.warm()
@@ -5987,12 +5901,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       try { padArmed = snapshot().armed } catch { padArmed = false }
       log.event('agent-key', { phase: 'stop', armed: padArmed, meaning: padArmed ? 'pause' : 'submit' })
       resumeOverlayEscape()
-      finishShortcut()
+      void deps.sessionManager.stopRemoteCapture()
       broadcastCapturePhase('transcribing')
     } else if (e.type === 'remote-stop') {
       log.event('remote-key', { phase: 'stop' })
       resumeOverlayEscape() // give Escape back to a still-visible overlay
-      finishShortcut()
+      void deps.sessionManager.stopRemoteCapture()
       broadcastCapturePhase('transcribing')
     }
   })
