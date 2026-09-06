@@ -4389,6 +4389,8 @@ async function dispatchFromCaptureInner(
         [...targetable, ...finished, ...coldSessions, ...wall]
           .filter(mine).map((t) => t.id),
       )
+      // Routing may choose a destination, but typed input needs no STT repair.
+      if (options.typedInput) decision.intent = raw
       if (decision.targetTaskId && !offeredIds.has(decision.targetTaskId)) {
         log.warn('router named a task outside its own snapshot — ignoring', {
           engine: useCodex ? 'codex' : 'claude',
