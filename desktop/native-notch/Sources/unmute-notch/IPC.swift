@@ -628,6 +628,8 @@ enum Event {
     case sendDraft(id: String, reference: QuestionReferenceP? = nil)
     case agentSend(submissionId: String, revision: Int)
     case agentRetry
+    /// End the Agent conversation and keep nothing; the next turn starts clean.
+    case agentNewConversation
     case cancelTaskFollowup(id: String, queueId: String)
     case restoreTaskFollowup(id: String, queueId: String)
     case queueSavedTaskFollowup(id: String, queueId: String)
@@ -744,6 +746,7 @@ enum Event {
         case .agentSend(let submissionId, let revision):
             return ["type": "agentSend", "submissionId": submissionId, "revision": revision]
         case .agentRetry: return ["type": "agentRetry"]
+        case .agentNewConversation: return ["type": "agentNewConversation"]
         case .cancelTaskFollowup(let id, let queueId): return ["type": "cancelTaskFollowup", "id": id, "queueId": queueId]
         case .restoreTaskFollowup(let id, let queueId): return ["type": "restoreTaskFollowup", "id": id, "queueId": queueId]
         case .queueSavedTaskFollowup(let id, let queueId): return ["type": "queueSavedTaskFollowup", "id": id, "queueId": queueId]

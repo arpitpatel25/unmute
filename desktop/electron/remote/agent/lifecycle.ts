@@ -4,6 +4,7 @@ import { AgentProviderError, type AgentProviderId } from './provider'
 import type { AgentInteractionInput, AgentInteractionResult, AgentSubmissionContext } from './controller'
 import type { AgentConversationRecord, AgentJournal, JournalAgentRun } from './journal'
 import type { AgentConversationSnapshot, AgentConversationStore, AgentPendingSettlement } from './conversation-store'
+import { diagnostic } from '../diagnostics'
 
 export interface AgentConversationView { record: AgentConversationRecord; snapshot: AgentConversationSnapshot }
 interface Options {
@@ -77,10 +78,31 @@ export class AgentConversationLifecycle {
       const snapshot = structuredClone(this.snapshot)
       // Prepare lazily on the next interaction: no provider is started solely
       // because a timer fired. Work and queued input can never be split by idle.
-      if (!this.draining && !this.pendingSettlement && !snapshot.queued.length && !snapshot.draft.text.trim()
-        && !this.record.prepared && this.record.phase !== 'recovery-required'
-        && this.record.accepted.length >= this.record.ceiling
-        && this.now() - (snapshot.lastActivityAt ?? this.now()) >= (this.options.idleMs ?? 20 * 60_000)) this.rotationDue = true
+      // WHY THIS IS OR IS NOT THE SAME CONVERSATION, written down.
+      //
+      // The log said `session: "resume"` and never why, so answering "why did
+      // it still have yesterday's context" meant reading two constants and
+      // doing the arithmetic by hand. Both gates have to pass to rotate, and
+      // being one gate short is the interesting case — it is what makes a
+      // conversation feel like it should have ended and did not.
+      const idleMs = this.options.idleMs ?? 20 * 60_000
+      const idleFor = this.now() - (snapshot.lastActivityAt ?? this.now())
+      const blocked = this.draining || this.pendingSettlement || !!snapshot.queued.length
+        || !!snapshot.draft.text.trim() || !!this.record.prepared || this.record.phase === 'recovery-required'
+      const atCeiling = this.record.accepted.length >= this.record.ceiling
+      const idleEnough = idleFor >= idleMs
+      if (!blocked && atCeiling && idleEnough) this.rotationDue = true
+      diagnostic('agent-continuity-decision', {
+        rotate: this.rotationDue,
+        turns: this.record.accepted.length, ceiling: this.record.ceiling, atCeiling,
+        idleForMs: idleFor, idleMs, idleEnough,
+        ...(blocked ? { blocked: true } : {}),
+        reason: this.rotationDue ? 'ceiling-and-idle'
+          : blocked ? 'work-in-flight'
+          : !atCeiling && !idleEnough ? 'under-ceiling-and-recently-active'
+          : !atCeiling ? 'under-ceiling'
+          : 'recently-active',
+      })
       snapshot.lastActivityAt = this.now()
       if (!snapshot.queued.some(q => q.submissionId === submissionId)) snapshot.queued.push({ submissionId, input: structuredClone({ ...input, submissionId }) })
       if (draftRevision !== undefined && snapshot.draft.revision === draftRevision && snapshot.draft.text.trim() === input.transcript.trim()) snapshot.draft.text = ''
@@ -138,6 +160,47 @@ export class AgentConversationLifecycle {
     })
     void this.drain()
     return completion
+  }
+
+  /**
+   * END THIS CONVERSATION AND KEEP NOTHING.
+   *
+   * There is exactly ONE Agent conversation at a time, and until now the only
+   * ways out of it were to burn twenty turns or leave it alone for six hours.
+   * A persistent chat you cannot deliberately end is one you can only escape
+   * by waiting, and "start again" is an ordinary thing to want — after a wrong
+   * turn, before a different subject, or to see what it does with no context.
+   *
+   * The next submission starts a genuinely new provider session, because the
+   * record it would have resumed from is gone: `runId: null` is what makes
+   * controller.submit() take supervisor.start() instead of resume().
+   *
+   * Work in flight is refused rather than abandoned — discarding a
+   * conversation whose turn is still running would leave a provider process
+   * writing into a record nothing points at any more.
+   */
+  async discard(): Promise<{ discarded: boolean; reason?: string }> {
+    // NOT `draining`: that flag is the drain loop's own, and it is still true
+    // for a moment after the caller's promise has resolved — testing it would
+    // refuse a discard requested the instant a turn finished. What matters is
+    // unsettled WORK: somebody still waiting on a result, input not yet sent,
+    // or an acceptance whose outcome we do not know.
+    if (this.waiting.size || this.snapshot.queued.length || this.pendingSettlement) {
+      return { discarded: false, reason: 'a turn is still running' }
+    }
+    const previous = this.record.snapshotId
+    this.rotationDue = false
+    this.record = { generation: this.record.generation + 1, phase: 'ready', runId: null, provider: null,
+      ceiling: this.ceiling(), effort: this.record.effort, accepted: [], snapshotId: 'initial' }
+    this.snapshot = { generation: this.record.generation, chat: { runId: null, turns: [] },
+      draft: { text: '', revision: 0 }, queued: [], results: {} }
+    await this.publish(this.record, this.snapshot)
+    // Only after the new record is durable: a crash between these two leaves a
+    // pointer to a snapshot that still exists, which recovers; the reverse does not.
+    if (previous && previous !== 'initial') await this.options.store.remove(previous).catch(() => {})
+    await this.options.prepareFresh()
+    diagnostic('agent-conversation-discarded', { generation: this.record.generation, previousSnapshotId: previous })
+    return { discarded: true }
   }
 
   dispose(): void {

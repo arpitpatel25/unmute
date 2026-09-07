@@ -48,6 +48,7 @@ export class AgentRuntimeClient {
   }
   async submit(input: AgentInteractionInput): Promise<AgentInteractionResult> { return (await this.enqueue(input)).completion }
   async retry(): Promise<AgentInteractionResult> { return this.rpc.call('agent.retry') }
+  async discard(): Promise<{ discarded: boolean; reason?: string }> { return this.rpc.call('agent.discard') }
   async setDraft(text: string, revision: number): Promise<void> { await this.rpc.call('agent.setDraft', text, revision) }
   async requestProvider(provider: AgentProviderId): Promise<void> { await this.rpc.call('agent.requestProvider', provider) }
   resumeQueued(): void { /* daemon drains its durable queue independently */ }

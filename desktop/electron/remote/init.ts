@@ -5362,6 +5362,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         }),
         agentDraftChanged: (text, revision) => unmuteAgentLifecycle?.setDraft(text, revision) ?? Promise.reject(new Error('Agent unavailable')),
         agentRetry: async () => { await unmuteAgentLifecycle?.retry() },
+        // ONE CONVERSATION AT A TIME: starting a new one ends the old one, it
+        // does not sit beside it. Refused rather than forced while a turn is
+        // running, so nothing is discarded out from under a live provider.
+        agentNewConversation: async () => {
+          const outcome = await unmuteAgentLifecycle?.discard()
+          log.event('agent-new-conversation', { discarded: outcome?.discarded ?? false, ...(outcome?.reason ? { reason: outcome.reason } : {}) })
+        },
         addressAgent: (on) => {
           if (orchestrateAgentAddressed === on) return
           orchestrateAgentAddressed = on

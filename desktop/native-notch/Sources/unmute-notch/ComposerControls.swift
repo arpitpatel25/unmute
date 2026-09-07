@@ -10,6 +10,10 @@ struct ComposerControls: View {
     let dictate: () -> Void
     let cancelDictation: () -> Void
     let newConversation: () -> Void
+    /// Agent only. There is exactly ONE Agent conversation, so starting
+    /// another ends this one — nil everywhere else, where "new conversation"
+    /// means an additional chat rather than a replacement.
+    var newAgentConversation: (() -> Void)?
 
     private var fields: [ComposerSetupField] {
         composerSetupFields(hasModels: !config.models.isEmpty,
@@ -31,6 +35,18 @@ struct ComposerControls: View {
                 .frame(height: 28)
 
                 Spacer(minLength: 8)
+
+                if let start = newAgentConversation {
+                    Menu {
+                        Text("This ends the current conversation. It is not kept.")
+                        Button("Start a new conversation", action: start)
+                    } label: {
+                        Label("New", systemImage: "square.and.pencil").foregroundColor(Theme.textFaint)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Ends this Agent conversation and starts a clean one.")
+                }
 
                 if let state = config.dictation {
                     Button(action: dictate) {

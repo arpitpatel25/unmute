@@ -193,6 +193,7 @@ export class AgentRuntimeService {
       }
       case 'submit': return this.lifecycle.submit(a[0])
       case 'retry': return this.lifecycle.retry()
+      case 'discard': return this.lifecycle.discard()
       case 'setDraft': return this.lifecycle.setDraft(a[0], a[1])
       case 'requestProvider': this.config!.selectedProvider = a[0]; return this.lifecycle.requestProvider(a[0])
       case 'completion': return this.completions.get(a[0]) ?? null

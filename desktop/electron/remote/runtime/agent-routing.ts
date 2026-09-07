@@ -69,7 +69,7 @@ export class CompatibleAgentRuntime extends RuntimeRpcClient {
     if (!method.startsWith('agent.')) throw new Error('Agent router accepts Agent commands only')
     const operation = this.serial.then(async () => {
       if (method === 'agent.configure') this.config = { ...args[0] as AgentRuntimeConfig }
-      const configured = await this.select(['agent.configure', 'agent.enqueue', 'agent.retry', 'agent.submit'].includes(method))
+      const configured = await this.select(['agent.configure', 'agent.discard', 'agent.enqueue', 'agent.retry', 'agent.submit'].includes(method))
       if (method === 'agent.update' && this.config) Object.assign(this.config, args[0])
       if (method === 'agent.requestProvider' && this.config) this.config.selectedProvider = args[0] as AgentRuntimeConfig['selectedProvider']
       if (method === 'agent.disable') this.config = undefined

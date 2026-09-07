@@ -76,8 +76,22 @@ export function agentTraceSinks(provider: string): {
           return
         case 'tool':
           // Trace every tool, including provider-native tools that bypass MCP.
-          // Do not copy file contents, commands or credentials into audit logs.
-          log.event('tool-call', { provider, sessionId, tool: trace.tool, id: trace.id, inputChars: trace.input?.length })
+          //
+          // THE ARGUMENT IS THE DECISION. This logged only `inputChars` — that
+          // a Grep happened, never what it searched for — and answering "why
+          // did it go there instead of the index" then meant opening the
+          // transcript every time. Which query, which path, which session id
+          // IS the reasoning, as far as anything outside the model can see it.
+          //
+          // `trace.input` is already clipped to TRACE_INPUT_MAX and passed
+          // through redactSecrets by trace.ts, so this carries an argument
+          // summary rather than file contents or credentials. `inputChars`
+          // stays alongside it, because the clip means length is no longer
+          // recoverable from the value.
+          log.event('tool-call', {
+            provider, sessionId, tool: trace.tool, id: trace.id,
+            inputChars: trace.input?.length, ...(trace.input ? { input: trace.input } : {}),
+          })
           return
         case 'toolResult':
           log.event('tool-result', {

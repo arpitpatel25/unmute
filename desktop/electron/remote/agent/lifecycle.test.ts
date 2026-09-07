@@ -254,3 +254,69 @@ for (const failedPublication of ['snapshot', 'journal'] as const) {
     } finally { await h.cleanup() }
   })
 }
+
+/**
+ * ONE conversation at a time, and a way to end it.
+ *
+ * Before this the only exits were twenty turns or six hours idle, so a chat
+ * that had gone somewhere wrong could only be escaped by waiting. Starting a
+ * new one REPLACES the old — it is not an additional conversation — so the
+ * next turn must carry no priorRunId, which is what makes the controller take
+ * supervisor.start() instead of resume().
+ */
+test('discarding ends the conversation and the next turn starts clean', async () => {
+  const h = await harness()
+  try {
+    const first = h.lifecycle.submit({ transcript: 'before', submissionId: 'b1' })
+    await h.waitCalls(1); await h.accept(0); h.calls[0].settle(); await first
+    assert.equal(h.calls[0].prior, undefined, 'the very first turn has no prior')
+
+    const outcome = await h.lifecycle.discard()
+    assert.deepEqual(outcome, { discarded: true })
+
+    // Checked HERE, before anything new is said: the point is that the old
+    // conversation is gone, not that a later one looks small.
+    const emptied = h.lifecycle.view()
+    assert.deepEqual(emptied.snapshot.chat.turns, [], 'the old turns are gone, not carried over')
+    assert.equal(emptied.record.runId, null, 'nothing is left to resume into')
+    assert.deepEqual(emptied.record.accepted, [], 'the turn count restarts, so the ceiling is not inherited')
+
+    const second = h.lifecycle.submit({ transcript: 'after', submissionId: 'a1' })
+    await h.waitCalls(2); await h.accept(1); h.calls[1].settle(); await second
+    assert.equal(h.calls[1].prior, undefined, 'a discarded conversation must not be resumed into')
+
+    // The persona is re-read on the way out, so an edited prompt takes effect
+    // on the conversation the person just started rather than the next one.
+    assert.ok(h.refreshes >= 1, 'discard must prepare a fresh constitution')
+    const texts = h.lifecycle.view().snapshot.chat.turns.map(t => t.text)
+    assert.ok(texts.some(t => t.includes('after')), 'the new conversation holds what was said after')
+    assert.ok(!texts.some(t => t.includes('before')), 'and nothing from the conversation that was ended')
+  } finally { await h.cleanup() }
+})
+
+test('a conversation is never discarded out from under a running turn', async () => {
+  const h = await harness()
+  try {
+    const inFlight = h.lifecycle.submit({ transcript: 'working', submissionId: 'w1' })
+    await h.waitCalls(1); await h.accept(0)
+    const refused = await h.lifecycle.discard()
+    assert.equal(refused.discarded, false)
+    assert.match(refused.reason ?? '', /still running/)
+    h.calls[0].settle(); await inFlight
+    // Once it lands, the same request is honoured.
+    assert.equal((await h.lifecycle.discard()).discarded, true)
+  } finally { await h.cleanup() }
+})
+
+test('a discarded conversation stays discarded across a restart', async () => {
+  const h = await harness()
+  try {
+    const p = h.lifecycle.submit({ transcript: 'one', submissionId: 'o1' })
+    await h.waitCalls(1); await h.accept(0); h.calls[0].settle(); await p
+    await h.lifecycle.discard()
+    const revived = await h.restart()
+    const next = revived.submit({ transcript: 'two', submissionId: 't1' })
+    await h.waitCalls(2); await h.accept(1); h.calls[1].settle(); await next
+    assert.equal(h.calls[1].prior, undefined, 'the discard must survive a runtime restart')
+  } finally { await h.cleanup() }
+})

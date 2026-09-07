@@ -164,6 +164,8 @@ export interface NotchControllerDeps {
   agentSend?(text: string, submission: { submissionId: string; revision: number }): Promise<void>
   agentDraftChanged?(text: string, revision: number): Promise<void>
   agentRetry?(): Promise<void>
+  /** End the Agent conversation and keep nothing. */
+  agentNewConversation?(): Promise<void>
   /** THE VOICE IS POINTED AT THE AGENT (its card is in front, or its chat is
    *  open). Separate from `focus`, which names a task and must never be handed
    *  an id the task runtime cannot resolve. Optional: a host that does not wire
@@ -580,6 +582,7 @@ export class NotchController {
       this.sendAgentDraft(event.submissionId, event.revision)
     })
     on('agentRetry', () => { void this.deps.agentRetry?.().catch(error => this.agentUnavailable((error as Error).message)) })
+    on('agentNewConversation', () => { void this.deps.agentNewConversation?.().catch(error => this.agentUnavailable((error as Error).message)) })
     on('tap', () => this.onTap())
     on('collapsed', () => {
       // THE HOLD DIES WITH THE CARD. Whether or not they pressed it again, a

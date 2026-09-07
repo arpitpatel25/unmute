@@ -463,6 +463,8 @@ export type NotchEvent =
   | { type: 'sendDraft'; id: string; reference?: import('../question-reference').QuestionReference }
   | { type: 'agentSend'; submissionId: string; revision: number }
   | { type: 'agentRetry' }
+  /** End this Agent conversation and keep nothing; the next turn starts clean. */
+  | { type: 'agentNewConversation' }
   | { type: 'cancelTaskFollowup' | 'restoreTaskFollowup' | 'queueSavedTaskFollowup' | 'recoverUncertainFollowup'; id: string; queueId: string }
   | { type: 'mute'; id: string }
   | { type: 'kill'; id: string }

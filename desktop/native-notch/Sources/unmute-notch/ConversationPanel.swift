@@ -446,7 +446,9 @@ struct StageComposer: View {
                                      dictate: { model.emit(.toggleDraftDictation(id: taskId, insertionOffset: editorSelection.location,
                                          selectedLength: editorSelection.length, clientRevision: clientRevision, insertionText: text)) },
                                      cancelDictation: { model.emit(.cancelDraftDictation(id: taskId)) },
-                                     newConversation: { newChatOpen = true })
+                                     newConversation: { newChatOpen = true },
+                                     newAgentConversation: taskId == "unmute-agent"
+                                         ? { model.emit(.agentNewConversation) } : nil)
                 }
             }
             .padding(.horizontal, 11)
