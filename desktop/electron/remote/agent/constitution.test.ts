@@ -45,9 +45,18 @@ test('the verbatim turn index is described, with its limits, and never mandated'
   assert.match(AGENT_PRINCIPLES, /29 GB/)
   assert.match(AGENT_PRINCIPLES, /26 MB/)
   assert.match(AGENT_PRINCIPLES, /the way IN to them/)
-  // Still described, never ordered.
+  // A FILE MAY BE RECOMMENDED; A TOOL MAY NOT BE MANDATED.
+  //
+  // This once asserted "in whatever order the question deserves", because the
+  // first version of this rule refused to point anywhere. That was the right
+  // instinct aimed at the wrong target: what made "Start with
+  // mcp__unmute__sessions_search" harmful was that it sent the Agent into a
+  // TOOL that failed silently and capped the queries it could express. A file
+  // it greps itself has neither property — an empty result is visibly empty,
+  // and its own judgement still applies on top. So the index is now named as
+  // where a past-work question starts, and no tool is.
   assert.doesNotMatch(AGENT_PRINCIPLES, /Start with mcp__unmute__/)
-  assert.match(AGENT_PRINCIPLES, /in whatever order the question deserves/)
+  assert.match(AGENT_PRINCIPLES, /the index is where to start/)
 })
 
 /**
@@ -266,4 +275,67 @@ test('a missing-tool error is a naming mistake, not a capability outage', () => 
 
 test('it must not silently substitute a different action for the one asked', () => {
   assert.match(AGENT_PRINCIPLES, /do something else instead/i)
+})
+
+// ── THE PRECEDENCE RULES ────────────────────────────────────────────────────
+//
+// Every rule added to this file during 2026-09-07 collided with one already in
+// it, and the model picked whichever was stated more absolutely — correctly,
+// because nothing said which won. Three separate field failures, one shape.
+// These tests assert the TIE-BREAKS, not that the paragraphs exist: a rule
+// nobody has ranked is the bug, and it reads fine right up until it fires.
+
+/**
+ * FIELD FAILURE. "We had a discussion about CUA… I asked you if Codex has it…
+ * and if we had the latest version… so let's continue the discussion please."
+ * Three question-shaped clauses then a continuation, and it answered instead
+ * of reopening — the retrospective rule fired because the recap was longer.
+ */
+test('a recap followed by "let\'s continue" is a continuation, not a question', () => {
+  assert.match(AGENT_PRINCIPLES, /WHEN A MESSAGE DOES BOTH, THE ENDING GOVERNS/)
+  assert.match(AGENT_PRINCIPLES, /how they told you WHICH session/)
+  assert.match(AGENT_PRINCIPLES, /however many question-shaped sentences came first/)
+  // ...and the other side of the tie-break, so this does not swallow a genuine question.
+  assert.match(AGENT_PRINCIPLES, /no such closing instruction is retrospective/)
+})
+
+/**
+ * FIELD FAILURE. Asked to add an item to the Unmute task list, sessions_open
+ * returned a LIVE card titled "Unmute Apple Notes" — and it called task_create
+ * anyway, because WORK THAT LEAVES UNMUTE said to, unconditionally.
+ */
+test('an existing home beats a new task, and "home" means a thread not a topic', () => {
+  assert.match(AGENT_PRINCIPLES, /WORK THAT ALREADY HAS A HOME GOES HOME/)
+  assert.match(AGENT_PRINCIPLES, /home of a thread, not of a topic/)
+  // The over-routing guard: same subject is NOT enough, or every task in a repo
+  // lands in whichever session once read that repo.
+  assert.match(AGENT_PRINCIPLES, /same work continuing/)
+  // It must cover sleeping sessions too — sessions_open only sees cards.
+  assert.match(AGENT_PRINCIPLES, /a session that has to be woken is still its home/)
+  assert.match(AGENT_PRINCIPLES, /only the ones with cards/)
+  // And it must not become a rule against task_create, which is the normal case.
+  assert.match(AGENT_PRINCIPLES, /mcp__unmute__task_create is for work with nowhere to go yet/)
+})
+
+/**
+ * It drifted to source files and to memory instead of the index. The index is
+ * complete, so its silence is information — that is the fact that makes it a
+ * sane first stop, and the fact that stops a fruitless 29 GB sweep after.
+ */
+test('the index is where a past-work question starts, and its silence counts', () => {
+  assert.match(AGENT_PRINCIPLES, /the index is where to start/)
+  assert.match(AGENT_PRINCIPLES, /ITS SILENCE MEANS SOMETHING/)
+  assert.match(AGENT_PRINCIPLES, /not a reason to go hunting through 29 GB/)
+  // Memory is a peer, not a loser: "what have I saved" is still memory's question.
+  assert.match(AGENT_PRINCIPLES, /asked side by side rather than in order/)
+})
+
+/**
+ * A resume can half-succeed: the session opens and the message does not land.
+ * Reported as failure, that produced an apology and a clipboard.
+ */
+test('a half-delivered resume is described as what it is', () => {
+  assert.match(AGENT_PRINCIPLES, /delivered:false/)
+  assert.match(AGENT_PRINCIPLES, /sitting in its composer unsent/)
+  assert.match(AGENT_PRINCIPLES, /never that it failed and never that it was delivered/)
 })
