@@ -155,6 +155,9 @@ export interface SessionActionResult {
   operation: 'resume' | 'fork'
   sourceSessionId: string
   sessionId: string
+  /** Present only when an intent was supplied. False means the session is open
+   *  but the words are sitting in its composer, not sent. */
+  delivered?: boolean
 }
 
 export interface SessionAdapters {

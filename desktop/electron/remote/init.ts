@@ -683,7 +683,19 @@ let continuationInteractionId: string | undefined
 const agentContinuations = new AgentContinuationService({
   interactionId: () => continuationInteractionId,
   operationRoot: join(homedir(), '.unmute', 'remote', 'continuation-operations'),
-  manager: () => manager,
+  // Only what the continuation service needs, bound explicitly. A spread of the
+  // TaskManager would copy fields and lose prototype methods.
+  manager: () => manager && {
+    list: () => manager!.list(),
+    resume: (id: string) => manager!.resume(id),
+    deliverDraft: (id: string, text: string, attachments: readonly string[]) => manager!.deliverDraft(id, text, [...attachments]),
+    attachProviderSession: (i: Parameters<TaskManager['attachProviderSession']>[0]) => manager!.attachProviderSession(i),
+    forkProviderSession: (i: Parameters<TaskManager['forkProviderSession']>[0]) => manager!.forkProviderSession(i),
+    setName: (id: string, name: string) => manager!.setName(id, name),
+    setGroup: (id: string, group: string) => manager!.setGroup(id, group),
+    // Where a message goes when the session reopened but would not take it yet.
+    saveDraft: (id: string, text: string) => { taskDrafts.setText(id, text) },
+  },
   locate: locateSession,
   workspaces: () => groupRegistry,
   scratchRoot: join(homedir(), '.unmute', 'remote', 'local'),

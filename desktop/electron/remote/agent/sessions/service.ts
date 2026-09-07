@@ -14,6 +14,8 @@ interface ContinuationManager {
   list(): Array<{ id: string; sessionId: string; codexRolloutId?: string } & MetadataSource>
   resume(taskId: string): Promise<boolean>
   deliverDraft(taskId: string, text: string, attachments: readonly string[]): Promise<boolean>
+  /** Park text in a card's composer when it could not be sent into the session. */
+  saveDraft?(taskId: string, text: string): void
   attachProviderSession(input: {
     harness: 'claude' | 'codex'; sessionId: string; cwd: string; intent?: string; title?: string; group?: string; groupId?: string
   }): Promise<{ taskId: string; sessionId: string }>
@@ -110,12 +112,24 @@ export class AgentContinuationService {
       if (existing?.name !== metadata.title) manager.setName?.(plan.taskId, metadata.title)
       if (existing?.groupId !== metadata.groupId || existing?.group !== metadata.group) manager.setGroup?.(plan.taskId, metadata.group)
       if (!(await manager.resume(plan.taskId))) throw new Error('That session could not be resumed')
-      if (plan.followUp && !(await manager.deliverDraft(plan.taskId, plan.followUp, []))) {
-        throw new Error('The session resumed, but the current request could not be delivered')
-      }
+      // WAKING IS NOT THE SAME AS BEING READY TO LISTEN.
+      //
+      // `resume()` returns once the respawn is INITIATED, not once the session
+      // can receive input, and delivery used to run on the very next line. A
+      // cold Claude card therefore failed 85ms after the request — before its
+      // PTY could exist — and the whole operation was reported as a failure
+      // even though the session HAD reopened. It is not retryable, so the
+      // Agent could only apologise and put the text on the clipboard.
+      //
+      // So: give it a bounded chance to come up, and if it still will not take
+      // the message, PARK THE TEXT IN THAT CARD'S COMPOSER rather than losing
+      // it. The person then finds their words where the conversation is, which
+      // is the worst case worth having.
+      const delivered = plan.followUp ? await this.deliverWhenReady(plan.taskId, plan.followUp) : true
       return {
         taskId: plan.taskId, operation: 'resume',
         sourceSessionId: input.sessionId, sessionId: input.sessionId,
+        ...(plan.followUp ? { delivered } : {}),
       }
     }
     await this.restoreScratch(plan.cwd)
@@ -125,6 +139,29 @@ export class AgentContinuationService {
     return {
       ...result, operation: 'resume', sourceSessionId: input.sessionId,
     }
+  }
+
+  /**
+   * Deliver into a session that may still be waking.
+   *
+   * Bounded on purpose: a session that cannot take a message after this long
+   * is not about to, and waiting further would hold a spoken request open with
+   * nothing to show for it. The delays are short and few because the common
+   * case is a PTY appearing, not a stuck runtime.
+   */
+  private async deliverWhenReady(taskId: string, text: string): Promise<boolean> {
+    const backoffMs = [0, 150, 400, 900, 1_800, 3_000]
+    for (const wait of backoffMs) {
+      if (wait) await new Promise<void>(resolve => setTimeout(resolve, wait))
+      if (await this.manager().deliverDraft(taskId, text, []).catch(() => false)) {
+        diagnostic('continuation-delivered', { taskId, afterMs: wait })
+        return true
+      }
+    }
+    // Never drop what they said. The composer is where they will look for it.
+    try { this.manager().saveDraft?.(taskId, text) } catch { /* the card may have gone */ }
+    diagnostic('continuation-delivery-deferred', { taskId, chars: text.length })
+    return false
   }
 
   async fork(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult> {

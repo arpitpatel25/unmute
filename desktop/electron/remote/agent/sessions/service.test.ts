@@ -34,12 +34,13 @@ test('host preserves existing descriptive title and canonical workspace on a for
   assert.deepEqual(calls[0].input, { harness: 'codex', sessionId: 'source-session', cwd: '/project', title: 'Repair billing migration', group: 'Unmute', groupId: 'unmute' })
 })
 
-function fixture(existing = false) {
+function fixture(existing = false, deliveries: boolean[] = []) {
   const calls: Array<{ op: string; input?: unknown }> = []
   const manager = {
     list: () => existing ? [{ id: 'existing-task', sessionId: 'source-session' }] : [],
     async resume(id: string) { calls.push({ op: 'wake', input: id }); return true },
-    async deliverDraft(id: string, text: string) { calls.push({ op: 'deliver', input: { id, text } }); return true },
+    async deliverDraft(id: string, text: string) { calls.push({ op: 'deliver', input: { id, text } }); return deliveries.shift() ?? true },
+    saveDraft(id: string, text: string) { calls.push({ op: 'saveDraft', input: { id, text } }) },
     async attachProviderSession(input: unknown) { calls.push({ op: 'attach', input }); return { taskId: 'new-task', sessionId: 'source-session' } },
     async forkProviderSession(input: unknown) { calls.push({ op: 'fork', input }); return { taskId: 'child-task', sessionId: 'child-session' } },
   }
@@ -61,6 +62,8 @@ test('resume wakes an existing card and delivers only the current request', asyn
   assert.deepEqual(result, {
     taskId: 'existing-task', operation: 'resume',
     sourceSessionId: 'source-session', sessionId: 'source-session',
+    // An intent was supplied, so whether it landed is part of the answer.
+    delivered: true,
   })
   assert.deepEqual(calls, [
     { op: 'wake', input: 'existing-task' },
@@ -127,4 +130,38 @@ test('a reaped Unmute scratch directory is recreated before attach', async () =>
   ;(service as any).deps.locate = async () => ({ ...located, cwd: '/scratch/task-id' })
   await service.resume({ ...metadata, sessionId: 'source-session' })
   assert.deepEqual(calls[0], { op: 'mkdir', input: '/scratch/task-id' })
+})
+
+/**
+ * FIELD FAILURE (2026-09-07). `resume()` returns once the respawn is INITIATED,
+ * not once the session can take input, and delivery ran on the very next line.
+ * A cold Claude card failed 85 ms after the request — before its PTY could
+ * exist — and the whole operation reported as failed even though the session
+ * HAD reopened, with retryable:false, so the Agent could only apologise and
+ * put the text on the clipboard.
+ */
+test('a session that is still waking gets the message once it can take it', async () => {
+  const { service, calls } = fixture(true, [false, false, true])
+  const result = await service.resume({ sessionId: 'source-session', intent: 'carry on', title: 'Billing migration', group: 'Unmute' })
+  assert.equal(result.delivered, true, 'it waits for the session rather than failing at once')
+  assert.equal(calls.filter(c => c.op === 'deliver').length, 3, 'it retried until the session was ready')
+  assert.equal(calls.filter(c => c.op === 'saveDraft').length, 0, 'nothing is parked when it lands')
+})
+
+test('a message that still cannot be delivered is parked in the card, never lost', async () => {
+  const { service, calls } = fixture(true, [false, false, false, false, false, false])
+  const result = await service.resume({ sessionId: 'source-session', intent: 'carry on', title: 'Billing migration', group: 'Unmute' })
+  // Reopening SUCCEEDED. Reporting the whole thing as a failure is what left
+  // the person with a clipboard and an apology.
+  assert.equal(result.taskId, 'existing-task')
+  assert.equal(result.delivered, false, 'and it says so, rather than throwing')
+  assert.deepEqual(calls.at(-1), { op: 'saveDraft', input: { id: 'existing-task', text: 'carry on' } },
+    'their words end up in that card\'s composer')
+})
+
+test('a reopen with no intent reports no delivery either way', async () => {
+  const { service, calls } = fixture(true)
+  const result = await service.resume({ sessionId: 'source-session', title: 'Billing migration', group: 'Unmute' })
+  assert.equal(result.delivered, undefined, 'nothing was asked for, so there is nothing to report')
+  assert.equal(calls.filter(c => c.op === 'deliver').length, 0)
 })
