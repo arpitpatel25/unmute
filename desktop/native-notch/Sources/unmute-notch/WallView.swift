@@ -70,11 +70,7 @@ struct WallView: View {
 
                 // "Nothing here" means nothing EXISTS — not "everything is
                 // folded", which is a different thing with a way out.
-                if visibleGroups.isEmpty, let emptyMessage {
-                    Text(emptyMessage)
-                        .font(Theme.fBody).foregroundColor(Theme.textFaint)
-                        .padding(.top, 34).frame(maxWidth: .infinity, alignment: .center)
-                }
+                if visibleGroups.isEmpty { emptyState }
 
                 // A GROUP KEEPS ITS HEADER WHEN EVERYTHING IN IT IS FOLDED.
                 // Skipping empty groups silently deleted whole groups from the
@@ -177,19 +173,47 @@ struct WallView: View {
         }
     }
 
-    /// Nil where the emptiness speaks for itself.
+    /// WHAT AN EMPTY WALL SAYS DEPENDS ON WHY IT IS EMPTY.
     ///
     /// The needs-you view said "Nothing needs you here". Removed at the user's
     /// request: an empty list already says that, and being congratulated for
-    /// having no work reads well once and grates every time after. Optional
-    /// rather than an empty string, so the row is skipped entirely instead of
-    /// leaving a padded blank where the text used to be.
-    private var emptyMessage: String? {
+    /// having no work reads well once and grates every time after. It stays
+    /// silent. Finished says only that nothing has finished — someone reading
+    /// a completed-work filter is not looking for a way to begin.
+    ///
+    /// Today and All work are different, and they are what a new person opens
+    /// first. An empty wall there is not a state to acknowledge, it is the
+    /// moment they have nothing to act on and no idea what to press — the one
+    /// place naming the keys is worth the space. "Speak to spawn one", which
+    /// this replaces, said the right thing without saying how.
+    @ViewBuilder private var emptyState: some View {
         switch selectedView {
-        case .needsYou: return nil
-        case .finished: return "No finished work here"
-        default: return "No sessions — speak to spawn one"
+        case .needsYou:
+            EmptyView()
+        case .finished:
+            emptyText("No finished work here")
+        default:
+            VStack(spacing: 7) {
+                Text("Nothing running")
+                    .font(Theme.fBody).foregroundColor(Theme.textDim)
+                VStack(spacing: 4) {
+                    // The key is read from the pocket rather than written in:
+                    // it is Fn for anyone who dictates with right Option, and
+                    // a wall confidently naming the wrong key is worse than
+                    // one naming none.
+                    Text("Press \(model.pocket.routeKeyLabel) and say what you want done")
+                    Text("Double-tap right \u{2318} to ask the Unmute Agent")
+                }
+                .font(Theme.fSub).foregroundColor(Theme.textFaint)
+            }
+            .padding(.top, 34).frame(maxWidth: .infinity, alignment: .center)
         }
+    }
+
+    private func emptyText(_ message: String) -> some View {
+        Text(message)
+            .font(Theme.fBody).foregroundColor(Theme.textFaint)
+            .padding(.top, 34).frame(maxWidth: .infinity, alignment: .center)
     }
 
     private var selectedWorkspaceTitle: String {
