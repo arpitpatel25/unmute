@@ -383,6 +383,10 @@ test('several candidates are separated by what they touched, then by what the pe
   assert.match(AGENT_PRINCIPLES, /not kept in a list somewhere/)
   // Engagement is the tie-break, and the reason it beats any self-report.
   assert.match(AGENT_PRINCIPLES, /cannot write about itself/)
+  // The field that carries it, and the two traps it exists to avoid.
+  assert.match(AGENT_PRINCIPLES, /`returns` on the session row/)
+  assert.match(AGENT_PRINCIPLES, /recency on its own points the wrong way/)
+  assert.match(AGENT_PRINCIPLES, /Never rank on how a session says it went/)
   // A destination is resolved the same way — the note id is never spoken.
   assert.match(AGENT_PRINCIPLES, /appears nowhere in anything they ever said/)
 })

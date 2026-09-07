@@ -544,6 +544,11 @@ function redactedActivity(activity: AgentActivity): string {
   if (/memory_get|reading (?:a )?memory/u.test(raw)) return 'Reading selected memory'
   if (/memory_(?:store|update|forget|restore)/u.test(raw)) return 'Updating saved memory'
   if (/delivery_/u.test(raw)) return 'Preparing requested delivery'
+  // Retrieval is now the FIRST thing every turn does, so without this the bar
+  // says "Using an authorized capability" for the most common act there is.
+  // Grep/Read against the session index, and the tools that open what it finds.
+  if (/session-index|turns\.jsonl|sessions\.jsonl/u.test(raw)) return 'Looking through your past sessions'
+  if (/mcp__unmute__sessions_open|sessions_open/u.test(raw)) return 'Checking what is already open'
   if (activity.kind === 'waiting') return 'Waiting for confirmation'
   if (activity.kind === 'tool') return 'Using an authorized capability'
   if (activity.kind === 'message') return 'Preparing the response'

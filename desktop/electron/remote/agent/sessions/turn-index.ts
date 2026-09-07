@@ -60,6 +60,8 @@ export interface IndexedSession {
   path: string
   firstAt: number
   lastAt: number
+  /** How many times they left this session and came back — see RETURN_GAP_MS. */
+  returns?: number
   turns: number
   /** Sessions in ANOTHER harness whose first turn is byte-identical to this
    *  one's — see LINKED. A link is a fact, not a ranking: neither side is
@@ -173,6 +175,28 @@ const SYNTHETIC = [
  * by chance across a corpus this size.
  */
 const LINKABLE_OPENING_CHARS = 40
+
+/**
+ * A GAP THIS LONG BETWEEN TWO THINGS SOMEONE SAID MEANS THEY LEFT AND CAME BACK.
+ *
+ * Which of two sessions to continue is a question nothing in the words can
+ * answer: a session that failed matches the same phrases as one that worked,
+ * and is usually the MORE recent of the two, because the failure is what made
+ * them ask again. Turn counts do not separate them either — fifteen turns is
+ * either a rich collaboration or fifteen corrections.
+ *
+ * What does separate them is whether the person came back. Someone who leaves
+ * a session and returns to it has accepted it; someone who says two things and
+ * never reappears has not, however well it matches. It is also the only signal
+ * here a session cannot author about itself, unlike a terminal state (a task
+ * can be "done" and still say "I couldn't complete this") or a summary it
+ * writes about its own success.
+ *
+ * Thirty minutes rather than hours: continuous work has gaps of seconds to
+ * minutes, so this is short enough to catch a real return and long enough that
+ * thinking, a meal, or a meeting is not mistaken for one.
+ */
+const RETURN_GAP_MS = 30 * 60_000
 
 /**
  * A session whose FIRST turn takes one of these forms was opened by software
@@ -396,9 +420,9 @@ export class SessionTurnIndex {
     const lines: string[] = []
     let offset = start
     let consumed = 0
-    // Bracketing this pass's turns; folded into the session by bump().
-    let earliest = 0
-    let latest = 0
+    // Every turn time in this pass, in the order they were read; bump() folds
+    // them into the session's bounds and counts the gaps between them.
+    const times: number[] = []
     // True while stepping through a line longer than one slice: the next
     // newline we meet ENDS that line rather than starting a new one.
     let overlong = false
@@ -437,8 +461,7 @@ export class SessionTurnIndex {
                 if (session && !session.turns && !lines.length && BRIEFING.some(form => form.test(turn.text))) session.briefing = true
                 if (session && !session.openingHash && !session.turns && !lines.length) session.openingHash = openingHash(turn.text)
                 lines.push(this.encode(id, turn, offset + lineStart))
-                if (!earliest || turn.t < earliest) earliest = turn.t
-                if (turn.t > latest) latest = turn.t
+                times.push(turn.t)
               }
             }
           }
@@ -454,7 +477,7 @@ export class SessionTurnIndex {
     if (offset === start) return 0
     if (lines.length) await fs.appendFile(this.paths.turns, lines.join('') , { mode: 0o600 })
     this.cursors.set(path, { offset, size: stat.size })
-    this.bump(id, lines.length, earliest, latest)
+    this.bump(id, lines.length, times)
     return consumed
   }
 
@@ -510,15 +533,27 @@ export class SessionTurnIndex {
    * assistant kept working in for hours after they left reads as of when they
    * left, which is the honest answer to where a conversation is.
    */
-  private bump(id: string, added: number, earliest: number, latest: number): void {
+  private bump(id: string, added: number, times: readonly number[]): void {
     const session = this.sessions.get(id)
-    if (!session || !added) return
+    if (!session || !added || !times.length) return
     session.turns += added
-    // min/max rather than assignment: a pass can carry turns out of order, and
-    // a later pass must never drag firstAt forward off the opening turn.
-    if (!session.firstAt || earliest < session.firstAt) session.firstAt = earliest
-    if (latest > session.lastAt) session.lastAt = latest
+    // Sorted rather than trusted in file order: Codex writes a turn twice and
+    // a compacted transcript can carry an older line after a newer one, and a
+    // single out-of-order pair would otherwise invent a return.
+    const sorted = [...times].sort((a, b) => a - b)
+    // min/max rather than assignment: a later pass must never drag firstAt
+    // forward off the opening turn.
+    if (!session.firstAt || sorted[0] < session.firstAt) session.firstAt = sorted[0]
+    // The gap BEFORE this pass counts too — a session tailed a day later is
+    // exactly the person coming back, and it is the strongest case there is.
+    let previous = session.lastAt
+    for (const at of sorted) {
+      if (previous && at - previous > RETURN_GAP_MS) session.returns = (session.returns ?? 0) + 1
+      previous = at
+    }
+    if (sorted[sorted.length - 1] > session.lastAt) session.lastAt = sorted[sorted.length - 1]
   }
+
 
   /**
    * The SAME utterance arriving twice, not the person repeating themselves.
@@ -546,7 +581,7 @@ export class SessionTurnIndex {
 
   private dropSession(id: string): void {
     const session = this.sessions.get(id)
-    if (session) { session.turns = 0; session.firstAt = 0; session.lastAt = 0 }
+    if (session) { session.turns = 0; session.firstAt = 0; session.lastAt = 0; delete session.returns }
   }
 
   private async load(): Promise<void> {

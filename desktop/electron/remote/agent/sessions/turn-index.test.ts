@@ -542,3 +542,50 @@ test('a session is bracketed by its turns, not by when the file was touched', as
   assert.equal(after.firstAt, Date.parse('2026-09-06T02:36:04.000Z'))
   assert.equal(after.lastAt, Date.parse('2026-09-06T20:21:42.000Z'))
 })
+
+/**
+ * WHICH OF TWO SESSIONS DID THEY ACTUALLY ACCEPT.
+ *
+ * Six real sessions all say "edit the video in Palmier Pro". Words cannot
+ * separate them, and the failed one is usually the MORE recent, because the
+ * failure is what made them ask again. What separates them is whether the
+ * person came back: 72237a27 ran nine turns and was returned to the next day;
+ * 01a03a0d said two things in the same minute and was never opened again.
+ */
+test('leaving a session and coming back to it is recorded; one burst is not', async () => {
+  const w = await workspace()
+  const at = (t: string, text: string) => claudeUser(text, { timestamp: t })
+  const burst = 'bbbbbbbb-2222-4333-8444-555555555555'
+  await fs.writeFile(join(w.claudeProjects, `${CLAUDE_ID}.jsonl`),
+    at('2026-09-06T23:48:00.000Z', 'edit the unmute capture video in palmier pro')
+    + at('2026-09-06T23:52:00.000Z', 'add the logo in the corner')
+    // Next day — they left and came back. This is the signal.
+    + at('2026-09-07T01:10:00.000Z', 'do you think we should trim it down'))
+  await fs.writeFile(join(w.claudeProjects, `${burst}.jsonl`),
+    JSON.stringify({ type: 'user', sessionId: burst, isSidechain: false, timestamp: '2026-09-06T23:22:00.000Z',
+      message: { role: 'user', content: [{ type: 'text', text: 'lets continue editing the video from yesterday' }] } }) + '\n'
+    + JSON.stringify({ type: 'user', sessionId: burst, isSidechain: false, timestamp: '2026-09-06T23:24:00.000Z',
+      message: { role: 'user', content: [{ type: 'text', text: 'ok never mind' }] } }) + '\n')
+
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+  const sessions = await sessionsOf(w.indexRoot)
+  assert.equal(sessions.find(s => s.id === CLAUDE_ID)!.returns, 1)
+  // Two turns four minutes apart is one sitting, not a return.
+  assert.equal(sessions.find(s => s.id === burst)!.returns, undefined)
+})
+
+test('a session tailed a day later counts the gap across the two passes', async () => {
+  const w = await workspace()
+  const path = join(w.claudeProjects, `${CLAUDE_ID}.jsonl`)
+  const at = (t: string, text: string) => claudeUser(text, { timestamp: t })
+  await fs.writeFile(path, at('2026-09-06T10:00:00.000Z', 'start the wedding video edit'))
+  const index = new SessionTurnIndex({ roots: w.roots, root: w.indexRoot })
+  await index.sync()
+  assert.equal((await sessionsOf(w.indexRoot)).find(s => s.id === CLAUDE_ID)!.returns, undefined)
+
+  // They come back the next day. The gap sits BETWEEN passes, which is exactly
+  // where a per-pass counter would lose it — and is the strongest case there is.
+  await fs.appendFile(path, at('2026-09-07T09:00:00.000Z', 'pick that back up'))
+  await index.sync()
+  assert.equal((await sessionsOf(w.indexRoot)).find(s => s.id === CLAUDE_ID)!.returns, 1)
+})
