@@ -146,6 +146,47 @@ test('a turn far past the old 128 KB window is indexed', async () => {
   assert.ok(raw.subarray(buried!.o, raw.indexOf(0x0a, buried!.o)).toString('utf8').includes('multiple sub-agents'))
 })
 
+/**
+ * FIELD FAILURE, first live run (2026-09-07). A single line longer than one
+ * 4 MB read slice made the loop break having consumed nothing, so the cursor
+ * never advanced and the file stalled FOREVER — silently. 16 files were stuck
+ * with 27.71 GB unread, and the worst of them was 1cc88345 itself: 405,453 of
+ * 35,508,282 bytes, 20 of its 146 turns. Codex puts 21 MB of base instructions
+ * on line one, so this is the common case, not the exotic one.
+ *
+ * An over-long line must be STEPPED OVER, and turns after it must still index.
+ */
+test('a line longer than one read slice does not stall the file', async () => {
+  const w = await workspace()
+  const path = join(w.claudeProjects, `${CLAUDE_ID}.jsonl`)
+  // 5 MB on a single line — past SLICE_BYTES (4 MB), so no newline lands in
+  // the first slice at all.
+  const monster = JSON.stringify({
+    type: 'assistant', sessionId: CLAUDE_ID, isSidechain: false,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'z'.repeat(5 * 1024 * 1024) }] },
+  }) + '\n'
+  await fs.writeFile(path, claudeUser('before the monster') + monster + claudeUser('after the monster'))
+
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+
+  const texts = (await turnsOf(w.indexRoot)).map(t => t.text)
+  assert.deepEqual(texts, ['before the monster', 'after the monster'],
+    'a turn after an over-long line was lost — the file stalled')
+})
+
+test('an over-long line at EOF is still treated as incomplete, not skipped', async () => {
+  const w = await workspace()
+  const path = join(w.claudeProjects, `${CLAUDE_ID}.jsonl`)
+  const whole = claudeUser('complete')
+  // A 5 MB fragment with no trailing newline: still being written.
+  const fragment = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'q'.repeat(5 * 1024 * 1024) }] } }).slice(0, 5 * 1024 * 1024)
+  await fs.writeFile(path, whole + fragment)
+
+  const index = new SessionTurnIndex({ roots: w.roots, root: w.indexRoot })
+  await index.sync()
+  assert.deepEqual((await turnsOf(w.indexRoot)).map(t => t.text), ['complete'])
+})
+
 test('appending adds only the new turns, and never re-reads the file', async () => {
   const w = await workspace()
   const path = join(w.claudeProjects, `${CLAUDE_ID}.jsonl`)

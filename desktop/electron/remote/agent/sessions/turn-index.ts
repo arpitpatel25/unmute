@@ -279,6 +279,9 @@ export class SessionTurnIndex {
     const lines: string[] = []
     let offset = start
     let consumed = 0
+    // True while stepping through a line longer than one slice: the next
+    // newline we meet ENDS that line rather than starting a new one.
+    let overlong = false
     try {
       while (offset < stat.size && consumed < budget) {
         const length = Math.min(SLICE_BYTES, stat.size - offset)
@@ -286,21 +289,38 @@ export class SessionTurnIndex {
         const { bytesRead } = await handle.read(buffer, 0, length, offset)
         if (!bytesRead) break
         const slice = buffer.subarray(0, bytesRead)
+        const lastBreak = slice.lastIndexOf(0x0a)
+        if (lastBreak === -1) {
+          // No line ENDS in this slice. Two very different reasons:
+          //  - at EOF it is a half-written trailing line, so leave the cursor
+          //    before it and let the next pass see it whole;
+          //  - mid-file it is a single line longer than the slice (Codex
+          //    writes 21 MB of base instructions on line one). Stepping over
+          //    it is the only way forward. Returning here instead — which is
+          //    what the first version did — pinned the cursor and stalled the
+          //    file permanently, silently, for the life of the index.
+          if (offset + bytesRead >= stat.size) break
+          offset += bytesRead
+          consumed += bytesRead
+          overlong = true
+          continue
+        }
         let lineStart = 0
-        for (let i = 0; i < slice.length; i++) {
+        for (let i = 0; i <= lastBreak; i++) {
           if (slice[i] !== 0x0a) continue
-          const raw = slice.subarray(lineStart, i)
-          if (raw.length <= MAX_LINE_BYTES && raw.includes(USER_MARK)) {
-            const turn = userTurnOf(raw.toString('utf8'), harness, stat.mtimeMs)
-            if (turn) lines.push(this.encode(id, turn, offset + lineStart))
+          if (!overlong) {
+            const raw = slice.subarray(lineStart, i)
+            if (raw.length <= MAX_LINE_BYTES && raw.includes(USER_MARK)) {
+              const turn = userTurnOf(raw.toString('utf8'), harness, stat.mtimeMs)
+              if (turn) lines.push(this.encode(id, turn, offset + lineStart))
+            }
           }
+          // Whatever it was, it is finished now.
+          overlong = false
           lineStart = i + 1
         }
-        // A trailing fragment is a half-written line. Leave the cursor before
-        // it so the next pass sees it whole rather than parsing a truncation.
-        if (lineStart === 0) break
-        consumed += lineStart
-        offset += lineStart
+        consumed += lastBreak + 1
+        offset += lastBreak + 1
       }
     } finally { await handle.close().catch(() => {}) }
 
