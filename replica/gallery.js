@@ -381,13 +381,29 @@ const WALL = {
 };
 
 const ROWS = [
-  { kind: "answer", text: "Tell me whether to carry on into the expanded surfaces, or to do that screenshot-diff pass against the running app first." },
+  { kind: "user", text: "Pick the redesign back up — get oriented in the branch first, don't change anything yet." },
+  { kind: "work", durationMs: 41200, steps: [
+    { title: "Check worktree status and layout", ms: 640, ok: true },
+    { title: "Read redesign plan and review doc", ms: 1120, ok: true },
+    { title: "Run unit tests and site check", ms: 8400, ok: true },
+  ] },
+  { kind: "answer", text: "I re-ran the checks rather than trusting the notes. **25 unit tests** pass and `scripts/check-site.mjs` clears all nine pages.\n\nOne thing the earlier notes missed: the branch is **7 commits ahead of `main` but 9 behind it**. It was cut from `feat/exact-interactive-demo`, which had already diverged, so `main` carries nine site commits the redesign never saw." },
+  { kind: "user", text: "What about the expanded state? You are just having a different notch but you are not showing the orchestrator and when you tap on it how the expanded state appears." },
+  { kind: "answer", text: "You're right — the expanded state *is* the notch, and I flagged it as not built instead of building it." },
+  { kind: "work", durationMs: 24600, failed: false, steps: [
+    { title: "Read WallView head", ms: 820, ok: true },
+    { title: "Read StageView and ConversationPanel", ms: 1310, ok: true },
+    { title: "Write expanded surfaces CSS", ms: 2100, ok: true },
+    { title: "Screenshot the expanded surfaces", ms: 4600, ok: true },
+    { title: "Wire expanded sections into gallery", ms: 900, ok: false },
+  ] },
+  { kind: "answer", text: "Built and committed. Refresh the page — **83 specimens** now, four new sections at the bottom.\n\nThe pocket, the Orchestrator, a task opened, and the attention panel. Tabs and the workspace rail are live; the size track drags." },
   { kind: "user", text: "Can you launch that in the browser so that I can check how it looks?" },
-  { kind: "work", durationMs: 24600, steps: [
+  { kind: "work", durationMs: 3400, steps: [
     { title: "Ensure the local server is up", ms: 820, ok: true },
     { title: "Open the replica in the browser", ms: 310, ok: true },
   ] },
-  { kind: "answer", text: "It's open in your default browser:\n\n`http://localhost:4180/replica/index.html`\n\nA few things are **live**, so they're worth poking rather than just scrolling past." },
+  { kind: "answer", text: "It's open in your default browser:\n\n`http://localhost:4180/replica/index.html`\n\nA few things are **live**, so they're worth poking rather than just scrolling past — hover any recording capsule, click a work line to open its steps, and drag the size track." },
 ];
 
 const TASK = {
@@ -443,14 +459,14 @@ document.getElementById("wall").innerHTML = [
   ["Finished, empty", "Here the emptiness does NOT speak for itself, so it is stated.",
     { ...WALL, view: "finished", groups: [] }],
 ].map(([n, w, m]) => specimen(n, w,
-  expandedStage(renderWall(m), 980, 560), "", true)).join("");
+  expandedStage(renderWall(m), 980, 700), "", true)).join("");
 
 document.getElementById("stage").innerHTML = [
   ["a session", "Header carries curation, lifecycle, destructive and view as four spaced groups — the spacing does the work borders used to.",
     { task: { ...TASK, alive: true }, rows: ROWS, surfaceFill: 0.77 }],
   ["not running", "A dead session offers Resume where Kill was.",
     { task: TASK, rows: ROWS.slice(0, 2), surfaceFill: 0.77 }],
-].map(([n, w, m]) => specimen(n, w, expandedStage(renderStage(m), 900, 520), "", true)).join("");
+].map(([n, w, m]) => specimen(n, w, expandedStage(renderStage(m), 880, 700), "", true)).join("");
 
 document.getElementById("task").innerHTML = [
   ["one task, with the crank", "Next is the one tinted primary on the surface.",
@@ -458,7 +474,7 @@ document.getElementById("task").innerHTML = [
   ["still running", "Stop appears only for something that is actually running.",
     { task: { ...TASK, status: "processing", alive: true, elapsed: "2m" }, rows: ROWS.slice(0, 3),
       attention: 0, surfaceFill: 0.77 }],
-].map(([n, w, m]) => specimen(n, w, expandedStage(renderTaskSurface(m), 820, 500), "", true)).join("");
+].map(([n, w, m]) => specimen(n, w, expandedStage(renderTaskSurface(m), 820, 680), "", true)).join("");
 
 /* Work blocks open in place. */
 document.body.addEventListener("click", (e) => {
@@ -501,4 +517,52 @@ document.body.addEventListener("pointerdown", (e) => {
   const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
+});
+
+
+/* ── 18 · The two grounds ─────────────────────────────────────────────────── */
+
+/* Rendered in a scope that overrides the tone locally, so both grounds are on
+   screen at once rather than needing the toggle to compare them. */
+function tonePair(inner) {
+  return `<div class="pair">
+    ${[["spaceGray", "Space Gray — rgb(22,24,28) at 94%, what ships"],
+       ["black", "Black — the same black the housing itself is"]]
+      .map(([tone, label]) => `<div class="pair-item" data-tone="${tone}">
+        <span class="pair-name">${label}</span>${inner}</div>`).join("")}
+  </div>`;
+}
+
+document.getElementById("tones").innerHTML =
+  `<div class="specimen" data-wide>
+     <div class="meta"><div class="name">a task, both grounds</div>
+       <div class="why">The plane, the user's bubble and the composer all move
+         with the tone. The bar-level mass does not: it is opaque black in every
+         state, and the appearance setting never reaches it.</div></div>
+     <div class="stage">${tonePair(
+        expandedStage(renderTaskSurface({ task: TASK, rows: ROWS.slice(3), attention: 2, surfaceFill: 0.77 }),
+          820, 560))}</div>
+   </div>
+   <div class="specimen" data-wide>
+     <div class="meta"><div class="name">the pocket, both grounds</div>
+       <div class="why">On black the card sits on the same ground as the mass
+         above it, so the pocket reads as one object rather than as a grey panel
+         hanging off a black cutout.</div></div>
+     <div class="stage">${tonePair(
+        expandedStage(renderPocket({ title: "Ship the pricing change", status: "needs-user",
+          backend: "claude", terminal: true,
+          ask: "Replace the annual price everywhere, or only on /pricing?", slots: 1 }, true),
+          348, 34 + 6 + 103 + 6, "mbp14",
+          { pocket: true, shoulders: pocketShoulders({ status: "needs-user", backend: "claude", terminal: true }, 200) }))}</div>
+   </div>`;
+
+/* The page-wide toggle. Appearance.tone is a user setting, so it belongs on a
+   control rather than on a specimen. */
+document.querySelectorAll("[data-tone-set]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const tone = btn.dataset.toneSet;
+    document.documentElement.setAttribute("data-tone", tone);
+    document.querySelectorAll("[data-tone-set]").forEach((b) =>
+      b.setAttribute("aria-pressed", String(b === btn)));
+  });
 });

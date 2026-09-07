@@ -101,6 +101,18 @@
   --f-term:    400 11.5px/1.45 var(--font-mono);
 }
 
+/* Appearance.tone == .spaceGray — the ORIGINAL, and the default, so nobody's
+   surface changes under them. Stated explicitly (not merely left to :root) so a
+   sub-tree can hold this ground while the page as a whole is set to black. */
+[data-tone="spaceGray"] {
+  --plane:            var(--plane-space-gray);
+  --user-bubble:      rgba(255, 255, 255, 0.055);
+  --user-bubble-edge: rgba(255, 255, 255, 0.10);
+  --composer-fill:    var(--sunken);
+  --composer-edge:    var(--hairline);
+  --rail-bg:          rgba(255, 255, 255, 0.028);
+}
+
 /* Appearance.tone == .black — "the same black the notch housing itself is". */
 [data-tone="black"] {
   --plane:            var(--plane-black);

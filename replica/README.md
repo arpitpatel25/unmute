@@ -62,6 +62,22 @@ node replica/verify.mjs
   harness — and every other number derives from it exactly as the app derives
   it (fillet and bottom radius are both `round(barHeight × 0.30)`).
 
+## The two grounds
+
+`Appearance.tone` decides the ground's *colour*; `SurfaceAppearance` decides its
+*material*. They are separate settings and the toggle at the top of the page
+drives the first. Space Gray — `rgb(22,24,28)` at 94% — is the original and the
+default, so nobody's surface changes under them. Black is the same black the
+housing itself is, so an expanded surface reads as one object with the mass
+above it rather than a grey panel hanging off a black cutout.
+
+Three things move with it, and they are in `Theme.swift` for a reason: the
+plane, the user's bubble (roughly double the lift on black, or a conversation
+reads as one undifferentiated column), and the composer (a *well* on Space Gray,
+a *lift* on black — there is nothing darker than the ground to recess into).
+The bar-level mass does not move: it is opaque black in every state and the
+appearance setting never reaches it.
+
 ## Covered
 
 **Pill** — all nine `PillPhase` values; all three `PillKind` lanes; the
