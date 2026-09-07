@@ -266,3 +266,90 @@ test('provider delivery logs the exact correlated transport and task configurati
     else process.env.UNMUTE_CURATOR_DEVLOG = previousFlag
   }
 })
+
+/**
+ * FIELD ISSUE, reported 2026-09-07. Right-Option with a screenshot on the
+ * clipboard: if the router answered "new" the image arrived, and if it
+ * answered "continue" — which is exactly what "add this to that" routes to —
+ * the image vanished without a word. dispatch() delegates to deliverDraft when
+ * something is attached; followUp(id, text) had no attachments parameter at
+ * all, so the two branches of one gesture behaved differently.
+ */
+test('a follow-up carries the images the person attached', async () => {
+  const trace: string[] = []
+  const ex: AgentExecutor = {
+    alive: true,
+    async spawn() {}, async isReady() { trace.push('ready') },
+    writeStdin(text) { trace.push(`legacy:${text}`) },
+    writeDraftText(text) { trace.push(`text:${text}`) },
+    async pasteImage() { trace.push('ctrl-v'); return true },
+    submitDraft() { trace.push('submit') },
+    write() {}, resize() {}, onData() {}, kill() {},
+  }
+  registerTaskImagePaste(async (_text, paths, paste) => {
+    for (const path of paths) { trace.push(`clipboard:${path}`); if (!(await paste())) return false }
+    return true
+  })
+  const baseDir = await mkdtemp(join(tmpdir(), 'unmute-followup-attach-'))
+  const manager = new TaskManager({ executorFactory: () => ex, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, verifyAfterMs: 100, pollMs: 99_999 })
+  const id = await manager.dispatch('initial')
+  trace.length = 0
+  ex.submitDraft = () => {
+    trace.push('submit')
+    manager.onHookEvent({ kind: 'prompt-submitted', sessionId: manager.get(id)!.sessionId })
+  }
+
+  assert.equal(await manager.followUpWith(id, 'add this to the sheet', ['/tmp/shot.png']), true)
+  assert.deepEqual(trace, ['ready', 'text:add this to the sheet', 'clipboard:/tmp/shot.png', 'ctrl-v', 'submit'])
+  // The consent clock has to advance here too, or the NEXT utterance meets a
+  // thread that reads cold and gets refused by the continue guard.
+  assert.ok((manager.get(id)!.lastUserInputAt ?? 0) > 0)
+  manager.kill(id)
+})
+
+test('a follow-up with nothing attached still takes the plain path', async () => {
+  const trace: string[] = []
+  const ex: AgentExecutor = {
+    alive: true,
+    async spawn() {}, async isReady() {},
+    writeStdin(text) { trace.push(`legacy:${text}`) },
+    writeDraftText(text) { trace.push(`text:${text}`) },
+    async pasteImage() { trace.push('ctrl-v'); return true },
+    submitDraft() { trace.push('submit') },
+    write() {}, resize() {}, onData() {}, kill() {},
+  }
+  const baseDir = await mkdtemp(join(tmpdir(), 'unmute-followup-plain-'))
+  const manager = new TaskManager({ executorFactory: () => ex, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, verifyAfterMs: 100, pollMs: 99_999 })
+  const id = await manager.dispatch('initial')
+  trace.length = 0
+
+  assert.equal(await manager.followUpWith(id, 'carry on'), true)
+  assert.equal(trace.includes('ctrl-v'), false)
+  manager.kill(id)
+})
+
+/**
+ * The label and the payload are now two different things: the session is
+ * handed the person's exact words, and the router's cleaned line becomes the
+ * one-line summary a list shows. Before this they were one string, which is
+ * why the paraphrase was what got delivered.
+ */
+test('the card label can be set without changing what was delivered', async () => {
+  const ex: AgentExecutor = {
+    alive: true,
+    async spawn() {}, async isReady() {}, writeStdin() {},
+    writeDraftText() {}, submitDraft() {},
+    write() {}, resize() {}, onData() {}, kill() {},
+  }
+  const baseDir = await mkdtemp(join(tmpdir(), 'unmute-setintent-'))
+  const manager = new TaskManager({ executorFactory: () => ex, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, verifyAfterMs: 100, pollMs: 99_999 })
+  const spoken = "so um the thing we were doing yesterday with the job board, can you like pick that back up"
+  const id = await manager.dispatch(spoken)
+  assert.equal(manager.get(id)!.intent, spoken)
+  manager.setIntent(id, 'Resume the job board work')
+  assert.equal(manager.get(id)!.intent, 'Resume the job board work')
+  // Empty or unchanged is a no-op, never a wipe.
+  manager.setIntent(id, '   ')
+  assert.equal(manager.get(id)!.intent, 'Resume the job board work')
+  manager.kill(id)
+})

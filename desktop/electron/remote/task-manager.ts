@@ -4955,6 +4955,24 @@ export class TaskManager extends EventEmitter {
   /** Set the session's short display name (generated async after dispatch). Emits
    *  'updated' so the UI swaps the truncated-intent fallback for the real name,
    *  and persists it into meta.json so the name survives an app restart. */
+  /**
+   * The one-line label for this task, set separately from what was delivered.
+   *
+   * dispatch() used to receive the router's rewritten line and store it as
+   * both the payload AND the label. Now the payload is the person's verbatim
+   * utterance, so the label is set here instead — the list stays readable
+   * without the session being handed a paraphrase.
+   */
+  setIntent(id: string, intent: string): void {
+    const task = this.tasks.get(id)
+    const next = (intent || '').trim()
+    if (!task || !next || task.intent === next) return
+    task.intent = next
+    task.updatedAt = this.clock()
+    this.emit('updated', task)
+    this.mergeMeta(task, { intent: next }, 'setIntent')
+  }
+
   setName(id: string, name: string): void {
     const task = this.tasks.get(id)
     const n = (name || '').trim()
@@ -5348,6 +5366,28 @@ export class TaskManager extends EventEmitter {
     const ids = new Set<string>()
     for (const t of this.tasks.values()) if (t.groupId) ids.add(t.groupId)
     return ids
+  }
+
+  /**
+   * A follow-up that carries what the person attached.
+   *
+   * followUp() writes text into a live REPL and has NO channel for an image,
+   * so a screenshot spoken at an existing task was dropped in silence — while
+   * the same screenshot spoken at a NEW task arrived, because dispatch()
+   * delegates to deliverDraft() whenever attachments are present. The user
+   * cannot see which branch the router took, so the same gesture worked or
+   * failed at random. This is that same delegation, for continue and resume.
+   *
+   * noteUserInput is ours to call: deliverDraft advances graduation
+   * (noteFollowUp) but NOT the consent clock on this path, and without it the
+   * thread reads cold to the next utterance's consent guard.
+   */
+  async followUpWith(id: string, text: string, attachments: readonly string[] = []): Promise<boolean> {
+    if (!attachments.length) return this.followUp(id, text)
+    const task = this.tasks.get(id)
+    if (!task) return false
+    this.noteUserInput(task, 'follow-up')
+    return this.deliverDraft(id, text, attachments)
   }
 
   followUp(id: string, text: string): boolean {

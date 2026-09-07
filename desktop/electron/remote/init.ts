@@ -47,7 +47,7 @@ import { ClaudeDesktopAx } from './claude-desktop/ax'
 import { ClaudeActuator } from './claude-desktop/actuate'
 import { readCatalog as readClaudeCatalog, offeredModels as offeredClaudeModels } from './claude-desktop/catalog'
 import { installApprovalHook } from './codex/hooks'
-import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
+import { nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
 import { initRuntimeConfig, getModels, getKnobs, getModelCatalog, isSelectableModel } from './runtime-config'
 import {
@@ -4164,11 +4164,16 @@ async function dispatchFromCaptureInner(
   const addressedTaskId = addressedToAgent ? null : (targetTaskId ?? orchestrateFocusId)
   if (addressedTaskId && manager.list().some((t) => t.id === addressedTaskId)) {
     const fid = addressedTaskId
-    // Hygiene: the deterministic path skips the router, so it must not skip
-    // CLEANUP — an STT misfire ("Happy Rates!") would land verbatim otherwise.
-    // Best-effort: without a wired completeFn the raw transcript passes through
-    // (status quo); delivery stays deterministic either way.
-    const text = completeFn ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
+    // WHAT THEY SAID IS WHAT IS DELIVERED.
+    //
+    // This used to run cleanIntent() first, so an addressed capture reached the
+    // session as an LLM's rewrite of the utterance rather than the utterance.
+    // The cleanup was added when this path carried a raw STT string and nothing
+    // else; the cost is that the session never sees the person's own words —
+    // and neither does the transcript, so neither does the turn index, which
+    // promises their words verbatim. A transcription slip is visible and
+    // correctable; a paraphrase is neither.
+    const text = raw
     // Right-Option capture and the visible composer are one draft. Captured
     // images stay as attachments rather than being rendered as filesystem paths.
     let trace: TaskReplyTrace | null = null
@@ -4489,15 +4494,23 @@ async function dispatchFromCaptureInner(
           const targetName = (target?.name || target?.intent || 'it').slice(0, 50)
           if (awaitingIds.has(tid)) {
             log.event('routed-as-answer', { taskId: tid, via: 'router' })
-            manager.answer(tid, withSkill(decision.intent || raw))
+            manager.answer(tid, withSkill(raw))
+            // An attachment is content, not an answer to a pending question —
+            // deliverDraft refuses that combination on purpose. Say so rather
+            // than dropping the image without a word.
+            if (attachments.length) log.warn('attachments not delivered: task is waiting on a question', { taskId: tid, count: attachments.length })
             // Assign-once grouping: the router may group the task it acted on,
             // never regroup one that already has a group (freeze).
             if (decision.group && !target?.group) manager.setGroup(tid, decision.group)
-            pendingBeat = `Passed to ${targetName}.`
+            // Silence is what made the old attachment loss so confusing: the
+            // gesture looked identical whether the image arrived or not.
+            pendingBeat = attachments.length
+              ? `Passed to ${targetName}. The attachment stayed behind — it\u2019s waiting on a question.`
+              : `Passed to ${targetName}.`
             return tid
           }
           const targetBusy = target?.state === 'processing' // mid-turn — the follow-up will queue
-          if (manager.followUp(tid, withSkill(decision.intent))) {
+          if (await manager.followUpWith(tid, withSkill(raw), attachments)) {
             log.event('routed-as-continuation', { taskId: tid, via: 'router' })
             // Assign-once grouping — covers graduation too: a one-off's 2nd
             // follow-up (which just promoted it to a session inside followUp)
@@ -4567,7 +4580,7 @@ async function dispatchFromCaptureInner(
         log.event('routed-as-resume', { taskId: tid, via: 'router' })
         try {
           if (await manager.resume(tid)) {
-            if (manager.followUp(tid, withSkill(decision.intent || raw))) {
+            if (await manager.followUpWith(tid, withSkill(raw), attachments)) {
               pendingBeat = `Continuing ${(manager.get(tid)?.name || 'it').slice(0, 50)}.`
               return tid
             }
@@ -4586,7 +4599,11 @@ async function dispatchFromCaptureInner(
       // the new task that task's ACTUAL record (status + Claude transcript) so it
       // reads ground truth instead of guessing. Read-only; works for any known
       // task including cold sessions (hearing about one is not injecting into it).
-      let intentText = withSkill(decision.intent || raw)
+      // The payload is the person's exact utterance. decision.intent is the
+      // router's one-line REWRITE of it: useful as a label, never as the thing
+      // the session is asked to act on. It is applied with setIntent after
+      // dispatch, so the card stays readable without the words being replaced.
+      let intentText = withSkill(raw)
       if (decision.contextTaskId) {
         const ctx = manager.get(decision.contextTaskId)
         if (ctx) {
@@ -4610,6 +4627,11 @@ async function dispatchFromCaptureInner(
         ...(chosenAgent === 'codex-desktop' ? { project: decision.codexProject ?? null } : {}),
         attachments,
       })
+      // The card's label. dispatch() stored the verbatim utterance as the
+      // task's intent because that is what it delivered; the router's cleaned
+      // line is the better one-line summary for a list, so it is applied here
+      // rather than being sent to the session.
+      if (decision.intent) manager.setIntent(newId, decision.intent)
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
       if (decision.name) manager.setName(newId, decision.name)
@@ -4689,16 +4711,18 @@ async function dispatchFromCaptureInner(
         return null
       }
       log.warn('router error — dispatching new', { error: msg })
-      if (attachments.length) return null
-      return manager.dispatch(raw, { mode: injectionDisabled() ? 'raw' : undefined })
+      // This used to `return null` whenever anything was attached, so a router
+      // hiccup threw away the whole utterance AND the image rather than
+      // falling back. dispatch() takes attachments; the fallback can too.
+      return manager.dispatch(raw, { mode: injectionDisabled() ? 'raw' : undefined, attachments })
     }
   }
 
-  // 3. Nothing to route among → straight to a new task. Cleanup is optional (the
-  //    executor tolerates raw); use the managed LLM only if it's wired.
-  const cleaned = completeFn ? (await cleanIntent(raw, completeFn)).intent : raw
-  if (!cleaned) { log.warn('empty intent after cleanup — not dispatching', {}); return null }
-  return manager.dispatch(cleaned, { mode: injectionDisabled() ? 'raw' : undefined, attachments })
+  // 3. Nothing to route among → straight to a new task, carrying exactly what
+  //    was said. This ran cleanIntent() first and dispatched the rewrite; the
+  //    last path that still replaced the person's words with a model's.
+  if (!raw) { log.warn('empty transcript — not dispatching', {}); return null }
+  return manager.dispatch(raw, { mode: injectionDisabled() ? 'raw' : undefined, attachments })
 }
 
 /** Read the current Remote trigger key (derived from the dictation key, §2.4.4). */
