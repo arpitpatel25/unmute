@@ -1,0 +1,381 @@
+/* ==========================================================================
+   THE PILL CLUSTER
+   Transcribed from PillView.swift + PillModel.swift.
+
+   "ONE height and ONE radius for every element in the cluster." Every metric
+   below carries the Swift name it came from so it can be diffed against the
+   source.
+   ========================================================================== */
+
+/* Declared at the root, not on a wrapper class: every one of these metrics is
+   read by an element that renderPill() may emit on its own (a bare chip, a
+   lone hint), so a scoping class is one more thing a call site can forget —
+   and forgetting it collapses every height in the cluster silently. */
+:root {
+  --pill-h: 36px;          /* PillMetrics.height */
+  --row-gap: 9px;          /* the column's VStack(spacing: 9) */
+  --cluster-gap: 8px;      /* the cluster's HStack(spacing: 8) */
+}
+.u-pill-scope {
+  font: var(--f-body);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── PillGlass ────────────────────────────────────────────────────────────
+   The FIXED treatment, which is what Appearance.preference DEFAULTS to.
+
+   "PITCH BLACK, AND NOTHING ON TOP OF IT." Pure black reads as a hole punched
+   in the screen: identical on every wallpaper, every Space and every Mac.
+
+   The rim is strokeBorder, not stroke — inset by half a line so the whole
+   width lands on the black and never anti-aliases against the desktop. An
+   inset box-shadow is the CSS equivalent; a `border` would grow the box.
+
+   1pt GREY, not 0.5pt white: 0.5pt is exactly one device pixel at 2x and
+   splits across two rows at ~50% coverage each. Weight comes off the COLOUR.
+   ------------------------------------------------------------------------ */
+.u-glass {
+  position: relative;
+  background: #000;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.30);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, white 30%, transparent);
+  border-radius: 9999px;
+  transition: box-shadow var(--flip) var(--ease-in-out),
+              background var(--flip) var(--ease-in-out);
+}
+/* A TINTED MODE GETS A REAL BORDER, not a wash: the mode's own colour at full
+   presence (0.95), 2pt rather than 1 — plus the tint riding the fill at 0.16. */
+.u-glass[data-tint] {
+  box-shadow: inset 0 0 0 2px var(--tint-strong);
+  background: linear-gradient(var(--tint-wash), var(--tint-wash)), #000;
+}
+.u-glass--panel { border-radius: 14px; }   /* SelectorPanel's RoundedRectangle(14) */
+
+/* ── Layout ──────────────────────────────────────────────────────────────
+   The pad is a SIBLING OF THE WHOLE COLUMN, with a counterweight of exactly
+   its width on the far side, so centring the row centres the column and THE
+   PILL DOES NOT MOVE when a pad appears.
+   ------------------------------------------------------------------------ */
+.u-pill-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;                       /* PadPaper.gap */
+  justify-content: center;
+}
+.u-pill-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--row-gap);
+}
+.u-cluster {
+  display: flex;
+  align-items: center;
+  gap: var(--cluster-gap);
+}
+
+/* Every element in the cluster is exactly pill-height tall. */
+.u-pill,
+.u-agent-control,
+.u-chip,
+.u-offline { height: var(--pill-h); box-sizing: border-box; }
+
+.u-pill {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+/* ── The pill, per state ─────────────────────────────────────────────────── */
+
+/* recording — "THE WAVEFORM, AND NOTHING ELSE AT REST."
+   Symmetric 14pt padding, because there is no longer anything to counterweight.
+
+   NO `gap` ON THIS ROW, deliberately. CSS gap — like HStack(spacing:) — is laid
+   between every pair of children including a zero-width one, so at rest the
+   capsule would carry 10pt of dead space on the right and the waveform would
+   sit off-centre in a capsule that looked symmetric. PillView's own note says
+   the leading pad "belongs to the control and collapses with it", so each
+   child carries its own spacing and the collapsed cancel contributes nothing.
+   At rest this capsule is 14 / 14. */
+.u-pill[data-phase="recording"] { padding: 0 14px; }
+.u-pill[data-phase="recording"] .u-remote-glyph { margin-right: 10px; }
+.u-pill[data-phase="recording"] .u-timer,
+.u-pill[data-phase="recording"] .u-wave { flex: none; }
+
+/* paused — "NOT AN ENDING, AND THE PILL MUST NOT PRETEND OTHERWISE." */
+.u-pill[data-phase="paused"] { gap: 11px; padding: 0 15px; }
+
+.u-pill[data-phase="processing"] { gap: 10px; padding: 0 15px; }
+
+/* output — SILENT SUCCESS: a green tick in a square, and nothing else. */
+.u-pill[data-phase="output"] {
+  width: var(--pill-h);
+  justify-content: center;
+  padding: 0;
+  color: var(--c-working);
+}
+
+.u-pill[data-phase="output-fallback"] { gap: 9px; padding: 0 15px; }
+.u-pill[data-phase="too-short"] { padding: 0 18px; }
+/* cancelled — UNDO BELONGS HERE, not on success. Asymmetric: the button's own
+   capsule carries the trailing air. */
+.u-pill[data-phase="cancelled"] { gap: 10px; padding: 0 8px 0 18px; }
+.u-pill[data-phase="error"] { gap: 9px; padding: 0 15px; }
+
+.u-paused-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-needs); }
+.u-paused-label { font: 400 14px/normal var(--font); color: var(--text-dim); }
+
+.u-processing-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.8075);   /* Theme.text × 0.85 */
+}
+.u-processing-label { font: 500 15px/normal var(--font); color: var(--text); }
+.u-note { font: 400 12px/normal var(--font); color: var(--text-faint); }
+
+.u-fallback-msg { font: 400 13px/normal var(--font); color: var(--text); }
+.u-fallback-preview { font: 400 13px/normal var(--font); color: var(--text-dim); }
+.u-tooshort { font: 400 14px/normal var(--font); color: var(--text-dim); }
+.u-cancelled-label { font: 400 14px/normal var(--font); color: var(--text-dim); }
+
+.u-error-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+.u-error-msg { font: 400 13px/normal var(--font); color: var(--text); }
+.u-error-hint { font: 400 11px/normal var(--font); color: var(--text-faint); }
+
+/* Anything in the strip is ONE LINE, and the capsule grows to fit it. */
+.u-pill span, .u-pill .u-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Motion pieces ───────────────────────────────────────────────────────── */
+
+/* Breathing — the processing dot. easeInOut 0.75s, repeatForever autoreverses. */
+.u-breathes { animation: u-breathe 1.5s var(--ease-in-out) infinite; }
+@keyframes u-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+/* RemoteGlyph — a scale pulse on the same 0.75s clock. */
+.u-remote-glyph {
+  color: rgba(255, 255, 255, 0.92);
+  display: inline-flex;
+  animation: u-remote-pulse 1.5s var(--ease-in-out) infinite;
+}
+@keyframes u-remote-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(0.86); } }
+
+/* BouncingDots — 3.5pt circles on a 3pt gap, ±2.5pt of travel, 0.42s
+   autoreversing, each delayed by 0.12s from the last. */
+.u-bouncing { display: flex; align-items: center; gap: 3px; }
+.u-bouncing i {
+  width: 3.5px; height: 3.5px; border-radius: 50%;
+  background: var(--text-dim);
+  animation: u-bounce 0.84s var(--ease-in-out) infinite;
+}
+.u-bouncing i:nth-child(2) { animation-delay: 0.12s; }
+.u-bouncing i:nth-child(3) { animation-delay: 0.24s; }
+@keyframes u-bounce { 0%, 100% { transform: translateY(2.5px); } 50% { transform: translateY(-2.5px); } }
+
+/* TimerText — counts up, flips to a countdown in the last 30s. */
+.u-timer {
+  font: 400 14px/normal var(--font);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.u-timer[data-near="true"] { color: var(--c-needs); }
+
+/* Waveform — seven dots, 3.5pt on a 5pt gap, in a 16pt band. */
+.u-wave { display: flex; align-items: center; gap: 5px; height: 16px; }
+.u-wave i {
+  width: 3.5px; height: 3.5px; border-radius: 50%;
+  background: #fff;                       /* PURE WHITE, not Theme.text */
+  opacity: 0.4;                           /* 0.4 + 0.6 × envelope */
+  will-change: transform;
+}
+
+/* CancelOnHover — revealed when the pointer is anywhere on the capsule.
+   The waveform NEVER MOVES: only the right edge travels, so the control stays
+   in the hierarchy at zero width and the width itself animates. */
+.u-cancel {
+  display: flex; align-items: center; justify-content: center;
+  /* CONTENT-BOX, against the UA stylesheet, which makes every <button>
+     border-box. In SwiftUI `.padding(.leading, 9)` sits OUTSIDE
+     `.frame(width: 22)`; under border-box the pad was being swallowed by the
+     22 and the capsule grew by 22 on hover instead of 31. */
+  box-sizing: content-box;
+  width: 0; padding-left: 0; opacity: 0;
+  overflow: hidden; flex: none;
+  border: 0; background: none; cursor: default;
+  color: rgba(255, 255, 255, 0.55);
+  transition: width var(--t-hover), padding-left var(--t-hover), opacity var(--t-hover);
+}
+.u-pill:hover .u-cancel,
+.u-pill:focus-within .u-cancel { width: 22px; padding-left: 9px; opacity: 1; }
+.u-cancel > span {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  transition: background var(--t-hover), color var(--t-hover);
+}
+.u-cancel:hover { color: rgba(255, 255, 255, 0.95); cursor: pointer; }
+.u-cancel:hover > span { background: rgba(255, 255, 255, 0.14); }
+
+/* ── CapsuleButton ───────────────────────────────────────────────────────── */
+.u-capsule-btn {
+  font: 400 12px/normal var(--font);
+  color: var(--text);
+  padding: 4px 11px;
+  border-radius: 9999px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.10);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.30);
+  cursor: pointer;
+  transition: background var(--t-hover);
+}
+.u-capsule-btn:hover { background: rgba(255, 255, 255, 0.18); }
+.u-capsule-btn[data-prominent] {
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--accent);
+  box-shadow: none;
+}
+.u-capsule-btn[data-prominent]:hover { background: rgba(255, 255, 255, 0.80); }
+
+/* ── AgentModelControl ──────────────────────────────────────────────────────
+   ONE CAPSULE, ONE HIT TARGET, ONE PANEL. The divider is gone: Agent moved
+   into the panel as its leftmost column. Symmetric 15pt padding now that
+   there is no seam to compensate for.
+   ------------------------------------------------------------------------- */
+.u-agent-control {
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 15px;
+  border: 0; cursor: pointer;
+  white-space: nowrap;
+  font: 600 12.5px/normal var(--font);
+}
+.u-agent-name { color: var(--text); }
+.u-agent-control[data-connected="false"] .u-agent-name { color: rgba(255, 255, 255, 0.5225); }
+.u-agent-control[data-lane="agent"] { cursor: default; }
+.u-agent-control[data-lane="agent"] .u-agent-name { color: var(--c-ready); }
+.u-agent-model { color: var(--text-dim); }
+.u-agent-chevron {
+  color: var(--text-faint); display: inline-flex;
+  transition: transform var(--t-hover);
+}
+.u-agent-control[aria-expanded="true"] .u-agent-chevron { transform: rotate(180deg); }
+/* "the mark itself now carries the state: full strength when reachable,
+    faded when not, next to a label that says why." */
+.u-agent-control[data-connected="false"] .u-mark { opacity: 0.45; }
+
+/* ── ProviderMark ────────────────────────────────────────────────────────── */
+.u-mark { display: inline-flex; align-items: center; gap: var(--mark-gap); }
+.u-mark-box {
+  width: var(--mark-size); height: var(--mark-size);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.u-mark-box img { display: block; object-fit: contain; }
+.u-mark-term { color: var(--text-faint); display: inline-flex; }
+
+/* ── SelectorPanel ───────────────────────────────────────────────────────── */
+.u-selector {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 8px;
+}
+.u-selector-summary {
+  font: 700 10px/normal var(--font);
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 3px 10px 0;
+}
+.u-selector-cols { display: flex; align-items: flex-start; gap: 14px; }
+.u-selector-col { display: flex; flex-direction: column; gap: 2px; min-width: 118px; }
+.u-selector-col[data-empty] { min-width: 150px; max-width: 220px; }
+.u-selector-header {
+  font: 700 10px/normal var(--font);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 5px 10px 2px;
+}
+.u-selector-empty {
+  font: 400 12px/normal var(--font);
+  color: var(--text-faint);
+  padding: 7px 10px;
+}
+
+.u-selector-row {
+  display: flex; align-items: center; gap: 7px;
+  height: 32px; padding: 0 10px;
+  border: 0; background: transparent;
+  border-radius: 8px;
+  color: var(--text-dim);
+  font: 600 12.5px/normal var(--font);
+  cursor: pointer; text-align: left; width: 100%;
+  transition: background var(--t-hover), color var(--t-hover);
+}
+.u-selector-row:hover { background: rgba(255, 255, 255, 0.07); }
+.u-selector-row[aria-selected="true"] {
+  background: rgba(255, 255, 255, 0.13);
+  color: var(--text);
+}
+.u-selector-check { width: 11px; display: inline-flex; justify-content: center; opacity: 0; flex: none; }
+.u-selector-row[aria-selected="true"] .u-selector-check { opacity: 1; }
+.u-selector-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Chips ───────────────────────────────────────────────────────────────
+   SQUARE, SO THE CAPSULE IS A CIRCLE. These carry one glyph each; a Capsule
+   is only a circle when its frame is square.
+   ------------------------------------------------------------------------ */
+.u-chip {
+  width: var(--pill-h);
+  display: flex; align-items: center; justify-content: center;
+  border: 0; padding: 0; cursor: pointer;
+  color: var(--text-dim);
+}
+.u-chip[data-on="true"] { color: var(--c-ready); }
+.u-chip--scratch { color: var(--text-faint); }
+.u-chip--scratch[data-on="true"] { color: var(--c-ready); }
+
+/* ── HintChip ────────────────────────────────────────────────────────────
+   "chip colours are ambience, WORDS are communication." 34pt, not 36: this
+   sits above the cluster rather than in it.
+   ------------------------------------------------------------------------ */
+.u-hint {
+  display: flex; align-items: center; gap: 7px;
+  height: 34px; padding: 0 14px;
+  white-space: nowrap;
+}
+.u-hint-icon { display: inline-flex; color: var(--hint-accent); }
+.u-hint-label { font: 600 12px/normal var(--font); color: var(--text); }
+.u-hint-detail { font: 400 12px/normal var(--font); color: var(--text-dim); }
+
+/* ── OfflineCard ─────────────────────────────────────────────────────────── */
+.u-offline {
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 11px 0 13px;
+  white-space: nowrap;
+}
+.u-offline-icon { display: inline-flex; color: var(--text-dim); }
+.u-offline[data-recoverable="true"] .u-offline-icon { color: var(--c-needs); }
+.u-offline-text { font: 400 12.5px/normal var(--font); color: var(--text-dim); }
+.u-offline[data-recoverable="true"] .u-offline-text { color: var(--text); }
+.u-offline-dismiss {
+  width: 22px; height: 22px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; background: none; border-radius: 50%;
+  color: var(--text-faint); cursor: pointer;
+}
+
+.u-icon { display: block; overflow: visible; }
+
+/* The user agent gives every <button> its own padding (1px 6px in Chrome), and
+   these are all measured controls — an unreset 6px on the right of the cancel
+   button widened the recording capsule by exactly that much and put the
+   waveform off-centre in a capsule that looked symmetric.
+   :where() so the reset carries ZERO specificity and every control's own
+   padding beats it regardless of file order — a plain `.u-nt button` reset
+   out-specified `.u-nt-discard` and clipped the word "Discard" off the end of
+   the capsule. */
+:where(.u-pill, .u-cluster, .u-selector, .u-offline, .u-nt) button {
+  font: inherit;
+  margin: 0;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}

@@ -1,0 +1,123 @@
+/* ==========================================================================
+   UNMUTE — DESIGN TOKENS
+   Transcribed from desktop/native-notch/Sources/unmute-notch/Theme.swift.
+   Every value here exists in that file. Nothing is invented, nothing is
+   "close enough". Where Swift derives a number, the derivation is kept as a
+   comment so it can be re-checked against the source.
+
+   SYSTEM COLOURS are Apple's, dumped from AppKit on macOS 26 (darkAqua) —
+   NSColor.systemGreen et al. resolved through .sRGB. They are NOT the iOS
+   values, which is why several differ from the ones usually quoted.
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* ── Status: the one colour variable (Theme.cWorking … cDone) ────────── */
+  --c-working: #30D158;   /* NSColor.systemGreen  dark */
+  --c-needs:   #FF9230;   /* NSColor.systemOrange dark */
+  --c-ready:   #00D2E0;   /* NSColor.systemTeal   dark */
+  --c-error:   #FF4245;   /* NSColor.systemRed    dark */
+  --c-done:    #98989D;   /* NSColor.systemGray   dark */
+
+  /* The AI formatter (Caps Lock) — a mode, not a status, so its own hue. */
+  --c-instruction: #6D7CFF;  /* NSColor.systemIndigo dark */
+  --c-link:        #419CFF;  /* NSColor.linkColor    dark */
+  --c-pin-gold:    #FFD600;  /* NSColor.systemYellow dark */
+
+  /* ── The primary action: MONOCHROME, deliberately ────────────────────── */
+  --accent:     rgba(255, 255, 255, 0.93);
+  --accent-ink: rgb(15, 17, 20);            /* Color(0.06, 0.065, 0.08) */
+  --accent-dim: rgba(255, 255, 255, 0.14);
+
+  /* ── Content layer (opaque; never glass) ─────────────────────────────── */
+  --plane-space-gray: rgba(22, 24, 28, 0.94);  /* Color(.086,.094,.110)@.94 */
+  --plane-black:      #000000;
+  --plane:            var(--plane-space-gray);
+
+  --raised:        rgba(255, 255, 255, 0.055);
+  --raised-hover:  rgba(255, 255, 255, 0.085);
+  --sunken:        rgba(0, 0, 0, 0.30);
+  --hairline:      rgba(255, 255, 255, 0.10);
+  --hairline-soft: rgba(255, 255, 255, 0.06);
+  --on-black-fill: rgba(255, 255, 255, 0.085);
+  --on-black-edge: rgba(255, 255, 255, 0.14);
+
+  /* Tone-aware (Appearance.tone). Defaults below are the .spaceGray values,
+     which is what ships; [data-tone="black"] overrides them. */
+  --user-bubble:      rgba(255, 255, 255, 0.055);
+  --user-bubble-edge: rgba(255, 255, 255, 0.10);
+  --composer-fill:    var(--sunken);
+  --composer-edge:    var(--hairline);
+  --rail-bg:          rgba(255, 255, 255, 0.028);
+
+  /* ── Ink ─────────────────────────────────────────────────────────────── */
+  --text:       rgba(255, 255, 255, 0.95);
+  --text-dim:   rgba(255, 255, 255, 0.62);
+  --text-faint: rgba(255, 255, 255, 0.40);
+
+  /* ── Geometry (concentric) ───────────────────────────────────────────── */
+  --panel-radius:   18px;
+  --panel-fillet:   14px;
+  --panel-padding:   6px;
+  --plane-radius:   12px;  /* DERIVED: panelRadius - panelPadding */
+  --card-radius:    10px;
+  --control-radius:  7px;
+  --gutter:         16px;
+
+  /* ── Motion ──────────────────────────────────────────────────────────── */
+  /* SwiftUI .easeInOut / .easeIn / .easeOut are exactly these curves. */
+  --ease-in-out: cubic-bezier(0.42, 0, 0.58, 1);
+  --ease-in:     cubic-bezier(0.42, 0, 1, 1);
+  --ease-out:    cubic-bezier(0, 0, 0.58, 1);
+
+  --surface-transition: 240ms;   /* Theme.surfaceTransitionDuration 0.24 */
+  --reduced-fade:       160ms;   /* Theme.reducedFadeDuration      0.16 */
+  --content-out:         90ms;   /* Theme.contentOutDuration       0.09 */
+  --content-in:         140ms;   /* Theme.contentInDuration        0.14 */
+  --content-in-delay:    80ms;   /* Theme.contentInDelay           0.08 */
+  --flip:               240ms;   /* Theme.flip                     0.24 */
+  --hover:              150ms;   /* Theme.hoverDuration            0.15 */
+
+  --morph:  var(--surface-transition) var(--ease-in-out);
+  --t-hover: var(--hover) var(--ease-out);
+
+  /* ── Type scale (Theme.fTitle … fTerm) ───────────────────────────────── */
+  /* Font.system == SF Pro. On a Mac browser -apple-system IS SF Pro, so the
+     text is the same font at the same size, not an approximation. */
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+          "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --f-title:   600 17px/1.25 var(--font);
+  --f-head:    600 15px/1.3  var(--font);
+  --f-body:    400 13px/1.35 var(--font);
+  --f-body-med:500 13px/1.35 var(--font);
+  --f-sub:     400 12px/1.35 var(--font);
+  --f-cap:     500 11px/1.3  var(--font);
+  --f-status:  600 11px/1.3  var(--font);
+  --f-micro:   600 10px/1.2  var(--font);
+  --f-num:     400 10.5px/1.2 var(--font-mono);
+  --f-term:    400 11.5px/1.45 var(--font-mono);
+}
+
+/* Appearance.tone == .black — "the same black the notch housing itself is". */
+[data-tone="black"] {
+  --plane:            var(--plane-black);
+  --user-bubble:      rgba(255, 255, 255, 0.11);
+  --user-bubble-edge: rgba(255, 255, 255, 0.16);
+  --composer-fill:    rgba(255, 255, 255, 0.075);
+  --composer-edge:    rgba(255, 255, 255, 0.20);
+  --rail-bg:          transparent;
+}
+
+/* Motion.reduceMotion — "a short cross-fade, no spring, no overshoot." */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --morph: var(--reduced-fade) var(--ease-in-out);
+  }
+  .u-breathes,
+  .u-bounces,
+  .u-pulses,
+  .u-remote-glyph { animation: none !important; }
+}

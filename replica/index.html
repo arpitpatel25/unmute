@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en" data-tone="spaceGray">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unmute — native UI replica</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="pill.css">
+<link rel="stylesheet" href="notetaker.css">
+<link rel="stylesheet" href="notch.css">
+<style>
+  html { background: #1c1d21; }
+  body {
+    margin: 0; padding: 0 0 120px;
+    font: var(--f-body); color: var(--text);
+    background:
+      radial-gradient(1200px 700px at 20% -10%, #2c3140 0%, transparent 60%),
+      radial-gradient(900px 600px at 90% 10%, #26313a 0%, transparent 55%),
+      #1c1d21;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+  header.page { padding: 72px 0 40px; }
+  h1 { font: 600 34px/1.1 var(--font); margin: 0 0 12px; letter-spacing: -0.02em; }
+  .lede { font: 400 15px/1.55 var(--font); color: var(--text-dim); max-width: 62ch; margin: 0; }
+  .lede code { font: var(--f-term); color: var(--text); }
+
+  h2 {
+    font: 600 12px/1 var(--font); letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--text-faint); margin: 64px 0 4px; padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.10);
+  }
+  h2 + .sec-note { margin: 14px 0 26px; }
+  .sec-note { font: 400 13px/1.6 var(--font); color: var(--text-dim); max-width: 68ch; }
+
+  .specimen {
+    display: grid; grid-template-columns: 218px 1fr; gap: 28px;
+    align-items: center;
+    padding: 22px 0; border-bottom: 1px solid rgba(255,255,255,0.055);
+  }
+  .specimen:last-child { border-bottom: 0; }
+  .meta .name { font: 600 13px/1.35 var(--font); color: var(--text); }
+  .meta .why  { font: 400 11.5px/1.5 var(--font); color: var(--text-faint); margin-top: 5px; }
+  .meta .why code { font: 400 11px/1.4 var(--font-mono); color: var(--text-dim); }
+  .stage {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 20px;
+    min-height: 44px;
+  }
+  /* Every surface in the app sits on a desktop, so give it one to sit on —
+     a plain neutral so nothing here is read as brand colour. */
+  .stage.on-desk {
+    background: linear-gradient(150deg, #4a5568 0%, #2d3748 55%, #3c4a5e 100%);
+    border-radius: 12px; padding: 22px 20px;
+  }
+  .stage.on-light { background: linear-gradient(150deg, #e8ecf2 0%, #cfd7e3 100%); }
+  .u-pill-row { justify-content: flex-start; }
+
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 18px 0 0; }
+  .toolbar button {
+    font: 500 12px/1 var(--font); color: var(--text-dim);
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 7px; padding: 7px 12px; cursor: pointer;
+  }
+  .toolbar button[aria-pressed="true"] { color: var(--text); background: rgba(255,255,255,0.16); }
+  .hint-note { font: 400 11.5px/1.5 var(--font); color: var(--text-faint); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="page">
+  <h1>Unmute — native UI replica</h1>
+  <p class="lede">
+    Every element on this page is real DOM, transcribed from the Swift and TSX
+    sources rather than drawn from a screenshot. Metrics come from
+    <code>PillView.swift</code>, <code>Theme.swift</code>,
+    <code>Waveform.swift</code> and <code>NotetakerWidget.tsx</code>; the status
+    hues are Apple's own system colours, read out of AppKit in dark appearance.
+    Motion durations and curves are the ones the app uses.
+  </p>
+</header>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<h2>1 · The pill, state by state</h2>
+<p class="sec-note">
+  The nine phases of <code>PillPhase</code>. Two of them are wordless by design:
+  while you are speaking the capsule holds the waveform alone, and on success it
+  shows a tick and nothing else, because the text is already at your cursor.
+</p>
+<div id="phases"></div>
+
+<h2>2 · Recording, across the three kinds</h2>
+<p class="sec-note">
+  <code>PillKind</code> is a different axis from phase. Only the formatter is
+  tinted — Remote already reads as itself from its glyph and its agent chip,
+  whereas Caps&nbsp;Lock produced a capsule indistinguishable from plain
+  dictation. Hover any capsule: cancel is revealed and the right edge travels,
+  while the waveform stays exactly where it is.
+</p>
+<div id="kinds"></div>
+
+<h2>3 · Processing, and its four trailing affordances</h2>
+<p class="sec-note">
+  The label itself changes with the reason — <code>processingLabel</code> reads
+  <code>draftOffer</code> first, then <code>engineNotice</code>.
+</p>
+<div id="processing"></div>
+
+<h2>4 · The terminal states</h2>
+<p class="sec-note">
+  Undo belongs to <em>cancelled</em>, not to success. The error hint is
+  suppressed when the message already says the limit was reached.
+</p>
+<div id="terminal"></div>
+
+<h2>5 · The agent · model control</h2>
+<p class="sec-note">
+  One capsule, one hit target, one panel. The connection dot is gone: the mark
+  itself carries the state — full strength when reachable, faded beside a label
+  that says why. The Agent lane has nothing to offer, so it wears its own colour
+  and does not accept a tap at all.
+</p>
+<div id="agent"></div>
+
+<h2>6 · The selector panel</h2>
+<p class="sec-note">
+  Columns rather than a stacked list, because Codex's three axes are about
+  thirteen rows — taller than the space above a pill already near the bottom of
+  the screen. Which shape it takes is decided by <em>what the engine sent</em>,
+  never by the backend's name. Click a row.
+</p>
+<div id="selector"></div>
+
+<h2>7 · Chips</h2>
+<p class="sec-note">
+  Square frames, so the capsule is a circle. The whole chip is the button, not
+  the glyph inside it. The scratchpad chip arms and disarms only — it never
+  sends. Both are live.
+</p>
+<div id="chips"></div>
+
+<h2>8 · Narration chips</h2>
+<p class="sec-note">
+  One at a time, with strict precedence: mic narration first, then noise, then
+  quiet. Two-tier copy — the bold condition, then the dim remedy.
+</p>
+<div id="hints"></div>
+
+<h2>9 · The offline card</h2>
+<p class="sec-note">
+  Five reasons. Only the recoverable one is tinted and carries a primary
+  button: one tinted thing per surface, and it is the one that fixes the
+  problem.
+</p>
+<div id="offline"></div>
+
+<h2>10 · The meeting notetaker</h2>
+<p class="sec-note">
+  Bottom-left, 260&nbsp;×&nbsp;36, its baseline flush with the dictation pill's.
+  One pill, always: tapping it while recording opens End and Discard in place,
+  and the saved acknowledgement renders in the same pill. Never a second
+  element. Click the recording pill to open the actions.
+</p>
+<div id="notetaker"></div>
+
+<h2>11 · The same surfaces on a light desktop</h2>
+<p class="sec-note">
+  Pure black rather than a sampled backdrop is what makes this hold: the capsule
+  reads as a hole punched in the screen, identical on every wallpaper. The rim
+  is drawn <em>inside</em> the shape, so its full width lands on the black and
+  never anti-aliases against what is behind it.
+</p>
+<div id="light"></div>
+
+
+<h2>12 · The notch — the ladder</h2>
+<p class="sec-note">
+  One shape, drawn straight through the camera housing. There is no second view
+  and no pair of wings butted against the hardware: the middle is empty by
+  construction, the path just runs through it, and the housing and the mass are
+  the same black so the join disappears. The top corners flare
+  <em>outward</em> in a concave quarter-circle where the mass meets the menu
+  bar — that inverted curve is what separates a surface belonging to the screen
+  from one pasted on top of it. Drawn here for a 14&#8221; MacBook Pro:
+  cutout 200&nbsp;×&nbsp;34, so the fillet and the bottom radius both derive to
+  10.
+</p>
+<div id="notch"></div>
+
+<h2>13 · The notch — hover, and the displays it has to survive</h2>
+<p class="sec-note">
+  Hover reveals, and that is all it does: it adds one more level of detail and
+  grows the mass to fit. It never opens the panel — the menu bar is somewhere
+  the pointer passes through constantly, and a panel that opens on approach
+  becomes something the user fights. Hover any of these.
+</p>
+<div id="notch2"></div>
+
+</div>
+
+<script type="module" src="gallery.js"></script>
+</body>
+</html>

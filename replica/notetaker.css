@@ -1,0 +1,118 @@
+/* ==========================================================================
+   THE MEETING NOTETAKER WIDGET
+   Transcribed from desktop/engine-overrides/renderer/notetaker/NotetakerWidget.tsx
+   and its window geometry from electron/remote/notetakerWidget.ts.
+
+   ONE pill, always. Tapping it while recording opens End/Discard IN PLACE;
+   the saved acknowledgement also renders in place. Never a second element.
+   ========================================================================== */
+
+.u-nt {
+  /* MUST MATCH notetakerWidget.ts's widgetBounds() pillHeight, which must
+     match PillMetrics.height. Duplicated across a process boundary in the
+     real app, so it is changed in both places or not at all. */
+  --nt-h: 36px;
+  --nt-wave-w: 55px;             /* the dictation waveform is 78 */
+  --nt-green: #6fbf9a;
+  --nt-red: #c4482e;
+
+  height: var(--nt-h);
+  box-sizing: border-box;   /* the rim is a real border here, and 36 is 36 */
+  display: flex; align-items: center;
+  border-radius: 9999px;
+  /* THE DICTATION PILL, NOT A SECOND DESIGN. This was a translucent dark wash
+     over a blur that SAMPLED the wallpaper, so on a magenta desktop the pill
+     came out maroon. Pure black reads as a hole punched in the screen. */
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  box-shadow: none;
+  overflow: hidden;
+  user-select: none;
+  padding: 0 13px;
+  transition: background 180ms ease, border-color 180ms ease,
+              padding 180ms ease, box-shadow 180ms ease;
+  font: var(--f-body);
+  color: var(--text);
+}
+.u-nt[data-state="idle"] { cursor: pointer; }
+.u-nt[data-state="discard"] { padding: 0; }
+/* `completed` changes the RIM and the contents, never the fill. */
+.u-nt[data-state="completed"] {
+  padding: 0 12px;
+  border: 1.5px solid rgba(111, 191, 154, 0.45);
+}
+
+.u-nt-inner { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+
+/* ── Recording ───────────────────────────────────────────────────────────── */
+.u-nt-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: var(--nt-red);
+  animation: u-nt-dot-pulse 1.1s ease-in-out infinite;
+}
+@keyframes u-nt-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.5; transform: scale(0.82); }
+}
+
+.u-nt-wave {
+  position: relative; flex: none;
+  width: var(--nt-wave-w); height: 20px;
+  display: flex; align-items: center; justify-content: center;
+}
+/* SILENCE IS A LINE, NOT A ROW OF DOTS — a hairline behind, and nothing drawn
+   below 2px, because a sub-2px rounded div is that dot again by another name. */
+.u-nt-wave::before {
+  content: ""; position: absolute; left: 0; right: 0;
+  height: 1px; border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+.u-nt-bars { position: relative; display: flex; align-items: center; gap: 2px; }
+.u-nt-bars i {
+  display: block; width: 2px; border-radius: 9999px; background: #fff;
+  height: 0; opacity: 0.55;
+  transition: height 60ms linear;
+}
+
+/* The static 3-bar glyph that stands in for the live waveform in every other
+   state, so it is still visibly "the recording thing". */
+.u-nt-glyph { display: flex; align-items: center; gap: 2px; flex: none; }
+.u-nt-glyph i { display: block; width: 2px; border-radius: 9999px; background: var(--nt-green); }
+.u-nt-glyph i:nth-child(1) { height: 7px; opacity: 0.55; }
+.u-nt-glyph i:nth-child(2) { height: 13px; }
+.u-nt-glyph i:nth-child(3) { height: 9px; opacity: 0.75; }
+
+/* ── Saved ───────────────────────────────────────────────────────────────── */
+.u-nt-saved { font: 500 13px/normal var(--font); color: rgba(255, 255, 255, 0.92); }
+.u-nt-check { color: var(--nt-green); display: inline-flex; flex: none; }
+
+/* ── The action row: × · End · Discard, two zones in one shape ───────────── */
+.u-nt-close {
+  width: 30px; height: var(--nt-h); flex: none; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; background: none; cursor: pointer;
+  color: rgba(255, 255, 255, 0.55);
+}
+.u-nt-end {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  height: var(--nt-h); padding: 0 12px 0 0;
+  border: 0; background: none; cursor: pointer; white-space: nowrap;
+}
+/* END is the ordinary, non-destructive completion — neutral white, because
+   the pill reserves colour for the one action that destroys something. */
+.u-nt-end-swatch {
+  width: 9px; height: 9px; border-radius: 2px; flex: none;
+  background: var(--nt-green);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.u-nt-end span { font: 500 13px/normal var(--font); color: rgba(255, 255, 255, 0.92); }
+.u-nt-sep { width: 1px; height: 16px; flex: none; background: rgba(255, 255, 255, 0.16); }
+.u-nt-discard {
+  display: flex; align-items: center; gap: 6px; flex: 1;
+  height: var(--nt-h); padding: 0 13px 0 12px;
+  border: 0; background: none; cursor: pointer; white-space: nowrap;
+}
+/* The red survives HERE and nowhere else — on the one label that means
+   destructive. A red capsule would read as another product. */
+.u-nt-discard span { font: 500 13px/normal var(--font); color: var(--nt-red); }
+.u-nt-discard svg { color: var(--nt-red); flex: none; }

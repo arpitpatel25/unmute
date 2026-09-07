@@ -1,0 +1,174 @@
+/* ==========================================================================
+   THE NOTCH — bar level.
+   Transcribed from NotchView.swift, NotchShape.swift, NotchGeometry.swift and
+   BarContent.swift.
+
+   "THE SURFACE IS ONE SHAPE, AND IT IS DRAWN STRAIGHT THROUGH THE CUTOUT."
+   There is no second view and no pair of wings butted against the hardware —
+   the middle is empty by construction and the path just runs through it.
+   ========================================================================== */
+
+.u-notch-stage {
+  /* THE REFERENCE MACHINE. macOS reports the real numbers per display
+     (safeAreaInsets, auxiliaryTopLeftArea/RightArea) and NotchGeometry never
+     hardcodes them. A web page has no display to measure, so it states which
+     Mac it is drawing: UNMUTE_FAKE_NOTCH=200x34 is a 14" Pro in the app's own
+     test harness, and 168x32 an Air 13". */
+  --cutout-w: 200px;
+  --bar-h: 34px;
+
+  /* DERIVED, exactly as NotchGeometry derives them:
+       barFillet       = max(round(barHeight × 0.30), 4)  →  10
+       barCornerRadius = max(round(barHeight × 0.30), 4)  →  10 */
+  --fillet: 10px;
+  --bottom-radius: 10px;
+
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  font: var(--f-body);
+  isolation: isolate;
+}
+.u-notch-stage[data-machine="air13"] { --cutout-w: 168px; --bar-h: 32px; }
+/* No hardware cutout: the two halves sit either side of a plain gap, and the
+   mass is centred on the screen instead of on the hole. */
+.u-notch-stage[data-machine="external"] { --cutout-w: 0px; --bar-h: 24px; --fillet: 7px; --bottom-radius: 7px; }
+
+/* The desktop the surface hangs over. */
+.u-desk {
+  position: relative;
+  min-height: 190px;
+  background: linear-gradient(150deg, #4a5568 0%, #2d3748 55%, #3c4a5e 100%);
+}
+.u-desk[data-light] { background: linear-gradient(150deg, #e8ecf2 0%, #cfd7e3 100%); }
+
+/* The menu bar row the mass is level with. Drawn only so the surface has the
+   context it is designed against — "UNMUTE LIVES IN THE MENUBAR ROW." */
+.u-menubar {
+  position: absolute; inset: 0 0 auto 0;
+  height: var(--bar-h);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px;
+  font: 500 12.5px/normal var(--font);
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+}
+.u-desk[data-light] .u-menubar { color: rgba(0, 0, 0, 0.78); background: rgba(255, 255, 255, 0.30); }
+.u-menubar b { font-weight: 700; margin-right: 16px; }
+.u-menubar-left, .u-menubar-right { display: flex; gap: 15px; align-items: center; }
+
+/* The physical camera housing, so the "drawn straight through" claim is
+   visible rather than asserted. It is pure black and so is the mass. */
+.u-cutout {
+  position: absolute; top: 0; left: 50%;
+  transform: translateX(-50%);
+  width: var(--cutout-w); height: var(--bar-h);
+  background: #000;
+  border-bottom-left-radius: var(--bottom-radius);
+  border-bottom-right-radius: var(--bottom-radius);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ── The mass ────────────────────────────────────────────────────────────── */
+.u-notch {
+  /* `left` is written per-render from NotchGeometry's own anchor arithmetic —
+     see renderNotch. No translateX(-50%): centring the mass is exactly the
+     bug that pulls its middle off the housing. */
+  position: absolute; top: 0;
+  height: var(--bar-h);
+  z-index: 2;
+  /* The window is sized to body + 2 × fillet and its content padded by fillet:
+     "The fillets live INSIDE the rect." */
+  padding: 0 var(--fillet);
+  box-sizing: border-box;
+  display: flex; align-items: center;
+  cursor: pointer;
+  transition: width var(--morph), height var(--morph);
+}
+/* The shape itself. Both radii are animatable in SwiftUI (`animatableData`),
+   so the fillets travel with the mass rather than being pinned on top of it —
+   a clip-path animates the same way. */
+.u-notch-shape {
+  position: absolute; inset: 0;
+  background: #000;
+  /* There is NO rim on the bar-level mass: a stroke around it would outline
+     the black against the housing and put the join back by another route.
+     `hairlineSoft` at 0.5pt is the one exception NotchView draws. */
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+}
+
+/* DORMANT DRAWS NOTHING VISIBLE. On a notched display the window IS the
+   cutout, so filling it black adds no pixel anyone can see while keeping a
+   target the pointer can find. Off-notch there is nothing to hide behind, so
+   it is drawn at zero opacity — never absent, or there would be no shape left
+   to animate the collapse with. */
+.u-notch[data-state="dormant"] .u-notch-shape { opacity: 1; }
+.u-notch-stage[data-machine="external"] .u-notch[data-state="dormant"] .u-notch-shape { opacity: 0; }
+
+/* THE RESTING NUB — off-notch idle, pointer elsewhere. DRAWN SMALL, HIT BIG:
+   the window stays a full menu-bar tall so hovering still wakes it; only the
+   ink shrinks. Softened from pure black, because at rest on a screen with no
+   cutout there is no hardware to match and a full-strength black tab reads as
+   a badge stuck to the desktop. */
+.u-notch[data-resting] .u-notch-shape {
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: none;
+  height: 7px;                              /* NotchView.restHeight */
+  bottom: auto;
+}
+
+/* ── The bar row ─────────────────────────────────────────────────────────── */
+.u-bar-row {
+  position: relative; z-index: 1;
+  display: flex; align-items: center;
+  width: 100%; height: 100%;
+}
+/* BORDER-BOX, and flex-none. Each half is given the exact width BarContent
+   measured for it, and `inset` (13) is part of that measurement — under
+   content-box the padding was added ON TOP, the three halves overflowed the
+   row, flex-shrink took the difference out of all of them, and the middle
+   slid off the housing while every label longer than "Working" clipped. */
+.u-bar-left, .u-bar-mid, .u-bar-right { box-sizing: border-box; flex: none; }
+.u-bar-left  { display: flex; align-items: center; gap: 7px; padding-left: 13px; overflow: hidden; }
+.u-bar-right { display: flex; justify-content: flex-end; padding-right: 13px; overflow: hidden; }
+
+.u-bar-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+/* `breathing` is for the WORKING state only — a slow opacity pulse, never a
+   spin or a scale: a spinner pulls the eye at exactly the moment the product's
+   whole thesis says to leave the user alone. */
+.u-bar-dot[data-breathing] { animation: u-dot-breathe 2.4s var(--ease-in-out) infinite; }
+@keyframes u-dot-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.42; } }
+
+/* LINE-HEIGHT NORMAL, NOT 1. SwiftUI's Text reserves the font's own line box,
+   which has room below the baseline; a 1.0 line-height box is exactly the type
+   size, so inside a half that clips its overflow every descender was sliced —
+   "Working" lost the tail of its g and the detail line lost p, g and y. */
+.u-bar-status {
+  font: 500 11px/normal var(--font);
+  color: var(--text);
+  white-space: nowrap; flex: none;          /* NEVER TRUNCATES */
+}
+.u-bar-detail {
+  font: 400 11.5px/normal var(--font);
+  color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.u-notch[data-state="attention"] .u-bar-detail { color: var(--text); }
+
+/* The mark carries the brand's own colours and is deliberately NOT retinted —
+   this is identity, not a status indicator. */
+.u-bar-mark { height: 13px; padding-right: 2px; flex: none; display: block; }
+
+/* Badge — "and N more like this", only ever drawn when greater than 1. */
+.u-badge {
+  font: 600 9.5px/normal var(--font);
+  padding: 1.5px 6px;
+  border-radius: 5px;
+  flex: none;
+  color: var(--badge-color);
+  background: color-mix(in srgb, var(--badge-color) 17%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--badge-color) 26%, transparent);
+}
