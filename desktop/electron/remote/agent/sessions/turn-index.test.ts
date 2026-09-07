@@ -487,3 +487,58 @@ test('two sessions in the SAME harness with one opening are not a cross-harness 
   await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
   for (const s of await sessionsOf(w.indexRoot)) assert.equal(s.linkedTo, undefined, s.id)
 })
+
+/**
+ * FIELD FAILURE, live run 2026-09-07. A three-turn Claude session weighed
+ * against its Codex copy carried a turn that was really the superpowers skill
+ * body — 8,192 characters of it, truncated at the cap. Turn counts are how a
+ * reader judges which side of a linked pair the work went to, so a skill load
+ * counted as something the person said tilts exactly the decision this index
+ * exists to inform. 92 of them on that machine, every one at the size cap.
+ */
+test('a skill body pasted into the user role is not something a person said', () => {
+  const skill = 'Base directory for this skill: /Users/x/.claude/plugins/cache/superpowers/6.3.0\n\nname: using-superpowers'
+  assert.equal(userTurnOf(claudeUser(skill).trim(), 'claude', 0), null)
+  assert.equal(userTurnOf(claudeUser('▐▛███▜▌   Claude Code v2.1.207').trim(), 'claude', 0), null)
+  // The words alone, from a person, are still a turn: only the harness's
+  // fixed preamble is the signature.
+  assert.equal(
+    userTurnOf(claudeUser('which base directory does this skill live in?').trim(), 'claude', 0)?.text,
+    'which base directory does this skill live in?')
+})
+
+/**
+ * FIELD FAILURE, live run 2026-09-07. firstAt and lastAt were both the file's
+ * mtime, so firstAt was a duplicate of lastAt on 4,006 of 4,007 sessions —
+ * 565 of the 566 multi-turn ones — and on 402 neither bracketed the turns it
+ * claimed to. "When did we start this" had no answer while the answer sat in
+ * the turns already parsed.
+ */
+test('a session is bracketed by its turns, not by when the file was touched', async () => {
+  const w = await workspace()
+  const path = join(w.claudeProjects, `${CLAUDE_ID}.jsonl`)
+  const at = (t: string, text: string) => claudeUser(text, { timestamp: t })
+  await fs.writeFile(path, at('2026-09-06T02:36:04.000Z', 'I have an idea for a job listing site')
+    + claudeAssistant('tell me more')
+    + at('2026-09-06T02:41:11.000Z', 'the answer is all the pain points, trust is one'))
+  // Touched well after the last thing anyone said — an assistant working on
+  // alone is what mtime measures, and it is not where the conversation is.
+  const later = new Date('2026-09-06T06:00:00.000Z')
+  await fs.utimes(path, later, later)
+
+  const index = new SessionTurnIndex({ roots: w.roots, root: w.indexRoot })
+  await index.sync()
+  const session = (await sessionsOf(w.indexRoot)).find(s => s.id === CLAUDE_ID)!
+  assert.equal(session.turns, 2)
+  assert.equal(session.firstAt, Date.parse('2026-09-06T02:36:04.000Z'))
+  assert.equal(session.lastAt, Date.parse('2026-09-06T02:41:11.000Z'))
+  assert.notEqual(session.firstAt, session.lastAt)
+
+  // A later append moves lastAt and leaves firstAt on the opening turn.
+  await fs.appendFile(path, at('2026-09-06T20:21:42.000Z', "let's keep going on the job listing platform"))
+  await index.sync()
+  const after = (await sessionsOf(w.indexRoot)).find(s => s.id === CLAUDE_ID)!
+  assert.equal(after.turns, 3)
+  assert.equal(after.firstAt, Date.parse('2026-09-06T02:36:04.000Z'))
+  assert.equal(after.lastAt, Date.parse('2026-09-06T20:21:42.000Z'))
+})

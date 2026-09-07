@@ -138,6 +138,16 @@ const SYNTHETIC = [
   '<task-notification', '<system-reminder', '<local-command-', '<command-name>', 'Caveat:',
   '<environment_context>', '<recommended_plugins>', '# AGENTS.md instructions for',
   '[Request interrupted by user', 'This session is being continued from a previous',
+  // A skill body, pasted into the user role when a skill loads mid-session.
+  // 92 of these on one real machine, and they are the LARGEST rows in the
+  // index — every one hits MAX_TURN_TEXT and is truncated, so each spends 8 KB
+  // saying nothing a person said. One of them landed in a three-turn session
+  // being weighed against its copy, where turn counts are exactly what decides
+  // which side the work went to. Unlike a BRIEFING this is not the opening, so
+  // labelling the session cannot reach it; the turn itself has to go.
+  'Base directory for this skill:',
+  // The Claude Code startup banner, box-drawing characters and all.
+  '\u2590\u259b\u2588\u2588\u2588\u259c\u258c',
 ]
 /**
  * COPIES ACROSS HARNESSES ARE REAL, AND THERE ARE HUNDREDS.
@@ -386,6 +396,9 @@ export class SessionTurnIndex {
     const lines: string[] = []
     let offset = start
     let consumed = 0
+    // Bracketing this pass's turns; folded into the session by bump().
+    let earliest = 0
+    let latest = 0
     // True while stepping through a line longer than one slice: the next
     // newline we meet ENDS that line rather than starting a new one.
     let overlong = false
@@ -424,6 +437,8 @@ export class SessionTurnIndex {
                 if (session && !session.turns && !lines.length && BRIEFING.some(form => form.test(turn.text))) session.briefing = true
                 if (session && !session.openingHash && !session.turns && !lines.length) session.openingHash = openingHash(turn.text)
                 lines.push(this.encode(id, turn, offset + lineStart))
+                if (!earliest || turn.t < earliest) earliest = turn.t
+                if (turn.t > latest) latest = turn.t
               }
             }
           }
@@ -439,7 +454,7 @@ export class SessionTurnIndex {
     if (offset === start) return 0
     if (lines.length) await fs.appendFile(this.paths.turns, lines.join('') , { mode: 0o600 })
     this.cursors.set(path, { offset, size: stat.size })
-    this.bump(id, lines.length, stat.mtimeMs)
+    this.bump(id, lines.length, earliest, latest)
     return consumed
   }
 
@@ -480,12 +495,29 @@ export class SessionTurnIndex {
     })
   }
 
-  private bump(id: string, added: number, mtimeMs: number): void {
+  /**
+   * When the person spoke, not when the file was touched.
+   *
+   * Both fields used to be the file's mtime, which made firstAt a duplicate of
+   * lastAt: 4,006 of 4,007 sessions on one real machine carried firstAt ===
+   * lastAt, 565 of the 566 multi-turn ones among them, and on 402 neither
+   * value fell anywhere near the turns it claimed to bracket — one row read
+   * Sep 4 16:18 for a conversation whose turns are all Aug 31 22:43. A reader
+   * asking "when did we start this" had no answer at all, and the answer is
+   * sitting in the turns we already parsed.
+   *
+   * lastAt therefore now means the last thing the PERSON said. A session the
+   * assistant kept working in for hours after they left reads as of when they
+   * left, which is the honest answer to where a conversation is.
+   */
+  private bump(id: string, added: number, earliest: number, latest: number): void {
     const session = this.sessions.get(id)
-    if (!session) return
+    if (!session || !added) return
     session.turns += added
-    if (added && !session.firstAt) session.firstAt = mtimeMs
-    if (added) session.lastAt = mtimeMs
+    // min/max rather than assignment: a pass can carry turns out of order, and
+    // a later pass must never drag firstAt forward off the opening turn.
+    if (!session.firstAt || earliest < session.firstAt) session.firstAt = earliest
+    if (latest > session.lastAt) session.lastAt = latest
   }
 
   /**
