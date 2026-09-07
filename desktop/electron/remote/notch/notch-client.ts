@@ -424,6 +424,8 @@ export type NotchEvent =
   | { type: 'next' }
   | { type: 'prev' }
   | { type: 'focusTask'; id: string }
+  /** Open the POCKET on this card. focusTask lands in the cockpit instead. */
+  | { type: 'pocketFocusTask'; id: string }
   | { type: 'closeStage' }
   /** The user left: another app came forward, or they swiped to another Space.
    *  Any expanded surface gets out of the way — a task goes to the pocket, the

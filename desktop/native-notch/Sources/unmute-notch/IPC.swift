@@ -588,6 +588,7 @@ enum Event {
     case next                                      // crank forward
     case prev                                      // crank backward
     case focusTask(id: String)                     // card clicked → voice address
+    case pocketFocusTask(id: String)               // session link → open the POCKET on that card
     case showAll(group: String?, on: Bool)         // reveal folded cards (nil = whole wall)
     case today(on: Bool)                           // 24h filter over the whole wall
     case importSession(sessionId: String)          // adopt a CLI session as a task
@@ -685,6 +686,7 @@ enum Event {
         case .next: return ["type": "next"]
         case .prev: return ["type": "prev"]
         case .focusTask(let id): return ["type": "focusTask", "id": id]
+        case .pocketFocusTask(let id): return ["type": "pocketFocusTask", "id": id]
         case let .today(on): return ["type": "today", "on": on]
         case let .importSession(sessionId): return ["type": "importSession", "sessionId": sessionId]
         case .showAll(let group, let on):

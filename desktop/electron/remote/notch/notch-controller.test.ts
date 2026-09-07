@@ -2629,3 +2629,36 @@ test('closing the pocket AFTER expanding a task still releases the voice', () =>
   assert.deepEqual(h.calls.focus?.at(-1), [null],
     'a closed pocket must hand the voice back to the router')
 })
+
+/**
+ * FIELD REPORT (2026-09-07). The Agent's `unmute://task/<id>` link reused
+ * `focusTask`, which sets `engaged = 'cockpit'` — correct for its own caller,
+ * a card clicked on the wall, and wrong for a link: it opened the DASHBOARD,
+ * a different surface with different chrome, rather than the pocket where the
+ * conversation lives.
+ */
+test('a session link opens the pocket on that card, not the cockpit', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'needs-user', alive: true }))
+  put(h, makeTask({ id: 'b', state: 'needs-user', alive: true }))
+  h.client.sent = []
+
+  h.client.fire({ type: 'pocketFocusTask', id: 'b' })
+
+  const pocket = h.client.last('pocket')
+  assert.equal(pocket?.data.mode, 'open', 'the pocket is the surface a link lands on')
+  // And it lands ON that card, rather than merely opening the pocket somewhere.
+  assert.deepEqual(h.calls.focus?.at(-1), ['b'], 'voice follows the card the link named')
+})
+
+test('a link to a card that cannot be pocketed still lands somewhere correct', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'needs-user', alive: true, shelved: true }))
+  h.client.sent = []
+
+  h.client.fire({ type: 'pocketFocusTask', id: 'a' })
+
+  // Shelved: not pocketable. The cockpit is a correct place to land, and is
+  // what focusTask would have done — a fallback, never an error.
+  assert.deepEqual(h.calls.focus?.at(-1), ['a'])
+})

@@ -81,7 +81,11 @@ struct RichText: View {
             // a card click sends, so a tapped link and a tapped card address a
             // session identically — one path, not two.
             if let taskID = sessionTaskID(from: url.absoluteString) {
-                IPC.emit(.focusTask(id: taskID))
+                // The POCKET, not the cockpit. focusTask sets engaged =
+                // 'cockpit', which is right when you already ARE in the
+                // cockpit and clicked a card on the wall — it lands the link
+                // in the dashboard instead of the conversation surface.
+                IPC.emit(.pocketFocusTask(id: taskID))
             } else if url.isFileURL {
                 IPC.emit(.openArtifact(type: "path", value: url.path))
             } else {

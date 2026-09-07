@@ -583,6 +583,7 @@ export class NotchController {
     })
     on('agentRetry', () => { void this.deps.agentRetry?.().catch(error => this.agentUnavailable((error as Error).message)) })
     on('agentNewConversation', () => { void this.deps.agentNewConversation?.().catch(error => this.agentUnavailable((error as Error).message)) })
+    on('pocketFocusTask', (e) => this.onPocketFocusTask((e as { id: string }).id))
     on('tap', () => this.onTap())
     on('collapsed', () => {
       // THE HOLD DIES WITH THE CARD. Whether or not they pressed it again, a
@@ -1830,6 +1831,37 @@ export class NotchController {
   }
 
   /** Opening a task makes its provider reachable without counting as work. */
+  /**
+   * A SESSION LINK LANDS IN THE POCKET, NOT THE COCKPIT.
+   *
+   * `onFocusTask` sets `engaged = 'cockpit'`, which is right for its own
+   * caller — a card clicked on the wall, where you are already in the cockpit
+   * and clicking should not move you out of it. Reusing it for the Agent's
+   * `unmute://task/<id>` link put people in the dashboard instead, which is a
+   * different surface with different chrome and not where the pocket's
+   * conversation lives.
+   *
+   * `addressed()` first, so a card that had scrolled out of the pocket is back
+   * in it before its slot is looked up. Voice follows the pocket rather than
+   * being set here: applyVoiceTarget reads the slot under `pocketAt` whenever
+   * the pocket is open, which is the same path the pocket chord uses.
+   *
+   * If it is not pocketable at all — shelved, say — the cockpit is a correct
+   * place to land, so that is the fallback rather than an error.
+   */
+  private onPocketFocusTask(id: string): void {
+    this.leaveAgent()
+    this.addressed(id)
+    const at = this.pocketSlots().findIndex((slot) => slot.kind !== 'agent' && slot.id === id)
+    if (at < 0) { this.onFocusTask(id); return }
+    this.engaged = 'none'
+    this.pocketAt = at
+    log.event('pocket-focus-task', { taskId: id, at, slots: this.pocketSlots().length })
+    this.setPocketMode('open')
+    this.applyVoiceTarget()
+    this.reconcile()
+  }
+
   private onFocusTask(id: string): void {
     this.leaveAgent()
     this.engaged = 'cockpit'
