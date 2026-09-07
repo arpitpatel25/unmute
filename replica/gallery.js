@@ -3,6 +3,7 @@
 import { renderPill, driveWaveforms, OFFLINE } from "./pill.js";
 import { renderNotetaker, driveNotetaker } from "./notetaker.js";
 import { renderNotch } from "./notch.js";
+import { renderWall, renderStage, renderTaskSurface, renderPocket, panel, SurfaceSizeStep } from "./expanded.js";
 
 const CLAUDE_AGENTS = [
   { id: "claude", label: "Claude Code", terminal: true },
@@ -24,8 +25,8 @@ const REMOTE = {
   agentOptions: CLAUDE_AGENTS, modelOptions: CLAUDE_MODELS, agentConnected: true,
 };
 
-function specimen(name, why, html, stageClass = "on-desk") {
-  return `<div class="specimen">
+function specimen(name, why, html, stageClass = "on-desk", wide = false) {
+  return `<div class="specimen" ${wide ? "data-wide" : ""}>
     <div class="meta"><div class="name">${name}</div><div class="why">${why}</div></div>
     <div class="stage ${stageClass}">${html}</div></div>`;
 }
@@ -331,4 +332,171 @@ document.getElementById("notch2").innerHTML = [
 /* Hover reveals — the mass re-resolves its content and re-measures its width. */
 document.querySelectorAll("#notch .u-notch, #notch2 .u-notch").forEach((el) => {
   el.style.transition = "width var(--morph)";
+});
+
+/* ── 14–17 · The expanded surfaces ────────────────────────────────────────── */
+
+const WALL = {
+  view: "today", workspace: "All workspaces", columns: 1,
+  surfaceFill: 0.77, doorbell: true,
+  capturePhase: "listening", captureTarget: "new task",
+  groups: [
+    { name: "job listing site", cards: [
+      { id: "c1", status: "done", title: "Job listing platform — product breakdown",
+        activity: "Built two of them. Here's where it landed.",
+        backend: "claude", kind: "session", dir: "session", age: "4h", qpos: 2, agentOrigin: "Unmute" } ] },
+    { name: "unmute marketing", cards: [
+      { id: "c2", status: "done", title: "Unmute landing page redesign — continued",
+        activity: "It's open in your default browser:",
+        backend: "claude", kind: "session", dir: "~/tools/unmute/unmute-landing-redesign",
+        age: "1h", qpos: 1, agentOrigin: "Unmute" } ] },
+    { name: "tweets", cards: [
+      { id: "c3", status: "done", title: "ziwenxu growth analysis",
+        activity: "I went through their Posts and Replies tabs and pulled 76 timeline items with metrics and timestamps. Here's what I found.",
+        backend: "claude", kind: "oneoff", age: "13m" } ] },
+    { name: "unmute app", cards: [
+      { id: "c4", status: "done", title: "Add CUA driver item to Unmute task list (Apple Notes + Google Sheet/Doc)",
+        activity: "Both lists are updated — new **CUA Driver** section added to your Apple Note and the Google Doc.",
+        backend: "claude", kind: "session", dir: "session", age: "9h" } ] },
+  ],
+  queue: [
+    { id: "q1", status: "done", name: "Unmute landing page re…" },
+    { id: "q2", status: "done", name: "Job listing platform — p…" },
+  ],
+  oneoffs: [
+    { id: "o1", status: "done", name: "ziwenxu growth analysis", age: "3m" },
+    { id: "o2", status: "done", name: "Cardboard AI interactivity", age: "4h" },
+    { id: "o3", status: "done", name: "Wafer AI overview", age: "5h" },
+    { id: "o4", status: "done", name: "Open Unmute to-do note…", age: "6h" },
+    { id: "o5", status: "done", name: "Job listing site idea", age: "8h" },
+    { id: "o6", status: "done", name: "Clicky computer use tool", age: "14h" },
+    { id: "o7", status: "done", name: "Software context transc…", age: "17h" },
+  ],
+  shelf: [
+    { id: "s1", name: "MrBeast latest video" },
+    { id: "s2", name: "Unmute pending work triage" },
+    { id: "s3", name: "Grant one-month pro plan t…" },
+    { id: "s4", name: "Earlier work you are continu…" },
+  ],
+};
+
+const ROWS = [
+  { kind: "answer", text: "Tell me whether to carry on into the expanded surfaces, or to do that screenshot-diff pass against the running app first." },
+  { kind: "user", text: "Can you launch that in the browser so that I can check how it looks?" },
+  { kind: "work", durationMs: 24600, steps: [
+    { title: "Ensure the local server is up", ms: 820, ok: true },
+    { title: "Open the replica in the browser", ms: 310, ok: true },
+  ] },
+  { kind: "answer", text: "It's open in your default browser:\n\n`http://localhost:4180/replica/index.html`\n\nA few things are **live**, so they're worth poking rather than just scrolling past." },
+];
+
+const TASK = {
+  id: "t1", status: "done", title: "Unmute landing page redesign — continued",
+  backend: "claude", hasTerminal: true, alive: false, kind: "session",
+  elapsed: "1h", modelLabel: "opus", isOwned: true,
+};
+
+/* One panel per specimen. The surface is sized as a share of the screen —
+   SurfaceSizeStep's range is 0.40…0.95, and 0.80 is where it lands by default. */
+function expandedStage(inner, w, h, machine = "mbp14", clearsHousing = false) {
+  return `<div class="u-notch-stage" data-machine="${machine}" style="width:${w + 60}px">
+    <div class="u-desk" style="min-height:${h + 30}px">
+      <div class="u-menubar">
+        <span class="u-menubar-left"><b>Unmute</b><span>File</span><span>Edit</span><span>View</span></span>
+        <span class="u-menubar-right"><span>100%</span><span>Thu 12:04</span></span>
+      </div>
+      <div class="u-cutout"></div>
+      <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);z-index:3">
+        ${panel(inner, { width: w, height: h, machine, clearsHousing })}
+      </div>
+    </div></div>`;
+}
+
+document.getElementById("pocket").innerHTML = [
+  ["one task, waiting", "The ask is DROPPED, not filled — a fixed row holding an echo of the footer is a third of the card spent saying nothing new.",
+    { title: "Ship the pricing change", status: "needs-user", backend: "claude", terminal: true,
+      ask: "Replace the annual price everywhere, or only on /pricing?", slots: 1 }],
+  ["already settled", "A slot that is not demanding reads quieter, and its dot goes grey.",
+    { title: "Rewrite the onboarding copy", status: "done", demanding: false, backend: "codex",
+      terminal: true, ask: "Done — three files edited.", slots: 1 }],
+  ["several held", "A slot rail appears only above one. The pips say which of them you are looking at.",
+    { title: "Job listing platform — product breakdown", status: "processing", backend: "claude",
+      terminal: true, ask: "Building the second variant now.", slots: 3, at: 1 }],
+  ["the Agent", "The mark already says Unmute; the title would say it again, so it is dropped.",
+    { isAgent: true, status: "ready", ask: "Read last week's meetings and drafted the summary.", slots: 1 }],
+  ["a toast", "An error takes the ask row, in the error hue.",
+    { title: "Ship the pricing change", status: "failed", backend: "claude", terminal: true,
+      ask: "the session had already closed", toast: true, slots: 1 }],
+].map(([n, w, p]) => specimen(n, w,
+  expandedStage(renderPocket(p), 348, 34 + 12 + (p.ask ? 106 : 68), "mbp14", true), "", true)).join("");
+
+document.getElementById("wall").innerHTML = [
+  ["Today", "Grouped by workspace, one column at the smaller surface sizes.", { ...WALL }],
+  ["two columns", "At 90% the surface has enough width that one row becomes mostly empty space, so it goes row-major two-column.",
+    { ...WALL, columns: 2, surfaceFill: 0.9 }],
+  ["one workspace", "The page title already carries the identity, so the group headings are dropped — repeating it would make two titles.",
+    { ...WALL, workspace: "unmute marketing" }],
+  ["Needs you, empty", "No message: an empty list already says nothing needs you, and being congratulated for it grates every time.",
+    { ...WALL, view: "needsYou", groups: [] }],
+  ["Finished, empty", "Here the emptiness does NOT speak for itself, so it is stated.",
+    { ...WALL, view: "finished", groups: [] }],
+].map(([n, w, m]) => specimen(n, w,
+  expandedStage(renderWall(m), 980, 560), "", true)).join("");
+
+document.getElementById("stage").innerHTML = [
+  ["a session", "Header carries curation, lifecycle, destructive and view as four spaced groups — the spacing does the work borders used to.",
+    { task: { ...TASK, alive: true }, rows: ROWS, surfaceFill: 0.77 }],
+  ["not running", "A dead session offers Resume where Kill was.",
+    { task: TASK, rows: ROWS.slice(0, 2), surfaceFill: 0.77 }],
+].map(([n, w, m]) => specimen(n, w, expandedStage(renderStage(m), 900, 520), "", true)).join("");
+
+document.getElementById("task").innerHTML = [
+  ["one task, with the crank", "Next is the one tinted primary on the surface.",
+    { task: TASK, rows: ROWS, attention: 2, surfaceFill: 0.77 }],
+  ["still running", "Stop appears only for something that is actually running.",
+    { task: { ...TASK, status: "processing", alive: true, elapsed: "2m" }, rows: ROWS.slice(0, 3),
+      attention: 0, surfaceFill: 0.77 }],
+].map(([n, w, m]) => specimen(n, w, expandedStage(renderTaskSurface(m), 820, 500), "", true)).join("");
+
+/* Work blocks open in place. */
+document.body.addEventListener("click", (e) => {
+  const toggle = e.target.closest(".u-work-toggle");
+  if (toggle) {
+    const w = toggle.closest(".u-work");
+    const open = w.hasAttribute("data-open");
+    w.toggleAttribute("data-open", !open);
+    w.querySelector(".u-work-steps").hidden = open;
+    return;
+  }
+  const tab = e.target.closest(".u-view-tab");
+  if (tab) {
+    tab.parentElement.querySelectorAll(".u-view-tab").forEach((t) =>
+      t.setAttribute("aria-selected", t === tab));
+    return;
+  }
+  const ws = e.target.closest(".u-ws-btn");
+  if (ws) {
+    ws.parentElement.querySelectorAll(".u-ws-btn").forEach((b) =>
+      b.setAttribute("aria-selected", b === ws));
+  }
+});
+
+/* The size track: the knob follows the pointer, and the label reads live. */
+document.body.addEventListener("pointerdown", (e) => {
+  const track = e.target.closest(".u-size-track");
+  if (!track) return;
+  const control = track.closest("[data-size-control]");
+  const move = (ev) => {
+    const r = track.getBoundingClientRect();
+    const fill = SurfaceSizeStep.fill((ev.clientX - r.left) / r.width);
+    const f = SurfaceSizeStep.fraction(fill), x = f * 116;
+    control.querySelector(".u-size-label").textContent = Math.round(fill * 100) + "%";
+    control.querySelector(".u-size-fill").style.width = Math.max(x, 0) + "px";
+    control.querySelector(".u-size-knob").style.left = Math.min(Math.max(x - 6, 0), 104) + "px";
+    control.setAttribute("aria-valuenow", Math.round(fill * 100));
+  };
+  move(e);
+  const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
 });

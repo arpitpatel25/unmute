@@ -15,6 +15,7 @@ comment beside it.
 | `tokens.css` | `native-notch/Sources/unmute-notch/Theme.swift` |
 | `pill.css`, `pill.js` | `PillView.swift`, `PillModel.swift`, `Waveform.swift`, `LevelMeterSupport/{LevelMeter,DotWave}.swift` |
 | `notch.css`, `notch.js` | `NotchShape.swift`, `NotchGeometry.swift`, `BarContent.swift`, `NotchView.swift` |
+| `expanded.css`, `expanded.js` | `WallView.swift`, `StageView.swift`, `TaskSurfaceView.swift`, `PocketView.swift`, `ConversationPanel.swift`, `SurfaceSizeControls.swift`, the controls in `NotchShape.swift` |
 | `notetaker.css`, `notetaker.js` | `engine-overrides/renderer/notetaker/NotetakerWidget.tsx`, `electron/remote/notetakerWidget.ts` |
 | `icons.js` → `providerMark` | `ProviderMark.swift`, `ProviderMarkArt.swift` |
 | `assets/*.png` | the base64 blobs compiled into `ProviderMarkArt.swift` and `UnMarkArt.swift`, extracted byte-for-byte |
@@ -74,14 +75,33 @@ offline reasons.
 
 **Notetaker** — recording, actions-open, saved.
 
-**Notch** — dormant, idle, the resting nub, active with and without a badge,
-attention, the pocket waiting, routing, agent activity, a toast; hover reveals
-on each; 14" Pro, 13" Air and an external display; over a light desktop.
+**Notch, bar level** — dormant, idle, the resting nub, active with and without
+a badge, attention, the pocket waiting, routing, agent activity, a toast; hover
+reveals on each; 14" Pro, 13" Air and an external display; over a light desktop.
+
+**The pocket, open** — one task waiting, one already settled, several held with
+the slot rail, the Agent, and a toast.
+
+**The Orchestrator** — the four view tabs, the workspace rail, grouped cards in
+one and two columns, a single selected workspace, and both empty states. Tabs
+and rail are live; the size track drags.
+
+**A task, opened** — the stage and the single-task attention panel. Right-aligned
+user bubbles, collapsed work blocks that open in place, the composer, and the
+crank.
 
 ## Not built yet
 
-The **expanded** notch surfaces — the open pocket card, the task surface, the
-wall and the focused stage (`PocketView`, `TaskSurfaceView`, `WallView`,
-`StageView`, `ConversationPanel`, `BlockViews`), plus the scratchpad pad
-(`ScratchpadView`) that hangs off the pill's scratchpad chip. Roughly 3,800
-lines of Swift between them.
+`BlockViews` / `BlockConversation` (the richer block-based transcript that
+supersedes `rows` — diffs, exit codes, MCP identity, reasoning), the live
+terminal panel (`TerminalHost`), `QuestionBlock`, the skill popup, and the
+scratchpad pad (`ScratchpadView`) that hangs off the pill's scratchpad chip.
+
+## One known divergence from the running app
+
+The composer in the shipping build carries a row of chips — agent, model,
+access, working directory, and "Right ⌥ to dictate". Those are **not** in
+`ConversationPanel.swift` in this checkout of `desktop/native-notch/Sources`,
+where `StageComposer` renders only a model label beside the send button. The
+replica follows the source, because transcribing from source is the whole
+method; the app is ahead of the vendored copy here.

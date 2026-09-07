@@ -111,6 +111,126 @@ const ART = {
           stroke-width="${SW}" stroke-linecap="round"/>`,
   },
 
+
+  /* ── Expanded-surface controls ───────────────────────────────────────── */
+
+  "arrow.up": {
+    ratio: 0.78,
+    d: `<path d="M12 20.4 V4.4 M5.4 10.6 L12 4 L18.6 10.6" fill="none" stroke="currentColor"
+          stroke-width="${SW + 0.5}" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  "arrow.left": {
+    ratio: 1.28,
+    d: `<path d="M20.4 12 H4.4 M10.6 5.4 L4 12 L10.6 18.6" fill="none" stroke="currentColor"
+          stroke-width="${SW + 0.2}" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  "arrow.right": {
+    ratio: 1.28,
+    d: `<path d="M3.6 12 H19.6 M13.4 5.4 L20 12 L13.4 18.6" fill="none" stroke="currentColor"
+          stroke-width="${SW + 0.2}" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  "chevron.right": {
+    ratio: 0.62,
+    d: `<path d="M8.8 5.2 L15.6 12 L8.8 18.8" fill="none" stroke="currentColor"
+          stroke-width="${SW + 0.9}" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  "chevron.up": {
+    ratio: 0.72,
+    d: `<path d="M5.2 15.2 L12 8.4 L18.8 15.2" fill="none" stroke="currentColor"
+          stroke-width="${SW + 0.9}" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  pin: {
+    ratio: 0.72,
+    d: `<path d="M9 2.6h6l-.7 6.1 3.1 3.2v1.8H6.6v-1.8l3.1-3.2z" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linejoin="round"/>
+        <path d="M12 13.7 V21.4" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linecap="round"/>`,
+  },
+  "pin.slash": {
+    ratio: 0.86,
+    d: `<path d="M9 2.6h6l-.7 6.1 3.1 3.2v1.8H6.6v-1.8l3.1-3.2z" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linejoin="round"/>
+        <path d="M12 13.7 V21.4" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linecap="round"/>
+        <path d="M3.4 3.4 L20.6 20.6" fill="none" stroke="currentColor"
+          stroke-width="${SW + 0.4}" stroke-linecap="round"/>`,
+  },
+  archivebox: {
+    ratio: 1.1,
+    d: `<rect x="2.4" y="3.6" width="19.2" height="4.6" rx="1.5" fill="none"
+          stroke="currentColor" stroke-width="${SW}"/>
+        <path d="M4.2 8.2 v10.1a2 2 0 0 0 2 2h11.6a2 2 0 0 0 2-2V8.2" fill="none"
+          stroke="currentColor" stroke-width="${SW}"/>
+        <path d="M9.6 12.2 h4.8" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linecap="round"/>`,
+  },
+  "stop.circle": {
+    ratio: 1.0,
+    d: `<circle cx="12" cy="12" r="9.6" fill="none" stroke="currentColor" stroke-width="${SW}"/>
+        <rect x="8.7" y="8.7" width="6.6" height="6.6" rx="1.3" fill="currentColor"/>`,
+  },
+  play: {
+    ratio: 0.86,
+    d: `<path d="M6.8 4.4 L19.2 12 L6.8 19.6 Z" fill="currentColor"/>`,
+  },
+  trash: {
+    ratio: 0.9,
+    d: `<path d="M4.4 6.6 h15.2 M9.4 6.6 V4.8a1.4 1.4 0 0 1 1.4-1.4h2.4a1.4 1.4 0 0 1 1.4 1.4v1.8"
+          fill="none" stroke="currentColor" stroke-width="${SW}" stroke-linecap="round"/>
+        <path d="M6.2 6.6 l0.9 12.8a1.6 1.6 0 0 0 1.6 1.5h6.6a1.6 1.6 0 0 0 1.6-1.5l0.9-12.8"
+          fill="none" stroke="currentColor" stroke-width="${SW}" stroke-linejoin="round"/>`,
+  },
+  "arrow.clockwise": {
+    ratio: 0.95,
+    d: `<path d="M20 12a8 8 0 1 1-2.6-5.9" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linecap="round"/>
+        <path d="M20.4 3.2 v4.6 h-4.6" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  "square.grid.2x2": {
+    ratio: 1.0,
+    d: `<g fill="none" stroke="currentColor" stroke-width="${SW}">
+          <rect x="3" y="3" width="7.6" height="7.6" rx="1.8"/>
+          <rect x="13.4" y="3" width="7.6" height="7.6" rx="1.8"/>
+          <rect x="3" y="13.4" width="7.6" height="7.6" rx="1.8"/>
+          <rect x="13.4" y="13.4" width="7.6" height="7.6" rx="1.8"/>
+        </g>`,
+  },
+  bell: {
+    ratio: 0.88,
+    d: `<path d="M6 17.4V11a6 6 0 0 1 12 0v6.4l1.6 2H4.4z" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linejoin="round"/>
+        <path d="M10 20.2a2.1 2.1 0 0 0 4 0" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linecap="round"/>`,
+  },
+  "bell.slash": {
+    ratio: 1.0,
+    d: `<path d="M6 17.4V11a6 6 0 0 1 12 0v6.4l1.6 2H4.4z" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linejoin="round"/>
+        <path d="M10 20.2a2.1 2.1 0 0 0 4 0" fill="none" stroke="currentColor"
+          stroke-width="${SW}" stroke-linecap="round"/>
+        <path d="M3.4 3.4 L20.6 20.6" fill="none" stroke="currentColor"
+          stroke-width="${SW + 0.4}" stroke-linecap="round"/>`,
+  },
+  "doc.on.doc": {
+    ratio: 0.9,
+    d: `<rect x="8.4" y="2.8" width="12.2" height="15.4" rx="2.2" fill="none"
+          stroke="currentColor" stroke-width="${SW}"/>
+        <path d="M15.6 21.2H5.6a2.2 2.2 0 0 1-2.2-2.2V6.6" fill="none"
+          stroke="currentColor" stroke-width="${SW}" stroke-linecap="round"/>`,
+  },
+  "pause.circle": {
+    ratio: 1.0,
+    d: `<circle cx="12" cy="12" r="9.6" fill="none" stroke="currentColor" stroke-width="${SW}"/>
+        <path d="M10.1 8.6v6.8M13.9 8.6v6.8" fill="none" stroke="currentColor"
+          stroke-width="${SW + 0.2}" stroke-linecap="round"/>`,
+  },
+  pencil: {
+    ratio: 1.0,
+    d: `<path d="M4 20l1-4.2L16.1 4.7a2 2 0 0 1 2.8 0l0.4 0.4a2 2 0 0 1 0 2.8L8.2 19z"
+          fill="none" stroke="currentColor" stroke-width="${SW}" stroke-linejoin="round"/>`,
+  },
+
   /* ── Used by the offline card (PillOfflineReason.symbol) ─────────────── */
 
   "person.crop.circle": {

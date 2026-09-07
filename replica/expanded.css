@@ -1,0 +1,453 @@
+/* ==========================================================================
+   THE EXPANDED SURFACES
+   Transcribed from WallView.swift (the Orchestrator), StageView.swift (the
+   focused stage), TaskSurfaceView.swift (the single-task attention panel),
+   PocketView.swift (the pocket card), ConversationPanel.swift (the transcript
+   and composer), SurfaceSizeControls.swift, and the shared controls in
+   NotchShape.swift.
+
+   THE MATERIAL SPLIT (decision D5): bar level is opaque black always, because
+   the mass impersonates the physical cutout. EXPANDED is a glass shell around
+   an OPAQUE CONTENT PLANE — and this is the only place the appearance setting
+   still applies in full.
+   ========================================================================== */
+
+/* ── The panel ───────────────────────────────────────────────────────────── */
+.u-panel {
+  position: relative;
+  /* The expanded panel names its own concave fillet — it is not bar-sized, so
+     it cannot derive one from the menu bar. Still part of the same path. */
+  --panel-fillet: 14px;
+  font: var(--f-body);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+/* The glass shell. Black rather than Theme.plane: "ONE MATERIAL, EVERYWHERE"
+   — the large surfaces used to be a dark blue-grey under a white rim while the
+   bar and the pocket were pure black, and side by side that read as two apps.
+   Edge definition is the shadow's job plus the faintest hairline. */
+.u-panel-shell {
+  background: #000;
+  box-shadow: inset 0 0 0 0.5px var(--hairline-soft), 0 24px 60px rgba(0, 0, 0, 0.55);
+  padding: var(--panel-padding);
+  box-sizing: border-box;
+}
+/* CONCENTRIC: the plane's radius is the panel's minus the padding, 18 − 6. */
+.u-plane {
+  background: var(--plane);
+  border-radius: var(--plane-radius);
+  overflow: hidden;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+/* Every large surface clears the camera housing. `topInset` is the cutout's
+   own height on a notched Mac and ordinary panel padding elsewhere. */
+.u-panel { --top-inset: 34px; }
+.u-panel[data-machine="external"] { --top-inset: 6px; }
+
+/* ── Shared controls ─────────────────────────────────────────────────────── */
+.u-section-label {
+  font: var(--f-micro);
+  letter-spacing: 0.75px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+/* Tabular data — ages, durations, counts, paths. The ONLY place monospace is
+   used outside the terminal. */
+.u-num { font: var(--f-num); font-variant-numeric: tabular-nums; color: var(--text-faint); }
+.u-status-label { font: var(--f-status); }
+
+.u-dot { border-radius: 50%; flex: none; width: 7px; height: 7px; }
+.u-dot[data-breathing] { animation: u-dot-breathe 2.4s var(--ease-in-out) infinite; }
+
+/* KeyButton — the dense default. macOS shape rule: mini/small/medium controls
+   stay ROUNDED RECTANGLES; only large controls become capsules. */
+.u-key-btn {
+  display: inline-flex; align-items: center; gap: 3.5px;
+  font: 500 11px/normal var(--font);
+  color: var(--text);
+  padding: 3.5px 9px;
+  border: 0; border-radius: 6px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+  cursor: pointer; white-space: nowrap;
+  transition: background var(--t-hover);
+}
+.u-key-btn:hover { background: var(--raised-hover); }
+.u-key-btn[data-danger] { color: var(--c-error); box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--c-error) 30%, transparent); }
+
+/* ActButton — the primary. Its fill is near-white, so its label is dark. */
+.u-act-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font: 600 11.5px/normal var(--font);
+  color: var(--accent-ink);
+  padding: 4.5px 12px;
+  border: 0; border-radius: 9999px;
+  background: var(--accent);
+  cursor: pointer; white-space: nowrap;
+  transition: background var(--t-hover);
+}
+.u-act-btn:hover { background: rgba(255, 255, 255, 0.8); }
+
+/* QuietButton — borderless, for tertiary actions that should not compete. */
+.u-quiet-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font: 400 11.5px/normal var(--font);
+  color: var(--text-dim);
+  padding: 3px 7px;
+  border: 0; border-radius: 6px;
+  background: transparent;
+  cursor: pointer; white-space: nowrap;
+  transition: background var(--t-hover), color var(--t-hover);
+}
+.u-quiet-btn:hover { background: var(--raised); color: var(--text); }
+
+.u-round-btn {
+  width: 22px; height: 22px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 50%; padding: 0;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background var(--t-hover), color var(--t-hover);
+}
+.u-round-btn:hover { background: rgba(255, 255, 255, 0.10); color: var(--text); }
+
+/* Badge — small tinted pill ("Q1", "agent", "unmute"). */
+.u-badge2 {
+  font: 600 9.5px/normal var(--font);
+  padding: 1.5px 6px; border-radius: 5px; flex: none; white-space: nowrap;
+  color: var(--badge-color, var(--text-dim));
+  background: color-mix(in srgb, var(--badge-color, #9b9ba1) 17%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--badge-color, #9b9ba1) 26%, transparent);
+}
+
+/* ScrollEdge — the macOS-leaning HARD style, so content dissolves under the
+   pinned chrome rather than colliding with it. One per scroll view, never
+   nested. */
+.u-scroll { overflow-y: auto; position: relative; flex: 1; min-height: 0; }
+.u-scroll::-webkit-scrollbar { width: 8px; }
+.u-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 4px; }
+.u-scroll-edge { position: relative; flex: 1; min-height: 0; display: flex; }
+.u-scroll-edge::after {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: var(--edge-h, 26px);
+  background: linear-gradient(to bottom, var(--plane) 0%,
+    color-mix(in srgb, var(--plane) 90%, transparent) 28%, transparent 100%);
+  pointer-events: none; z-index: 2;
+}
+
+/* ── The Orchestrator wall ───────────────────────────────────────────────── */
+.u-wall { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+
+/* ONE compact, cutout-safe header row. */
+.u-wall-chrome {
+  display: flex; align-items: center; gap: 10px;
+  padding: var(--top-inset) var(--gutter) 9px;
+  background: var(--rail-bg);
+  flex: none;
+}
+.u-wall-chrome-rule { height: 1px; background: var(--hairline-soft); flex: none; }
+.u-view-tabs { display: flex; gap: 4px; }
+.u-view-tab {
+  font: 500 11.5px/normal var(--font);
+  color: var(--text-dim);
+  padding: 6px 10px; border: 0; border-radius: var(--control-radius);
+  background: transparent; cursor: pointer;
+  transition: background var(--t-hover), color var(--t-hover);
+}
+.u-view-tab[aria-selected="true"] { font-weight: 600; color: var(--text); background: var(--raised); }
+.u-system-moving { display: flex; align-items: center; gap: 6px; font: var(--f-cap); color: var(--text-dim); }
+
+.u-wall-body { display: flex; align-items: stretch; flex: 1; min-height: 0; }
+
+/* GOLDEN GATE: the sidebar is EDGE-TO-EDGE, not an inset floating pane. */
+.u-workspace-rail {
+  width: 174px; flex: none;
+  background: var(--rail-bg);
+  box-shadow: inset -1px 0 0 var(--hairline-soft);
+  overflow-y: auto;
+  padding: 14px 8px 44px;
+  box-sizing: border-box;
+}
+.u-ws-list { display: flex; flex-direction: column; gap: 3px; }
+.u-workspace-rail .u-section-label { padding: 0 8px 5px; display: block; }
+.u-ws-btn {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px; border: 0; border-radius: var(--control-radius);
+  background: transparent; cursor: pointer; text-align: left;
+  transition: background var(--t-hover);
+}
+.u-ws-btn:hover { background: var(--raised); }
+.u-ws-btn[aria-selected="true"] { background: var(--raised); }
+.u-ws-btn[aria-selected="true"] .u-ws-name { color: var(--text); }
+.u-ws-marker {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  box-shadow: inset 0 0 0 0.75px var(--text-faint);
+}
+.u-ws-marker[data-active] { background: var(--accent); box-shadow: inset 0 0 0 0.75px var(--accent); }
+.u-ws-marker[data-ungrouped] {
+  background: color-mix(in srgb, var(--c-needs) 78%, transparent);
+  box-shadow: inset 0 0 0 0.75px color-mix(in srgb, var(--c-needs) 78%, transparent);
+}
+.u-ws-name { font: var(--f-sub); color: var(--text-dim); flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.u-wall-main { position: relative; flex: 1; min-width: 0; display: flex; }
+.u-wall-scroll { padding: 18px var(--gutter) 60px; }
+.u-wall-groups { display: flex; flex-direction: column; gap: 18px; }
+.u-wall-title { display: flex; flex-direction: column; gap: 4px; }
+.u-wall-title h3 { font: var(--f-title); color: var(--text); margin: 0; }
+.u-wall-title p { font: var(--f-sub); color: var(--text-dim); margin: 0; }
+.u-group { display: flex; flex-direction: column; gap: 9px; }
+.u-group-head { display: flex; align-items: center; gap: 8px; }
+.u-group-head h4 { font: var(--f-head); color: var(--text); margin: 0; flex: 1; }
+.u-group-head h4[data-ungrouped] { color: color-mix(in srgb, var(--c-needs) 82%, transparent); }
+.u-card-grid { display: grid; gap: 8px; align-items: stretch; }
+
+/* A UNIFORM TILE, whatever the card happens to carry — sized UP to the
+   tallest, never shrinking the ones that have something to say. */
+.u-card {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 11px 12px; min-height: 104px;
+  border: 0; border-radius: var(--card-radius);
+  background: var(--raised);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+  cursor: pointer; text-align: left; width: 100%;
+  transition: background var(--t-hover);
+}
+.u-card:hover { background: var(--raised-hover); }
+/* A your-move card carries a whisper of its OWN status hue mapped into the
+   fill — Apple's tinting model — so the wall sorts itself visually before you
+   read a word. Our-move and done stay neutral. */
+.u-card[data-yourmove] {
+  background: color-mix(in srgb, var(--card-status) 9%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--card-status) 26%, transparent);
+}
+.u-card-head { display: flex; align-items: center; gap: 6px; }
+.u-card-title { font: var(--f-body-med); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.u-card-activity {
+  font: var(--f-sub); color: var(--text-dim);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.u-card-note { display: flex; align-items: center; gap: 4px;
+  font: 400 11.5px/normal var(--font); color: var(--c-ready); }
+/* The footer sits at the BOTTOM of the tile, not straight under the body —
+   otherwise a card with no activity line puts its footer halfway up while its
+   neighbour's sits at the base. */
+.u-card-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 2px; }
+.u-card-foot .u-spacer { flex: 1; }
+
+/* ── The activity rail ───────────────────────────────────────────────────── */
+.u-rail {
+  width: 250px; flex: none;
+  background: var(--rail-bg);
+  box-shadow: inset 1px 0 0 var(--hairline-soft);
+  overflow-y: auto;
+  padding: var(--top-inset) 14px 44px;
+  box-sizing: border-box;
+}
+.u-rail-sections { display: flex; flex-direction: column; gap: 20px; }
+.u-rail-section { display: flex; flex-direction: column; gap: 2px; }
+.u-rail-head { display: flex; align-items: center; gap: 8px; padding-bottom: 3px; }
+.u-rail-head .u-section-label { flex: 1; }
+.u-rail-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 4px 8px; border: 0; border-radius: 6px;
+  background: transparent; cursor: pointer; text-align: left;
+  transition: background var(--t-hover);
+}
+.u-rail-row:hover { background: var(--raised); }
+.u-rail-row-name { font: var(--f-body); color: var(--text); flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.u-rail-empty { font: 400 11.5px/normal var(--font); color: var(--text-faint); padding: 0 8px; }
+
+/* ── The wall's floating bottom chrome ───────────────────────────────────── */
+.u-wall-bottom {
+  position: absolute; inset: auto 0 0 0;
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 0 var(--gutter) 12px;
+  pointer-events: none;
+}
+.u-wall-bottom > * { pointer-events: auto; }
+.u-wall-bottom .u-spacer { flex: 1; min-width: 12px; pointer-events: none; }
+
+/* The voice chip: where your words are going, before you say them. */
+.u-voice-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  font: var(--f-sub); color: var(--text-dim);
+  padding: 7px 12px; border-radius: 9999px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+  transition: background var(--t-hover), color var(--t-hover);
+}
+.u-voice-chip[data-live] {
+  color: var(--c-working);
+  background: color-mix(in srgb, var(--c-working) 14%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--c-working) 30%, transparent);
+}
+.u-bell {
+  width: 30px; height: 30px; flex: none; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 50%;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+  color: var(--text); cursor: pointer;
+}
+.u-bell[data-off] { color: var(--text-faint); }
+
+/* SurfaceSizeControls — a track you drag, not three buttons. THE RESIZE
+   HAPPENS WHEN YOU LET GO, never while you drag. */
+.u-size { display: inline-flex; align-items: center; gap: 8px; }
+.u-size-label {
+  font: 600 10.5px/normal ui-rounded, var(--font);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  width: 34px; text-align: right; flex: none;
+}
+.u-size-track {
+  position: relative; width: 116px; height: 28px; flex: none;
+  display: flex; align-items: center; cursor: pointer;
+}
+.u-size-track-bg {
+  position: absolute; left: 0; right: 0; height: 12px; border-radius: 9999px;
+  background: var(--raised); box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.u-size-fill {
+  position: absolute; left: 0; height: 12px; border-radius: 9999px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.u-size-knob {
+  position: absolute; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--accent); box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+
+/* ── The stage / task surface ────────────────────────────────────────────── */
+.u-stage { display: flex; flex-direction: column; height: 100%; min-height: 0;
+  padding: calc(var(--top-inset) + 4px) var(--gutter) 14px; box-sizing: border-box; }
+.u-stage-head { display: flex; align-items: center; gap: 9px; flex: none; }
+.u-stage-title { font: var(--f-title); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.u-stage-head .u-spacer { flex: 1; min-width: 8px; }
+.u-stage-count { font: var(--f-sub); color: var(--text-dim); white-space: nowrap; }
+.u-key-group { display: flex; gap: 4px; }
+
+/* The transcript. */
+.u-convo { display: flex; flex-direction: column; gap: 26px; padding: 10px 0 2px; }
+/* A BUBBLE HAS TO BE NARROWER THAN THE COLUMN or it stops reading as one.
+   Capped by MEASURE rather than a percentage — the notch is far narrower than
+   the Codex window, where a literal 65% would be cramped. */
+.u-user-row { display: flex; justify-content: flex-end; }
+.u-user-bubble {
+  max-width: 460px;
+  padding: 9px 14px; border-radius: 16px;
+  background: var(--user-bubble);
+  box-shadow: inset 0 0 0 0.5px var(--user-bubble-edge);
+  font: 400 14px/1.5 var(--font); color: var(--text);
+}
+.u-answer { display: flex; flex-direction: column; gap: 10px; }
+.u-answer-text { font: 400 14px/1.55 var(--font); color: var(--text); }
+.u-answer-text p { margin: 0 0 9px; }
+.u-answer-text p:last-child { margin-bottom: 0; }
+.u-answer-text code {
+  font: 400 12.5px/1.4 var(--font-mono);
+  background: rgba(255, 255, 255, 0.08); padding: 1px 5px; border-radius: 4px;
+}
+.u-answer-text strong { font-weight: 600; }
+.u-copy-row { display: flex; gap: 12px; opacity: 0.35; transition: opacity var(--t-hover); }
+.u-answer:hover .u-copy-row { opacity: 1; }
+.u-copy-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font: 400 11.5px/normal var(--font); color: var(--text-faint);
+  border: 0; background: none; padding: 0; cursor: pointer;
+}
+.u-copy-btn[data-copied] { color: var(--c-ready); }
+
+/* "Worked for 2m 46s ›" — everything the agent did, behind one line. */
+.u-work { display: flex; flex-direction: column; gap: 10px; }
+.u-work-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  border: 0; background: none; padding: 0; cursor: pointer; text-align: left;
+}
+.u-work-label { font: var(--f-sub); color: var(--text-dim); flex: 1; }
+.u-work-rule { height: 1px; background: var(--hairline-soft); }
+.u-work-chevron { color: var(--text-faint); display: inline-flex; transition: transform var(--t-hover); }
+.u-work[data-open] .u-work-chevron { transform: rotate(90deg); }
+/* `[hidden]` is a UA display:none, and a class that sets display:flex simply
+   out-specifies it — so every work block rendered with its steps already open. */
+.u-work-steps[hidden] { display: none; }
+.u-work-steps { display: flex; flex-direction: column; gap: 10px; }
+.u-step { display: flex; align-items: center; gap: 7px; }
+.u-step-title { font: var(--f-sub); color: var(--text-dim); flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.u-step[data-failed] .u-step-icon { color: var(--c-error); }
+.u-step-icon { color: var(--text-faint); display: inline-flex; }
+
+/* The composer. Its ONE primary action is the only tinted thing here. */
+.u-composer {
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 7px 11px; border-radius: 14px;
+  background: var(--composer-fill);
+  box-shadow: inset 0 0 0 0.75px var(--composer-edge);
+  flex: none; margin-top: 9px;
+  transition: box-shadow var(--t-hover);
+}
+.u-composer:focus-within {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.u-composer-input {
+  flex: 1; min-height: 30px; resize: none;
+  border: 0; background: none; outline: none; padding: 6px 0;
+  font: 400 13.5px/1.4 var(--font); color: var(--text);
+}
+.u-composer-input::placeholder { color: var(--text-faint); }
+.u-composer-model { font: 400 11.5px/normal var(--font); color: var(--text-faint); white-space: nowrap; }
+.u-send {
+  width: 24px; height: 24px; flex: none; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 50%;
+  background: var(--raised); color: var(--text-faint);
+  cursor: pointer; transition: background var(--t-hover), color var(--t-hover);
+}
+.u-send[data-can-send] { background: var(--accent); color: var(--accent-ink); }
+
+.u-stage-actions { display: flex; align-items: center; gap: 6px; padding-top: 11px; flex: none; }
+.u-stage-foot { display: flex; align-items: center; gap: 10px; padding-top: 10px; flex: none; }
+.u-stage-actions .u-spacer, .u-stage-foot .u-spacer { flex: 1; }
+
+/* ── The pocket card ─────────────────────────────────────────────────────── */
+.u-pocket {
+  position: relative;
+  /* The card FILLS its window. 348 is NotchGeometry.pocketCardWidth — the
+     WINDOW's width — and the plane is inset from it by panelPadding, so a card
+     that also claimed 348 was 12pt wider than the space it had and lost its
+     right edge, controls included. */
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px 9px;           /* padTop / padX / padBottom */
+  display: flex; flex-direction: column; gap: 7px;   /* rowGap */
+  cursor: pointer;
+}
+.u-pocket-head { display: flex; align-items: center; gap: 8px; padding-right: 46px; }
+.u-pocket-title {
+  font: 600 13.5px/normal var(--font); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.u-pocket[data-quiet] .u-pocket-title { color: var(--text-dim); }
+/* DROPPED, NOT FILLED — a fixed row holding an echo of the footer is a third
+   of this card spent saying nothing new. */
+.u-pocket-ask {
+  font: 400 12px/1.35 var(--font);
+  color: rgba(255, 255, 255, 0.72);
+  height: 31px;                     /* askHeight */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.u-pocket-ask[data-toast] { color: var(--c-error); }
+.u-pocket-foot { display: flex; align-items: center; gap: 6px; height: 21px; }
+.u-pocket-foot .u-spacer { flex: 1; }
+.u-pocket-status { font: 500 11.5px/normal var(--font); }
+.u-pocket-controls { position: absolute; top: 9px; right: 9px; display: flex; gap: 6px; }
+.u-pocket-rail { display: flex; gap: 4px; }
+.u-pocket-pip { width: 5px; height: 5px; border-radius: 50%; background: var(--text-faint); }
+.u-pocket-pip[data-on] { background: var(--text); }

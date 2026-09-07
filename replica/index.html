@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="pill.css">
 <link rel="stylesheet" href="notetaker.css">
 <link rel="stylesheet" href="notch.css">
+<link rel="stylesheet" href="expanded.css">
 <style>
   html { background: #1c1d21; }
   body {
@@ -19,7 +20,7 @@
       #1c1d21;
     -webkit-font-smoothing: antialiased;
   }
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
   header.page { padding: 72px 0 40px; }
   h1 { font: 600 34px/1.1 var(--font); margin: 0 0 12px; letter-spacing: -0.02em; }
   .lede { font: 400 15px/1.55 var(--font); color: var(--text-dim); max-width: 62ch; margin: 0; }
@@ -46,6 +47,10 @@
     display: flex; align-items: center; flex-wrap: wrap; gap: 20px;
     min-height: 44px;
   }
+  /* An expanded surface is wider than the two-column specimen grid, so it gets
+     the whole row and its note sits above it. */
+  .specimen[data-wide] { grid-template-columns: 1fr; gap: 14px; }
+  .specimen[data-wide] .stage { overflow-x: auto; padding: 0; }
   /* Every surface in the app sits on a desktop, so give it one to sit on —
      a plain neutral so nothing here is read as brand colour. */
   .stage.on-desk {
@@ -195,6 +200,45 @@
   becomes something the user fights. Hover any of these.
 </p>
 <div id="notch2"></div>
+
+
+<h2>14 · The pocket, open</h2>
+<p class="sec-note">
+  Between the bar and the panel. Not a rung of its own — it borrows the bar's
+  states and changes only what is drawn, which is why it costs nothing: no new
+  window, no floating widget, just the surface that was already on screen. One
+  card, 348 wide, hanging below the housing. The whole card is the button.
+</p>
+<div id="pocket"></div>
+
+<h2>15 · The Orchestrator</h2>
+<p class="sec-note">
+  Clicking a card focuses that task — the voice address — and the Stage takes
+  over. The sidebars are edge-to-edge rather than inset floating panes, and both
+  scrollers carry a hard scroll-edge so content dissolves under the pinned
+  chrome instead of colliding with it. A your-move card carries a whisper of its
+  own status hue mapped into the fill, so the wall sorts itself visually before
+  you read a word. The tabs and the workspace rail are live.
+</p>
+<div id="wall"></div>
+
+<h2>16 · A task, opened</h2>
+<p class="sec-note">
+  Your message is a right-aligned bubble, never full width. The whole tool run
+  collapses to one line — &ldquo;Worked for 24s&rdquo; — with a rule under it;
+  the answer is left-aligned, full width, no label and no avatar. Click a work
+  line to open its steps. The composer's send button is the one tinted thing on
+  the surface.
+</p>
+<div id="stage"></div>
+
+<h2>17 · The attention panel</h2>
+<p class="sec-note">
+  Exactly one task, sized to itself, and it never balloons into the dashboard —
+  that boundary is what keeps this state distinct from the cockpit. It carries
+  the crank: &ldquo;1 of N&rdquo;, Prev, and Next as the one tinted primary.
+</p>
+<div id="task"></div>
 
 </div>
 
