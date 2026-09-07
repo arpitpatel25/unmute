@@ -645,6 +645,9 @@ async function createAgentWorkspace(group: unknown) {
  *  the Agent from resuming a conversation that never went away. */
 function openAgentSessions(limit?: number) {
   if (!manager) return []
+  // Warm and in-front-of-you are different questions with different answers;
+  // only the notch knows the second one.
+  const pocket = notchController?.pocketTaskIds() ?? new Set<string>()
   return manager.list()
     .filter(task => task.state === 'needs-user' || manager!.isLive(task.id))
     .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -656,6 +659,7 @@ function openAgentSessions(limit?: number) {
         sessionId: task.codexRolloutId ?? task.sessionId,
         state: task.state,
         live: manager!.isLive(task.id),
+        inPocket: pocket.has(task.id),
         updatedAt: task.updatedAt,
         ...(task.agent === 'claude' || task.agent === 'codex' ? { provider: task.agent } : {}),
         ...(task.cwd ? { cwd: task.cwd } : {}),

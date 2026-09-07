@@ -50,6 +50,51 @@ test('the verbatim turn index is described, with its limits, and never mandated'
   assert.match(AGENT_PRINCIPLES, /in whatever order the question deserves/)
 })
 
+/**
+ * The rule used to fire on "another approach" and "an experiment", which is
+ * exactly how someone phrases an ordinary change of direction — "let's try it
+ * another way" would have forked. A fork nobody asked for leaves two sessions
+ * with the same project, topic and opening, and that is what makes the right
+ * one unfindable later.
+ */
+test('fork is a second session, not a change of direction', () => {
+  assert.match(AGENT_PRINCIPLES, /FORK IS A SECOND SESSION/)
+  assert.match(AGENT_PRINCIPLES, /carries on as its own thread/)
+  // the direction-shaped phrasings must be named as NOT forks
+  assert.match(AGENT_PRINCIPLES, /try it another way/)
+  assert.match(AGENT_PRINCIPLES, /ordinary continuations of the SAME conversation/)
+  // and the loose triggers must be gone
+  assert.doesNotMatch(AGENT_PRINCIPLES, /asks for another approach/)
+  assert.doesNotMatch(AGENT_PRINCIPLES, /an experiment, or to preserve/)
+})
+
+test('the verb is decided before the session', () => {
+  assert.match(AGENT_PRINCIPLES, /WHAT THEY ARE ASKING FOR DECIDES WHERE IT GOES/)
+  assert.match(AGENT_PRINCIPLES, /Nothing is resumed and nothing is opened/)
+  // the trap: reads retrospective, is actually an instruction to act
+  assert.match(AGENT_PRINCIPLES, /do that same thing again for this one/)
+  assert.match(AGENT_PRINCIPLES, /whether there is a new object in the sentence/)
+})
+
+/**
+ * Surfacing a card is free and undoes itself; putting words into a live session
+ * makes it act, and no card closes hard enough to unedit a file. So the two
+ * halves get opposite dispositions — and neither of them is a question.
+ */
+test('bringing a session up is free, delivering into it is not', () => {
+  assert.match(AGENT_PRINCIPLES, /BRING IT UP FREELY; PUT WORDS IN IT CAREFULLY/)
+  assert.match(AGENT_PRINCIPLES, /you never ask permission/)
+  assert.match(AGENT_PRINCIPLES, /is not a request, it is an address/)
+  assert.match(AGENT_PRINCIPLES, /the card appearing IS how you ask/)
+})
+
+test('the answer belongs to the session, and is never echoed back', () => {
+  assert.match(AGENT_PRINCIPLES, /THE SESSION'S ANSWER IS THE SESSION'S/)
+  assert.match(AGENT_PRINCIPLES, /do not repeat it/)
+  assert.match(AGENT_PRINCIPLES, /two records of one exchange/)
+  assert.match(AGENT_PRINCIPLES, /not the place the conversation happens/)
+})
+
 test('what is open, and the undo, are both named', () => {
   assert.match(AGENT_PRINCIPLES, /mcp__unmute__sessions_open/)
   assert.match(AGENT_PRINCIPLES, /mcp__unmute__session_close/)

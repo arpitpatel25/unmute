@@ -340,7 +340,12 @@ const DEMAND_WINDOW_MS = 2 * 60 * 60 * 1000
 /** The dashboard's Today window. */
 const TODAY_MS = 24 * 60 * 60 * 1000
 
-const POCKET_MAX = 8
+/* The pocket is not capped. It was 8, which silently dropped the ninth thing
+ * you were working on off your own desk — and the cost of that is exactly the
+ * cost this product exists to remove: work you have to remember you had. What
+ * makes a long pocket usable is ORDER, not a ceiling; `byAddressed` puts what
+ * you touched last at the front, and POCKET_IDLE_MS still ages out anything
+ * untouched for half a day. */
 const POCKET_IDLE_MS = 12 * 60 * 60 * 1000
 
 /** How long a SETTLED card stays on the wall before folding into "show all".
@@ -1116,7 +1121,6 @@ export class NotchController {
       .filter((t) => !already.has(t.id) && !t.shelved && this.addressable(t)
         && now - this.engagedAt(t) < POCKET_IDLE_MS)
       .sort(this.byAddressed)
-      .slice(0, POCKET_MAX)
 
     return [...demanding, ...rest]
   }
@@ -1132,6 +1136,14 @@ export class NotchController {
    * Newcomers append and the dead drop, because the pocket must stay truthful;
    * only the ORDER is nailed down, and only until you close it.
    */
+  /** Which task ids are in the pocket right now — the only place that knows.
+   *  Exposed so the Agent can tell the person a session is IN FRONT OF THEM
+   *  rather than merely warm; those are different claims and it kept making
+   *  the wrong one. Read-only: asking never reorders the pocket. */
+  pocketTaskIds(): ReadonlySet<string> {
+    return new Set(this.pocketList().map((t) => t.id))
+  }
+
   private pocketOrder(): string[] {
     const live = this.pocketList()
     const liveIds = live.map((t) => t.id)

@@ -63,7 +63,7 @@ function adapters(overrides: Partial<SessionAdapters> = {}): SessionAdapters & {
     async open(input) {
       asked.push({ operation: 'open', ...input })
       return [{ taskId: 'task-7', sessionId: 'live-1', provider: 'codex' as const, cwd: '/repo',
-        title: 'Pricing migration', workspace: 'Unmute', state: 'processing', live: true, updatedAt: 5 }]
+        title: 'Pricing migration', workspace: 'Unmute', state: 'processing', live: true, inPocket: false, updatedAt: 5 }]
     },
     async close(input) {
       asked.push({ operation: 'close', ...input })
@@ -151,6 +151,9 @@ test('open sessions report liveness so a live card is not resumed', async () => 
   const result = await new SessionsCapability(a).call(ctx, 'sessions_open', { limit: 8 })
   assert.equal(parse(result).result[0].taskId, 'task-7')
   assert.equal(parse(result).result[0].live, true)
+  // live and inPocket are independent facts; reporting one as the other is the
+  // confusion this field was added to end.
+  assert.equal(parse(result).result[0].inPocket, false)
   assert.deepEqual(a.asked[0], { operation: 'open', limit: 8 })
 })
 

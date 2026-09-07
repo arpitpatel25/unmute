@@ -103,11 +103,12 @@ const tools = [
   },
   {
     name: 'sessions_open',
-    description: 'What is open in Unmute right now: every session that already has a card,'
-      + ' whether it is still live, and what it is called. Nothing on disk records this. A'
-      + ' session that is already open does not need resuming — a follow-up can land on it as'
-      + ' it is. The titles and workspaces here are the existing ones; carry them through when'
-      + ' you resume or fork.',
+    description: 'The sessions Unmute is holding right now, with two separate facts about each:'
+      + ' `live` means its process is warm, so a follow-up needs no respawn; `inPocket` means it is'
+      + ' in front of the person at this moment. They are independent — a sleeping session can be in'
+      + ' the pocket and a warm one can have scrolled out of it — so say which you mean rather than'
+      + ' "open". Nothing on disk records either. Titles and workspaces here are the existing ones;'
+      + ' carry them through when you resume or fork.',
     inputSchema: {
       type: 'object', additionalProperties: false,
       properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } },
@@ -139,7 +140,13 @@ export interface OpenSessionEntry {
   title?: string
   workspace?: string
   state: string
+  /** The process is warm — it can take a follow-up with no respawn. */
   live: boolean
+  /** It is in the pocket right now, i.e. in front of them. Independent of
+   *  `live`: a sleeping session can sit in the pocket, and a live one can have
+   *  aged out of it. Saying "still open" when you mean "still warm" is the
+   *  confusion this field exists to end. */
+  inPocket: boolean
   updatedAt: number
 }
 
