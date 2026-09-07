@@ -34,10 +34,20 @@ test('no tool stands between the Agent and the transcripts', () => {
 test('the verbatim turn index is described, with its limits, and never mandated', () => {
   assert.match(AGENT_PRINCIPLES, /session-index/)
   assert.match(AGENT_PRINCIPLES, /turns\.jsonl/)
-  assert.match(AGENT_PRINCIPLES, /USER TURNS ONLY/)
   // Naming what it OMITS is what lets the Agent decide to go past it.
   assert.match(AGENT_PRINCIPLES, /no assistant replies/)
   assert.match(AGENT_PRINCIPLES, /no summary of any kind/)
+  // ...and naming what makes it CHEAP and COMPLETE is what makes reaching for
+  // it first a decision the Agent can make on the facts, rather than an order.
+  // The first live run grepped 29 GB because nothing told it the alternative
+  // was complete; a paragraph that lists only limits argues against itself.
+  assert.match(AGENT_PRINCIPLES, /complete, and current to the second/)
+  assert.match(AGENT_PRINCIPLES, /29 GB/)
+  assert.match(AGENT_PRINCIPLES, /26 MB/)
+  assert.match(AGENT_PRINCIPLES, /the way IN to them/)
+  // Still described, never ordered.
+  assert.doesNotMatch(AGENT_PRINCIPLES, /Start with mcp__unmute__/)
+  assert.match(AGENT_PRINCIPLES, /in whatever order the question deserves/)
 })
 
 test('what is open, and the undo, are both named', () => {
