@@ -159,11 +159,10 @@ test('a turn far past the old 128 KB window is indexed', async () => {
 test('a line longer than one read slice does not stall the file', async () => {
   const w = await workspace()
   const path = join(w.claudeProjects, `${CLAUDE_ID}.jsonl`)
-  // 5 MB on a single line — past SLICE_BYTES (4 MB), so no newline lands in
-  // the first slice at all.
+  // Past SLICE_BYTES (24 MB), so no newline lands in the first slice at all.
   const monster = JSON.stringify({
     type: 'assistant', sessionId: CLAUDE_ID, isSidechain: false,
-    message: { role: 'assistant', content: [{ type: 'text', text: 'z'.repeat(5 * 1024 * 1024) }] },
+    message: { role: 'assistant', content: [{ type: 'text', text: 'z'.repeat(26 * 1024 * 1024) }] },
   }) + '\n'
   await fs.writeFile(path, claudeUser('before the monster') + monster + claudeUser('after the monster'))
 
@@ -178,8 +177,8 @@ test('an over-long line at EOF is still treated as incomplete, not skipped', asy
   const w = await workspace()
   const path = join(w.claudeProjects, `${CLAUDE_ID}.jsonl`)
   const whole = claudeUser('complete')
-  // A 5 MB fragment with no trailing newline: still being written.
-  const fragment = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'q'.repeat(5 * 1024 * 1024) }] } }).slice(0, 5 * 1024 * 1024)
+  // A 26 MB fragment with no trailing newline: still being written.
+  const fragment = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'q'.repeat(26 * 1024 * 1024) }] } }).slice(0, 26 * 1024 * 1024)
   await fs.writeFile(path, whole + fragment)
 
   const index = new SessionTurnIndex({ roots: w.roots, root: w.indexRoot })
@@ -198,6 +197,52 @@ test('appending adds only the new turns, and never re-reads the file', async () 
 
   assert.deepEqual((await turnsOf(w.indexRoot)).map(t => t.text), ['first', 'second'])
   assert.equal((await sessionsOf(w.indexRoot)).find(s => s.id === CLAUDE_ID)!.turns, 2)
+})
+
+/**
+ * FIELD FAILURE, second live run (2026-09-07). A 2 MB line cap dropped a real
+ * 6,474-character message whose JSON line was 6.98 MB, because Claude embeds
+ * pasted images as base64 INSIDE the user turn (52 image blocks in that one
+ * session). The turn vanished from the index entirely — silently, again.
+ *
+ * What someone said must survive whatever they attached to it.
+ */
+test('a user turn survives a multi-megabyte image blob on its line', async () => {
+  const w = await workspace()
+  const said = 'here is the screenshot, fix the thing in the corner'
+  const fat = JSON.stringify({
+    type: 'user', sessionId: CLAUDE_ID, isSidechain: false,
+    timestamp: '2026-09-06T10:00:00.000Z',
+    message: { role: 'user', content: [
+      { type: 'text', text: said },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(6 * 1024 * 1024) } },
+    ] },
+  }) + '\n'
+  const path = join(w.claudeProjects, `${CLAUDE_ID}.jsonl`)
+  await fs.writeFile(path, claudeUser('before') + fat + claudeUser('after'))
+  assert.ok((await fs.stat(path)).size > 6 * 1024 * 1024)
+
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+
+  const texts = (await turnsOf(w.indexRoot)).map(t => t.text)
+  assert.deepEqual(texts, ['before', said, 'after'],
+    'a real message was dropped because an image shared its line')
+})
+
+/** The blob the size cap used to be aimed at: excluded by the marker instead,
+ *  so it is never parsed, and the turns around it still index. */
+test("a Codex base-instructions blob is skipped without touching its file's turns", async () => {
+  const w = await workspace()
+  const blob = JSON.stringify({
+    type: 'session_meta', timestamp: '2026-09-05T21:28:44.667Z',
+    payload: { id: CODEX_ID, cwd: '/repo', source: 'vscode', instructions: 'You are Codex. '.repeat(400_000) },
+  }) + '\n'
+  const path = join(w.codexSessions, `rollout-2026-09-06T02-58-44-${CODEX_ID}.jsonl`)
+  await fs.writeFile(path, blob + codexUser('build the astra branch'))
+  assert.ok((await fs.stat(path)).size > 5 * 1024 * 1024)
+
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+  assert.deepEqual((await turnsOf(w.indexRoot)).map(t => t.text), ['build the astra branch'])
 })
 
 test('a half-written trailing line is left alone until it is complete', async () => {

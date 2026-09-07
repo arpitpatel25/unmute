@@ -64,8 +64,16 @@ export interface IndexedSession {
 
 /** One turn is generous; beyond this the transcript is the record. */
 const MAX_TURN_TEXT = 8 * 1024
-/** Read the delta in slices so one huge catch-up cannot hold the loop. */
-const SLICE_BYTES = 4 * 1024 * 1024
+/**
+ * Read the delta in slices so one huge catch-up cannot hold the loop.
+ *
+ * This also sets the largest line that can be seen whole, and therefore the
+ * largest line that can be indexed — Claude puts pasted images in the user
+ * turn as base64, so real turns arrive on multi-megabyte lines and 4 MB was
+ * not enough. A slice is allocated as min(SLICE_BYTES, remaining), so small
+ * files still cost little.
+ */
+const SLICE_BYTES = 24 * 1024 * 1024
 /** Ceiling on bytes consumed per pass; whatever is left is picked up next tick. */
 const PASS_BUDGET = 64 * 1024 * 1024
 /** Enough to carry provenance and cwd in both harnesses (see locate.ts). */
@@ -73,18 +81,38 @@ const PREFIX_BYTES = 64 * 1024
 const DEBOUNCE_MS = 250
 /**
  * A byte-level prefilter, applied before any line is decoded or parsed. The
- * corpus this walks is ~29 GB and almost none of it is a user turn: Codex
- * writes its whole base-instructions prompt into the first line (one real file
- * measured 21 MB before its first turn) and both harnesses write far more
- * assistant and tool output than input. `"user` appears in Claude's
- * `"type":"user"` and in Codex's `"user_message"`, so a line without it cannot
- * be a turn. A false positive only costs one parse — correctness still rests
- * entirely on userTurnOf.
+ * corpus is ~29 GB and almost none of it is a user turn, so this keeps
+ * JSON.parse off the vast majority of it. The markers are per harness and
+ * deliberately narrow:
+ *
+ *  - Claude writes compact JSON, and a user line carries `"type":"user"`.
+ *    `"role":"user"` is accepted too so a key-order change cannot silently
+ *    empty the index.
+ *  - Codex user turns carry `"user_message"`. This one matters: Codex puts its
+ *    entire base-instructions prompt in the first line — one real rollout is
+ *    21 MB before its first turn — and that line contains NO occurrence of
+ *    `"user_message` (verified across real rollouts), so the blob is excluded
+ *    without ever being parsed.
+ *
+ * A false positive only costs one parse; correctness rests entirely on
+ * userTurnOf.
  */
-const USER_MARK = Buffer.from('"user')
-/** No genuine turn is this big, and it keeps multi-megabyte prompt blobs out
- *  of JSON.parse. A turn is clipped to 8 KB in the index anyway. */
-const MAX_LINE_BYTES = 2 * 1024 * 1024
+const MARKS: Record<Harness, readonly Buffer[]> = {
+  claude: [Buffer.from('"type":"user"'), Buffer.from('"role":"user"')],
+  codex: [Buffer.from('"user_message')],
+}
+/**
+ * The largest line that can be indexed. Tied to SLICE_BYTES on purpose: a line
+ * that cannot be seen whole in one slice is stepped over, so a separate cap
+ * could only ever disagree with the slicer — and when it did, it dropped a
+ * real 6,474-character message whose line was 6.98 MB because Claude embeds
+ * pasted images as base64 in the user turn (52 of them in that one session).
+ * Losing what someone said because they attached a screenshot to it is the
+ * precise failure this index exists to prevent. The multi-megabyte prompt
+ * blobs a size cap used to be aimed at are excluded by MARKS instead, which is
+ * the accurate instrument.
+ */
+const MAX_LINE_BYTES = SLICE_BYTES
 
 /** Synthetic turns the harness writes into the user role. Not what anyone said. */
 const SYNTHETIC = ['<task-notification', '<system-reminder', '<local-command-', '<command-name>', 'Caveat:']
@@ -310,7 +338,7 @@ export class SessionTurnIndex {
           if (slice[i] !== 0x0a) continue
           if (!overlong) {
             const raw = slice.subarray(lineStart, i)
-            if (raw.length <= MAX_LINE_BYTES && raw.includes(USER_MARK)) {
+            if (raw.length <= MAX_LINE_BYTES && MARKS[harness].some(mark => raw.includes(mark))) {
               const turn = userTurnOf(raw.toString('utf8'), harness, stat.mtimeMs)
               if (turn) lines.push(this.encode(id, turn, offset + lineStart))
             }
