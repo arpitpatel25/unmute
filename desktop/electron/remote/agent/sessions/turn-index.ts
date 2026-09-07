@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { watch, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
@@ -60,6 +61,12 @@ export interface IndexedSession {
   firstAt: number
   lastAt: number
   turns: number
+  /** Sessions in ANOTHER harness whose first turn is byte-identical to this
+   *  one's — see LINKED. A link is a fact, not a ranking: neither side is
+   *  declared the original, because copies are not reliably newer. */
+  linkedTo?: string[]
+  /** sha256 of the first user turn, which is what the link is computed from. */
+  openingHash?: string
   /** This session was OPENED by software, not by a person — see BRIEFING. It
    *  stays indexed and searchable; it is simply never what someone means when
    *  they say "the thing I was working on". */
@@ -132,6 +139,31 @@ const SYNTHETIC = [
   '<environment_context>', '<recommended_plugins>', '# AGENTS.md instructions for',
   '[Request interrupted by user', 'This session is being continued from a previous',
 ]
+/**
+ * COPIES ACROSS HARNESSES ARE REAL, AND THERE ARE HUNDREDS.
+ *
+ * 679 Codex sessions on one real machine open with a turn byte-identical to a
+ * Claude session's, arriving in bursts of 30-50 within the same SECOND, every
+ * day or two for weeks. Something enumerates one harness's history and replays
+ * it into the other; nothing in either file records that it happened.
+ *
+ * The damage is to retrieval. Two sessions, same project, same opening, no
+ * relationship recorded — indistinguishable from two separate conversations
+ * about one subject, which is exactly how a reader concludes somebody started
+ * the same thing twice. It is the unasked-for fork again, made by a vendor.
+ *
+ * So the link is recorded and NOTHING is ranked. Not by provider: preferring
+ * the "original" would hand back the abandoned half of a thread that carried
+ * on elsewhere. Not by age either: measured copies PREDATE their counterpart
+ * by up to 232 hours, so oldest-is-original is simply false here. Which side
+ * to offer is a question about where the work went, and that is the reader's
+ * to answer from turns and recency.
+ *
+ * An opening shorter than this is not evidence — "yes" or "continue" collides
+ * by chance across a corpus this size.
+ */
+const LINKABLE_OPENING_CHARS = 40
+
 /**
  * A session whose FIRST turn takes one of these forms was opened by software
  * for software: a job prompt, a worker briefing, a reviewer's instructions.
@@ -222,6 +254,13 @@ export function userTurnOf(line: string, harness: Harness, fallbackTime: number)
   return { t: timeOf(record, fallbackTime), text }
 }
 
+/** The link key: a session's first turn, once it is long enough to be evidence. */
+export function openingHash(text: string): string | undefined {
+  const t = text.trim()
+  if (t.length < LINKABLE_OPENING_CHARS) return undefined
+  return createHash('sha256').update(t).digest('hex')
+}
+
 interface Cursor { offset: number; size: number }
 
 export interface TurnIndexDeps {
@@ -236,6 +275,7 @@ export class SessionTurnIndex {
   private readonly now: () => number
   private readonly cursors = new Map<string, Cursor>()
   private readonly sessions = new Map<string, IndexedSession>()
+  private readonly echoes = new Set<string>()
   private watchers: FSWatcher[] = []
   private timer: NodeJS.Timeout | null = null
   private running = false
@@ -379,9 +419,10 @@ export class SessionTurnIndex {
             const raw = slice.subarray(lineStart, i)
             if (raw.length <= MAX_LINE_BYTES && MARKS[harness].some(mark => raw.includes(mark))) {
               const turn = userTurnOf(raw.toString('utf8'), harness, stat.mtimeMs)
-              if (turn) {
+              if (turn && !this.isEcho(id, turn)) {
                 const session = this.sessions.get(id)
                 if (session && !session.turns && !lines.length && BRIEFING.some(form => form.test(turn.text))) session.briefing = true
+                if (session && !session.openingHash && !session.turns && !lines.length) session.openingHash = openingHash(turn.text)
                 lines.push(this.encode(id, turn, offset + lineStart))
               }
             }
@@ -447,6 +488,30 @@ export class SessionTurnIndex {
     if (added) session.lastAt = mtimeMs
   }
 
+  /**
+   * The SAME utterance arriving twice, not the person repeating themselves.
+   *
+   * Codex records every user message in BOTH of its shapes — `event_msg`
+   * /`user_message` and `response_item`/`message` — at the identical
+   * timestamp. Indexing both (which is what it took to stop losing half of
+   * Codex) therefore doubled every Codex turn: 4,748 of 10,107 rows on one
+   * real machine, 47%. That is not merely waste; it inflates turn counts, and
+   * turn counts are how a reader judges which of two sessions the work is in.
+   *
+   * The timestamp is what makes this safe. Two shapes of one message share a
+   * second exactly; a person typing "yes" twice does not. So identical text
+   * at the identical millisecond is one turn, and the same words a minute
+   * later are two.
+   */
+  private isEcho(id: string, turn: { t: number; text: string }): boolean {
+    const key = `${id}\u0000${turn.t}\u0000${turn.text}`
+    if (this.echoes.has(key)) return true
+    this.echoes.add(key)
+    // Bounded: only a live file's own turns can echo, and they arrive together.
+    if (this.echoes.size > 4_096) this.echoes.delete(this.echoes.values().next().value!)
+    return false
+  }
+
   private dropSession(id: string): void {
     const session = this.sessions.get(id)
     if (session) { session.turns = 0; session.firstAt = 0; session.lastAt = 0 }
@@ -472,7 +537,30 @@ export class SessionTurnIndex {
     } catch { /* no sessions file yet */ }
   }
 
+  /**
+   * Record which sessions opened with the same words in a DIFFERENT harness.
+   *
+   * Recorded on both sides and ranked on neither — see LINKABLE_OPENING_CHARS
+   * for why neither provider nor age can decide which is the original.
+   */
+  private link(): void {
+    const byOpening = new Map<string, IndexedSession[]>()
+    for (const session of this.sessions.values()) {
+      if (!session.openingHash) continue
+      const group = byOpening.get(session.openingHash)
+      if (group) group.push(session); else byOpening.set(session.openingHash, [session])
+    }
+    for (const group of byOpening.values()) {
+      if (group.length < 2 || new Set(group.map(s => s.provider)).size < 2) continue
+      for (const session of group) {
+        const others = group.filter(other => other.id !== session.id).map(other => other.id).sort()
+        if (others.length) session.linkedTo = others
+      }
+    }
+  }
+
   private async flush(): Promise<void> {
+    this.link()
     const sessions = [...this.sessions.values()].map(session => JSON.stringify(session)).join('\n')
     await writeFileAtomic(this.paths.sessions, sessions ? sessions + '\n' : '')
     await writeFileAtomic(this.paths.cursors, JSON.stringify(Object.fromEntries(this.cursors)))

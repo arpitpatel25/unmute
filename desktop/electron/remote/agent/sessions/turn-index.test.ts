@@ -410,3 +410,80 @@ test('the index is a cache: deleting it rebuilds it exactly', async () => {
 
   assert.deepEqual(await turnsOf(w.indexRoot), before)
 })
+
+/**
+ * FIELD FAILURE (2026-09-07). Codex records EVERY user message in both of its
+ * shapes at the identical timestamp. Indexing both — which is what it took to
+ * stop losing half of Codex — doubled every Codex turn: 4,748 of 10,107 rows,
+ * 47%. It inflated turn counts, and turn counts are how a reader judges which
+ * of two sessions the work is in; it is what made one thread read as two.
+ */
+test('the same message in both Codex shapes is one turn, not two', async () => {
+  const w = await workspace()
+  const stamp = '2026-09-06T11:00:00.000Z'
+  const said = 'I have an idea for a job listing site that only lists official company postings'
+  const both =
+    JSON.stringify({ type: 'event_msg', timestamp: stamp, payload: { type: 'user_message', message: said } }) + '\n'
+    + JSON.stringify({ type: 'response_item', timestamp: stamp, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: said }] } }) + '\n'
+  await fs.writeFile(join(w.codexSessions, `rollout-2026-09-06T02-58-44-${CODEX_ID}.jsonl`), codexMeta() + both)
+
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+  assert.deepEqual((await turnsOf(w.indexRoot)).map(t => t.text), [said])
+})
+
+/** The timestamp is what makes dedupe safe: saying the same short thing twice
+ *  a moment apart is genuinely two turns, and must survive. */
+test('the same words said again later are two turns', async () => {
+  const w = await workspace()
+  const twice =
+    JSON.stringify({ type: 'event_msg', timestamp: '2026-09-06T11:00:00.000Z', payload: { type: 'user_message', message: 'yes' } }) + '\n'
+    + JSON.stringify({ type: 'event_msg', timestamp: '2026-09-06T11:04:00.000Z', payload: { type: 'user_message', message: 'yes' } }) + '\n'
+  await fs.writeFile(join(w.codexSessions, `rollout-2026-09-06T02-58-44-${CODEX_ID}.jsonl`), codexMeta() + twice)
+
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+  assert.equal((await turnsOf(w.indexRoot)).length, 2)
+})
+
+/**
+ * 679 Codex sessions open with a turn byte-identical to a Claude session's,
+ * arriving in bursts of 30-50 in the same second. Unlinked, they read as two
+ * separate conversations about one subject — which is exactly how a reader
+ * concludes somebody started the same thing twice.
+ */
+test('a conversation copied into another harness is linked, and neither side ranked', async () => {
+  const w = await workspace()
+  const opening = 'I have an idea for a job listing site that only includes jobs posted on official company websites'
+  await fs.writeFile(join(w.claudeProjects, `${CLAUDE_ID}.jsonl`), claudeUser(opening))
+  await fs.writeFile(join(w.codexSessions, `rollout-2026-09-06T02-58-44-${CODEX_ID}.jsonl`), codexMeta() + codexUser(opening))
+
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+  const sessions = await sessionsOf(w.indexRoot)
+  const claude = sessions.find(s => s.id === CLAUDE_ID)!
+  const codex = sessions.find(s => s.id === CODEX_ID)!
+  // Recorded on BOTH sides: neither is declared the original, because copies
+  // are not reliably newer — measured ones predate their counterpart by 232h.
+  assert.deepEqual(claude.linkedTo, [CODEX_ID])
+  assert.deepEqual(codex.linkedTo, [CLAUDE_ID])
+})
+
+test('a short opening is not evidence of a copy', async () => {
+  const w = await workspace()
+  await fs.writeFile(join(w.claudeProjects, `${CLAUDE_ID}.jsonl`), claudeUser('carry on'))
+  await fs.writeFile(join(w.codexSessions, `rollout-2026-09-06T02-58-44-${CODEX_ID}.jsonl`), codexMeta() + codexUser('carry on'))
+
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+  for (const s of await sessionsOf(w.indexRoot)) assert.equal(s.linkedTo, undefined, s.id)
+})
+
+test('two sessions in the SAME harness with one opening are not a cross-harness copy', async () => {
+  const w = await workspace()
+  const opening = 'I have an idea for a job listing site that only includes jobs posted on official company websites'
+  const other = 'bbbbbbbb-2222-4333-8444-555555555555'
+  await fs.writeFile(join(w.claudeProjects, `${CLAUDE_ID}.jsonl`), claudeUser(opening))
+  await fs.writeFile(join(w.claudeProjects, `${other}.jsonl`),
+    JSON.stringify({ type: 'user', sessionId: other, isSidechain: false, timestamp: '2026-09-06T10:00:00.000Z',
+      message: { role: 'user', content: [{ type: 'text', text: opening }] } }) + '\n')
+
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+  for (const s of await sessionsOf(w.indexRoot)) assert.equal(s.linkedTo, undefined, s.id)
+})

@@ -110,13 +110,20 @@ struct TaskSurfaceView: View {
             // way to learn its backend, and then the expansion did not say
             // either — it was inferred from whether a terminal happened to be
             // offered.
+            // THE MARK, HERE TOO. The bar, the pocket rows and the wall all
+            // show the real `un`; this surface — the one you land on when you
+            // open a card — showed a generic `sparkles` for the Agent itself
+            // and a text badge for cards it opened. Same product, unrecognisable
+            // in the one place you actually read it.
             if t.id == "unmute-agent", t.backend == nil {
-                Image(systemName: "sparkles").foregroundColor(Theme.textDim)
+                UnMark(height: 13)
             } else {
                 ProviderMark(backend: t.backend, terminal: t.hasTerminal)
             }
-            if let origin = t.agentOriginPresentation {
-                Badge(text: origin.label, color: Theme.cReady)
+            // A card the Agent opened keeps its backend mark — that says what
+            // RUNS it — and gains the mark for who opened it.
+            if t.agentOriginPresentation != nil {
+                UnMark(height: 11)
             }
             // WHERE YOUR VOICE IS GOING, while it is going there.
             //
