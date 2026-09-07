@@ -365,6 +365,12 @@ test('the first act of a turn is a read, and all three are read together', () =>
   // "this is just something to save" skips the search.
   assert.match(AGENT_PRINCIPLES, /BEFORE you have decided what kind of request this is/)
   assert.match(AGENT_PRINCIPLES, /You have not looked until a search has returned/)
+  // The exception, stated rather than left to be invented: a read made
+  // earlier in the SAME conversation counts, and a recollection does not.
+  assert.match(AGENT_PRINCIPLES, /a read YOU MADE IN THIS CONVERSATION/)
+  assert.match(AGENT_PRINCIPLES, /Your own recollection is not a read/)
+  // And it expires, or turn 18 quietly trusts turn 1 again.
+  assert.match(AGENT_PRINCIPLES, /a memory of a read, which is a prior again/)
 })
 
 test('answering is an outcome, so the Agent is not reduced to a router', () => {

@@ -37,8 +37,22 @@ const MAX_SEARCH_LIMIT = 100
 const UNASSIGNED_MEMORY_ID = 'unassigned'
 const SEARCH_QUERY_KEYS = new Set(['text', 'kinds', 'tags', 'scope', 'limit'])
 const GET_OPTION_KEYS = new Set(['includeContent', 'includeAttachments', 'includeDeleted'])
+/**
+ * EVERY FIELD A RECORD HAS, BECAUSE THIS SET IS A GATE AND NOT A DESCRIPTION.
+ *
+ * `summary` and `links` were missing while the capability schema advertised
+ * both and record-store applied both — so a gate in the middle refused what
+ * either end was happy with, and mcp__unmute__memory_update could NEVER change
+ * a summary, at any length. On 2026-09-07 the Agent spent eleven failed calls
+ * shortening one from 661 characters to 94 chasing an error that had nothing
+ * to do with length, because the refusal said only "Memory update input is
+ * invalid".
+ *
+ * Keep it in step with MemoryRecordPatch: a key that record-store applies and
+ * this set omits is silently unwritable.
+ */
 const UPDATE_PATCH_KEYS = new Set([
-  'kind', 'title', 'content', 'tags', 'scope', 'references', 'provenance',
+  'kind', 'title', 'summary', 'content', 'links', 'tags', 'scope', 'references', 'provenance',
 ])
 
 
@@ -197,11 +211,16 @@ function requireGetOptions(options: MemoryGetOptions): void {
 }
 
 function requireUpdatePatch(patch: MemoryRecordPatch): void {
-  if (
-    !patch || typeof patch !== 'object' || Array.isArray(patch)
-    || Object.keys(patch).length === 0
-    || Object.keys(patch).some((key) => !UPDATE_PATCH_KEYS.has(key))
-  ) throw new MemoryServiceError('invalid-input', 'Memory update input is invalid')
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).length === 0) {
+    throw new MemoryServiceError('invalid-input', 'Memory update input is invalid')
+  }
+  // Name the key. The unnamed version of this refusal cost eleven calls,
+  // because "invalid" with no field reads as "too long" to anyone holding a
+  // long string, and shortening it can never work.
+  const unknown = Object.keys(patch).filter((key) => !UPDATE_PATCH_KEYS.has(key))
+  if (unknown.length) {
+    throw new MemoryServiceError('invalid-input', `Memory update does not accept: ${unknown.sort().join(', ')}`)
+  }
 }
 
 function dependencyCode(error: unknown): unknown {

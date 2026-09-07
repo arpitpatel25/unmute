@@ -470,6 +470,23 @@ test('a reversible write needs a live interaction, not a magic word in the trans
   const updated = await service.update(ctx(), live.id, { title: 'Changed' })
   assert.equal(updated.title, 'Changed')
 
+  // FIELD FAILURE, 2026-09-07. UPDATE_PATCH_KEYS omitted `summary` and `links`
+  // while the capability schema advertised both and record-store applied both,
+  // so a summary could NEVER be updated, at any length. The Agent read the
+  // unnamed refusal as "too long" and burned eleven calls shortening one from
+  // 661 characters to 94. Every field record-store writes must be listed here.
+  const resummarised = await service.update(ctx(), live.id, { summary: 'A shorter description.' })
+  assert.equal(resummarised.summary, 'A shorter description.')
+  const relinked = await service.update(ctx(), live.id, { links: [] })
+  assert.deepEqual(relinked.links, [])
+  // And a key that genuinely is not accepted says WHICH one.
+  await assert.rejects(
+    service.update(ctx(), live.id, { attachments: ['attachment-1'] } as never),
+    (error: unknown) => error instanceof MemoryServiceError
+      && error.code === 'invalid-input'
+      && /does not accept: attachments/.test(error.message),
+  )
+
   // Deleting still takes its flag; putting it back does not.
   await service.forget(ctx('forget'), stored.id)
   assert.equal(records.active.has(stored.id), false)
