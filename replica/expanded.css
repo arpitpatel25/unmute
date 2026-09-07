@@ -29,9 +29,17 @@
 .u-panel-shell {
   background: #000;
   box-shadow: inset 0 0 0 0.5px var(--hairline-soft), 0 24px 60px rgba(0, 0, 0, 0.55);
-  padding: var(--panel-padding);
+  /* HORIZONTALLY BY panelPadding + FILLET, not by panelPadding alone.
+     NotchView.plane insets `.horizontal, Theme.panelPadding + model.bar.fillet`
+     because the fillets are part of the path and eat into the rect — a plane
+     inset by 6 runs straight into the concave flare, and its content is clipped
+     by the shape it is supposed to sit inside. */
+  padding: var(--panel-padding) calc(var(--panel-padding) + var(--panel-fillet));
   box-sizing: border-box;
 }
+/* The open pocket is a BAR-level surface, so it takes the bar's fillet (10 at a
+   34pt bar) rather than the expanded panel's own 14. */
+.u-panel[data-pocket] { --panel-fillet: 10px; }
 /* CONCENTRIC: the plane's radius is the panel's minus the padding, 18 − 6. */
 .u-plane {
   background: var(--plane);
@@ -47,6 +55,12 @@
 .u-panel[data-machine="external"] { --top-inset: 6px; }
 
 /* ── Shared controls ─────────────────────────────────────────────────────── */
+/* These are all `width: 100%` blocks that also carry padding. Under the
+   default content-box the padding is added on top and they overhang the column
+   they were measured for — the rail rows ran 2pt past the plane's edge. */
+.u-card, .u-rail-row, .u-ws-btn, .u-composer, .u-pocket, .u-panel-shell,
+.u-workspace-rail, .u-rail, .u-stage { box-sizing: border-box; }
+
 .u-section-label {
   font: var(--f-micro);
   letter-spacing: 0.75px;
@@ -171,7 +185,13 @@
   box-sizing: border-box;
 }
 .u-ws-list { display: flex; flex-direction: column; gap: 3px; }
-.u-workspace-rail .u-section-label { padding: 0 8px 5px; display: block; }
+.u-workspace-rail /* These are all `width: 100%` blocks that also carry padding. Under the
+   default content-box the padding is added on top and they overhang the column
+   they were measured for — the rail rows ran 2pt past the plane's edge. */
+.u-card, .u-rail-row, .u-ws-btn, .u-composer, .u-pocket, .u-panel-shell,
+.u-workspace-rail, .u-rail, .u-stage { box-sizing: border-box; }
+
+.u-section-label { padding: 0 8px 5px; display: block; }
 .u-ws-btn {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 8px; border: 0; border-radius: var(--control-radius);
@@ -251,7 +271,13 @@
 .u-rail-sections { display: flex; flex-direction: column; gap: 20px; }
 .u-rail-section { display: flex; flex-direction: column; gap: 2px; }
 .u-rail-head { display: flex; align-items: center; gap: 8px; padding-bottom: 3px; }
-.u-rail-head .u-section-label { flex: 1; }
+.u-rail-head /* These are all `width: 100%` blocks that also carry padding. Under the
+   default content-box the padding is added on top and they overhang the column
+   they were measured for — the rail rows ran 2pt past the plane's edge. */
+.u-card, .u-rail-row, .u-ws-btn, .u-composer, .u-pocket, .u-panel-shell,
+.u-workspace-rail, .u-rail, .u-stage { box-sizing: border-box; }
+
+.u-section-label { flex: 1; }
 .u-rail-row {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 4px 8px; border: 0; border-radius: 6px;
@@ -429,7 +455,36 @@
   display: flex; flex-direction: column; gap: 7px;   /* rowGap */
   cursor: pointer;
 }
+/* SHOULDERS, THEN THE BODY. On a notched Mac the row fills the housing's own
+   line — identity left of the camera, controls right of it — and everything you
+   read hangs below. Off-notch the same three slots sit in one unsplit header,
+   which is the whole point: one layout, not two. */
+.u-pocket-shoulders {
+  display: flex; align-items: center;
+  height: var(--top-inset);
+  padding: 0 13px;                  /* BarContent.inset */
+  box-sizing: border-box;
+  flex: none;
+}
+.u-pocket-shoulder-left {
+  flex: 1; display: flex; align-items: center; justify-content: flex-end;
+  gap: 7px;                         /* PocketRowMetrics.cardGap */
+  padding-right: 7px;               /* BarContent.gap */
+}
+.u-pocket-shoulder-mid { flex: none; }
+.u-pocket-shoulder-right {
+  flex: 1; display: flex; align-items: center; justify-content: flex-start;
+  gap: 6px;                         /* PocketRowMetrics.buttonGap */
+  padding-left: 7px;
+}
+.u-pocket-shoulder-right .u-round-btn { width: 17px; height: 17px; }
+
 .u-pocket-head { display: flex; align-items: center; gap: 8px; padding-right: 46px; }
+/* The two controls have moved up to the right shoulder, so the title gets the
+   width back — and the card reclaims the 46pt it was reserving for buttons
+   that are no longer in it. */
+.u-pocket[data-shoulders] .u-pocket-head { padding-right: 0; }
+.u-pocket[data-shoulders] .u-pocket-controls { display: none; }
 .u-pocket-title {
   font: 600 13.5px/normal var(--font); color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

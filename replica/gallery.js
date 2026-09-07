@@ -3,7 +3,7 @@
 import { renderPill, driveWaveforms, OFFLINE } from "./pill.js";
 import { renderNotetaker, driveNotetaker } from "./notetaker.js";
 import { renderNotch } from "./notch.js";
-import { renderWall, renderStage, renderTaskSurface, renderPocket, panel, SurfaceSizeStep } from "./expanded.js";
+import { renderWall, renderStage, renderTaskSurface, renderPocket, pocketShoulders, panel, SurfaceSizeStep } from "./expanded.js";
 
 const CLAUDE_AGENTS = [
   { id: "claude", label: "Claude Code", terminal: true },
@@ -398,7 +398,7 @@ const TASK = {
 
 /* One panel per specimen. The surface is sized as a share of the screen —
    SurfaceSizeStep's range is 0.40…0.95, and 0.80 is where it lands by default. */
-function expandedStage(inner, w, h, machine = "mbp14", clearsHousing = false) {
+function expandedStage(inner, w, h, machine = "mbp14", panelOpts = {}) {
   return `<div class="u-notch-stage" data-machine="${machine}" style="width:${w + 60}px">
     <div class="u-desk" style="min-height:${h + 30}px">
       <div class="u-menubar">
@@ -407,7 +407,7 @@ function expandedStage(inner, w, h, machine = "mbp14", clearsHousing = false) {
       </div>
       <div class="u-cutout"></div>
       <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);z-index:3">
-        ${panel(inner, { width: w, height: h, machine, clearsHousing })}
+        ${panel(inner, { width: w, height: h, machine, ...panelOpts })}
       </div>
     </div></div>`;
 }
@@ -428,7 +428,9 @@ document.getElementById("pocket").innerHTML = [
     { title: "Ship the pricing change", status: "failed", backend: "claude", terminal: true,
       ask: "the session had already closed", toast: true, slots: 1 }],
 ].map(([n, w, p]) => specimen(n, w,
-  expandedStage(renderPocket(p), 348, 34 + 12 + (p.ask ? 106 : 68), "mbp14", true), "", true)).join("");
+  expandedStage(renderPocket(p, true), 348,
+    34 + 6 + (p.ask ? 103 : 65) + 6,
+    "mbp14", { pocket: true, shoulders: pocketShoulders(p, 200) }), "", true)).join("");
 
 document.getElementById("wall").innerHTML = [
   ["Today", "Grouped by workspace, one column at the smaller surface sizes.", { ...WALL }],

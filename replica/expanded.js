@@ -72,19 +72,43 @@ function sizeControls(fill) {
    concave top fillet (14) and its own radius (18), both part of the shape
    rather than an overlay. It hangs from the top edge of the screen.
    ------------------------------------------------------------------------- */
-export function panel(inner, { width, height, machine = "mbp14", clearsHousing = false } = {}) {
-  const path = notchPath(width, height, 14, 18);   // panelFillet, panelRadius
-  // THE POCKET'S PLANE IS HELD CLEAR OF THE CAMERA HOUSING. The grey plane is a
-  // different material from the black around it, so where it passed behind the
-  // housing it simply stopped being displayed — taking chunks of its own
-  // rounded corners with it. The black surface beneath already runs straight
-  // through the hole invisibly, because it is the same colour; what has to stay
-  // clear is anything that ISN'T that black.
-  const pad = clearsHousing ? ` padding-top:calc(var(--top-inset) + var(--panel-padding))` : "";
-  return `<div class="u-panel" data-machine="${machine}" style="width:${width}px;height:${height}px">
-      <div class="u-panel-shell" style="clip-path:path('${path}');width:100%;height:100%;${pad}">
-        <div class="u-plane">${inner}</div>
+export function panel(inner, { width, height, machine = "mbp14", pocket = false, shoulders = "" } = {}) {
+  // A panel with square shoulders reads as a floating window pasted over the
+  // screen instead of something the screen grew — same path, same fillets.
+  const fillet = pocket ? 10 : 14;   // barFillet at a 34pt bar / Theme.panelFillet
+  const path = notchPath(width, height, fillet, pocket ? 10 : 18);
+  // THE SHOULDER ROW IS OUTSIDE THE PLANE, on the housing's own line, so the
+  // plane below it never passes behind the camera. The grey plane is a
+  // different material from the black around it: where it crossed the housing
+  // it simply stopped being displayed, taking its own rounded corners with it.
+  return `<div class="u-panel" data-machine="${machine}" ${pocket ? "data-pocket" : ""}
+      style="width:${width}px;height:${height}px">
+      <div class="u-panel-shell" style="clip-path:path('${path}');width:100%;height:100%;
+        display:flex;flex-direction:column;${shoulders ? "padding-top:0" : ""}">
+        ${shoulders}
+        <div class="u-plane" style="flex:1;min-height:0">${inner}</div>
       </div></div>`;
+}
+
+/** The pocket's shoulder row — identity left of the cutout, controls right of
+ *  it, nothing behind the camera. Zero-width middle off-notch, so the row
+ *  collapses to an ordinary header on a display without one. */
+export function pocketShoulders(p, cutoutWidth) {
+  const quiet = p.demanding === false;
+  const status = quiet ? "done" : (p.status ?? "needs-user");
+  return `<div class="u-pocket-shoulders">
+      <div class="u-pocket-shoulder-left">
+        ${dot(status, 8)}
+        ${p.isAgent
+          ? `<img src="assets/unmark.png" alt="Unmute" style="height:16px;width:25.8px;display:block">`
+          : providerMark(p.backend, p.terminal ?? true, 16)}
+      </div>
+      <div class="u-pocket-shoulder-mid" style="width:${cutoutWidth}px"></div>
+      <div class="u-pocket-shoulder-right">
+        ${roundBtn("square.grid.2x2", 8.5, "Open the dashboard")}
+        ${roundBtn("xmark", 8, "Close — your voice goes back to normal routing")}
+      </div>
+    </div>`;
 }
 
 /* ── The Orchestrator wall ────────────────────────────────────────────────── */
@@ -372,16 +396,19 @@ export function renderStage(m) {
 }
 
 /* ── The pocket card ─────────────────────────────────────────────────────── */
-export function renderPocket(p) {
+export function renderPocket(p, shoulders = false) {
   const quiet = p.demanding === false;
   const status = p.status ?? "needs-user";
-  return `<div class="u-pocket" ${quiet ? "data-quiet" : ""}>
+  // The mark already says "Unmute"; the title would say it again — unless the
+  // mark has moved up to the shoulders, in which case the title is all there is.
+  const showTitle = !p.isAgent || shoulders;
+  return `<div class="u-pocket" ${quiet ? "data-quiet" : ""} ${shoulders ? "data-shoulders" : ""}>
     <div class="u-pocket-head">
-      ${dot(quiet ? "done" : status, 8)}
-      ${p.isAgent
+      ${shoulders ? "" : dot(quiet ? "done" : status, 8)}
+      ${shoulders ? "" : (p.isAgent
         ? `<img src="assets/unmark.png" alt="Unmute" style="height:14px;width:22.6px;display:block">`
-        : providerMark(p.backend, p.terminal ?? true, 14)}
-      ${p.isAgent ? "" : `<span class="u-pocket-title">${esc(p.title ?? "Nothing in your pocket")}</span>`}
+        : providerMark(p.backend, p.terminal ?? true, 14))}
+      ${showTitle ? `<span class="u-pocket-title">${esc(p.title ?? "Nothing in your pocket")}</span>` : ""}
     </div>
     ${p.ask ? `<div class="u-pocket-ask" ${p.toast ? "data-toast" : ""}>${esc(p.ask)}</div>` : ""}
     <div class="u-pocket-foot">
