@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { MemoryCapability, type MemoryCapabilityService } from './memory.ts'
+import { MemoryCapability, MAX_SUMMARY_LENGTH, type MemoryCapabilityService } from './memory.ts'
 import { CapabilityRegistry } from './registry.ts'
 import type { CapabilityCallContext, McpPrincipal, ToolResult } from '../types.ts'
 import { MemoryServiceError } from '../memory/service.ts'
@@ -871,4 +871,38 @@ test('a resolver failure surfaces as an error, not a handle', async () => {
   }))
   const result = await cap.call(keepCtx, 'memory_keep_file', { path: '/nope.mp4' })
   assert.equal(result.isError, true)
+})
+
+
+/**
+ * FIELD FAILURE, 2026-09-07. Three records cost five memory_store calls: a
+ * 711-character summary refused, a 562-character one refused again, and 488
+ * finally accepted — two blind retries and eighteen seconds against a limit of
+ * 500 the error never mentioned. "Memory tool input is invalid" names no field,
+ * no limit and no length, so the only way through it is guessing.
+ */
+test('an over-long summary is refused by name, with the limit and the length', async () => {
+  const service = new FakeMemoryService()
+  const capability = new MemoryCapability(service)
+  const output = await capability.call(context, 'memory_store', {
+    title: 'Remember this', summary: 'x'.repeat(MAX_SUMMARY_LENGTH + 1),
+  })
+  assert.equal(output.isError, true)
+  const payload = parse(output) as { ok: boolean; error: { code: string; message: string } }
+  assert.equal(payload.ok, false)
+  assert.equal(payload.error.code, 'invalid-input')
+  assert.match(payload.error.message, /summary/)
+  assert.match(payload.error.message, new RegExp(String(MAX_SUMMARY_LENGTH)))
+  assert.match(payload.error.message, new RegExp(String(MAX_SUMMARY_LENGTH + 1)))
+  // Refused before the service, exactly as before — only the wording changed.
+  assert.equal(service.calls.length, 0)
+})
+
+test('a summary exactly at the limit is still accepted', async () => {
+  const service = new FakeMemoryService()
+  const capability = new MemoryCapability(service)
+  const output = await capability.call(context, 'memory_store', {
+    title: 'Remember this', summary: 'x'.repeat(MAX_SUMMARY_LENGTH),
+  })
+  assert.equal((parse(output) as { ok: boolean }).ok, true)
 })

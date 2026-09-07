@@ -382,12 +382,26 @@ class MemoryCapabilityError extends Error {
 
   constructor(readonly code: 'access-denied' | 'invalid-input' | 'duplicate', composed?: string) {
     super(composed ?? (code === 'access-denied' ? 'Memory access is unavailable' : 'Memory tool input is invalid'))
-    if (code === 'duplicate' && composed) this.composedMessage = composed
+    if ((code === 'duplicate' || code === 'invalid-input') && composed) this.composedMessage = composed
   }
 }
 
-function invalid(): never {
-  throw new MemoryCapabilityError('invalid-input')
+/**
+ * Say WHICH field and WHAT the limit is.
+ *
+ * "Memory tool input is invalid" names nothing, so a caller over a cap can only
+ * guess. On 2026-09-07 five memory_store calls were needed for three records:
+ * a 711-character summary was refused, then a 562-character one was refused
+ * again, and 488 finally landed — two blind retries and eighteen seconds
+ * against a limit of 500 that the error never mentioned.
+ *
+ * The detail is composed HERE, from our own schema constants, and never from a
+ * dependency's message — which is the invariant this class exists to hold, and
+ * it is untouched: nothing that could carry a path or a driver detail reaches
+ * the model through it.
+ */
+function invalid(detail?: string): never {
+  throw new MemoryCapabilityError('invalid-input', detail ? `Memory tool input is invalid: ${detail}` : undefined)
 }
 
 function requireAgent(ctx: CapabilityCallContext): void {
@@ -410,12 +424,17 @@ function object(input: unknown, allowed: readonly string[], required: readonly s
  *  summary reads as though the model wrote something it did not. */
 function summary(value: unknown): string {
   const text = string(value)
-  if (text.length > MAX_SUMMARY_LENGTH) invalid()
+  if (text.length > MAX_SUMMARY_LENGTH) {
+    invalid(`summary is ${text.length} characters, and the limit is ${MAX_SUMMARY_LENGTH}`)
+  }
   return text
 }
 
 function content(value: unknown): string {
-  if (typeof value !== 'string' || value.length > MAX_CONTENT_LENGTH) invalid()
+  if (typeof value !== 'string') invalid('content must be a string')
+  if (value.length > MAX_CONTENT_LENGTH) {
+    invalid(`content is ${value.length} characters, and the limit is ${MAX_CONTENT_LENGTH}`)
+  }
   return value
 }
 

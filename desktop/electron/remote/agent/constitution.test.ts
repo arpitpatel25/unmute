@@ -138,9 +138,13 @@ test('there is one retrieval rule and it points at the transcripts', () => {
 test('the ladder is sealed off from the memory-retrieval rule', () => {
   assert.match(AGENT_PRINCIPLES, /NONE OF THIS APPLIES TO YOUR OWN MEMORY/)
   assert.match(AGENT_PRINCIPLES, /empty memory is still an honest answer/)
-  // The rule it must not contradict is still present and unweakened.
-  assert.match(AGENT_PRINCIPLES, /RETRIEVAL MEANS YOUR MEMORY/)
+  // The rule it must not contradict is still present and unweakened. It was
+  // renamed when the word "note" was taken back from memory (2026-09-07): the
+  // guard is the BEHAVIOUR — answer from memory, offer, stop — not the title.
+  assert.match(AGENT_PRINCIPLES, /YOUR MEMORY ANSWERS WHAT YOU WERE TOLD TO KEEP/)
   assert.match(AGENT_PRINCIPLES, /Do not go looking/)
+  // And the carve-out that caused the rename: a thing they MAINTAIN is a place.
+  assert.match(AGENT_PRINCIPLES, /is not your memory\. It is a place in the world/)
 })
 
 test('the record is named by path, so there is one place to look', () => {
@@ -338,4 +342,59 @@ test('a half-delivered resume is described as what it is', () => {
   assert.match(AGENT_PRINCIPLES, /delivered:false/)
   assert.match(AGENT_PRINCIPLES, /sitting in its composer unsent/)
   assert.match(AGENT_PRINCIPLES, /never that it failed and never that it was delivered/)
+})
+
+/**
+ * FIELD FAILURE, 2026-09-07, twice in five minutes. A request to add a line to
+ * a note the person keeps became a memory write on zero searches; a request to
+ * comp an account became a task on a single tool call, while a session naming
+ * the right Supabase project sat one grep away. Both rules that should have
+ * caught it were phrased as things to CONSIDER — "ask whether a session is
+ * already doing this work" — which a model answers from priors and proceeds.
+ */
+test('the first act of a turn is a read, and all three are read together', () => {
+  assert.match(AGENT_PRINCIPLES, /LOOK BEFORE YOU DECIDE ANYTHING/)
+  // Parallel, not sequential: a sequence gives three chances to stop early.
+  assert.match(AGENT_PRINCIPLES, /issued TOGETHER, in one message/)
+  // All three named, and named as non-substitutable.
+  assert.match(AGENT_PRINCIPLES, /mcp__unmute__sessions_open/)
+  assert.match(AGENT_PRINCIPLES, /session-index/)
+  assert.match(AGENT_PRINCIPLES, /mcp__unmute__memory_list/)
+  assert.match(AGENT_PRINCIPLES, /not substitutes/)
+  // Reading BEFORE classifying is the whole point — classifying first is how
+  // "this is just something to save" skips the search.
+  assert.match(AGENT_PRINCIPLES, /BEFORE you have decided what kind of request this is/)
+  assert.match(AGENT_PRINCIPLES, /You have not looked until a search has returned/)
+})
+
+test('answering is an outcome, so the Agent is not reduced to a router', () => {
+  assert.match(AGENT_PRINCIPLES, /THEN DECIDE WHETHER ANYTHING NEEDS TO HAPPEN AT ALL/)
+  assert.match(AGENT_PRINCIPLES, /You are\s+not a router/)
+  // The line is finishable-in-this-turn, NOT read-versus-write: a read-only
+  // sweep of thirty transcripts is still a task.
+  assert.match(AGENT_PRINCIPLES, /not read-versus-write/)
+})
+
+test('several candidates are separated by what they touched, then by what the person did', () => {
+  assert.match(AGENT_PRINCIPLES, /WHEN MORE THAN ONE COULD BE IT/)
+  // Artifacts are read at decision time from the transcript, never kept in a
+  // list — filtering them needs the context an index cannot carry.
+  assert.match(AGENT_PRINCIPLES, /byte offset/)
+  assert.match(AGENT_PRINCIPLES, /not kept in a list somewhere/)
+  // Engagement is the tie-break, and the reason it beats any self-report.
+  assert.match(AGENT_PRINCIPLES, /cannot write about itself/)
+  // A destination is resolved the same way — the note id is never spoken.
+  assert.match(AGENT_PRINCIPLES, /appears nowhere in anything they ever said/)
+})
+
+test('the chosen session is named out loud, with the reason, before the work', () => {
+  assert.match(AGENT_PRINCIPLES, /SAY WHICH ONE, AND WHY, IN THE SAME BREATH/)
+  assert.match(AGENT_PRINCIPLES, /being wrong SILENTLY/)
+  // It announces; it does not ask. Waiting would make every resume a question.
+  assert.match(AGENT_PRINCIPLES, /not a request for permission/)
+})
+
+test('an open card is read alongside the index, and its silence proves nothing', () => {
+  assert.match(AGENT_PRINCIPLES, /ALONGSIDE the index at the start of a turn, never instead of it/)
+  assert.match(AGENT_PRINCIPLES, /says nothing whatever about what is on disk/)
 })
