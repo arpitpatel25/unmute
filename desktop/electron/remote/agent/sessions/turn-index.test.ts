@@ -90,6 +90,66 @@ test('only what the person actually said becomes a turn', () => {
   assert.equal(userTurnOf('{ not json', 'claude', 0), null)
 })
 
+/**
+ * FIELD FAILURE, third live run (2026-09-07). Codex writes a user turn TWO
+ * ways: `event_msg` with payload.type "user_message", and `response_item` with
+ * payload.type "message" and role "user", whose blocks are `input_text` rather
+ * than `text`. Only the first was indexed, so a 580 MB rollout holding 142
+ * real turns reported ZERO — and a coverage audit that recounted with the same
+ * wrong rule happily agreed with it.
+ */
+test('a Codex response_item user message is a turn, input_text blocks and all', () => {
+  const record = JSON.stringify({
+    type: 'response_item', timestamp: '2026-09-06T11:00:00.000Z',
+    payload: { type: 'message', id: 'x', role: 'user', content: [{ type: 'input_text', text: 'go through the repo and tell me your take' }] },
+  })
+  assert.equal(userTurnOf(record, 'codex', 0)?.text, 'go through the repo and tell me your take')
+})
+
+test('the assistant and developer roles are not user turns', () => {
+  for (const role of ['assistant', 'developer']) {
+    const record = JSON.stringify({
+      type: 'response_item',
+      payload: { type: 'message', role, content: [{ type: 'input_text', text: 'not the user' }] },
+    })
+    assert.equal(userTurnOf(record, 'codex', 0), null, role)
+  }
+})
+
+test('environment injections in the user role are not turns', () => {
+  const synthetic = [
+    '<environment_context>\n  <cwd>/Users/x</cwd>\n</environment_context>',
+    '# AGENTS.md instructions for /Users/x',
+    '<recommended_plugins> here is a list',
+    '[Request interrupted by user]',
+    'This session is being continued from a previous conversation',
+  ]
+  for (const text of synthetic) {
+    const record = JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })
+    assert.equal(userTurnOf(record, 'codex', 0), null, text.slice(0, 30))
+  }
+})
+
+test('an attached image is stripped but the words with it are kept', () => {
+  const withImage = JSON.stringify({
+    type: 'response_item',
+    payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<image name=[Image #1] path="/var/folders/x.png">fix the corner of this' }] },
+  })
+  assert.equal(userTurnOf(withImage, 'codex', 0)?.text, 'fix the corner of this')
+  // Several attachments, opening and closing tags, then the words.
+  const multi = JSON.stringify({
+    type: 'response_item',
+    payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '</image>\n<image name=[Image #2] path="/var/x.png">look at these two' }] },
+  })
+  assert.equal(userTurnOf(multi, 'codex', 0)?.text, 'look at these two')
+  // An image on its own carries no words, so it is not a turn.
+  const onlyImage = JSON.stringify({
+    type: 'response_item',
+    payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<image name=[Image #1] path="/var/folders/x.png">' }] },
+  })
+  assert.equal(userTurnOf(onlyImage, 'codex', 0), null)
+})
+
 test('both harnesses index their user turns, with provenance and cwd', async () => {
   const w = await workspace()
   await fs.writeFile(join(w.claudeProjects, `${CLAUDE_ID}.jsonl`),
@@ -274,6 +334,33 @@ test('a file that shrank was rewritten, so it is read again from zero', async ()
   const texts = (await turnsOf(w.indexRoot)).map(t => t.text)
   assert.ok(texts.includes('compacted'), 'the rewritten file was not re-read')
   assert.equal((await sessionsOf(w.indexRoot)).find(s => s.id === CLAUDE_ID)!.turns, 1)
+})
+
+/**
+ * 17% of the first full index was machine-written briefings — 2,703 turns of
+ * one Unmute job prompt alone. They are labelled, not dropped: the same words
+ * could be something a person typed, and the doctrine settled in the
+ * 2026-08-26 spec is that a briefing stays searchable but is never offered as
+ * work the person was doing.
+ */
+test('a session opened by software is labelled a briefing, and still indexed', async () => {
+  const w = await workspace()
+  await fs.writeFile(join(w.claudeProjects, `${CLAUDE_ID}.jsonl`),
+    claudeUser('You are maintaining a factual record of one coding session so its owner can find it again')
+    + claudeUser('and then some more of the job'))
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+
+  const session = (await sessionsOf(w.indexRoot)).find(s => s.id === CLAUDE_ID)!
+  assert.equal(session.briefing, true)
+  assert.equal((await turnsOf(w.indexRoot)).length, 2, 'a briefing must stay searchable, not be dropped')
+})
+
+test('a person opening with ordinary words is not a briefing', async () => {
+  const w = await workspace()
+  await fs.writeFile(join(w.claudeProjects, `${CLAUDE_ID}.jsonl`), claudeUser('you are going to love this bug'))
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+  const session = (await sessionsOf(w.indexRoot)).find(s => s.id === CLAUDE_ID)!
+  assert.equal(session.briefing, undefined)
 })
 
 test('a subagent session is labelled, not dropped', async () => {

@@ -60,6 +60,10 @@ export interface IndexedSession {
   firstAt: number
   lastAt: number
   turns: number
+  /** This session was OPENED by software, not by a person — see BRIEFING. It
+   *  stays indexed and searchable; it is simply never what someone means when
+   *  they say "the thing I was working on". */
+  briefing?: true
 }
 
 /** One turn is generous; beyond this the transcript is the record. */
@@ -99,7 +103,12 @@ const DEBOUNCE_MS = 250
  */
 const MARKS: Record<Harness, readonly Buffer[]> = {
   claude: [Buffer.from('"type":"user"'), Buffer.from('"role":"user"')],
-  codex: [Buffer.from('"user_message')],
+  // Codex writes a user turn TWO ways and both must be caught: `event_msg`
+  // with payload.type "user_message", and `response_item` with payload.type
+  // "message" + role "user". Indexing only the first left a 580 MB session
+  // with 142 real turns showing ZERO. Neither marker appears in a session_meta
+  // blob (verified across real rollouts), so the blob is still never parsed.
+  codex: [Buffer.from('"user_message'), Buffer.from('"role":"user"')],
 }
 /**
  * The largest line that can be indexed. Tied to SLICE_BYTES on purpose: a line
@@ -114,8 +123,34 @@ const MARKS: Record<Harness, readonly Buffer[]> = {
  */
 const MAX_LINE_BYTES = SLICE_BYTES
 
-/** Synthetic turns the harness writes into the user role. Not what anyone said. */
-const SYNTHETIC = ['<task-notification', '<system-reminder', '<local-command-', '<command-name>', 'Caveat:']
+/**
+ * Written into the user role by the harness or the environment, not by a
+ * person. Every one of these was observed in a real transcript.
+ */
+const SYNTHETIC = [
+  '<task-notification', '<system-reminder', '<local-command-', '<command-name>', 'Caveat:',
+  '<environment_context>', '<recommended_plugins>', '# AGENTS.md instructions for',
+  '[Request interrupted by user', 'This session is being continued from a previous',
+]
+/**
+ * A session whose FIRST turn takes one of these forms was opened by software
+ * for software: a job prompt, a worker briefing, a reviewer's instructions.
+ * One Unmute job prompt alone — "You are maintaining a factual record of one
+ * coding session…" — accounted for 2,703 of 16,771 indexed turns, and
+ * briefings together for 17% of the index.
+ *
+ * The FORM is the rule rather than a list of phrasings; that was already
+ * settled in docs/superpowers/specs/2026-08-26, where enumerating them proved
+ * to be whack-a-mole. Nothing is dropped: the same words could be something a
+ * person genuinely typed, and dropping loses content. The SESSION is labelled,
+ * exactly as provenance labels a subagent, and the reader decides.
+ */
+const BRIEFING = [/^You are /, /^\/(?:Users|home|tmp|Volumes)\//]
+
+/** Attachment references Codex wraps around a turn — opening AND closing, and
+ *  several in a row when more than one image was attached. The words after
+ *  them are still the person's, so strip the tags rather than drop the turn. */
+const IMAGE_TAG = /^(?:\s*<\/?image\b[^>]*>\s*)+/
 
 export function defaultIndexRoot(home: string = homedir()): string {
   return join(home, '.unmute', 'remote', 'session-index')
@@ -139,7 +174,10 @@ function textOf(value: unknown): string {
     // is not something the person said.
     return value
       .filter((part): part is { type: string; text: string } =>
-        !!part && typeof part === 'object' && (part as any).type === 'text' && typeof (part as any).text === 'string')
+        !!part && typeof part === 'object'
+        // `input_text` is what Codex calls the same thing.
+        && ((part as any).type === 'text' || (part as any).type === 'input_text')
+        && typeof (part as any).text === 'string')
       .map(part => part.text)
       .join('\n')
   }
@@ -173,11 +211,12 @@ export function userTurnOf(line: string, harness: Harness, fallbackTime: number)
     raw = textOf(record.message?.content ?? record.content)
   } else {
     const payload = record.payload
-    if (payload?.type !== 'user_message') return null
-    raw = textOf(payload.message ?? payload.content)
+    if (payload?.type === 'user_message') raw = textOf(payload.message ?? payload.content)
+    else if (payload?.type === 'message' && payload.role === 'user') raw = textOf(payload.content)
+    else return null
   }
 
-  const text = raw.trim()
+  let text = raw.trim().replace(IMAGE_TAG, '').trim()
   if (!text) return null
   if (SYNTHETIC.some(marker => text.startsWith(marker))) return null
   return { t: timeOf(record, fallbackTime), text }
@@ -340,7 +379,11 @@ export class SessionTurnIndex {
             const raw = slice.subarray(lineStart, i)
             if (raw.length <= MAX_LINE_BYTES && MARKS[harness].some(mark => raw.includes(mark))) {
               const turn = userTurnOf(raw.toString('utf8'), harness, stat.mtimeMs)
-              if (turn) lines.push(this.encode(id, turn, offset + lineStart))
+              if (turn) {
+                const session = this.sessions.get(id)
+                if (session && !session.turns && !lines.length && BRIEFING.some(form => form.test(turn.text))) session.briefing = true
+                lines.push(this.encode(id, turn, offset + lineStart))
+              }
             }
           }
           // Whatever it was, it is finished now.
