@@ -695,6 +695,10 @@ const agentContinuations = new AgentContinuationService({
     setGroup: (id: string, group: string) => manager!.setGroup(id, group),
     // Where a message goes when the session reopened but would not take it yet.
     saveDraft: (id: string, text: string) => { taskDrafts.setText(id, text) },
+    // resume() marks a card resumable; opened() is what respawns its session.
+    opened: (id: string) => manager!.opened(id),
+    isLive: (id: string) => manager!.isLive(id),
+    setShelved: (id: string, shelved: boolean) => manager!.setShelved(id, shelved),
   },
   locate: locateSession,
   workspaces: () => groupRegistry,

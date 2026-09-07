@@ -1851,6 +1851,12 @@ export class NotchController {
    */
   private onPocketFocusTask(id: string): void {
     this.leaveAgent()
+    // HIDING IS NEVER PERMANENT. Shelving takes a card out of the pocket; the
+    // act of bringing it back is what puts it in again, whoever does it — the
+    // person tapping a link, or the Agent reopening the session. Without this
+    // the flag would outlive its reason and a hidden card could only be
+    // recovered from the dashboard.
+    this.deps.setShelved(id, false)
     this.addressed(id)
     const at = this.pocketSlots().findIndex((slot) => slot.kind !== 'agent' && slot.id === id)
     if (at < 0) { this.onFocusTask(id); return }
@@ -1864,6 +1870,7 @@ export class NotchController {
 
   private onFocusTask(id: string): void {
     this.leaveAgent()
+    this.deps.setShelved(id, false)
     this.engaged = 'cockpit'
     this.addressed(id)
     this.setFocus(id)

@@ -140,6 +140,36 @@ struct TaskSurfaceView: View {
             // Spacers with the counter to its right, which floated it into the
             // middle of the header — nowhere near where a close control belongs.
             if model.canGoBack { BackButton { model.onBack() } }
+            // THE CARD'S OWN ACTIONS, on the card.
+            //
+            // This header had none: closing it collapsed the surface and left
+            // no way to put a card down or throw it away without going to the
+            // dashboard — and cards the Agent opened are met HERE, so for those
+            // there was no way at all.
+            //
+            // A menu rather than a button row because this header is narrow and
+            // already carries a title, status, elapsed and a counter; the
+            // dashboard's four visible KeyButtons do not fit beside them.
+            if t.id != "unmute-agent" {
+                Menu {
+                    // HIDE IS NOT DELETE. Shelving takes the card out of the
+                    // pocket and nothing else: the session keeps running, ages
+                    // out on its own schedule, and stays in the dashboard.
+                    // Anything that brings it back — you, or the Agent
+                    // reopening it — clears the flag.
+                    Button((t.shelved ?? false) ? "Show in pocket" : "Hide from pocket") {
+                        model.emit(.shelve(id: t.id, shelved: !(t.shelved ?? false)))
+                    }
+                    Divider()
+                    Button("Remove", role: .destructive) { model.emit(.remove(id: t.id)) }
+                } label: {
+                    Image(systemName: "ellipsis").foregroundColor(Theme.textFaint)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Hide this card from the pocket, or remove it")
+            }
             CloseButton { model.emit(.collapsed) }
         }
     }

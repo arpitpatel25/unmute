@@ -16,6 +16,11 @@ interface ContinuationManager {
   deliverDraft(taskId: string, text: string, attachments: readonly string[]): Promise<boolean>
   /** Park text in a card's composer when it could not be sent into the session. */
   saveDraft?(taskId: string, text: string): void
+  /** Respawn a cold card's session. `resume()` marks it resumable; THIS wakes it. */
+  opened?(taskId: string): void
+  isLive?(taskId: string): boolean
+  /** Bringing a session back is what un-hides it; see the notch's counterpart. */
+  setShelved?(taskId: string, shelved: boolean): void
   attachProviderSession(input: {
     harness: 'claude' | 'codex'; sessionId: string; cwd: string; intent?: string; title?: string; group?: string; groupId?: string
   }): Promise<{ taskId: string; sessionId: string }>
@@ -125,6 +130,16 @@ export class AgentContinuationService {
       // the message, PARK THE TEXT IN THAT CARD'S COMPOSER rather than losing
       // it. The person then finds their words where the conversation is, which
       // is the worst case worth having.
+      // WAKE IT, THEN WAIT FOR IT.
+      //
+      // `resume()` returns true having spawned NOTHING: a cold Claude card is
+      // respawned lazily by `opened()`, which until now only the UI called. So
+      // an Agent-driven resume woke nothing, and the first version of this fix
+      // politely retried for 6.6s against a session that only came alive 16s
+      // later when the person opened the card by hand.
+      manager.setShelved?.(plan.taskId, false)
+      manager.opened?.(plan.taskId)
+      if (plan.followUp) await this.waitUntilLive(plan.taskId)
       const delivered = plan.followUp ? await this.deliverWhenReady(plan.taskId, plan.followUp) : true
       return {
         taskId: plan.taskId, operation: 'resume',
@@ -142,6 +157,33 @@ export class AgentContinuationService {
   }
 
   /**
+   * Wait for a woken session to actually be alive.
+   *
+   * BOUNDED BY THE RPC, not by taste. The runtime's host call times out at
+   * 30s (runtime/rpc.ts) and a timeout there reports "outcome is unknown",
+   * which is a worse answer than parking the text. So this waits up to 20s
+   * and leaves the rest of the budget to delivery — raise one and you must
+   * lower the other.
+   *
+   * Returns whether it came up; delivery is attempted either way, since a
+   * session can be live without this having observed it.
+   */
+  private async waitUntilLive(taskId: string): Promise<boolean> {
+    const isLive = this.manager().isLive
+    if (!isLive) return true
+    const deadline = Date.now() + 20_000
+    for (let attempt = 0; Date.now() < deadline; attempt++) {
+      if (isLive.call(this.manager(), taskId)) {
+        diagnostic('continuation-session-live', { taskId, waitedMs: 20_000 - (deadline - Date.now()), attempt })
+        return true
+      }
+      await new Promise<void>(resolve => setTimeout(resolve, 400))
+    }
+    diagnostic('continuation-session-never-woke', { taskId, waitedMs: 20_000 })
+    return false
+  }
+
+  /**
    * Deliver into a session that may still be waking.
    *
    * Bounded on purpose: a session that cannot take a message after this long
@@ -150,7 +192,7 @@ export class AgentContinuationService {
    * case is a PTY appearing, not a stuck runtime.
    */
   private async deliverWhenReady(taskId: string, text: string): Promise<boolean> {
-    const backoffMs = [0, 150, 400, 900, 1_800, 3_000]
+    const backoffMs = [0, 250, 750, 1_500, 2_500]
     for (const wait of backoffMs) {
       if (wait) await new Promise<void>(resolve => setTimeout(resolve, wait))
       if (await this.manager().deliverDraft(taskId, text, []).catch(() => false)) {

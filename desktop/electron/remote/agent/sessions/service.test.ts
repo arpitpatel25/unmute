@@ -34,13 +34,18 @@ test('host preserves existing descriptive title and canonical workspace on a for
   assert.deepEqual(calls[0].input, { harness: 'codex', sessionId: 'source-session', cwd: '/project', title: 'Repair billing migration', group: 'Unmute', groupId: 'unmute' })
 })
 
-function fixture(existing = false, deliveries: boolean[] = []) {
+function fixture(existing = false, deliveries: boolean[] = [], startsLive = true) {
   const calls: Array<{ op: string; input?: unknown }> = []
+  let live = startsLive
   const manager = {
     list: () => existing ? [{ id: 'existing-task', sessionId: 'source-session' }] : [],
     async resume(id: string) { calls.push({ op: 'wake', input: id }); return true },
-    async deliverDraft(id: string, text: string) { calls.push({ op: 'deliver', input: { id, text } }); return deliveries.shift() ?? true },
+    async deliverDraft(id: string, text: string) { calls.push({ op: 'deliver', input: { id, text } }); return deliveries.shift() ?? live },
     saveDraft(id: string, text: string) { calls.push({ op: 'saveDraft', input: { id, text } }) },
+    // A cold Claude card wakes on opened(), NOT on resume() — the whole bug.
+    opened(id: string) { calls.push({ op: 'opened', input: id }); live = true },
+    isLive(_id: string) { return live },
+    setShelved(id: string, shelved: boolean) { calls.push({ op: 'setShelved', input: { id, shelved } }) },
     async attachProviderSession(input: unknown) { calls.push({ op: 'attach', input }); return { taskId: 'new-task', sessionId: 'source-session' } },
     async forkProviderSession(input: unknown) { calls.push({ op: 'fork', input }); return { taskId: 'child-task', sessionId: 'child-session' } },
   }
@@ -67,6 +72,10 @@ test('resume wakes an existing card and delivers only the current request', asyn
   })
   assert.deepEqual(calls, [
     { op: 'wake', input: 'existing-task' },
+    // Bringing it back is what un-hides it — a card shelved earlier must not
+    // stay out of the pocket once the Agent has reopened it.
+    { op: 'setShelved', input: { id: 'existing-task', shelved: false } },
+    { op: 'opened', input: 'existing-task' },
     { op: 'deliver', input: { id: 'existing-task', text: 'continue the migration' } },
   ])
 })
@@ -164,4 +173,28 @@ test('a reopen with no intent reports no delivery either way', async () => {
   const result = await service.resume({ sessionId: 'source-session', title: 'Billing migration', group: 'Unmute' })
   assert.equal(result.delivered, undefined, 'nothing was asked for, so there is nothing to report')
   assert.equal(calls.filter(c => c.op === 'deliver').length, 0)
+})
+
+/**
+ * FIELD FAILURE, second round. `resume()` returned true having spawned
+ * NOTHING: a cold Claude card is respawned lazily by `opened()`, which until
+ * now only the UI called. The first fix retried politely for 6.6s against a
+ * session that came alive 16 seconds later — when the person opened the card
+ * by hand. No backoff would have helped; nothing was waking it.
+ */
+test('a cold card is woken, not merely resumed', async () => {
+  const { service, calls } = fixture(true, [], false)
+  const result = await service.resume({ sessionId: 'source-session', intent: 'carry on', title: 'Billing migration', group: 'Unmute' })
+  const order = calls.map(c => c.op)
+  assert.ok(order.indexOf('opened') > order.indexOf('wake'), 'opened() comes after resume() and before delivery')
+  assert.ok(order.indexOf('opened') < order.indexOf('deliver'), 'the session is awake before we speak into it')
+  assert.equal(result.delivered, true)
+})
+
+test('reopening a hidden card puts it back in the pocket', async () => {
+  const { service, calls } = fixture(true, [], false)
+  await service.resume({ sessionId: 'source-session', intent: 'carry on', title: 'Billing migration', group: 'Unmute' })
+  // Hiding must never outlive the reason for it: bringing the session back IS
+  // the act that un-hides it.
+  assert.deepEqual(calls.find(c => c.op === 'setShelved')?.input, { id: 'existing-task', shelved: false })
 })
