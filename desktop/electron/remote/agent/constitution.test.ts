@@ -93,6 +93,11 @@ test('the answer belongs to the session, and is never echoed back', () => {
   assert.match(AGENT_PRINCIPLES, /do not repeat it/)
   assert.match(AGENT_PRINCIPLES, /two records of one exchange/)
   assert.match(AGENT_PRINCIPLES, /not the place the conversation happens/)
+  // The handoff is the LINK. The notch classifies unmute://task/<id> as its own
+  // link kind and routes a tap to focusTask — the same event a card click
+  // sends — so the exact scheme here is load-bearing, not cosmetic.
+  assert.match(AGENT_PRINCIPLES, /unmute:\/\/task\/<taskId>/)
+  assert.match(AGENT_PRINCIPLES, /never invent a taskId/)
 })
 
 test('what is open, and the undo, are both named', () => {

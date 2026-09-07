@@ -25,6 +25,10 @@ public enum LinkKind: String, Equatable, Sendable {
     case image
     case mail
     case phone
+    /// A card already in Unmute. Not a place on the internet or the disk — the
+    /// only link here that resolves INSIDE the app, by moving the pocket to a
+    /// session rather than opening anything.
+    case session
 }
 
 /// Extensions we are willing to call an image. Bounded and boring on purpose —
@@ -51,6 +55,7 @@ public func linkKind(
     guard !raw.isEmpty else { return .web }
 
     let lower = raw.lowercased()
+    if sessionTaskID(from: raw) != nil { return .session }
     if lower.hasPrefix("mailto:") { return .mail }
     if lower.hasPrefix("tel:") || lower.hasPrefix("sms:") { return .phone }
 
@@ -67,6 +72,27 @@ public func linkKind(
     }
 
     return .web
+}
+
+/// The task a `unmute://task/<id>` link addresses, or nil for anything else.
+///
+/// The Agent hands back a session by writing one of these instead of repeating
+/// what the session said: the answer belongs in that session, and this is how
+/// somebody gets to it in one tap. Deliberately a URL rather than a bespoke
+/// block — markdown is already what the Agent writes and what this view
+/// renders, so a link costs no new protocol on either side.
+///
+/// Strict about shape. A malformed or foreign `unmute://` URL classifies as an
+/// ordinary web link and opens the way any other would, rather than silently
+/// addressing the wrong card.
+public func sessionTaskID(from raw: String) -> String? {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.lowercased().hasPrefix("unmute://task/") else { return nil }
+    let id = String(trimmed.dropFirst("unmute://task/".count))
+        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        .removingPercentEncoding ?? ""
+    guard !id.isEmpty, !id.contains("/"), id.count <= 128 else { return nil }
+    return id
 }
 
 /// The local filesystem path a destination refers to, or nil if it does not

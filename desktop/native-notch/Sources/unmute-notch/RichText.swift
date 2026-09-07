@@ -75,7 +75,14 @@ struct RichText: View {
         // the artifact channel the Stage's own buttons already go through, so
         // there is one place that decides what opening something means.
         .environment(\.openURL, OpenURLAction { url in
-            if url.isFileURL {
+            // A SESSION LINK GOES INWARD. Everything else here opens where the
+            // user works; this one moves the pocket instead, because the thing
+            // it points at is already in the app. `focusTask` is the same event
+            // a card click sends, so a tapped link and a tapped card address a
+            // session identically — one path, not two.
+            if let taskID = sessionTaskID(from: url.absoluteString) {
+                IPC.emit(.focusTask(id: taskID))
+            } else if url.isFileURL {
                 IPC.emit(.openArtifact(type: "path", value: url.path))
             } else {
                 IPC.emit(.openArtifact(type: "url", value: url.absoluteString))
@@ -385,6 +392,9 @@ struct RichText: View {
         case .image:  return "photo"
         case .mail:   return "envelope"
         case .phone:  return "phone"
+        // Not a destination mark: this one says "the conversation is over
+        // there", so it reads as a card, not as a link out.
+        case .session: return "bubble.left.and.bubble.right"
         }
     }
 
@@ -395,7 +405,7 @@ struct RichText: View {
         case .file, .folder, .image:
             if let p = localPath(from: destination) { return URL(fileURLWithPath: p) }
             return URL(string: destination)
-        case .web, .mail, .phone:
+        case .web, .mail, .phone, .session:
             return URL(string: destination)
         }
     }

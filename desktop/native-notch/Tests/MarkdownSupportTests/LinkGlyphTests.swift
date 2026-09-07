@@ -63,3 +63,38 @@ final class LinkGlyphTests: XCTestCase {
         XCTAssertEqual(linkKind(for: "docs/readme.md", isDirectory: nothingExists), .web)
     }
 }
+
+// MARK: - Session links
+
+/// The Agent hands a session back by writing `unmute://task/<id>` rather than
+/// repeating what the session said. The link has to classify as its own kind so
+/// it gets a card mark instead of a link-out mark, and so the click handler
+/// knows to move the pocket rather than open something.
+final class SessionLinkTests: XCTestCase {
+    func testSessionLinkIsItsOwnKind() {
+        XCTAssertEqual(linkKind(for: "unmute://task/c45d1637-e06d-4097-8967-0df2c56a52cf"), .session)
+        XCTAssertEqual(sessionTaskID(from: "unmute://task/c45d1637-e06d-4097-8967-0df2c56a52cf"),
+                       "c45d1637-e06d-4097-8967-0df2c56a52cf")
+    }
+
+    func testTrailingSlashAndEncodingSurvive() {
+        XCTAssertEqual(sessionTaskID(from: "unmute://task/abc123/"), "abc123")
+        XCTAssertEqual(sessionTaskID(from: "  unmute://task/abc123  "), "abc123")
+    }
+
+    /// A malformed one must fall back to an ordinary web link and open the way
+    /// any other does — never silently address the wrong card.
+    func testMalformedSessionLinksAreNotSessions() {
+        for bad in ["unmute://task/", "unmute://task", "unmute://tasks/abc",
+                    "unmute://task/a/b", "https://example.com/unmute://task/abc"] {
+            XCTAssertNil(sessionTaskID(from: bad), bad)
+            XCTAssertNotEqual(linkKind(for: bad), .session, bad)
+        }
+    }
+
+    func testOrdinaryLinksAreUnaffected() {
+        XCTAssertEqual(linkKind(for: "https://example.com"), .web)
+        XCTAssertEqual(linkKind(for: "mailto:a@b.c"), .mail)
+        XCTAssertEqual(linkKind(for: "/tmp/notes.txt"), .file)
+    }
+}
