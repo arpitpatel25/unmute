@@ -28,6 +28,7 @@ const S = {
   notchModel: { working: 0, attention: 0, hasNotch: true },
   hovering: false,
   expanded: null,           // null | "task" | "cockpit" | "pocket"
+  pocket: null,             // { waiting, at, slots }
   nt: null,                 // null | "idle" | "discard" | "completed"
   held: null,               // which key is down
   busy: false,              // a scripted beat is running
@@ -80,6 +81,10 @@ function mountNotch() {
 }
 
 function drawNotch() {
+  S.notchModel.pocket = S.pocket
+    ? { waiting: S.pocket.slots.filter((x) => x.demanding).length,
+        isOpen: S.expanded === "pocket", slots: S.pocket.slots }
+    : null;
   const n = notchParts(S.notchModel, S.notch, S.hovering, SCREEN);
   notchEl.dataset.state = n.state;
   notchEl.toggleAttribute("data-resting", n.nub);
@@ -126,7 +131,7 @@ let dictation = null;
 function startDictation({ kind, text, onLand }) {
   const script = speak(text);
   const started = performance.now();
-  dictation = { script, started, kind, text, onLand, landed: 0, cancelled: false };
+  dictation = { script, started, kind, text, onLand, landed: 0, auto: false, keyId: S.held };
 
   S.pill = kind === "remote"
     ? { phase: "recording", kind: "remote", agent: "Claude Code", model: "Opus 4.6",
@@ -168,20 +173,41 @@ function tickWave() {
       dictation.landed++;
       if (dictation.kind !== "remote") drawDoc();
     }
+    // The script has run out, and nobody is holding the key.
+    if (dictation.auto && ms > dictation.script.totalMs + 260) { finishDictation(); return; }
     waveRaf = requestAnimationFrame(step);
   };
   waveRaf = requestAnimationFrame(step);
 }
 
-async function endDictation() {
+/** Released. A short press hands over to the script; a long one ends here. */
+function endDictation() {
+  if (!dictation || dictation.auto) return;
+  const heldFor = performance.now() - dictation.started;
+  if (heldFor < TAP_MS) {
+    // A TAP PLAYS THE WHOLE LINE. In the app a tap is genuinely nothing —
+    // too short, no call made — but the point here is to watch it work, so the
+    // sentence finishes on its own and the cap stays lit until it does.
+    dictation.auto = true;
+    S.busy = true;
+    keysEl.querySelector(`[data-key="${dictation.keyId}"]`)?.setAttribute("data-held", "");
+    return;
+  }
+  finishDictation();
+}
+
+const TAP_MS = 380;
+
+async function finishDictation() {
   if (!dictation) return;
   const d = dictation;
   dictation = null;
   cancelAnimationFrame(waveRaf);
+  S.busy = false;
+  keysEl.querySelector(`[data-key="${d.keyId}"]`)?.removeAttribute("data-held");
 
-  // Nothing captured — too short or silent. No API call was made.
-  const heldFor = performance.now() - d.started;
-  if (heldFor < 420) {
+  // Abandoned mid-word without letting it finish: nothing was captured.
+  if (!d.auto && d.landed === 0) {
     S.pill = { phase: "too-short" }; drawPill();
     DOC.live = ""; drawDoc();
     await sleep(1300);
@@ -311,6 +337,19 @@ const ROWS = [
 
 function openPanel(kind) {
   S.expanded = kind;
+  if (kind === "pocket") {
+    const slot = S.pocket.slots[S.pocket.at ?? 0];
+    const p = { ...slot, slots: S.pocket.slots.length, at: S.pocket.at ?? 0 };
+    // Counted the way the view stacks it: shoulder row (the cutout's own
+    // height), plane top pad, the card, plane bottom pad.
+    panelHost.innerHTML = panel(renderPocket(p, true), {
+      width: 348, height: 34 + 6 + (p.ask ? 103 : 65) + 6,
+      pocket: true, shoulders: pocketShoulders(p, SCREEN.cutoutWidth),
+    });
+    panelHost.dataset.open = "true";
+    drawNotch();
+    return;
+  }
   const width = kind === "cockpit" ? 1180 : 900;
   const height = kind === "cockpit" ? 760 : 620;
   const inner = kind === "cockpit"
@@ -341,11 +380,35 @@ function closePanel() {
 
 function onNotchClick() {
   if (S.expanded) return;
-  // A tap on a notch that says "3 in your pocket" and getting the task surface
-  // would answer a different question than the one it just asked.
-  if (S.notch === "attention") { openPanel("task"); narrate("The whole panel is one shape with the mass — same path, same concave shoulders. <b>Answer it.</b>"); }
-  else { openPanel("cockpit"); narrate("Everything at once. Click a card to focus it; drag the size track; <b>Esc</b> to close."); }
+  // A tap on a notch that says "2 waiting on you" and getting the task surface
+  // would answer a different question than the one it just asked. Open is
+  // aimed; the pocket never opens itself.
+  if (S.notch === "attention") {
+    openPanel("task");
+    narrate("The whole panel is one shape with the mass — same path, same concave shoulders. <b>Answer it.</b>");
+  } else if (S.pocket && S.pocket.slots.some((x) => x.demanding)) {
+    openPanel("pocket");
+    narrate("The pocket. Identity on the left of the camera, controls on the right, and what it is asking below — <b>the notch itself, opened</b>. Click a pip to walk the carousel, or the card to expand it.");
+  } else {
+    openPanel("cockpit");
+    narrate("Everything at once. Click a card to focus it; drag the size track; <b>Esc</b> to close.");
+  }
 }
+
+/* What is sitting in the pocket once the first hand-off is settled. Only what
+   is WAITING may speak from the closed surface — `waiting`, never the whole
+   list, or work you had already dealt with announces itself as though new. */
+const POCKET_SLOTS = [
+  { id: "p1", title: "Rewrite the onboarding copy", backend: "claude", terminal: true,
+    status: "needs-user", demanding: true,
+    ask: "The second paragraph repeats the first. Cut it, or rewrite it?" },
+  { id: "p2", title: "Parakeet warm-start", backend: "codex", terminal: true,
+    status: "ready", demanding: true,
+    ask: "First token is down to 210ms. Want the profile?" },
+  { id: "p3", title: "Notch geometry audit", backend: "codex", terminal: true,
+    status: "done", demanding: false,
+    ask: "Every radius now derives from the measured bar." },
+];
 
 const WALL = {
   view: "today", workspace: "All workspaces", columns: 2, surfaceFill: 0.77, doorbell: true,
@@ -473,13 +536,15 @@ document.addEventListener("click", async (e) => {
     narrate("Answered. It carries on — and the surface goes back to saying one quiet thing.");
     await sleep(3200);
     S.notchModel = { working: 0, attention: 0, hasNotch: true };
+    S.pocket = { at: 0, slots: POCKET_SLOTS };
     S.notch = "idle"; drawNotch();
-    narrate("Done. <b>Click the notch</b> for everything at once, or start again with <b>Fn</b>.");
+    narrate("Two more are still holding. The closed surface counts <b>only what is waiting</b> — never everything it holds. <b>Click the notch.</b>");
     return;
   }
   if (e.target.closest('.u-round-btn[aria-label="Close"]')) {
     closePanel(); S.notch = S.notchModel.attention ? "attention" : "idle"; drawNotch(); return;
   }
+  if (e.target.closest("[data-open-pocket]")) { openPanel("pocket"); return; }
   // The notetaker: tapping the recording pill opens the actions in place.
   const nt = e.target.closest(".u-nt");
   const act = e.target.closest("[data-action]");
@@ -495,18 +560,47 @@ document.addEventListener("click", async (e) => {
       S.nt = null; drawNotetaker();
     }
   }
+  // The pocket: the pips walk the carousel, the card expands, ✕ hands your
+  // voice back to normal routing.
+  if (S.expanded === "pocket") {
+    const pip = e.target.closest(".u-pocket-pip");
+    if (pip) {
+      S.pocket.at = [...pip.parentElement.children].indexOf(pip);
+      openPanel("pocket");
+      return;
+    }
+    if (e.target.closest('.u-round-btn[title^="Close"]')) {
+      closePanel(); S.notch = "idle"; drawNotch();
+      narrate("Closed. Your voice goes back to normal routing.");
+      return;
+    }
+    if (e.target.closest('.u-round-btn[title^="Open the dashboard"]')) {
+      closePanel(); openPanel("cockpit");
+      narrate("Everything at once. <b>Esc</b> to close.");
+      return;
+    }
+    if (e.target.closest(".u-pocket")) {
+      closePanel(); openPanel("task");
+      narrate("The pocket hands over to the task. Same surface, more of it.");
+      return;
+    }
+  }
   // A card on the wall focuses that task — the voice address.
   const card = e.target.closest(".u-card");
   if (card && S.expanded === "cockpit") { closePanel(); openPanel("task"); }
 });
 
 /* ── Fit the machine to the viewport ──────────────────────────────────────── */
+/* The machine's true size is a FLOOR, not a ceiling: capping the scale at 1
+   left a large display more than half empty. Scaling a DOM tree up keeps the
+   type sharp — it is re-rasterised, not stretched — so the only limit is how
+   much of the viewport we are willing to fill. */
 function fit() {
   const m = document.querySelector(".machine");
-  const pad = 56;
+  const pad = 30;
   const k = Math.min((innerWidth - pad) / (m.offsetWidth || 1534),
                      (innerHeight - pad) / (m.offsetHeight || 1004));
-  document.querySelector(".machine-fit").style.setProperty("--k", Math.min(k, 1).toFixed(4));
+  document.querySelector(".machine-fit").style.setProperty("--k", Math.min(k, 1.6).toFixed(4));
 }
 addEventListener("resize", fit);
 

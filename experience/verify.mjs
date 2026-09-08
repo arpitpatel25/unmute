@@ -58,20 +58,25 @@ ok(await attr('.u-pill', 'data-phase') === 'output', 'processing did not resolve
 await page.waitForTimeout(1300);
 ok(await page.locator('.u-pill').count() === 0, 'the pill did not go away after success');
 
-// A tap, rather than a hold, is nothing: too short, and no call was made.
+// A TAP PLAYS THE WHOLE LINE. In the app a tap is genuinely nothing; here the
+// point is to watch it work, so it must NOT collapse to "Didn't catch that".
 await page.keyboard.down('f'); await page.waitForTimeout(120); await page.keyboard.up('f');
-await page.waitForTimeout(250);
-ok(await attr('.u-pill', 'data-phase') === 'too-short', 'a 120ms hold should be "Didn\'t catch that"');
-await page.waitForTimeout(1500);
+await page.waitForTimeout(900);
+ok(await attr('.u-pill', 'data-phase') === 'recording',
+   'a tap should play the line, not fall through to "Didn\'t catch that"');
+await page.waitForFunction(() => !document.querySelector('.u-pill'), null, { timeout: 25000 })
+  .catch(() => fails.push('the auto-played line never finished on its own'));
+ok(await page.locator('.doc p').count() >= 2, 'the auto-played line did not land');
+await page.waitForTimeout(400);
 
 // ── The formatter ──────────────────────────────────────────────────────────
-const before = (await text('.doc p'))?.trim();
+const before = (await page.locator('.doc').textContent())?.trim();
 await page.keyboard.down('CapsLock'); await page.waitForTimeout(1200);
 ok(await attr('.u-pill', 'data-phase') === 'recording', 'Caps Lock did not open a capture');
 const tint = await page.evaluate(() => document.querySelector('.u-pill')?.hasAttribute('data-tint'));
 ok(tint === true, 'the formatter lane is not tinted — it must not look like plain dictation');
 await page.keyboard.up('CapsLock'); await page.waitForTimeout(1100);
-const after = (await text('.doc p'))?.trim();
+const after = (await page.locator('.doc').textContent())?.trim();
 ok(before !== after, 'the formatter did not rewrite the text in place');
 await page.waitForTimeout(1200);
 
@@ -100,11 +105,40 @@ await page.locator('[data-answer]').first().click();
 await page.waitForTimeout(500);
 ok(await attr('#panel', 'data-open') === 'false', 'answering did not collapse the surface');
 ok((await text('.u-bar-status'))?.trim() === 'Working', 'after answering it should carry on working');
-await page.waitForTimeout(3400);
-ok(await attr('.u-notch', 'data-state') === 'idle', 'it never went quiet again');
+await page.waitForTimeout(3600);
+
+// ── The pocket ─────────────────────────────────────────────────────────────
+// Ranked above every resting state, because something waiting on you outranks
+// a wordmark — and it counts only what is WAITING, never everything it holds.
+ok((await text('.u-bar-status'))?.includes('waiting on you'),
+   `the closed surface should be counting what is waiting, said "${(await text('.u-bar-status'))?.trim()}"`);
+ok((await text('.u-bar-status'))?.trim().startsWith('2'),
+   'it should count the two demanding slots, not all three');
+
+await page.locator('.u-notch').click({ force: true });
+await page.waitForTimeout(450);
+ok(await page.locator('.u-pocket').count() === 1, 'a waiting notch should open the POCKET, not the task surface');
+ok(await page.locator('.u-pocket-shoulders').count() === 1,
+   'on a notched display the pocket needs its shoulder row — identity left of the camera, controls right');
+ok(await page.locator('.u-pocket-pip').count() === 3, 'the slot rail should show every slot it holds');
+const firstTitle = (await text('.u-pocket-title'))?.trim();
+
+await page.locator('.u-pocket-pip').nth(1).click();
+await page.waitForTimeout(350);
+ok((await text('.u-pocket-title'))?.trim() !== firstTitle, 'the pips do not walk the carousel');
+
+await page.locator('.u-pocket').click({ position: { x: 120, y: 60 } });
+await page.waitForTimeout(400);
+ok(await page.locator('.u-stage').count() === 1, 'the pocket did not hand over to the task');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(350);
 
 // ── The cockpit ────────────────────────────────────────────────────────────
+// Reached from the pocket's own dashboard control, since the bar is now
+// counting rather than resting.
 await page.locator('.u-notch').click({ force: true });
+await page.waitForTimeout(400);
+await page.locator('.u-pocket-shoulders .u-round-btn[title^="Open the dashboard"]').click();
 await page.waitForTimeout(500);
 ok(await page.locator('.u-wall').count() === 1, 'clicking an idle notch should open the Orchestrator');
 ok(await page.locator('.u-card').count() >= 4, 'the wall has no cards');

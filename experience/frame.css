@@ -13,7 +13,7 @@
 html, body { height: 100%; }
 body {
   margin: 0;
-  background: #0a0b0d;
+  background: #e9ecf1;
   font: var(--f-body);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -35,12 +35,12 @@ body {
   border-radius: 18px;
   padding: 11px;
   box-sizing: content-box;
-  background: linear-gradient(168deg, #3a3d42 0%, #202226 42%, #303338 100%);
+  background: linear-gradient(168deg, #d7dade 0%, #aeb2b8 42%, #c6cace 100%);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.09),
-    0 2px 3px rgba(255, 255, 255, 0.14) inset,
-    0 60px 120px -30px rgba(0, 0, 0, 0.9),
-    0 20px 50px -20px rgba(0, 0, 0, 0.7);
+    0 0 0 1px rgba(0, 0, 0, 0.13),
+    0 2px 3px rgba(255, 255, 255, 0.55) inset,
+    0 60px 120px -30px rgba(35, 42, 60, 0.35),
+    0 20px 50px -20px rgba(35, 42, 60, 0.28);
 }
 
 /* The display itself — the only thing the app ever draws on. */
@@ -58,12 +58,11 @@ body {
   border-radius: 8px;
   overflow: hidden;
   background:
-    radial-gradient(1100px 720px at 22% 8%, #46506b 0%, transparent 62%),
-    radial-gradient(900px 700px at 86% 92%, #2a4a56 0%, transparent 58%),
-    linear-gradient(154deg, #2b3350 0%, #1b2233 48%, #223744 100%);
+    radial-gradient(1200px 800px at 18% 4%, #ffffff 0%, transparent 58%),
+    radial-gradient(1000px 760px at 88% 96%, #cfe3ef 0%, transparent 56%),
+    linear-gradient(154deg, #eef1f6 0%, #dfe5ee 46%, #e6eef2 100%);
   isolation: isolate;
 }
-.screen[data-tone="black"] { }
 
 /* The menu bar the mass is level with. */
 .menubar {
@@ -71,9 +70,8 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 16px;
   font: 500 13px/1 var(--font);
-  color: rgba(255, 255, 255, 0.88);
+  color: rgba(20, 22, 28, 0.86);
   z-index: 4; pointer-events: none;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 .menubar-left, .menubar-right { display: flex; align-items: center; gap: 18px; }
 .menubar b { font-weight: 700; }
@@ -114,39 +112,39 @@ body {
   position: absolute; left: 50%; top: 92px; transform: translateX(-50%);
   width: 820px; height: 560px;
   border-radius: 12px; overflow: hidden;
-  background: rgba(30, 31, 36, 0.86);
-  backdrop-filter: blur(28px) saturate(1.5);
-  box-shadow: 0 0 0 0.5px rgba(255,255,255,0.16), 0 30px 80px -20px rgba(0,0,0,0.75);
+  background: rgba(253, 253, 254, 0.88);
+  backdrop-filter: blur(28px) saturate(1.6);
+  box-shadow: 0 0 0 0.5px rgba(20, 24, 34, 0.13), 0 30px 80px -22px rgba(28, 36, 56, 0.32);
   z-index: 2;
   display: flex; flex-direction: column;
 }
 .win-bar {
   height: 38px; flex: none;
   display: flex; align-items: center; gap: 8px; padding: 0 13px;
-  background: rgba(255,255,255,0.045);
-  box-shadow: inset 0 -0.5px 0 rgba(255,255,255,0.10);
+  background: rgba(20, 24, 34, 0.035);
+  box-shadow: inset 0 -0.5px 0 rgba(20, 24, 34, 0.10);
 }
 .light { width: 12px; height: 12px; border-radius: 50%; }
 .light.r { background: #ff5f57; } .light.y { background: #febc2e; } .light.g { background: #28c840; }
 .win-title {
   flex: 1; text-align: center; font: 600 13px/1 var(--font);
-  color: rgba(255,255,255,0.62); margin-right: 56px;
+  color: rgba(20, 24, 34, 0.52); margin-right: 56px;
 }
 .doc {
   flex: 1; padding: 30px 38px; overflow-y: auto;
   font: 400 15.5px/1.72 var(--font);
-  color: rgba(255,255,255,0.90);
+  color: rgba(17, 20, 27, 0.88);
 }
-.doc h1 { font: 600 22px/1.3 var(--font); margin: 0 0 14px; color: #fff; }
+.doc h1 { font: 600 22px/1.3 var(--font); margin: 0 0 14px; color: #0d1016; }
 .doc p { margin: 0 0 15px; }
-.doc .placeholder { color: rgba(255,255,255,0.28); }
+.doc .placeholder { color: rgba(17, 20, 27, 0.34); }
 /* The selection the formatter rewrites. */
 .doc mark {
   background: rgba(65, 156, 255, 0.28);
   color: inherit; border-radius: 2px;
   box-shadow: 0 0 0 1px rgba(65,156,255,0.35);
 }
-.doc .landing { color: #fff; }
+.doc .landing { color: #0d1016; }
 .caret {
   display: inline-block; width: 2px; height: 1.05em;
   background: #fff; vertical-align: text-bottom;
@@ -158,7 +156,7 @@ body {
 
 /* ── The key legend ──────────────────────────────────────────────────────── */
 .keys {
-  position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%);
+  position: absolute; left: 50%; bottom: 124px; transform: translateX(-50%);
   display: flex; gap: 9px; z-index: 8;
   transition: opacity 320ms var(--ease-out), transform 320ms var(--ease-out);
 }
@@ -168,44 +166,43 @@ body {
   padding: 9px 13px 8px;
   border: 0; cursor: pointer;
   border-radius: 10px;
-  background: rgba(12, 13, 16, 0.72);
-  backdrop-filter: blur(20px);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.14), 0 6px 20px -6px rgba(0,0,0,0.7);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(20px) saturate(1.5);
+  box-shadow: inset 0 0 0 1px rgba(20, 24, 34, 0.10), 0 6px 18px -8px rgba(28, 36, 56, 0.35);
   transition: background 140ms var(--ease-out), box-shadow 140ms var(--ease-out),
               transform 90ms var(--ease-out);
 }
-.keycap:hover { background: rgba(30, 32, 38, 0.86); }
+.keycap:hover { background: rgba(255, 255, 255, 0.96); }
 .keycap[data-held] {
   transform: translateY(1px);
-  background: rgba(255,255,255,0.92);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.5);
+  background: #14161c;
+  box-shadow: inset 0 0 0 1px rgba(20, 24, 34, 0.5);
 }
-.keycap[data-held] .keycap-key { color: #0f1114; }
-.keycap[data-held] .keycap-what { color: rgba(15,17,20,0.66); }
+.keycap[data-held] .keycap-key { color: #fff; }
+.keycap[data-held] .keycap-what { color: rgba(255, 255, 255, 0.62); }
 .keycap[data-disabled] { opacity: 0.34; pointer-events: none; }
 .keycap-key {
-  font: 600 12.5px/1 var(--font); color: rgba(255,255,255,0.95);
+  font: 600 12.5px/1 var(--font); color: rgba(13, 16, 22, 0.95);
   font-variant-numeric: tabular-nums;
 }
-.keycap-what { font: 500 10.5px/1 var(--font); color: rgba(255,255,255,0.46); }
+.keycap-what { font: 500 10.5px/1 var(--font); color: rgba(13, 16, 22, 0.46); }
 
 /* ── The narrator: one line, under the keys ──────────────────────────────── */
 .narrator {
-  position: absolute; left: 50%; bottom: 168px; transform: translateX(-50%);
+  position: absolute; left: 50%; bottom: 196px; transform: translateX(-50%);
   max-width: 620px; text-align: center;
   font: 400 13.5px/1.55 var(--font);
-  color: rgba(255, 255, 255, 0.62);
+  color: rgba(24, 28, 38, 0.66);
   z-index: 8; pointer-events: none;
-  text-shadow: 0 1px 10px rgba(0,0,0,0.6);
   transition: opacity 260ms var(--ease-out);
 }
-.narrator b { color: rgba(255,255,255,0.94); font-weight: 600; }
+.narrator b { color: rgba(11, 14, 20, 0.96); font-weight: 600; }
 .narrator[data-hidden] { opacity: 0; }
 
 /* ── The one bit of chrome that is not the product ───────────────────────── */
 .hint-fn {
   position: absolute; right: 16px; bottom: 14px;
-  font: 400 11px/1.5 var(--font); color: rgba(255,255,255,0.3);
+  font: 400 11px/1.5 var(--font); color: rgba(24, 28, 38, 0.38);
   z-index: 8; text-align: right; max-width: 260px;
 }
 
