@@ -5632,6 +5632,9 @@ export class TaskManager extends EventEmitter {
       return false
     }
     if (task.claudeSessionSettings) {
+      log.child({ taskId: id }).event('chat-delivery-attempt', {
+        state: task.state, chatUnstarted: task.chatUnstarted ?? false, chars: text.length,
+      })
       const stopVersion = this.chatStopVersion.get(id) ?? 0
       try {
         await this.connectClaude(task, true)
@@ -5680,6 +5683,21 @@ export class TaskManager extends EventEmitter {
         return true
       } catch (error) {
         task.deliveryError = (error as Error).message
+        // SAY IT WHERE IT CAN BE READ AFTERWARDS.
+        //
+        // deliveryError lives on the in-memory task and is never written to
+        // meta.json, so a refusal here left no trace anywhere: the caller's
+        // own catch sees nothing (this returns false rather than throwing),
+        // the reply trace is not reached, and the file on disk is unchanged.
+        // On 2026-09-08 a message failed eight times against this branch and
+        // three separate investigations could not name the reason.
+        log.child({ taskId: id }).warn('chat delivery refused', {
+          reason: (error as Error).message,
+          chars: text.length,
+          attachments: attachments.length,
+          taskState: task.state,
+          chatUnstarted: task.chatUnstarted ?? false,
+        })
         this.emit('updated', task)
         return false
       }
