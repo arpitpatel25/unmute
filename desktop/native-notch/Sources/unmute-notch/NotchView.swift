@@ -171,30 +171,17 @@ struct NotchView: View {
     /// to include it. Fill and rim travel together, and no state can be added
     /// later that quietly gets one without the other.
     private var inked: some View {
-        shape.fill(Color.black)
+        // THE AGENT'S CARD IS TINTED, NOT OUTLINED.
+        //
+        // A gradient RIM was tried first and read as a border drawn around the
+        // window rather than a property of the card — the eye followed the
+        // outline of the app instead of the surface. The identity belongs
+        // inside the shape: same geometry, same hairline as every other card,
+        // a ground that is quietly not black.
+        shape.fill(model.task?.id == "unmute-agent"
+                   ? AnyShapeStyle(Theme.agentSurface)
+                   : AnyShapeStyle(Color.black))
             .overlay(shape.stroke(Theme.hairlineSoft, lineWidth: 0.5))
-            .overlay(agentRim)
-    }
-
-    /// THE AGENT'S EDGE — the one card that routes work rather than doing it.
-    ///
-    /// Every card looked identical, so nothing said this surface is a different
-    /// kind of thing: you address it and it finds, resumes or starts work
-    /// elsewhere. A rim is the cheapest signal that costs nothing in legibility
-    /// — no material change, no ground change, nothing behind the transcript.
-    ///
-    /// The three colours are already the product's: Theme.cReady, which is what
-    /// "Ready" is written in beside this very title; Theme.cInstruction, which
-    /// the theme already reserves for instruction; and the terracotta of the
-    /// `un` mark. Nothing new is introduced, it is only said louder.
-    @ViewBuilder private var agentRim: some View {
-        if model.task?.id == "unmute-agent" {
-            shape.stroke(
-                LinearGradient(
-                    colors: [Theme.cReady, Theme.cInstruction, Theme.agentMarkTint],
-                    startPoint: .topLeading, endPoint: .bottomTrailing),
-                lineWidth: 1.5)
-        }
     }
 
     /// THE RESTING NUB — off-notch idle, pointer elsewhere.

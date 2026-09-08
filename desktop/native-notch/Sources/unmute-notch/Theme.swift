@@ -97,9 +97,25 @@ enum Theme {
     /// The one exception, and it is not an accent: a pinned star is gold because
     /// that is what a star is.
     static let pinGold   = Color(nsColor: .systemYellow)
-    /// The terracotta of the `un` mark, for the Agent card's rim. Taken from
-    /// UnMarkArt so the edge and the badge cannot drift apart.
-    static let agentMarkTint = Color(red: 0.788, green: 0.439, blue: 0.353)
+    /// THE AGENT'S GROUND.
+    ///
+    /// Every card is pure black because the pocket continues the hardware, and
+    /// the Agent's card looked identical to the tasks it routes work to. This
+    /// is the same black carrying the product's three hues at a luminance where
+    /// they read as a tint rather than a colour: the teal of `cReady`, which is
+    /// what "Ready" is written in on this very card; the indigo the theme
+    /// reserves for instruction; and the terracotta of the `un` mark.
+    ///
+    /// Kept this dark deliberately. `Theme.raised` — the card treatment — is
+    /// white at 5.5% and was designed against black; lift this ground much
+    /// further and the cards sitting on it stop reading as raised at all.
+    static let agentSurface = LinearGradient(
+        stops: [
+            .init(color: Color(red: 0.016, green: 0.075, blue: 0.094), location: 0.00),
+            .init(color: Color(red: 0.035, green: 0.039, blue: 0.086), location: 0.52),
+            .init(color: Color(red: 0.075, green: 0.043, blue: 0.035), location: 1.00),
+        ],
+        startPoint: .topLeading, endPoint: .bottomTrailing)
 
     // MARK: - Content layer (opaque; never glass)
 
