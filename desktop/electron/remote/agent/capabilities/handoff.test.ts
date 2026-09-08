@@ -206,3 +206,29 @@ test('a failure to create is reported without leaking why', async () => {
   assert.equal(parse(result).error.code, 'handoff-failed')
   assert.equal(String(result.content[0]!.text).includes('/private'), false)
 })
+
+/**
+ * FIELD FAILURE, 2026-09-08. One task took three task_create calls: an
+ * `artifacts` entry it would not take, then the same input without it and
+ * still refused because `context` requires `sourceSessions` beside it, then
+ * both put right. Every refusal said only "Task input is invalid", so the two
+ * wasted attempts were guesses at a reason that was never given.
+ */
+test('a rejected task says which field, and why', async () => {
+  const base = { title: 'Build and install it', group: 'unmute-cloud', kind: 'oneoff', intent: 'Build it.' }
+  const cases: Array<[Record<string, unknown>, RegExp]> = [
+    [{ ...base, context: 'Earlier work established the build steps.' }, /context requires sourceSessions/],
+    [{ ...base, kind: 'forever' }, /kind must be one of/],
+    [{ ...base, intent: '' }, /intent is required/],
+    [{ ...base, cwd: 'relative/path' }, /cwd must be an absolute path/],
+    [{ ...base, artifacts: [{ kind: 'file', value: '/x', extra: 1 }] }, /artifacts entries take only/],
+    [{ ...base, context: 'x', sourceSessions: [{ sessionId: 'not-a-uuid', provider: 'claude' }] },
+      /sourceSessions entries take only/],
+  ]
+  for (const [input, expected] of cases) {
+    const result = parse(await new HandoffCapability(adapters()).call(ctx, 'task_create', input))
+    assert.equal(result.ok, false, JSON.stringify(input))
+    assert.equal(result.error.code, 'invalid-input')
+    assert.match(result.error.message, expected, JSON.stringify(input))
+  }
+})

@@ -180,9 +180,24 @@ const MESSAGES: Record<HandoffErrorCode, string> = {
   'not-found': 'That task was not found',
 }
 
-function fail(code: HandoffErrorCode): ToolResult {
+/**
+ * Say WHICH field, and what is wrong with it.
+ *
+ * "Task input is invalid" names nothing, so the only move left is guessing. On
+ * 2026-09-08 task_create was submitted three times for one task: once with an
+ * `artifacts` entry it would not take, once without it and still refused
+ * because `context` requires `sourceSessions` alongside it, and finally with
+ * both put right. Two of those attempts existed only because the refusal was
+ * silent about its reason.
+ *
+ * The detail is composed HERE, from this file's own rules, and never from a
+ * dependency's message — nothing carrying a path or a driver detail can reach
+ * the model through it.
+ */
+function fail(code: HandoffErrorCode, detail?: string): ToolResult {
+  const message = detail ? `${MESSAGES[code]}: ${detail}` : MESSAGES[code]
   return {
-    content: [{ type: 'text', text: JSON.stringify({ ok: false, error: { code, message: MESSAGES[code] } }) }],
+    content: [{ type: 'text', text: JSON.stringify({ ok: false, error: { code, message } }) }],
     isError: true,
   }
 }
@@ -213,29 +228,31 @@ export class HandoffCapability implements CapabilityModule {
     try {
       if (tool === 'task_create') {
         let metadata
-        try { metadata = requireAgentMetadata(value) } catch { return fail('invalid-input') }
+        try { metadata = requireAgentMetadata(value) } catch { return fail('invalid-input', 'title and group are both required') }
         const intent = typeof value.intent === 'string' ? value.intent.trim() : ''
-        if (!intent || intent.length > MAX_INTENT_LENGTH) return fail('invalid-input')
+        if (!intent || intent.length > MAX_INTENT_LENGTH) return fail('invalid-input', `intent is required and at most ${MAX_INTENT_LENGTH} characters`)
         const kind = typeof value.kind === 'string' && TASK_KINDS.includes(value.kind as TaskKind)
           ? value.kind as TaskKind
           : null
-        if (!kind) return fail('invalid-input')
+        if (!kind) return fail('invalid-input', `kind must be one of: ${TASK_KINDS.join(', ')}`)
         const requestedProvider = value.provider
         if (
           requestedProvider !== undefined
           && (typeof requestedProvider !== 'string'
             || !PROVIDERS.includes(requestedProvider as ProviderId))
-        ) return fail('invalid-input')
+        ) return fail('invalid-input', `provider must be one of: ${PROVIDERS.join(', ')}`)
         const provider = requestedProvider as ProviderId | undefined ?? ctx.principal.provider
-        if (!provider) return fail('invalid-input')
+        if (!provider) return fail('invalid-input', 'provider could not be resolved; name one explicitly')
         const context = value.context
         if (context !== undefined
           && (typeof context !== 'string' || context.length > MAX_CONTEXT_LENGTH)) {
-          return fail('invalid-input')
+          return fail('invalid-input', `context must be a string of at most ${MAX_CONTEXT_LENGTH} characters`)
         }
         const carried = typeof context === 'string' ? context.trim() : ''
         const sourceSessions = value.sourceSessions
-        if (carried && (!Array.isArray(sourceSessions) || sourceSessions.length === 0)) return fail('invalid-input')
+        if (carried && (!Array.isArray(sourceSessions) || sourceSessions.length === 0)) {
+          return fail('invalid-input', 'context requires sourceSessions naming the conversations it was summarized from')
+        }
         if (sourceSessions !== undefined && (
           !Array.isArray(sourceSessions) || sourceSessions.length > MAX_SOURCES
           || sourceSessions.some(source => {
@@ -245,7 +262,7 @@ export class HandoffCapability implements CapabilityModule {
               || typeof item.sessionId !== 'string' || !SESSION_ID.test(item.sessionId)
               || typeof item.provider !== 'string' || !SOURCE_PROVIDERS.includes(item.provider as any)
           })
-        )) return fail('invalid-input')
+        )) return fail('invalid-input', `sourceSessions entries take only sessionId and provider (one of: ${SOURCE_PROVIDERS.join(', ')}), at most ${MAX_SOURCES}`)
         const artifacts = value.artifacts
         if (artifacts !== undefined && (
           !Array.isArray(artifacts) || artifacts.length > MAX_ARTIFACTS
@@ -257,10 +274,10 @@ export class HandoffCapability implements CapabilityModule {
               || typeof item.value !== 'string' || !item.value.trim() || item.value.length > 4096
               || item.label !== undefined && (typeof item.label !== 'string' || item.label.length > 200)
           })
-        )) return fail('invalid-input')
+        )) return fail('invalid-input', `artifacts entries take only kind (one of: ${ARTIFACT_KINDS.join(', ')}), value and label, at most ${MAX_ARTIFACTS}`)
         const cwd = value.cwd
         if (cwd !== undefined && (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd.length > 4096)) {
-          return fail('invalid-input')
+          return fail('invalid-input', 'cwd must be an absolute path')
         }
         const created = await this.adapters.createTask({
           ...metadata,

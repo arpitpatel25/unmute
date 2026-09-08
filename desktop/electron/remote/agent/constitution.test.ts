@@ -434,3 +434,37 @@ test('a blocked action is explained, offered an alternative, and only then asked
   assert.match(AGENT_PRINCIPLES, /Choosing between candidate sessions is NOT/)
   assert.match(AGENT_PRINCIPLES, /never make a question out of a decision that is yours/)
 })
+
+/**
+ * FIELD FAILURES, 2026-09-08 — four things that went wrong while nothing
+ * "failed": a session was cited without being read, a decision not to resume
+ * was never mentioned, a procedure stopped one step short, and a card closed
+ * describing work it had already done as still to come.
+ */
+test('a session that did the job outranks a doc, and a citation means it was read', () => {
+  assert.match(AGENT_PRINCIPLES, /A SESSION THAT DID THIS JOB OUTRANKS A DOCUMENT ABOUT IT/)
+  assert.match(AGENT_PRINCIPLES, /Never name a session there you did not open/)
+  // The document is not banned — it is the supplement, and attribution is owed.
+  assert.match(AGENT_PRINCIPLES, /say which gave you what/)
+})
+
+test('choosing not to resume is said out loud, not only failing to', () => {
+  assert.match(AGENT_PRINCIPLES, /DECLINING TO DO SOMETHING IS ALSO A THING TO SAY/)
+  assert.match(AGENT_PRINCIPLES, /Explaining yourself is not only for what FAILS/)
+})
+
+test('a procedure runs to its last step, and stopping short is a decline', () => {
+  assert.match(AGENT_PRINCIPLES, /A PROCEDURE IS FINISHED WHEN ITS LAST STEP IS DONE/)
+  assert.match(AGENT_PRINCIPLES, /steps, not decoration/)
+})
+
+test('the closing line describes what happened, not what was in flight', () => {
+  assert.match(AGENT_PRINCIPLES, /WHAT YOU SAY YOU DID IS WHAT YOU DID/)
+  assert.match(AGENT_PRINCIPLES, /in the past tense/)
+})
+
+test('an unexplained refusal is met by changing shape, then by saying so', () => {
+  assert.match(AGENT_PRINCIPLES, /A REFUSAL YOU DO NOT UNDERSTAND IS NOT ANSWERED BY GUESSING/)
+  assert.match(AGENT_PRINCIPLES, /a SHAPE, not a size/)
+  assert.match(AGENT_PRINCIPLES, /if two attempts do not land, stop/)
+})
