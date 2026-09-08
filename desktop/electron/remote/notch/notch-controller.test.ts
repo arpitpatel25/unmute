@@ -2755,3 +2755,24 @@ test('a momentary processing blip does not reset the demand clock', () => {
   // demand that had already lapsed, nor create one that never existed.
   assert.deepEqual(after, before)
 })
+
+/**
+ * FIELD FAILURE, 2026-09-08. Auto-expand was guarded on `engaged === 'none'`,
+ * which asks "is anyone being shown something", not "is the person busy" — and
+ * dequeue() clears it the instant the attention queue empties. A card that kept
+ * re-entering the queue therefore took the surface every few seconds, which put
+ * a card switch between the person typing and pressing send.
+ */
+test('a card that arrives while you are working does not take the surface', () => {
+  const h = setup()
+  // The person opens the pocket: a deliberate act on the surface.
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketClose' })
+
+  // Something finishes and starts demanding, right now.
+  put(h, makeTask({ id: 'arriver', state: 'needs-user', kind: 'session', name: 'Arriver', alive: true }))
+
+  // It joins the rail, and it waits. It does not yank the surface open.
+  const expanded = h.client.sent.filter((m: { type: string }) => m.type === 'surface')
+  assert.equal(expanded.some((m: { id?: string }) => m.id === 'arriver'), false)
+})

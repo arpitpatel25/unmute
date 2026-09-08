@@ -518,6 +518,8 @@ export class NotchController {
   private demandStamp = new Map<string, number>()
   /** When a task entered `processing`, to tell a real turn from a blip. */
   private processingSince = new Map<string, number>()
+  /** When the person last acted on the surface — see USER_HOLDS_SURFACE_MS. */
+  private userTouchedAt = 0
   /** id → the state we last stamped for, so a change restarts the window. */
   private stateSeen = new Map<string, TaskStatusName>()
   /** Set when leaving collapsed an expanded task; a return inside this window
@@ -621,12 +623,12 @@ export class NotchController {
       this.historyLimit += 10
       this.reconcile()
     })
-    on('focusTask', (e) => this.onFocusTask((e as { id: string }).id))
+    on('focusTask', (e) => { this.touch(); this.onFocusTask((e as { id: string }).id) })
     on('closeStage', () => { this.seenThenClose() })
     on('userLeft', (e) => this.onUserLeft((e as { reason: 'blur' | 'screenshot' | 'space' }).reason))
     on('userReturned', () => this.onUserReturned())
     on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
-    on('pocketOpen', () => { this.pocketAt = 0; this.setPocketMode('open'); this.reconcile() })
+    on('pocketOpen', () => { this.touch(); this.pocketAt = 0; this.setPocketMode('open'); this.reconcile() })
     on('pocketRelease', () => {
       // CLOSING THE POCKET RELEASES ITS ORDER — the next open re-sorts to
       // whatever has actually moved since. Expanding a card out of the pocket
@@ -655,7 +657,7 @@ export class NotchController {
       this.setPocketMode('closed')
       this.reconcile()
     })
-    on('pocketExpand', () => this.onPocketExpand())
+    on('pocketExpand', () => { this.touch(); this.onPocketExpand() })
     on('importSession', (e) => void this.onImportSession((e as { sessionId: string }).sessionId))
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
     on('reloadHistory', (e) => { const id = (e as { id: string }).id; if (this.deps.getTask(id)) void this.deps.loadBlocks?.(id, true).catch(() => {}) })
@@ -677,6 +679,7 @@ export class NotchController {
       this.submitAnswer(id, text, wasBlocking, reference)
     })
     on('setDraftText', (e) => {
+      this.touch()
       const draft = e as { id: string; text: string }
       // THE AGENT'S DRAFT IS THE CONTROLLER'S, not the task runtime's. Handing
       // a draft store keyed by task id something that is not a task is how a
@@ -962,6 +965,9 @@ export class NotchController {
    * agent's closing line ended in a question mark; it is now decided by what
    * the task IS, which is known at creation and never re-guessed.
    */
+  /** Any deliberate act on the surface. See USER_HOLDS_SURFACE_MS. */
+  private touch(): void { this.userTouchedAt = Date.now() }
+
   private demanding(t: TaskLite): boolean {
     if (t.shelved) return false
     if (this.attentionAcknowledged.get(t.id) === t.state) return false
