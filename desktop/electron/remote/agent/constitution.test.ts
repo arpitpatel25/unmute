@@ -408,3 +408,29 @@ test('an open card is read alongside the index, and its silence proves nothing',
   assert.match(AGENT_PRINCIPLES, /ALONGSIDE the index at the start of a turn, never instead of it/)
   assert.match(AGENT_PRINCIPLES, /says nothing whatever about what is on disk/)
 })
+
+/**
+ * FIELD FAILURE, 2026-09-08. The Agent found exactly the right session for
+ * "create a new dev build" — the one that had done every build that day — and
+ * could not resume it, because it is a Claude session live in a terminal and a
+ * session has one writer. What reached the person was the raw provider error,
+ * "Could not resume Claude: Claude session closed", so they asked for a retry
+ * of something that could never work. The retrieval was right; the sentence
+ * was not.
+ */
+test('a session Unmute did not start is readable, not resumable', () => {
+  assert.match(AGENT_PRINCIPLES, /A SESSION UNMUTE DID NOT START IS YOURS TO READ, NOT TO RESUME/)
+  // The check is on cwd, which the index already records, and it happens FIRST.
+  assert.match(AGENT_PRINCIPLES, /look at the cwd\s+BEFORE calling mcp__unmute__session_resume/)
+  // And the reason is a real constraint, not a policy we invented.
+  assert.match(AGENT_PRINCIPLES, /a Claude session has ONE writer/)
+})
+
+test('a blocked action is explained, offered an alternative, and only then asked about', () => {
+  assert.match(AGENT_PRINCIPLES, /WHEN SOMETHING IS BLOCKED, SAY WHAT IS TRUE AND OFFER WHAT YOU CAN DO/)
+  assert.match(AGENT_PRINCIPLES, /never an\s+explanation for them/)
+  // Asking is bounded: only when the alternative differs in kind. Picking
+  // between candidates is announced, not put to a vote.
+  assert.match(AGENT_PRINCIPLES, /Choosing between candidate sessions is NOT/)
+  assert.match(AGENT_PRINCIPLES, /never make a question out of a decision that is yours/)
+})
