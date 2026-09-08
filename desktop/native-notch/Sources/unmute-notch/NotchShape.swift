@@ -345,13 +345,31 @@ struct MarkdownText: View {
     var size: CGFloat = 13
     var color: Color = Theme.textDim
 
+    /// BLOCK MARKERS ARE NOISE IN A TWO-LINE PREVIEW.
+    ///
+    /// The parser below is inlineOnly, which is the right choice here — a
+    /// heading rendered at heading size would wreck a pocket row — but
+    /// "preserving" means the `##` survives as characters, so a card whose
+    /// first line was a heading read `## Yes, they're live` on screen
+    /// (2026-09-08). Inline emphasis still renders; only the leading block
+    /// marker goes, and only when it is followed by a space, so a `#tag` or a
+    /// bare `-` is left alone.
+    private static let blockMarker = try! NSRegularExpression(
+        pattern: "^[ \\t]*(?:#{1,6}|>|[-*+]|\\d{1,3}[.)])[ \\t]+", options: [.anchorsMatchLines])
+
+    private var stripped: String {
+        let full = NSRange(text.startIndex..., in: text)
+        return MarkdownText.blockMarker.stringByReplacingMatches(in: text, range: full, withTemplate: "")
+    }
+
     var body: some View {
+        let source = stripped
         if let attr = try? AttributedString(
-            markdown: text,
+            markdown: source,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
             Text(attr).font(.system(size: size)).foregroundColor(color)
         } else {
-            Text(text).font(.system(size: size)).foregroundColor(color)
+            Text(source).font(.system(size: size)).foregroundColor(color)
         }
     }
 }
