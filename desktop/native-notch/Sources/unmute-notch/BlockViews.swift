@@ -30,15 +30,35 @@ struct BlockTurnView: View {
                     MessageActions(text: text, at: prompt.at, taskId: taskId, canEdit: canEdit)
                 }
             }
-            ForEach(Array(turn.work.filter { $0.kind == "attachment" }.enumerated()), id: \.offset) { _, attachment in
-                if let path = attachment.path, !path.isEmpty {
-                    ComposerAttachmentTile(attachment: DraftAttachmentP(id: attachment.id, path: path,
-                        mimeType: attachment.mimeType ?? "application/octet-stream",
-                        name: attachment.name ?? URL(fileURLWithPath: path).lastPathComponent),
-                        remove: {}, restore: {}, readOnly: true, knownBytes: attachment.bytes)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                } else {
-                    NoticeRow(text: "Attachment unavailable: \(attachment.name ?? "File")", tone: .warn)
+            // ATTACHMENTS ARE A ROW, NOT A COLUMN.
+            //
+            // Each tile used to be its own full-width line, so six screenshots
+            // sent in one message pushed the entire conversation off screen and
+            // the transcript became a list of filenames. They belong to ONE
+            // message and read as one thing: a single row beside it, scrolling
+            // sideways when there are more than fit, so the cost of attaching
+            // ten is the same as attaching one.
+            //
+            // maxWidth on the inner row is what keeps a short row pinned right
+            // with the bubble it belongs to; without it a lone tile drifts to
+            // the left edge, away from its own message.
+            let attachments = turn.work.filter { $0.kind == "attachment" }
+            if !attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(Array(attachments.enumerated()), id: \.offset) { _, attachment in
+                            if let path = attachment.path, !path.isEmpty {
+                                ComposerAttachmentTile(attachment: DraftAttachmentP(id: attachment.id, path: path,
+                                    mimeType: attachment.mimeType ?? "application/octet-stream",
+                                    name: attachment.name ?? URL(fileURLWithPath: path).lastPathComponent),
+                                    remove: {}, restore: {}, readOnly: true, knownBytes: attachment.bytes)
+                                    .frame(maxWidth: 168)
+                            } else {
+                                NoticeRow(text: "Attachment unavailable: \(attachment.name ?? "File")", tone: .warn)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
             // THE PLAN IS NOT A STEP. It is what the turn intends, so it sits
