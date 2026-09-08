@@ -688,5 +688,7 @@ struct CodexComposer: View {
         StageComposer(placeholder: "Reply to Codex — or hold right ⌥ and speak",
                       model: model, taskId: taskId, deliveryError: deliveryError,
                       modelLabel: modelLabel, sending: sending, draft: draft, config: config)
+            // See TaskSurfaceView: @State text outlives a card switch without this.
+            .id(taskId)
     }
 }

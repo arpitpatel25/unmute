@@ -56,9 +56,21 @@ struct TaskSurfaceView: View {
                     switch composerState(alive: t.alive, canCompose: t.canCompose, canResume: t.canResume,
                                          status: t.status.rawValue, kind: t.kind) {
                     case .composable:
+                        // ONE COMPOSER PER CARD, ENFORCED BY IDENTITY.
+                        //
+                        // `taskId` is a let and updates with the card; `text` is
+                        // @State and does not, because @State belongs to the view
+                        // rather than to the data. Without an id SwiftUI reuses
+                        // this composer across a card switch, onAppear never fires
+                        // again to re-seed from the new draft, and the next
+                        // keystroke emits the OLD text under the NEW taskId. On
+                        // 2026-09-08 a message meant for one task was submitted
+                        // there and simultaneously appeared in another card's
+                        // composer, which is that, exactly.
                         StageComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
                                       modelLabel: t.modelLabel, sending: t.sending ?? false,
                                       draft: t.draft, config: t.chatConfig, followup: t.followup, composerMode: t.composerMode, question: t.question)
+                            .id(t.id)
                             .padding(.top, 9)
                     case .notRunning:
                         SessionNotRunning(reason: reconnectReason(t))
