@@ -468,3 +468,22 @@ test('an unexplained refusal is met by changing shape, then by saying so', () =>
   assert.match(AGENT_PRINCIPLES, /a SHAPE, not a size/)
   assert.match(AGENT_PRINCIPLES, /if two attempts do not land, stop/)
 })
+
+/**
+ * FIELD FAILURE, 2026-09-08. "Delivered into the composer" was reported in
+ * four paragraphs. The fact the person needed was the first clause; the rest
+ * was everything the Agent had noticed on the way. A routing action and an
+ * answer to a question were indistinguishable at a glance, so both had to be
+ * read.
+ */
+test('an action is a one-line receipt in a fixed mould; a question is not', () => {
+  assert.match(AGENT_PRINCIPLES, /AN ACTION GETS A RECEIPT, A QUESTION GETS AN ANSWER/)
+  // The moulds are spelled out, because a style instruction alone does not hold.
+  for (const mould of [/Continuing <name>/, /Sent to <name>/, /In <name>/, /Made <name>/, /Forked <name>/, /Closed <name>/]) {
+    assert.match(AGENT_PRINCIPLES, mould)
+  }
+  // One extra line, and only when it changes what they do next.
+  assert.match(AGENT_PRINCIPLES, /changes what they would do next/)
+  // And the other half: a question keeps its full length.
+  assert.match(AGENT_PRINCIPLES, /answer it at the length the answer takes/)
+})
