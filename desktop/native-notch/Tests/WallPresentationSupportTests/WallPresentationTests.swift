@@ -69,7 +69,7 @@ final class WallPresentationTests: XCTestCase {
     func testOnlyTheNinetyPercentSurfaceUsesTwoCardColumns() {
         XCTAssertEqual(WallCardLayout.columnCount(surfaceFill: 0.7), 1)
         XCTAssertEqual(WallCardLayout.columnCount(surfaceFill: 0.8), 1)
-        XCTAssertEqual(WallCardLayout.columnCount(surfaceFill: 0.9), 2)
+        XCTAssertEqual(WallCardLayout.columnCount(surfaceFill: 0.9), 1)
     }
 
     func testAllWorkAcrossAllWorkspacesPreviewsFourCardsPerWorkspace() {

@@ -135,6 +135,8 @@ export interface TurnP {
 }
 
 export interface TaskDetailP {
+  canEditLatestMessage?: boolean
+  olderMessages?: number
   id: string
   title: string
   origin?: 'unmute-agent'
@@ -381,6 +383,7 @@ export type NotchCommand =
   | { type: 'present' }
   | { type: 'setState'; state: NotchStateName; attention: number; working: number }
   | { type: 'showTask'; task: TaskDetailP }
+  | { type: 'messageEditStatus'; id: string; accepted: boolean; error?: string }
   | { type: 'stageDetail'; task: TaskDetailP }
   | { type: 'setCockpit'; data: CockpitPayload }
   | { type: 'termData'; id: string; data: string }             // base64
@@ -423,6 +426,8 @@ export type NotchEvent =
   | { type: 'openDashboard' }
   | { type: 'next' }
   | { type: 'prev' }
+  | { type: 'editLatestMessage'; id: string; expected: string; text: string }
+  | { type: 'loadOlderMessages'; id: string }
   | { type: 'focusTask'; id: string }
   /** Open the POCKET on this card. focusTask lands in the cockpit instead. */
   | { type: 'pocketFocusTask'; id: string }

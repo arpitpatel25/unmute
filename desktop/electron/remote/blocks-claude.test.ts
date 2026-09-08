@@ -234,3 +234,16 @@ test('ordering is preserved across mixed entries', () => {
   ])
   assert.deepEqual(blocks.map((b) => b.kind), ['message', 'reasoning', 'command', 'message'])
 })
+
+test('internal task notifications do not create user turns or split ongoing work', () => {
+  const { blocks } = run([user('Build it'), assistant([{ type: 'text', text: 'Working' }]),
+    user('<task-notification><task-id>abc</task-id><status>completed</status></task-notification>'),
+    assistant([{ type: 'text', text: 'Done' }])])
+  assert.equal(only(blocks, 'message').filter(b => b.role === 'user').length, 1)
+})
+
+test('message timestamps survive the Claude projection', () => {
+  const at = '2026-09-08T09:00:00Z'
+  const { blocks } = run([user('Hello', { timestamp: at }), assistant([{ type: 'text', text: 'Hi' }], { timestamp: at })])
+  assert.deepEqual(only(blocks, 'message').map(b => b.at), [Date.parse(at), Date.parse(at)])
+})

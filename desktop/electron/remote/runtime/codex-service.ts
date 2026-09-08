@@ -25,7 +25,7 @@ export class CodexRuntimeService {
   constructor(private root: string, private emit: (event: CodexRuntimeEvent) => void, overrides: Pick<CodexHubDeps, 'makeServer'> = {}) {
     this.hub = new CodexHub({
       ...overrides, resolveBin: async () => this.bin,
-      onForkConfirmed: (id, result) => this.save(id, result.forkedFromId, 'fork', () => result),
+      onForkConfirmed: (id, result, operationId) => this.save(id, result.forkedFromId, operationId ? `fork:${operationId}` : 'fork', () => result),
       threadConfig: async id => this.prepared.get(id)?.config ?? {},
       approvalCap: id => this.prepared.get(id)?.cap ?? { roots: [], fullAccessAllowed: false },
       loadPlans: (id, thread) => this.read(id, thread, 'plans', []),
@@ -89,33 +89,40 @@ export class CodexRuntimeService {
     }
     switch (method) {
       case 'forkResult': {
-        const previous = this.forks.get(id)
+        const operationId = rest[1] as string | undefined
+        const key = JSON.stringify([id, operationId ?? null])
+        const kind = operationId ? `fork:${operationId}` : 'fork'
+        const previous = this.forks.get(key)
         if (previous && previous.source !== rest[0]) throw new Error('Fork operation cannot change its source')
-        const receipt = await this.read(id, rest[0], 'fork', null)
+        const receipt = await this.read(id, rest[0], kind, null)
         if (receipt) return receipt
         if (previous) {
           try { return await previous.result } catch { /* read the durable provider identity below */ }
         }
-        return this.read(id, rest[0], 'fork', null)
+        return this.read(id, rest[0], kind, null)
       }
       case 'startThread': return this.register(id, async () => this.hub.threadIdFor(id) ? { threadId: this.hub.threadIdFor(id), url: this.hub.url } : this.hub.startThread(id, rest[0]))
-      case 'resumeThread': return this.register(id, () => this.hub.resumeThread(id, rest[0], rest[1], false))
+      case 'resumeThread': return this.register(id, () => this.hub.resumeThread(id, rest[0], rest[1], rest[2] === true))
+      case 'rollbackLatestTurn': return this.register(id, () => this.hub.rollbackLatestTurn(id, rest[0]))
       case 'forkThread': {
-        const previous = this.forks.get(id)
+        const operationId = rest[2] as string | undefined
+        const key = JSON.stringify([id, operationId ?? null])
+        const kind = operationId ? `fork:${operationId}` : 'fork'
+        const previous = this.forks.get(key)
         if (previous) {
           if (previous.source !== rest[0]) throw new Error('Fork operation cannot change its source')
           return previous.result
         }
         const result = this.register(id, async () => {
-          const receipt = await this.read<{ threadId: string; forkedFromId: string } | null>(id, rest[0], 'fork', null)
+          const receipt = await this.read<{ threadId: string; forkedFromId: string } | null>(id, rest[0], kind, null)
           if (receipt) {
             if (!receipt.threadId || receipt.threadId === rest[0] || receipt.forkedFromId !== rest[0]) throw new Error('Invalid durable fork identity')
             await this.hub.resumeThread(id, receipt.threadId, rest[1])
             return receipt
           }
-          return this.hub.forkThread(id, rest[0], rest[1])
+          return this.hub.forkThread(id, rest[0], rest[1], operationId)
         })
-        this.forks.set(id, { source: rest[0], result })
+        this.forks.set(key, { source: rest[0], result })
         return result
       }
       case 'send': return this.hub.send(id, rest[0], rest[1])

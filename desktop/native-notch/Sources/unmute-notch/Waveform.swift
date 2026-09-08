@@ -10,13 +10,10 @@ import LevelMeterSupport
 ///
 /// FLAT MEANS SILENT, and that is the whole contract. A decorative animation
 /// that wobbles regardless would be worse than the timer it replaces: it would
-/// look like proof of something it is not checking. Level 0 draws a straight
-/// line, deliberately.
+/// look like proof of something it is not checking. Level 0 draws resting
+/// dots, deliberately.
 ///
-/// A SCROLLING HISTORY, not a bar meter. The level arrives per frame from the
-/// engine (`pill:level`); keeping the last N and shifting left gives the last
-/// second or so of speech at a glance, so a pause reads as a dip in a line
-/// rather than as a bar that happens to be short right now.
+/// Stationary dots grow vertically with the current audio level.
 struct Waveform: View {
     /// 0…1, as the engine reports it.
     let level: Double
@@ -37,74 +34,24 @@ struct Waveform: View {
     /// thing on the surface.
     var color: Color = .white
 
-    /// The shortest bar that still reads as a bar. Below about this a 2pt-wide
-    /// capsule is round, and a row of them is the dot problem again — so this
-    /// is the floor for AUDIBLE signal, not for silence, which draws nothing.
-    static let minAudible: CGFloat = 3
-
-    @State private var history: [Double] = []
-    /// The smoothed level the last frame settled on. See `push`.
     @State private var envelope: Double = 0
 
     var body: some View {
-        ZStack {
-            // SILENCE IS A LINE — and this is what that was supposed to mean.
-            //
-            // The bars used to carry a one-point floor so quiet never left a
-            // gap. But a 2pt-wide CAPSULE at 1pt tall is a circle, so the
-            // resting state rendered as a row of dots rather than the flat line
-            // the floor was written for. The floor is gone and the line is
-            // drawn once, properly, behind them.
-            Capsule()
-                .fill(color.opacity(0.18))
-                .frame(height: 1)
-
-            HStack(alignment: .center, spacing: spacing) {
-                ForEach(Array(padded.enumerated()), id: \.offset) { _, v in
-                    // ANY AUDIO AT ALL IS VISIBLE. The previous cut — draw
-                    // nothing below 2pt — is a threshold on HEIGHT, so at a
-                    // 16pt bar it silently swallowed every level under 0.125.
-                    // Quiet speech produced a flat line, which is the opposite
-                    // of what a meter is for.
-                    //
-                    // Silence is exactly zero, because LevelMeter.advance parks
-                    // there rather than approaching it forever. So zero draws
-                    // nothing and the hairline speaks; anything above it gets a
-                    // floor tall enough to read as a BAR rather than a dot.
-                    let raw = CGFloat(v) * height
-                    let h: CGFloat = v <= 0 ? 0 : max(Self.minAudible, raw)
-                    Capsule()
-                        // Brighter across the whole range, peaking at pure
-                        // white. The old ramp started at 0.35 of an already
-                        // dimmed colour.
-                        .fill(color.opacity(0.55 + 0.45 * v))
-                        .frame(width: barWidth, height: h)
-                }
+        HStack(alignment: .center, spacing: spacing) {
+            ForEach(0..<max(1, bars), id: \.self) { index in
+                // Fixed horizontal slots. Audio changes height, never position.
+                let shape = 0.35 + 0.65 * abs(sin(Double(index + 1) * 1.7))
+                Capsule().fill(color.opacity(0.5 + 0.5 * envelope))
+                    .frame(width: barWidth, height: max(barWidth, CGFloat(envelope * shape) * height))
             }
         }
         .frame(height: height)
-        // The single-argument form: the package targets macOS 13, where the
-        // two-argument `onChange` does not exist yet.
-        .onChange(of: level) { new in push(new) }
-        .onAppear { history = Array(repeating: 0, count: bars) }
-        .accessibilityHidden(true)   // the phase label already speaks
+        .animation(.easeOut(duration: 0.08), value: envelope)
+        .onChange(of: level) { envelope = LevelMeter.target(for: $0) }
+        .onAppear { envelope = LevelMeter.target(for: level) }
+        .accessibilityHidden(true)
     }
 
-    /// Newest on the right, so it reads the way speech is written.
-    private var padded: [Double] {
-        let h = history.suffix(bars)
-        return Array(repeating: 0, count: max(0, bars - h.count)) + h
-    }
-
-    /// The arithmetic lives in `LevelMeterSupport` so it can be tested; see
-    /// there for why every constant is fixed rather than adaptive.
-    private func push(_ v: Double) {
-        envelope = LevelMeter.advance(envelope, toward: LevelMeter.target(for: v))
-        var h = history
-        h.append(envelope)
-        if h.count > bars { h.removeFirst(h.count - bars) }
-        history = h
-    }
 }
 
 /// "YOUR VOICE IS GOING HERE" — the live-aim chip.

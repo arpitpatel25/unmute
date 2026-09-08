@@ -256,6 +256,10 @@ final class AppController: NSObject, NotchResizing {
 
     func handle(_ command: Command) {
         switch command {
+        case let .messageEditStatus(id, accepted, error):
+            NotificationCenter.default.post(name: .init("UnmuteMessageEditStatus"), object: nil,
+                userInfo: ["id": id, "accepted": accepted, "error": error ?? ""])
+
         case let .bootstrap(appearance, tone, fill, show, terminalAutoExpand, present):
             Appearance.shared.preference = appearance
             Appearance.shared.tone = tone
@@ -1476,7 +1480,7 @@ final class AppController: NSObject, NotchResizing {
             if let eventWindow = e.window, eventWindow !== self.window { return e }
             // Never steal keys from a text field or the terminal.
             let fr = self.window.firstResponder
-            let typing = fr is NSTextView || fr is TerminalView
+            let typing = (fr as? NSTextView)?.isEditable == true || fr is TerminalView
             if e.keyCode == 53 {
                 // Logged so a leak is DIAGNOSABLE rather than inferred: if this
                 // line is absent when Escape leaks, the local monitor never
@@ -1504,7 +1508,8 @@ final class AppController: NSObject, NotchResizing {
             // thing everywhere else. The chord expands too (see the controller's
             // pocketChord): two keys, one event, the same way the chevrons and
             // the swipe both move the carousel.
-            if !typing, self.model.pocket.isOpen, !isExpanded(self.model.state) {
+            let bareKey = e.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+            if !typing, bareKey, self.model.pocket.isOpen, !isExpanded(self.model.state) {
                 switch e.keyCode {
                 case 123:                                  // ←
                     if self.model.pocket.slots.count > 1 {
@@ -1589,7 +1594,7 @@ final class AppController: NSObject, NotchResizing {
                 if ch == "v" { NotchLog.log("⌘V reached NO responder — paste dropped") }
             }
 
-            if typing { return e }
+            if typing || !bareKey { return e }
             guard self.model.state == .cockpit || self.model.state == .task else { return e }
             if e.keyCode == 48 { self.model.emit(.next); return nil }            // Tab → crank
             // ARROWS WALK THE CRANK, and only here.

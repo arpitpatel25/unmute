@@ -58,20 +58,20 @@ export class PersistentCodexHub extends CodexHub {
     const result = await this.rpc.call<{ threadId: string; url: string }>('codex.startThread', id, options)
     await this.reconnect(); return result
   }
-  override async resumeThread(id: string, thread: string, options: StartThreadOpts, _force = false): Promise<void> {
+  override async resumeThread(id: string, thread: string, options: StartThreadOpts, force = false): Promise<void> {
     await this.prepare(id, thread)
-    await this.rpc.call('codex.resumeThread', id, thread, options)
+    await this.rpc.call('codex.resumeThread', id, thread, options, force)
     await this.reconnect()
   }
-  override async forkThread(id: string, source: string, options: StartThreadOpts): Promise<{ threadId: string; forkedFromId: string }> {
+  override async forkThread(id: string, source: string, options: StartThreadOpts, operationId?: string): Promise<{ threadId: string; forkedFromId: string }> {
     await this.prepare(id, source)
     type Result = { threadId: string; forkedFromId: string }
     let result: Result
-    try { result = await this.rpc.call<Result>('codex.forkThread', id, source, options) }
+    try { result = await this.rpc.call<Result>('codex.forkThread', id, source, options, operationId) }
     catch (error) {
       log.event('fork-confirmation-recovery-started', { taskId: id, sourceSessionId: source })
       // Query the same operation. NEVER issue a second provider fork on ambiguity.
-      const recovered = await this.rpc.call<Result | null>('codex.forkResult', id, source).catch(() => null)
+      const recovered = await this.rpc.call<Result | null>('codex.forkResult', id, source, operationId).catch(() => null)
       if (!recovered) throw error
       result = recovered
       log.event('fork-confirmation-recovered', { taskId: id, sourceSessionId: source, sessionId: result.threadId })
@@ -83,6 +83,10 @@ export class PersistentCodexHub extends CodexHub {
       gate: old?.gate ?? { kind: 'unavailable', reason: 'Loading fork history.' } })
     // Return identity first: the manager persists/publishes before refreshing.
     return result
+  }
+  override async rollbackLatestTurn(id: string, options: StartThreadOpts): Promise<void> {
+    await this.rpc.call('codex.rollbackLatestTurn', id, options)
+    await this.refreshTask(id)
   }
   override async send(id: string, text: string, options: Parameters<CodexHub['send']>[2] = {}): Promise<boolean> {
     return this.rpc.call('codex.send', id, text, options)

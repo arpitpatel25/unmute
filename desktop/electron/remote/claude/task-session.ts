@@ -25,6 +25,7 @@ export interface ClaudeTaskOptions {
   resume?: boolean
   /** Fork this source conversation into sessionId (or a newly generated UUID). */
   forkFromSessionId?: string
+  resumeSessionAt?: string
   model?: string
   effort?: string
   permissionMode?: ClaudePermissionMode
@@ -102,6 +103,7 @@ export class ClaudeTaskSession {
       : [o.resume ? '--resume' : '--session-id', this.sessionId]
     const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', o.permissionMode ?? 'manual', ...identityArgs]
     for (const [flag, value] of [['--model', o.model], ['--effort', o.effort], ['--system-prompt-file', o.systemPromptFile], ['--append-system-prompt-file', o.appendSystemPromptFile], ['--settings', o.settingsFile], ['--mcp-config', o.mcpConfigFile]]) if (value) args.push(flag!, value)
+    if (o.resumeSessionAt) args.push('--resume-session-at', o.resumeSessionAt)
     for (const directory of o.addDirs ?? []) args.push('--add-dir', directory)
     if (o.chrome !== undefined) args.push(o.chrome ? '--chrome' : '--no-chrome')
     const env = { ...process.env, ...o.env }

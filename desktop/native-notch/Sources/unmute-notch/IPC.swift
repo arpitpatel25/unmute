@@ -125,6 +125,8 @@ struct ChatConfigP: Codable {
 
 /// Full detail for the fronted task (task surface) or the focused Stage.
 struct TaskDetail: Codable {
+    var canEditLatestMessage: Bool? = nil
+    var olderMessages: Int? = nil
     let id: String
     let title: String
     let origin: String?
@@ -404,6 +406,7 @@ enum Command {
     /// Sent after bootstrap plus replay so no stale/default frame flashes.
     case present
     case setState(state: NotchState, attention: Int, working: Int)
+    case messageEditStatus(id: String, accepted: Bool, error: String?)
     case showTask(TaskDetail)                  // fronted task (attention/task surface)
     case stageDetail(TaskDetail)               // focused Stage detail (cockpit)
     case setCockpit(CockpitData)
@@ -484,6 +487,8 @@ enum Command {
                 autoPresent: obj["autoPresent"] as? Bool ?? true)
         case "present":
             return .present
+        case "messageEditStatus":
+            return .messageEditStatus(id: obj["id"] as? String ?? "", accepted: obj["accepted"] as? Bool ?? false, error: obj["error"] as? String)
         case "setState":
             let state = NotchState(rawValue: obj["state"] as? String ?? "dormant") ?? .dormant
             return .setState(state: state,
@@ -587,6 +592,8 @@ enum Event {
     case openDashboard
     case next                                      // crank forward
     case prev                                      // crank backward
+    case editLatestMessage(id: String, expected: String, text: String)
+    case loadOlderMessages(id: String)
     case focusTask(id: String)                     // card clicked → voice address
     case pocketFocusTask(id: String)               // session link → open the POCKET on that card
     case showAll(group: String?, on: Bool)         // reveal folded cards (nil = whole wall)
@@ -685,6 +692,8 @@ enum Event {
         case .openDashboard: return ["type": "openDashboard"]
         case .next: return ["type": "next"]
         case .prev: return ["type": "prev"]
+        case .editLatestMessage(let id, let expected, let text): return ["type": "editLatestMessage", "id": id, "expected": expected, "text": text]
+        case .loadOlderMessages(let id): return ["type": "loadOlderMessages", "id": id]
         case .focusTask(let id): return ["type": "focusTask", "id": id]
         case .pocketFocusTask(let id): return ["type": "pocketFocusTask", "id": id]
         case let .today(on): return ["type": "today", "on": on]

@@ -47,6 +47,11 @@ struct BlockConversation: View {
     let turns: [BlockTurn]
     var id: String = ""
     var usage: BlockUsage?
+    var olderMessages: Int = 0
+    var loadOlder: () -> Void = {}
+    var canEditLatestMessage: Bool = false
+    @State private var loadingOlder = false
+    @State private var olderAnchor: BlockTurn?
 
     @State private var atBottom = true
     /// Viewport height, so the reporter's measurement can be turned into a
@@ -83,14 +88,12 @@ struct BlockConversation: View {
         positionedTask = nil
         _ = restoreGate.begin(task: task, savedAnchor: nil)
         DispatchQueue.main.async {
-            if let target = initialConversationAnchor(turns: turns) {
-                proxy.scrollTo(target, anchor: .top)
+            if let target = initialConversationAnchor(turns: turns) { proxy.scrollTo(target, anchor: .top) }
+            DispatchQueue.main.async {
+                if let target = initialConversationAnchor(turns: turns) { proxy.scrollTo(target, anchor: .top) }
+                restoreGate.finish(task: task)
+                positionedTask = task
             }
-            // scrollTo and reveal are committed in the same display pass: the
-            // reader receives an already-positioned task, while a stale callback
-            // can never reveal a different task because the ids must match.
-            restoreGate.finish(task: task)
-            positionedTask = task
         }
     }
 
@@ -99,9 +102,16 @@ struct BlockConversation: View {
             ScrollViewReader { proxy in
                 ZStack(alignment: .bottom) {
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 22) {
+                        VStack(alignment: .leading, spacing: 22) {
+                            if olderMessages > 0 {
+                                Button("Load earlier messages (\(olderMessages))") {
+                                    olderAnchor = turns.first
+                                    loadingOlder = true
+                                    loadOlder()
+                                }.buttonStyle(.plain).foregroundColor(Theme.textDim)
+                            }
                             ForEach(turns) { turn in
-                                BlockTurnView(turn: turn, taskId: id)
+                                BlockTurnView(turn: turn, taskId: id, canEdit: canEditLatestMessage && turn.id == turns.last(where: { $0.prompt != nil })?.id)
                                     .background(GeometryReader { geo in
                                         Color.clear.preference(key: TurnTopKey.self,
                                             value: [turn.id: geo.frame(in: .named(BLOCK_SCROLL))])
@@ -168,6 +178,11 @@ struct BlockConversation: View {
                 // end as that turn grows.
                 .onAppear { restorePosition(proxy) }
                 .onChange(of: turns.count) { _ in
+                    if loadingOlder {
+                        loadingOlder = false
+                        if let old = olderAnchor, let anchor = turns.first(where: { old.prompt != nil ? $0.prompt == old.prompt : old.reply != nil && $0.reply == old.reply })?.id { DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) } }
+                        return
+                    }
                     if positionedTask != id { restorePosition(proxy); return }
                     guard atBottom else { return }   // do not yank a reader back
                     withAnimation(.easeOut(duration: 0.18)) {

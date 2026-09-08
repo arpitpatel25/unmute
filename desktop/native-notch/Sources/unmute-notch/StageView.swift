@@ -97,7 +97,8 @@ struct StageView: View {
         // was given, which is the other half of the empty-band problem.
         ConversationPanel(rows: model.stageConversationRows, id: t.id,
                           blocks: model.stageBlocks, usage: model.stageUsage,
-                          running: t.status == .processing, history: t.history)
+                          running: t.status == .processing, history: t.history, canEditLatestMessage: t.canEditLatestMessage ?? false, olderMessages: t.olderMessages ?? 0,
+                                      loadOlder: { model.emit(.loadOlderMessages(id: t.id)) })
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.top, 10)
         if t.status == .needsUser, let q = t.question {
@@ -274,7 +275,6 @@ struct StageView: View {
     private var miniRail: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 3) {
-                NewConversationButton(model: model).padding(.horizontal, 8).padding(.bottom, 8)
                 let all = (model.cockpit?.groups ?? []).flatMap(\.cards)
                 SectionLabel(text: "Sessions · \(all.count)")
                     .padding(.horizontal, 8).padding(.bottom, 4)

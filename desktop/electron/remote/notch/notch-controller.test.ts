@@ -954,7 +954,7 @@ test('the native stage receives relaunch progress instead of inferring it from l
   assert.equal(detail.resumeError, 'previous attempt failed')
 })
 
-test('the WHOLE conversation reaches the surface, not a tail', () => {
+test('the conversation initially sends only the latest ten messages', () => {
   // The parse layer used to cut to 6 items and the windows here were all
   // downstream of that, so widening them did nothing. A 40-item thread must
   // arrive whole — without the user's own messages there is no alternation and
@@ -967,8 +967,8 @@ test('the WHOLE conversation reaches the surface, not a tail', () => {
   h.client.fire({ type: 'focusTask', id: 'c1' })
   h.flush()
   const conv = h.client.last('stageDetail')!.task.conversation!
-  assert.equal(conv.length, 40)
-  assert.equal(conv[0].text, 'm0', 'the FIRST message survives, not just the tail')
+  assert.equal(conv.length, 10)
+  assert.equal(conv[0].text, 'm30')
 })
 
 test('an unchanged transcript is not re-sent on every poll', () => {
@@ -1910,7 +1910,7 @@ test('the pocket orders by when YOU last talked to a task', () => {
   assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['a', 'b'])
 })
 
-test('opening a card counts as talking to it', () => {
+test('opening a card does not count as sending a message', () => {
   const h = setup()
   const t0 = Date.now()
   put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A', createdAt: t0 - 5 * 60_000 }))
@@ -1924,8 +1924,8 @@ test('opening a card counts as talking to it', () => {
   // the next fresh visit re-sorts.
   h.client.fire({ type: 'pocketRelease' })
   h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['a', 'b'],
-    'the one you just had open is the one at hand')
+  assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['b', 'a'],
+    'reading leaves user-message recency unchanged')
 })
 
 // ── the Agent: an ELEMENT of the pocket, never a task in its queue ─────────
@@ -2163,7 +2163,7 @@ test('the chord does nothing once you are already expanded', () => {
   assert.equal(h.client.ofType('pocket').length, before, 'nothing moved')
 })
 
-test('the order is held while you walk it, and released when you close it', () => {
+test('finishing a capture without an accepted message does not change recency', () => {
   const h = setup()
   const t0 = Date.now()
   put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A',
@@ -2178,7 +2178,7 @@ test('the order is held while you walk it, and released when you close it', () =
     'the list you are reading must not reshuffle under your thumb')
   h.client.fire({ type: 'pocketRelease' })
   h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['a', 'b'], 'released on close')
+  assert.deepEqual(taskSlots(h).map((sl) => sl.id), ['b', 'a'], 'capture completion is not a sent message')
 })
 
 // ── presence: the one thing allowed to open the surface ────────────────────
@@ -2661,4 +2661,66 @@ test('a link to a card that cannot be pocketed still lands somewhere correct', (
   // Shelved: not pocketable. The cockpit is a correct place to land, and is
   // what focusTask would have done — a fallback, never an error.
   assert.deepEqual(h.calls.focus?.at(-1), ['a'])
+})
+
+test('history pages grow by ten and reset after switching tasks', () => {
+  const h = setup()
+  const blocks = Array.from({ length: 30 }, (_, i) => ({ kind: 'message' as const, role: i % 2 ? 'assistant' as const : 'user' as const, text: `message-${i}` }))
+  put(h, makeTask({ id: 'paged', kind: 'session', blocks }))
+  put(h, makeTask({ id: 'other', kind: 'session' }))
+  h.client.fire({ type: 'focusTask', id: 'paged' }); h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.blocks!.length, 10)
+  assert.equal(h.client.last('stageDetail')!.task.olderMessages, 20)
+  h.client.fire({ type: 'loadOlderMessages', id: 'paged' }); h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.blocks!.length, 20)
+  h.client.fire({ type: 'focusTask', id: 'other' }); h.flush()
+  h.client.fire({ type: 'focusTask', id: 'paged' }); h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.blocks!.length, 10)
+  h.client.fire({ type: 'closeStage' }); h.flush()
+  h.client.fire({ type: 'focusTask', id: 'paged' }); h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.blocks!.length, 10)
+})
+
+test('persisted last user input controls recency after restart', () => {
+  const h = setup(); const now = Date.now()
+  put(h, makeTask({ id: 'old', kind: 'session', createdAt: now - 100000, lastUserInputAt: now - 1000 }))
+  put(h, makeTask({ id: 'new', kind: 'session', createdAt: now - 10000, lastUserInputAt: now - 10000 }))
+  h.client.fire({ type: 'pocketOpen' })
+  assert.deepEqual(taskSlots(h).map(s => s.id), ['old', 'new'])
+})
+
+test('unseen error leads temporarily, then returns to user-message order when opened', () => {
+ const h = setup(); const now = Date.now()
+ put(h, makeTask({ id: 'old-error', kind: 'session', state: 'failed', createdAt: now - 50000, lastUserInputAt: now - 50000 }))
+ put(h, makeTask({ id: 'recent', kind: 'session', state: 'done', createdAt: now - 1000, lastUserInputAt: now - 1000 }))
+ h.client.fire({ type: 'pocketOpen' })
+ assert.deepEqual(taskSlots(h).map(s => s.id), ['old-error', 'recent'])
+ h.client.fire({ type: 'pocketExpand' }); h.flush()
+ h.client.fire({ type: 'closeStage' }); h.flush()
+ assert.deepEqual(taskSlots(h).map(s => s.id), ['recent', 'old-error'])
+})
+
+test('fallback conversation pagination is reachable and resets on blur', () => {
+  const h = setup()
+  const conversation = Array.from({ length: 30 }, (_, i) => ({ role: i % 2 ? 'assistant' as const : 'user' as const, text: String(i) }))
+  put(h, makeTask({ id: 'fallback', kind: 'session', conversation }))
+  h.client.fire({ type: 'focusTask', id: 'fallback' }); h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.olderMessages, 20)
+  h.client.fire({ type: 'loadOlderMessages', id: 'fallback' }); h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.conversation!.length, 20)
+  h.client.fire({ type: 'userLeft', reason: 'blur' }); h.flush()
+  h.client.fire({ type: 'focusTask', id: 'fallback' }); h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.conversation!.length, 10)
+})
+
+test('accepted input outside the composer releases a held pocket order', () => {
+  const h = setup(); const now = Date.now()
+  const old = makeTask({ id: 'old', kind: 'session', createdAt: now - 50000, lastUserInputAt: now - 50000 })
+  put(h, old)
+  put(h, makeTask({ id: 'recent', kind: 'session', createdAt: now - 1000, lastUserInputAt: now - 1000 }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketMove', delta: 1 })
+  put(h, { ...old, lastUserInputAt: now })
+  h.flush()
+  assert.deepEqual(taskSlots(h).map(s => s.id), ['old', 'recent'])
 })

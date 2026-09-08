@@ -42,6 +42,10 @@ export class PersistentClaudeTaskSession extends ClaudeTaskSession {
   }
   private async attach(): Promise<void> {
     const { onEvent: _onEvent, spawn: _spawn, readImage: _readImage, ...options } = this.remoteOptions
+    if (options.resumeSessionAt) {
+      const info = await this.rpc.call<{ capabilities?: string[] }>('runtime.info')
+      if (!info.capabilities?.includes('claude.resumeSessionAt')) throw new Error('Claude background runtime needs checkpoint support before editing.')
+    }
     const opened = await this.rpc.call<ClaudeRuntimeState & { sequence: number }>('claude.open', this.sessionId, { ...options, sessionId: this.sessionId })
     if (opened.sequence < this.sequence) this.sequence = 0
     while (this.sequence < opened.sequence) {

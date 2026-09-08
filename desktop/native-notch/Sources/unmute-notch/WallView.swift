@@ -40,7 +40,6 @@ struct WallView: View {
     var body: some View {
         VStack(spacing: 0) {
             headerChrome
-            NewConversationButton(model: model).padding(.vertical, 6)
             Rectangle().fill(Theme.hairlineSoft).frame(height: 1)
             HStack(alignment: .top, spacing: 0) {
                 workspaceRail
@@ -350,9 +349,7 @@ struct WallView: View {
                 }
             }
 
-            // At the two smaller surface sizes, preserve the calm single-column
-            // scan. The 90% surface has enough width that one row becomes mostly
-            // empty space, so it uses a row-major two-column grid instead.
+            // One ticket fills each row at every surface size.
             LazyVGrid(columns: cardColumns, alignment: .leading, spacing: 8) {
                 ForEach(shownCards, id: \.id) { card($0) }
             }

@@ -1,3 +1,4 @@
+import { messageWindow } from './message-window'
 // NotchController — the brain between the task runtime and the native notch.
 //
 // v2: full cockpit/overlay parity. It owns the your-move QUEUE (skip=requeue),
@@ -81,6 +82,7 @@ export interface TaskLite {
    *  stuck task. See Task.checkpointExpiresAt. */
   checkpointExpiresAt?: number
   step?: string | null
+  lastUserInputAt?: number
   createdAt?: number
   updatedAt?: number
   result?: { summary: string; detail?: string; artifacts?: Array<{ type: 'url' | 'path'; value: string }> } | null
@@ -122,6 +124,8 @@ export interface NotchControllerDeps {
    *  The task is still blocked, so the crank must not move off it. */
   answer(id: string, text: string): boolean
   answerAsync?(id: string, text: string, reference?: QuestionReference): Promise<boolean>
+  canEditLatestMessage?(id: string): boolean
+  editLatestMessage?(id: string, expected: string, text: string): Promise<boolean>
   getDraft?(id: string): TaskDraft
   setDraftText?(id: string, text: string, clientRevision?: number): void
   addDraftImage?(id: string, path: string, mimeType: string, name: string, insertion?: DraftInsertionP): Promise<void> | void
@@ -371,6 +375,8 @@ type Engaged = 'none' | 'task' | 'cockpit'
 
 export class NotchController {
   private queue: string[] = []
+  private historyLimit = 10
+  private historyTask: string | null = null
   private engaged: Engaged = 'none'
   /** AUTO-EXPAND: open the task surface when something starts needing you,
    *  instead of only tinting the bar amber and waiting to be tapped.
@@ -504,6 +510,7 @@ export class NotchController {
   /** The pocket's order, nailed down for the duration of a visit. Null when
    *  the pocket is closed, so the next open re-sorts to what you last worked in. */
   private frozenOrder: string[] | null = null
+  private frozenInputTimes = new Map<string, number>()
   /** Set while an expanded task came FROM an open pocket, so closing it goes
    *  back there rather than dumping you onto the bare notch. */
   private cameFromPocket = false
@@ -595,6 +602,22 @@ export class NotchController {
     on('openDashboard', () => this.openCockpit())
     on('next', () => this.onNext())
     on('prev', () => this.onPrev())
+    on('editLatestMessage', (e) => {
+      const { id, expected, text } = e as { id: string; expected: string; text: string }
+      if (typeof expected !== 'string' || typeof text !== 'string') return
+      if (!this.deps.canEditLatestMessage?.(id)) { this.client.send({ type: 'messageEditStatus', id, accepted: false, error: 'The conversation changed. Wait for it to finish and reopen the latest message.' }); return }
+      void this.deps.editLatestMessage?.(id, expected, text).then(ok => {
+        if (ok) { this.addressed(id); this.client.send({ type: 'messageEditStatus', id, accepted: true }) }
+        else this.client.send({ type: 'messageEditStatus', id, accepted: false, error: 'This message cannot be edited right now.' })
+        this.scheduleReconcile()
+      }).catch(error => { this.client.send({ type: 'messageEditStatus', id, accepted: false, error: (error as Error).message }); this.scheduleReconcile() })
+    })
+    on('loadOlderMessages', (e) => {
+      const { id } = e as { id: string }
+      if (id !== this.historyTask || (id !== this.focusedId && !(id === NotchController.AGENT_SLOT && this.agentOpen))) return
+      this.historyLimit += 10
+      this.reconcile()
+    })
     on('focusTask', (e) => this.onFocusTask((e as { id: string }).id))
     on('closeStage', () => { this.seenThenClose() })
     on('userLeft', (e) => this.onUserLeft((e as { reason: 'blur' | 'screenshot' | 'space' }).reason))
@@ -876,14 +899,13 @@ export class NotchController {
         containsCtrlV: decoded.includes('\u0016'),
         transport: 'direct-pty-input',
       })
-      this.addressed(id)
       this.deps.sendInput(id, decoded)
     })
     on('termResize', (e) => { const { id, cols, rows } = e as { id: string; cols: number; rows: number }; this.deps.resizeTerm(id, cols, rows) })
     on('suggestionOpen', (e) => void this.onSuggestionOpen((e as { id: string }).id))
     on('suggestionAccept', (e) => void this.onSuggestionAccept((e as { id: string }).id))
     on('suggestionReject', (e) => { const { id, reason } = e as { id: string; reason: string }; void this.onSuggestionReject(id, reason) })
-    on('converseWrite', (e) => { const { id, text } = e as { id: string; text: string }; this.addressed(id); void this.onConverseWrite(id, text) })
+    on('converseWrite', (e) => { const { id, text } = e as { id: string; text: string }; void this.onConverseWrite(id, text) })
     on('converseStop', (e) => { this.deps.converseStop((e as { id: string }).id); this.conversing.delete((e as { id: string }).id) })
     // The scratchpad. NO STATE LIVES HERE — every one of these is a straight
     // relay onto the same internals the scratchpad:* IPC handlers call, and the
@@ -1014,6 +1036,9 @@ export class NotchController {
   /** YOU touched this task. The one write to the user's clock. */
   private addressed(id: string): void {
     this.addressedStamp.set(id, Date.now())
+    this.frozenOrder = null
+    const current = this.pocketSlots().findIndex(slot => slot.id === (this.focusedId ?? id))
+    if (current >= 0) this.pocketAt = current
     this.scheduleReconcile()
   }
 
@@ -1022,7 +1047,7 @@ export class NotchController {
    *  it is the agent's clock, and letting it in through the back door would
    *  restore exactly the reshuffling this replaced. */
   private addressedAt(t: TaskLite): number {
-    return this.addressedStamp.get(t.id) ?? t.createdAt ?? 0
+    return Math.max(this.addressedStamp.get(t.id) ?? 0, t.lastUserInputAt ?? t.createdAt ?? 0)
   }
 
   /** THE POCKET'S ORDER. Most recently talked-to first, in both halves. */
@@ -1126,7 +1151,10 @@ export class NotchController {
         && now - this.engagedAt(t) < POCKET_IDLE_MS)
       .sort(this.byAddressed)
 
-    return [...demanding, ...rest]
+    return [...demanding, ...rest].sort((a, b) => {
+      const urgent = (t: TaskLite) => this.demanding(t) && ['needs-user', 'stuck', 'failed'].includes(t.state) ? 1 : 0
+      return urgent(b) - urgent(a) || this.byAddressed(a, b)
+    })
   }
 
   /**
@@ -1151,6 +1179,13 @@ export class NotchController {
   private pocketOrder(): string[] {
     const live = this.pocketList()
     const liveIds = live.map((t) => t.id)
+    // An accepted voice/provider input can arrive outside this controller.
+    // Its persisted clock releases a browsing hold just like a composer send.
+    if (this.frozenOrder && live.some(t => this.frozenInputTimes.has(t.id) && this.frozenInputTimes.get(t.id) !== this.addressedAt(t))) {
+      this.frozenOrder = null
+      const at = liveIds.indexOf(this.focusedId ?? '')
+      if (at >= 0) this.pocketAt = at
+    }
     if (!this.frozenOrder) return liveIds
     const alive = new Set(liveIds)
     const held = this.frozenOrder.filter((id) => alive.has(id))
@@ -1588,6 +1623,8 @@ export class NotchController {
     this.returnTo = id ? { kind: 'task', id } : { kind: 'cockpit' }
     this.returnGraceUntil = Date.now() + RETURN_GRACE_MS
     this.engaged = 'none'
+    this.historyTask = null
+    this.historyLimit = 10
     this.setFocus(null)
     this.setPocketMode('closed')
     log.event('user-left', { reason, taskId: id, state: t?.state ?? null, was: this.returnTo.kind })
@@ -1641,8 +1678,8 @@ export class NotchController {
     // return. Index deliberately kept, not reset.
     this.leaveAgent()
     this.cameFromPocket = this.pocketMode === 'open'
-    this.attentionAcknowledged.delete(id) // opening it asks to hear about it again
-    this.addressed(id)
+    const opened = this.deps.getTask(id)
+    if (opened) this.attentionAcknowledged.set(id, opened.state)
     this.engaged = 'task'
     this.setFocus(id)
     log.event('pocket-expanded', { taskId: id })
@@ -1685,6 +1722,7 @@ export class NotchController {
 
   /** The Agent's chat, in the same payload every other backend renders into. */
   private sendAgentDetail(): void {
+    if (this.historyTask !== NotchController.AGENT_SLOT) { this.historyTask = NotchController.AGENT_SLOT; this.historyLimit = 10 }
     const detail: TaskDetailP = {
       id: NotchController.AGENT_SLOT,
       title: 'Unmute',
@@ -1701,7 +1739,7 @@ export class NotchController {
       terminal: false,
       owned: false,
       resumable: false,
-      blocks: this.agentBlocks,
+      ...messageWindow(this.agentBlocks, this.historyLimit),
       draft: { text: this.agentDraft, attachments: [], clientRevision: this.agentDraftRevision },
       ...(this.agentBusy ? { activity: 'Thinking' } : {}),
     }
@@ -1815,10 +1853,16 @@ export class NotchController {
     const slots = this.pocketSlots()
     const n = slots.length
     if (!n) return
+    const current = slots.findIndex(slot => slot.id === this.focusedId)
+    if (current >= 0) this.pocketAt = current
     for (let walked = 0; walked < n; walked++) {
       this.pocketAt = (this.pocketAt + delta + n * 2) % n
       const slot = slots[this.pocketAt]
       if (slot?.kind === 'agent') continue
+      if (slot?.id) {
+        const opened = this.deps.getTask(slot.id)
+        if (opened) this.attentionAcknowledged.set(slot.id, opened.state)
+      }
       this.setFocus(slot?.id ?? null)
       this.reconcile()
       return
@@ -1827,7 +1871,11 @@ export class NotchController {
 
   /** Nail the pocket's order down for this visit. Idempotent. */
   private holdOrder(): void {
-    if (!this.frozenOrder) this.frozenOrder = this.pocketList().map((t) => t.id)
+    if (!this.frozenOrder) {
+      const tasks = this.pocketList()
+      this.frozenOrder = tasks.map(t => t.id)
+      this.frozenInputTimes = new Map(tasks.map(t => [t.id, this.addressedAt(t)]))
+    }
   }
 
   /** Opening a task makes its provider reachable without counting as work. */
@@ -1857,7 +1905,6 @@ export class NotchController {
     // the flag would outlive its reason and a hidden card could only be
     // recovered from the dashboard.
     this.deps.setShelved(id, false)
-    this.addressed(id)
     const at = this.pocketSlots().findIndex((slot) => slot.kind !== 'agent' && slot.id === id)
     if (at < 0) { this.onFocusTask(id); return }
     this.engaged = 'none'
@@ -1872,7 +1919,8 @@ export class NotchController {
     this.leaveAgent()
     this.deps.setShelved(id, false)
     this.engaged = 'cockpit'
-    this.addressed(id)
+    const opened = this.deps.getTask(id)
+    if (opened) this.attentionAcknowledged.set(id, opened.state)
     this.setFocus(id)
     this.reconcile()
   }
@@ -2009,6 +2057,8 @@ export class NotchController {
   private leaveAgent(): void {
     if (!this.agentOpen) return
     this.agentOpen = false
+    this.historyTask = null
+    this.historyLimit = 10
     log.ui('agent-chat', { shown: false, why: 'another surface took the front' })
   }
 
@@ -2113,6 +2163,8 @@ export class NotchController {
    * lands in reach, one press away.
    */
   private seenThenClose(opts: { collapse?: boolean } = {}): void {
+    this.historyLimit = 10
+    this.historyTask = null
     // THE CHAT CLOSES LIKE ANYTHING ELSE. Without this the controller goes on
     // believing the Agent is the expanded surface — so the voice stays pointed
     // at it after you have left, and a later answer never marks itself unread
@@ -2157,7 +2209,10 @@ export class NotchController {
     if (this.cameFromPocket) {
       this.cameFromPocket = false
       this.engaged = 'none'
-      this.setPocketMode('open')      // keeps frozenOrder — you never left
+      this.frozenOrder = null
+      const restored = this.pocketSlots().findIndex(slot => slot.id === id)
+      if (restored >= 0) this.pocketAt = restored
+      this.setPocketMode('open')
       this.applyVoiceTarget()
       this.reconcile()
       return
@@ -2325,6 +2380,7 @@ export class NotchController {
       this.conversing.add(id)
     }
     this.deps.converseWrite(id, text + '\r')
+    this.addressed(id)
   }
 
   // ── external notifications (init forwards these) ───────────────────────────
@@ -2347,7 +2403,7 @@ export class NotchController {
     // utterance actually went, and speaking to a task is the plainest form of
     // talking to it there is — but it never passes through a handler here, so
     // without this the one thing the pocket is FOR would not move the order.
-    if (phase === 'idle' && taskId) this.addressed(taskId)
+    // Recency advances on accepted user input, not on a capture ending.
     const t = taskId ? this.deps.getTask(taskId) : undefined
     const target = t ? (t.name ?? truncate(t.intent)) : undefined
     this.client.send({ type: 'capturePhase', phase, target })
@@ -2482,6 +2538,7 @@ export class NotchController {
     const external = providerOf(t.agent).transport === 'driver'
     return {
       id: t.id,
+      canEditLatestMessage: this.deps.canEditLatestMessage?.(t.id) ?? false,
       title: t.name ?? truncate(t.intent),
       origin: t.origin ?? undefined,
       agentRunId: t.agentRunId ?? undefined,
@@ -2519,11 +2576,12 @@ export class NotchController {
       // (transcript.ts), so all three backends now speak the same shape and the
       // stage can show the message AND the terminal. `terminal` above still
       // says whether there is a PTY to draw underneath it.
-      conversation: t.conversation ?? [],
+      conversation: (t.conversation ?? []).slice(-this.historyLimit),
       // THE CHAT VIEW. Read from the agent's own source, so an OLD thread shows
       // its full history the moment it is opened — the source file outlives the
       // card, and outlived the version of Unmute that could not read it.
-      ...(t.blocks?.length ? { blocks: t.blocks } : {}),
+      ...messageWindow(t.blocks ?? [], this.historyLimit),
+      ...(!t.blocks?.length ? { olderMessages: Math.max(0, (t.conversation?.length ?? 0) - this.historyLimit) } : {}),
       ...(t.usage ? { usage: t.usage } : {}),
       // ALWAYS SENT — the same fix toCard needed, in the payload one surface
       // over. Driver-only meant a Codex CLI task's expansion arrived with no
@@ -2583,7 +2641,8 @@ export class NotchController {
     // and populate later, or never. The source file is still on disk; this asks
     // for it. Fire-and-forget: it emits `updated` when it finds anything, which
     // re-sends this detail with the blocks attached.
-    void this.deps.loadBlocks?.(task.id)
+    if (this.historyTask !== task.id) void this.deps.loadBlocks?.(task.id)
+    if (this.historyTask !== task.id) { this.historyTask = task.id; this.historyLimit = 10 }
     const detail = this.toDetail(task)
     const json = JSON.stringify(detail)
     // Dedupe only against what this surface is CURRENTLY showing. Keying by

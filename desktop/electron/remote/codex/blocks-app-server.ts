@@ -368,10 +368,10 @@ export class CodexBlockStream {
   }
 
   /** Apply one notification. Returns true when the thread's blocks changed. */
-  push(ev: CodexNotification): boolean {
+  push(ev: CodexNotification, receivedAt?: number): boolean {
     const revision = this.revision
     const metadata = JSON.stringify([this.usage, this.name])
-    this.applyOne(ev)
+    this.applyOne(ev, receivedAt)
     return revision !== this.revision || metadata !== JSON.stringify([this.usage, this.name])
   }
 
@@ -386,9 +386,16 @@ export class CodexBlockStream {
   /** Pending approval details use the same item the transcript renders. */
   item(id: string): Block | undefined { return this.byId.get(id) }
 
-  private applyOne(ev: CodexNotification): void {
+  private applyOne(ev: CodexNotification, receivedAt?: number): void {
     const p = obj(ev.params)
-    const upsert = (id: string, b: Block | null) => this.upsert(id, b)
+    const upsert = (id: string, b: Block | null) => {
+      if (b?.kind === 'message') {
+        const previous = this.byId.get(id)
+        const at = b.at ?? (previous?.kind === 'message' ? previous.at : undefined) ?? receivedAt
+        if (at !== undefined) b = { ...b, at }
+      }
+      this.upsert(id, b)
+    }
     const order = this.order
     const byId = this.byId
     const deltas = this.deltas

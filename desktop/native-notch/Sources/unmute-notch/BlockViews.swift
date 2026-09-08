@@ -20,11 +20,15 @@ import ConversationSupport
 struct BlockTurnView: View {
     let turn: BlockTurn
     let taskId: String
+    var canEdit: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let prompt = turn.prompt, let text = prompt.text {
-                BlockUserBubble(text: text)
+                VStack(alignment: .trailing, spacing: 5) {
+                    BlockUserBubble(text: text)
+                    MessageActions(text: text, at: prompt.at, taskId: taskId, canEdit: canEdit)
+                }
             }
             ForEach(Array(turn.work.filter { $0.kind == "attachment" }.enumerated()), id: \.offset) { _, attachment in
                 if let path = attachment.path, !path.isEmpty {
@@ -59,7 +63,10 @@ struct BlockTurnView: View {
                 }
             }
             if let reply = turn.reply, let text = reply.text {
-                BlockAnswer(text: text)
+                VStack(alignment: .leading, spacing: 7) {
+                    BlockAnswer(text: text)
+                    MessageActions(text: text, at: reply.at)
+                }
             }
         }
     }
@@ -655,7 +662,60 @@ private struct BlockAnswer: View {
         // Every native conversation surface uses the same cmark-gfm-backed
         // renderer. Keeping a second block parser here caused valid tables to
         // be flattened into literal pipe-delimited paragraphs.
-        RichText(text: text, size: 14, color: Theme.text)
+        SelectableMessage(text: text, size: 14, color: Theme.text)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Actions belong to a whole message, including all paragraphs and tables.
+private struct MessageActions: View {
+    let text: String
+    let at: Double?
+    var taskId: String = ""
+    var canEdit: Bool = false
+    @State private var copied = false
+    @State private var editing = false
+    @State private var replacement = ""
+    @State private var submitting = false
+    @State private var editError: String?
+    var body: some View {
+        HStack(spacing: 10) {
+            if let at {
+                Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.day().month(.abbreviated).hour().minute())
+            }
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+            } label: { Image(systemName: copied ? "checkmark" : "doc.on.doc") }
+            .buttonStyle(.plain).help("Copy message").accessibilityLabel("Copy message")
+            if canEdit {
+                Button { replacement = text; editError = nil; editing = true } label: { Image(systemName: "pencil") }
+                    .buttonStyle(.plain).help("Edit latest message").accessibilityLabel("Edit latest message")
+            }
+        }.font(.system(size: 10.5)).foregroundColor(Theme.textFaint)
+        .popover(isPresented: $editing) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Edit latest message").font(.headline)
+                TextEditor(text: $replacement).font(.system(size: 14)).frame(width: 480, height: 180)
+                    .disabled(submitting)
+                if let editError { Text(editError).foregroundColor(Theme.cError) }
+                HStack {
+                    Button("Cancel") { editing = false }.disabled(submitting)
+                    Spacer()
+                    Button(submitting ? "Regenerating…" : "Save and regenerate") {
+                        submitting = true; editError = nil
+                        IPC.emit(.editLatestMessage(id: taskId, expected: text, text: replacement))
+                    }.disabled(submitting || replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }.padding(18)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("UnmuteMessageEditStatus"))) { event in
+            guard event.userInfo?["id"] as? String == taskId else { return }
+            submitting = false
+            if event.userInfo?["accepted"] as? Bool == true { editing = false }
+            else { editError = event.userInfo?["error"] as? String }
+        }
     }
 }

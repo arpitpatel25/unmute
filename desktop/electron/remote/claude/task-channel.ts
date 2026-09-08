@@ -63,6 +63,7 @@ export class ClaudeTaskChannel {
   event(event: ClaudeTaskEvent): void {
     if (event.type === 'message') {
       let f = normalizeFrame(event.message)
+      if ((f.type === 'user' || f.type === 'assistant') && !f.timestamp) f = { ...f, timestamp: new Date().toISOString() }
       if (f.type === 'system' && Array.isArray(f.mcp_servers)) {
         for (const server of f.mcp_servers) if (typeof server.name === 'string' && typeof server.status === 'string') {
           this.patch({ mcpStatus: { name: server.name, status: server.status,
@@ -149,7 +150,7 @@ export class ClaudeTaskChannel {
 
   private finishPartial(): void {
     if (this.partial.size) {
-      const frame = { type: 'assistant', message: { content: [...this.partial.values()] } }
+      const frame = { type: 'assistant', timestamp: new Date().toISOString(), message: { content: [...this.partial.values()] } }
       this.frames.push(frame)
       this.serializedFrames += `${this.serializedFrames ? '\n' : ''}${JSON.stringify(frame)}`
       this.persist?.(this.frames)

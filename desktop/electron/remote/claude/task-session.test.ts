@@ -273,3 +273,11 @@ test('a result before the stdin write callback cannot be followed by a late turn
   assert.equal(f.driver.busy, false)
   f.driver.close()
 })
+
+test('editing forks from an exact message checkpoint', async () => {
+ const source = 'f58420a1-6377-4c87-815f-df099cb194ce'
+ const f = fixture(false, { forkFromSessionId: source, resumeSessionAt: 'prior-assistant' })
+ await f.driver.start()
+ assert.equal(f.args()[f.args().indexOf('--resume-session-at') + 1], 'prior-assistant')
+ f.driver.close()
+})

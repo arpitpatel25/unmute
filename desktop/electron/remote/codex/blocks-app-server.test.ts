@@ -293,3 +293,11 @@ test('a delete reads as Deleted', () => {
   assert.equal((b as any).removed, 2)
   assert.equal((b as any).added, 0)
 })
+
+test('live message timestamps remain stable across deltas, while undated history stays undated', () => {
+ const stream = new CodexBlockStream()
+ stream.push({ method: 'item/agentMessage/delta', params: { itemId: 'answer', delta: 'Hi' } }, 1000)
+ stream.push({ method: 'item/agentMessage/delta', params: { itemId: 'answer', delta: ' there' } }, 2000)
+ const message = stream.snapshot().blocks.find(b => b.kind === 'message')
+ assert.equal(message?.kind === 'message' ? message.at : undefined, 1000)
+})

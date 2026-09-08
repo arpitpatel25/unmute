@@ -216,7 +216,10 @@ test('streamed text is replaced by the final frame, and replayed messages are de
   const frame = { type: 'assistant', uuid: 'a', message: { id: 'm', content: [{ type: 'text', text: 'Hello world' }] } }
   c.event({ type: 'message', message: frame })
   c.event({ type: 'message', message: frame })
-  assert.deepEqual(patches.at(-1).blocks, [{ kind: 'message', role: 'assistant', text: 'Hello world' }])
+  const at = patches.at(-1).blocks[0].at
+  assert.equal(typeof at, 'number')
+  assert.ok(Math.abs(Date.now() - at) < 1000)
+  assert.deepEqual(patches.at(-1).blocks, [{ kind: 'message', role: 'assistant', text: 'Hello world', at }])
 })
 
 test('questions remain separately correlated and advance only after delivered answers', async () => {

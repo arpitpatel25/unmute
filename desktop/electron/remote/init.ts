@@ -1778,11 +1778,17 @@ async function performSendTaskDraft(id: string, source: TaskReplySource, onSnaps
 let codexHub: CodexHub | null = null
 /** Detached provider owner. The Electron UI only holds this reconnectable socket. */
 let persistentRuntime: PersistentRuntimeClient | null = null
+let claudeEditRuntime: PersistentRuntimeClient | null = null
 let codexRuntimeRouting: CompatibleCodexRuntime | null = null
 let agentRuntimeRouting: CompatibleAgentRuntime | null = null
 let releaseAgentRuntimeHost: (() => void) | null = null
 let releaseRuntimeHost: (() => void) | null = null
 let persistentRuntimeReady: Promise<void> = Promise.resolve()
+
+async function listClaudeRuntimeSessions(): Promise<Array<{ sessionId: string; alive: boolean }>> {
+  const runtimes = [persistentRuntime, claudeEditRuntime].filter((r): r is PersistentRuntimeClient => !!r)
+  return (await Promise.all(runtimes.map(r => r.call<Array<{ sessionId: string; alive: boolean }>>('claude.list')))).flat()
+}
 
 async function persistentSessionEndpoints(taskId: string): Promise<{ env: Record<string, string>; computerUrl: string; computerEnabled: boolean }> {
   const runtime = persistentRuntime
@@ -2392,6 +2398,7 @@ function serializeTask(t: Task) {
     // TaskLite's optional field says exactly that. A null would have to be
     // handled as a third case by every reader.
     codexActivity: t.codexActivity,
+    lastUserInputAt: t.lastUserInputAt,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     result: t.result ?? null,
@@ -4808,6 +4815,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
 
   const runtimeRoot = join(app.getPath('userData'), 'persistent-runtime')
   persistentRuntime = new PersistentRuntimeClient(runtimeRoot, join(__dirname, 'unmute-runtime.js'))
+  // Checkpoint forks need the updated CLI adapter; existing live sessions keep their owner.
+  claudeEditRuntime = new PersistentRuntimeClient(join(runtimeRoot, 'claude-edits-v1'), join(__dirname, 'unmute-runtime.js'))
+  claudeEditRuntime.on('reconnected', () => {
+    void (async () => {
+      const sessions = await claudeEditRuntime!.call<Array<{ sessionId: string; alive: boolean }>>('claude.list')
+      const live = new Set(sessions.filter(session => session.alive).map(session => session.sessionId))
+      await Promise.all(manager?.list().filter(task => task.claudeResumeSessionAt && live.has(task.sessionId))
+        .map(task => manager!.resume(task.id, { touchActivity: false })) ?? [])
+      notchController?.refresh()
+    })().catch(error => log.warn('Claude edit runtime recovery failed', { error: (error as Error).message }))
+  })
   releaseRuntimeHost = registerRuntimeHost(persistentRuntime, invokeRuntimeHost)
   const agentWorker = new PersistentRuntimeClient(join(app.getPath('userData'), 'persistent-runtime-agent-metadata-v1'), join(__dirname, 'unmute-runtime.js'))
   releaseAgentRuntimeHost = registerRuntimeHost(agentWorker, invokeRuntimeHost)
@@ -4845,7 +4863,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       await runtime.call('hello')
       await (codexHub as PersistentCodexHub | null)?.reconnect()
       if (unmuteAgentLifecycle instanceof AgentRuntimeClient) await unmuteAgentLifecycle.reconnect()
-      const sessions = await runtime.call<Array<{ sessionId: string; alive: boolean }>>('claude.list')
+      const sessions = await listClaudeRuntimeSessions()
       const live = new Set(sessions.filter(session => session.alive).map(session => session.sessionId))
       await Promise.all(manager?.list().filter(task => task.claudeSessionSettings && live.has(task.sessionId))
         .map(task => manager!.resume(task.id, { touchActivity: false })) ?? [])
@@ -4944,12 +4962,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // reference: the hub is constructed BEFORE the manager it feeds, and closing
   // over a `manager` that is still undefined is how a stream of events would
   // land silently on nothing.
-  // Preserve both generations' live owners. Only new forks use the worker
-  // that implements durable confirmation/status and targeted history.
+  // Preserve older live owners. New forks/edits use v4, which supports
+  // operation-scoped fork receipts, rollback, and forced recovery.
   codexRuntimeRouting = new CompatibleCodexRuntime(
-    new CompatibleCodexRuntime(persistentRuntime!,
-      new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v2'), join(__dirname, 'unmute-runtime.js'))),
-    new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v3'), join(__dirname, 'unmute-runtime.js')))
+    new CompatibleCodexRuntime(
+      new CompatibleCodexRuntime(persistentRuntime!,
+        new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v2'), join(__dirname, 'unmute-runtime.js'))),
+      new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v3'), join(__dirname, 'unmute-runtime.js'))),
+    new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v4'), join(__dirname, 'unmute-runtime.js')))
   codexHub = new PersistentCodexHub(codexRuntimeRouting, {
     approvalCap: taskId => ({ fullAccessAllowed: manager?.chatFullAccessAllowed(taskId) === true, roots: settings.get('sandboxRoots') ?? [] }),
     loadPlans: async (taskId, threadId) => {
@@ -5040,7 +5060,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         env,
       }
     },
-    claudeTaskFactory: options => new PersistentClaudeTaskSession(persistentRuntime!, options),
+    claudeTaskFactory: (options, task) => new PersistentClaudeTaskSession(task.claudeResumeSessionAt ? claudeEditRuntime! : persistentRuntime!, options),
     groupRegistry,
     codexHub,
     // The path fence, read fresh per dispatch so a task started after the
@@ -5282,6 +5302,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           holdBackgroundAudio: () => deps.backgroundAudio!.hold(),
           releaseBackgroundAudio: () => deps.backgroundAudio!.release(),
         } : {}),
+        canEditLatestMessage: id => mgr.canEditLatestMessage(id) && !taskFollowups?.view(id) && !taskFollowups?.isSubmitting(id),
+        editLatestMessage: async (id, expected, text) => {
+          if (taskFollowups?.view(id) || taskFollowups?.isSubmitting(id)) return false
+          try { return await mgr.editLatestMessage(id, expected, text) }
+          catch (error) {
+            const draft = taskDrafts.get(id)
+            if (!draft.text && !draft.attachments.length) taskDrafts.setText(id, text)
+            throw error
+          }
+        },
         getDraft: (id) => taskDrafts.get(id),
         getFollowup: id => taskFollowups?.view(id),
         getComposerMode: id => manager?.followupScope(id) ? taskFollowups?.composerMode(id) : undefined,
@@ -5786,7 +5816,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   void manager.rehydrate().then(async () => {
     await persistentRuntimeReady
     await (codexHub as PersistentCodexHub).reconnect()
-    const claudeSessions = await persistentRuntime!.call<Array<{ sessionId: string; alive: boolean }>>('claude.list')
+    const claudeSessions = await listClaudeRuntimeSessions()
     const liveClaude = new Set(claudeSessions.filter(session => session.alive).map(session => session.sessionId))
     await Promise.all(manager!.list().filter(task => task.claudeSessionSettings && liveClaude.has(task.sessionId))
       .map(task => manager!.resume(task.id, { touchActivity: false })))
@@ -6223,6 +6253,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     releaseAgentRuntimeHost?.(); releaseAgentRuntimeHost = null
     agentRuntimeRouting?.disconnect(); agentRuntimeRouting = null
     codexRuntimeRouting?.disconnect(); codexRuntimeRouting = null
+    claudeEditRuntime?.disconnect(); claudeEditRuntime = null
     persistentRuntime?.disconnect(); persistentRuntime = null
   })
   // Prove the App Server transport in THIS build, once, at launch. Backgrounded

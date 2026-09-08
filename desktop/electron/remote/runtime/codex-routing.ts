@@ -28,7 +28,9 @@ export class CompatibleCodexRuntime extends RuntimeRpcClient {
     if (method === 'codex.prepare') this.preparations.set(id, args)
     if (method === 'codex.forkThread') {
       const info = await this.current.call<{ capabilities: string[] }>('runtime.info')
-      if (!['codex.forkThread', 'codex.forkResult', 'codex.targetedSnapshot'].every(cap => info.capabilities?.includes(cap))) {
+      const required = ['codex.forkThread', 'codex.forkResult', 'codex.targetedSnapshot']
+      if (args[3]) required.push('codex.editLatestMessage')
+      if (!required.every(cap => info.capabilities?.includes(cap))) {
         diagnostic('codex-runtime-incompatible', { taskId: id, capabilities: info.capabilities })
         throw new Error('Background runtime needs an update; do not retry this fork')
       }

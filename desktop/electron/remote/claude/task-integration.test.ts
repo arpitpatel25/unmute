@@ -504,3 +504,46 @@ test('externally owned conversation cannot silently acquire a second structured 
   assert.match(manager.get(id)!.deliveryError!, /read-only/)
   manager.shutdown()
 })
+
+test('editing latest Claude message forks at the preceding answer and keeps the task identity', async () => {
+  const baseDir = await mkdtemp(join(tmpdir(), 'unmute-edit-integration-'))
+  const launches: ClaudeTaskOptions[] = []
+  const checkpointOwners: boolean[] = []
+  let sequence = 0
+  const manager = new TaskManager({
+    baseDir, executorFactory: () => { throw new Error('No PTY') },
+    claudeChoice: () => ({ model: 'sonnet', permissionMode: 'manual' }),
+    claudeSessionOptions: async task => ({ binary: 'fake', cwd: task.cwd }),
+    claudeTaskFactory: (options, task) => {
+      checkpointOwners.push(Boolean(task.claudeResumeSessionAt))
+      launches.push(options)
+      return { alive: true, busy: false, async start() {}, close() {},
+        async send(text: string) {
+          const n = ++sequence
+          options.onEvent({ type: 'message', message: { type: 'user', uuid: `user-${n}`, message: { content: text } } })
+          options.onEvent({ type: 'message', message: { type: 'assistant', uuid: `answer-${n}`, message: { content: [{ type: 'text', text: `Reply ${n}` }] } } })
+          options.onEvent({ type: 'result', message: { type: 'result', subtype: 'success', is_error: false } })
+          return { submissionId: `send-${n}`, sessionId: options.sessionId! }
+        },
+      } as never
+    },
+  })
+  try {
+    const id = await manager.dispatch('First')
+    await manager.deliverDraft(id, 'Second', [])
+    const source = manager.get(id)!.sessionId
+    assert.equal(manager.canEditLatestMessage(id), true)
+    await assert.rejects(manager.editLatestMessage(id, 'Second', '/clear'), /Terminal-only/ )
+    assert.equal(manager.get(id)!.sessionId, source)
+    assert.equal(launches.length, 1)
+    assert.equal(await manager.editLatestMessage(id, 'Second', 'Corrected'), true)
+    assert.notEqual(manager.get(id)!.sessionId, source)
+    assert.equal(launches[1].forkFromSessionId, source)
+    assert.equal(launches[1].resumeSessionAt, 'answer-1')
+    assert.deepEqual(checkpointOwners, [false, true])
+    const prompts = manager.get(id)!.blocks!.filter(b => b.kind === 'message' && b.role === 'user').map(b => b.kind === 'message' ? b.text : '')
+    assert.deepEqual(prompts, ['First', 'Corrected'])
+    assert.equal(manager.get(id)!.id, id)
+    await assert.rejects(manager.editLatestMessage(id, 'Second', 'Stale'), /latest message changed/)
+  } finally { manager.shutdown() }
+})

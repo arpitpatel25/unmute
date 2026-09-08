@@ -300,7 +300,7 @@ struct PocketRow: View {
                     ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true,
                                  size: PocketRowMetrics.markSize)
                     Spacer().frame(width: PocketRowMetrics.cardGap)
-                    Text(slot?.title ?? "Nothing in your pocket")
+                    Text(.init(slot?.title ?? "Nothing in your pocket"))
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundColor(quiet ? Theme.textDim : Theme.text)
                         .lineLimit(1).truncationMode(.tail)
@@ -492,7 +492,7 @@ struct PocketCard: View {
             }
             // The mark already says "Unmute"; the title would say it again.
             if !PocketFace.isAgent(slot) || headerInShoulders {
-                Text(slot?.title ?? "Nothing in your pocket")
+                Text(.init(slot?.title ?? "Nothing in your pocket"))
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundColor(quiet ? Theme.textDim : Theme.text)
                     .lineLimit(1).truncationMode(.tail)

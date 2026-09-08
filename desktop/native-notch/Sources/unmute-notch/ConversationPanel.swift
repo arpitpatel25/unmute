@@ -34,12 +34,15 @@ struct ConversationPanel: View {
     /// certain; the blocks often cannot say — see BlockPresentation.build.
     var running: Bool = false
     var history: ChatHistoryState? = nil
+    var canEditLatestMessage: Bool = false
+    var olderMessages: Int = 0
+    var loadOlder: () -> Void = {}
 
     private var visibleBlocks: [Block] { blocks.isEmpty ? ConversationPresentation.blocks(from: rows) : blocks }
 
     var body: some View {
         if !visibleBlocks.isEmpty {
-            BlockConversation(turns: BlockPresentation.build(visibleBlocks, running: running), id: id, usage: usage)
+            BlockConversation(turns: BlockPresentation.build(visibleBlocks, running: running), id: id, usage: usage, olderMessages: olderMessages, loadOlder: loadOlder, canEditLatestMessage: canEditLatestMessage)
                 // A task switch must create a fresh positioning lifecycle. This
                 // prevents SwiftUI from reusing a hidden transcript while the
                 // previous task's scroll state is still being reconciled.
@@ -394,8 +397,6 @@ struct StageComposer: View {
                 HStack(alignment: .bottom, spacing: 8) {
                     Menu {
                         Button("Attach files and images", action: pickFiles)
-                        Divider()
-                        Button("New conversation…") { newChatOpen = true }
                     } label: {
                         Image(systemName: "plus").frame(width: 28, height: 28)
                     }

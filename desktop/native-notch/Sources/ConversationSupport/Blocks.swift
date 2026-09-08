@@ -49,6 +49,7 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
     public let kind: String
 
     // message
+    public let at: Double?
     public let role: String?
     public let text: String?
 
@@ -121,7 +122,7 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
     public var isUser: Bool { kind == "message" && role == "user" }
     public var isAssistant: Bool { kind == "message" && role == "assistant" }
 
-    public init(kind: String, role: String? = nil, text: String? = nil, streaming: Bool? = nil,
+    public init(kind: String, at: Double? = nil, role: String? = nil, text: String? = nil, streaming: Bool? = nil,
                 label: String? = nil, command: String? = nil, cwd: String? = nil, exitCode: Int? = nil,
                 output: String? = nil, durationMs: Int? = nil, status: String? = nil,
                 path: String? = nil, verb: String? = nil, added: Int? = nil, removed: Int? = nil,
@@ -135,6 +136,7 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
         self.diff = diff; self.changes = changes; self.error = error; self.outcome = outcome
         self.mimeType = mimeType; self.bytes = bytes
         self.startedAt = startedAt
+        self.at = at
         self.kind = kind; self.role = role; self.text = text; self.streaming = streaming
         self.label = label; self.command = command; self.cwd = cwd; self.exitCode = exitCode
         self.output = output; self.durationMs = durationMs; self.status = status

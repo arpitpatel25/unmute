@@ -1,3 +1,4 @@
+import { claudeEditPrefix } from './claude/edit-prefix'
 // Unmute Remote — task manager: the orchestrator (PRD §4.4, §5, §6, §13.6).
 //
 // Owns the full lifecycle of a Remote task:
@@ -346,6 +347,7 @@ export interface Task {
   /** An empty GUI conversation has not submitted a provider turn yet. */
   chatUnstarted?: boolean
   claudeForkFromSessionId?: string
+  claudeResumeSessionAt?: string
   importedFromCli?: boolean
   sessionOwnership?: 'unmute' | 'external' | 'unknown'
   /** Token usage for the panel footer, when the provider reports it. */
@@ -489,7 +491,7 @@ export interface Task {
 export interface TaskManagerOpts {
   /** Session-scoped credentials/configuration, rebuilt on resume; never persisted. */
   claudeSessionOptions?: (task: Task) => Promise<Omit<ClaudeTaskOptions, 'onEvent' | 'resume'>>
-  claudeTaskFactory?: (options: ClaudeTaskOptions) => ClaudeTaskSession
+  claudeTaskFactory?: (options: ClaudeTaskOptions, task: Task) => ClaudeTaskSession
   claudeChoice?: (context?: { cwd: string; home: string; managedProjectId?: string }) => NonNullable<Task['claudeSessionSettings']>
   /** Creates a fresh executor per task (default: ClaudeCodeExecutor). */
   executorFactory: ExecutorFactory
@@ -1293,8 +1295,13 @@ export class TaskManager extends EventEmitter {
         this.claudeHistoryWrites.set(task.id, writes)
       })
       if (resume || task.claudeForkFromSessionId) {
-        const recovered = await readClaudeHistory({ ...task, sessionId: task.claudeForkFromSessionId ?? task.sessionId, chatUnstarted: false })
+        const recovered = await readClaudeHistory({ ...task, sessionId: !resume && task.claudeForkFromSessionId ? task.claudeForkFromSessionId : task.sessionId, chatUnstarted: false })
         restoredFrames = recovered.frames
+        if (!resume && task.claudeResumeSessionAt) {
+          const cutoff = restoredFrames.findIndex(frame => frame.uuid === task.claudeResumeSessionAt)
+          if (cutoff < 0) throw new Error('The edit checkpoint is missing from Claude history.')
+          restoredFrames = restoredFrames.slice(0, cutoff + 1)
+        }
         task.history = recovered.history
         if (recovered.history.phase !== 'ready') {
           const retained = task.blocks?.length ? task.blocks : (task.conversation ?? []).map(m => ({ kind: 'message', role: m.role, text: m.text }))
@@ -1313,9 +1320,9 @@ export class TaskManager extends EventEmitter {
         this.mergeMeta(task, { claudeSessionSettings: task.claudeSessionSettings }, 'record-browser-choice')
         await this.metaChains.get(task.id)
       }
-      const driver = (this.opts.claudeTaskFactory ?? (o => new ClaudeTaskSession(o)))({
+      const driver = (this.opts.claudeTaskFactory ?? ((o: ClaudeTaskOptions, _task: Task) => new ClaudeTaskSession(o)))({
         ...options, ...task.claudeSessionSettings, sessionId: task.sessionId, cwd: task.cwd, resume,
-        ...(!resume && task.claudeForkFromSessionId ? { forkFromSessionId: task.claudeForkFromSessionId } : {}),
+        ...(!resume && task.claudeForkFromSessionId ? { forkFromSessionId: task.claudeForkFromSessionId, resumeSessionAt: task.claudeResumeSessionAt } : {}),
         onEvent: e => {
           const live = this.claudeTasks.get(task.id)
           if (!live || live.channel !== channel) return
@@ -1332,7 +1339,7 @@ export class TaskManager extends EventEmitter {
             })
           } else this.emit('followup-ready', { taskId: task.id })
         },
-      })
+      }, task)
       this.followupGenerations.set(driver, ++this.followupNextGeneration)
       this.emit('followup-disarm', { taskId: task.id })
       this.claudeTasks.set(task.id, { driver, channel })
@@ -3978,6 +3985,7 @@ export class TaskManager extends EventEmitter {
       continuationArtifacts: task.continuationArtifacts,
       continuationConfidence: task.continuationConfidence,
       claudeForkFromSessionId: task.claudeForkFromSessionId,
+      claudeResumeSessionAt: task.claudeResumeSessionAt,
       conversation: task.conversation ?? [],
       turnOutcome: task.turnOutcome,
     }, 'state')
@@ -4304,6 +4312,8 @@ export class TaskManager extends EventEmitter {
         ...(meta.codexRolloutId ? { codexRolloutId: meta.codexRolloutId } : {}),
         ...((meta as { codexSessionSettings?: StartThreadOpts }).codexSessionSettings
           ? { codexSessionSettings: (meta as { codexSessionSettings: StartThreadOpts }).codexSessionSettings } : {}),
+        claudeForkFromSessionId: (meta as Task).claudeForkFromSessionId,
+        claudeResumeSessionAt: (meta as Task).claudeResumeSessionAt,
         ...((meta as Task).claudeSessionSettings ? { claudeSessionSettings: (meta as Task).claudeSessionSettings } : {}),
         ...((meta as Task).managedProjectId ? { managedProjectId: (meta as Task).managedProjectId } : {}),
         ...((meta as Task).permissionReason ? { permissionReason: (meta as Task).permissionReason } : {}),
@@ -5480,8 +5490,76 @@ export class TaskManager extends EventEmitter {
     return true
   }
 
-  /** Deliver an attachment-bearing draft through the provider's native image
-   * channel. Filesystem paths are never rendered into the user's message. */
+  /** Only the latest text-only prompt in an idle owned session can be edited. */
+  canEditLatestMessage(id: string): boolean {
+    const task = this.tasks.get(id)
+    if (!task || task.sessionOwnership !== 'unmute' || task.sending || task.state === 'processing' || task.state === 'needs-user'
+      || !(task.claudeSessionSettings || task.codexSessionSettings)) return false
+    const blocks = task.blocks ?? []
+    let index = -1
+    blocks.forEach((b, i) => { if (b.kind === 'message' && b.role === 'user') index = i })
+    return index >= 0 && !blocks.slice(index).some(b => b.kind === 'attachment')
+  }
+
+  /** Edit on a provider-native branch, retaining the original session as recovery history. */
+  async editLatestMessage(id: string, expected: string, replacement: string): Promise<boolean> {
+    if (!this.canEditLatestMessage(id) || !replacement.trim()) return false
+    const task = this.tasks.get(id)!
+    const latest = [...(task.blocks ?? [])].reverse().find(b => b.kind === 'message' && b.role === 'user')
+    if (latest?.kind !== 'message' || latest.text !== expected) throw new Error('The latest message changed. Reopen it before editing.')
+    if (/^\/(clear|compact|model|permissions|resume|quit)\s*$/i.test(replacement.trim())) {
+      throw new Error('Terminal-only commands cannot replace a message. Your original conversation is unchanged.')
+    }
+    task.sending = true
+    const source = task.sessionId
+    const before = { sessionId: task.sessionId, blocks: task.blocks, conversation: task.conversation, chatUnstarted: task.chatUnstarted,
+      claudeForkFromSessionId: task.claudeForkFromSessionId, claudeResumeSessionAt: task.claudeResumeSessionAt, codexRolloutId: task.codexRolloutId }
+    let prepared = false
+    let originalClaudeFrames: Array<Record<string, any>> | undefined
+    try {
+      await writeFileAtomic(join(task.home, `chat-edit-${randomUUID()}.json`), JSON.stringify({ ...before, replacement }))
+      if (task.codexSessionSettings && this.opts.codexHub) {
+        const gate = this.opts.codexHub.followupGate(id)
+        if (gate.kind !== 'idle' || gate.blocked) throw new Error('Wait for Codex to finish before editing.')
+        const fork = await this.opts.codexHub.forkThread(id, source, task.codexSessionSettings, randomUUID())
+        task.sessionId = fork.threadId; task.codexRolloutId = fork.threadId
+        await this.opts.codexHub.rollbackLatestTurn(id, task.codexSessionSettings)
+      } else if (task.claudeSessionSettings) {
+        const live = this.claudeTasks.get(id)
+        if (live?.driver.busy || live?.driver.followupUnavailable || live?.channel.pending) throw new Error('Wait for Claude to finish before editing.')
+        await this.claudeHistoryWrites.get(id)
+        const history = await readClaudeHistory(task)
+        if (history.history.phase !== 'ready') throw new Error('Load the complete source history before editing.')
+        originalClaudeFrames = history.frames
+        const prefix = claudeEditPrefix(history.frames, expected)
+        this.claudeTasks.delete(id); live?.driver.close()
+        task.sessionId = randomUUID()
+        task.claudeForkFromSessionId = prefix.resumeAt ? source : undefined
+        task.claudeResumeSessionAt = prefix.resumeAt
+        task.chatUnstarted = true
+        task.blocks = blocksFromClaudeTranscript(ClaudeTaskChannel.displayTranscript(prefix.frames)).blocks
+        task.conversation = []
+        await writeFileAtomic(join(task.home, 'chat-frames.json'), JSON.stringify(prefix.frames))
+        await this.connectClaude(task, false)
+      } else throw new Error('This provider cannot edit messages.')
+      prepared = true
+      await this.persistState(task)
+      const accepted = await this.deliverDraft(id, replacement, [])
+      if (!accepted) throw new Error(task.deliveryError || 'The edited message was not accepted. Your replacement is saved as a draft.')
+      return true
+    } catch (error) {
+      if (!prepared) {
+        const failed = this.claudeTasks.get(id); this.claudeTasks.delete(id); failed?.driver.close()
+        Object.assign(task, before)
+        if (originalClaudeFrames) await writeFileAtomic(join(task.home, 'chat-frames.json'), JSON.stringify(originalClaudeFrames))
+        if (task.codexSessionSettings && this.opts.codexHub) await this.opts.codexHub.resumeThread(id, source, task.codexSessionSettings, true).catch(() => {})
+        await this.persistState(task)
+      }
+      task.deliveryError = (error as Error).message
+      throw error
+    } finally { task.sending = false; this.emit('updated', task) }
+  }
+
   async answerQuestion(id: string, text: string, reference: QuestionReference): Promise<boolean> {
     const task = this.tasks.get(id)
     if (!task || task.sessionOwnership === 'external' || task.importedFromCli || !sameQuestion(task.question?.reference, reference)

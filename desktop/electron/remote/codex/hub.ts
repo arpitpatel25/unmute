@@ -168,7 +168,7 @@ interface ThreadState {
 
 export interface CodexHubDeps {
   /** Durable identity receipt, before potentially large history processing. */
-  onForkConfirmed?: (taskId: string, result: { threadId: string; forkedFromId: string }) => Promise<void>
+  onForkConfirmed?: (taskId: string, result: { threadId: string; forkedFromId: string }, operationId?: string) => Promise<void>
   approvalCap?: (taskId: string) => import('./app-server-events').ApprovalCap
   loadPlans?: (taskId: string, threadId: string) => Promise<Array<Extract<import('../blocks').Block, { kind: 'plan' }>>>
   savePlans?: (taskId: string, threadId: string, plans: Array<Extract<import('../blocks').Block, { kind: 'plan' }>>) => Promise<void>
@@ -306,7 +306,7 @@ export class CodexHub {
 
   /** Create a provider-native child. The returned child identity is
    * authoritative; a fork is never emulated by starting a blank thread. */
-  async forkThread(taskId: string, sourceThreadId: string, o: StartThreadOpts): Promise<{
+  async forkThread(taskId: string, sourceThreadId: string, o: StartThreadOpts, operationId?: string): Promise<{
     threadId: string
     forkedFromId: string
   }> {
@@ -329,7 +329,7 @@ export class CodexHub {
       if (result.thread?.forkedFromId && result.thread.forkedFromId !== sourceThreadId) {
         throw new Error('Codex fork returned inconsistent source identity')
       }
-      await this.deps.onForkConfirmed?.(taskId, { threadId, forkedFromId: sourceThreadId })
+      await this.deps.onForkConfirmed?.(taskId, { threadId, forkedFromId: sourceThreadId }, operationId)
       log.event('codex-fork-identity-confirmed', { taskId, threadId, forkedFromId: sourceThreadId })
       let historyError: string | undefined
       const turns = await this.loadHistory(srv, threadId, result).catch(error => {
@@ -355,6 +355,8 @@ export class CodexHub {
           .map(turn => turn.id)),
       }
       st.turnId = turns.find(turn => turn.status === 'inProgress')?.id
+      const previous = this.byTask.get(taskId)
+      if (previous) this.byThread.delete(previous.threadId)
       this.byThread.set(threadId, st)
       this.byTask.set(taskId, st)
       const snapshot = blocks.snapshot()
@@ -612,6 +614,15 @@ export class CodexHub {
     return ordered
   }
 
+  /** Rewind only a freshly forked, idle branch; source history remains intact. */
+  async rollbackLatestTurn(taskId: string, options: StartThreadOpts): Promise<void> {
+    const state = this.byTask.get(taskId)
+    if (!state || state.turnId || state.pending || state.submitting || state.disconnected) throw new Error('Codex must be idle before editing.')
+    await this.server!.request('thread/rollback', { threadId: state.threadId, numTurns: 1 })
+    this.deps.onPatch({ taskId, blocks: [] })
+    await this.resumeThread(taskId, state.threadId, options, true)
+  }
+
   /** Reattach the persisted conversation without creating a new thread or
    * replaying the user's last prompt. Process lifetime is not session lifetime. */
   async resumeThread(taskId: string, threadId: string, o: StartThreadOpts, force = false): Promise<void> {
@@ -777,7 +788,7 @@ export class CodexHub {
     // "ignored" notifications. So the block stream sees the whole feed, and the
     // state reducer keeps its narrow view.
     let blocksChanged = false
-    if (st) blocksChanged = st.blocks.push({ method: m.method, params: m.params })
+    if (st) blocksChanged = st.blocks.push({ method: m.method, params: m.params }, Date.now())
 
     const patch = reduceAppServerEvent({ method: m.method, params: m.params })
     if (!patch && !blocksChanged) return

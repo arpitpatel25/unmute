@@ -1,3 +1,4 @@
+import { isClaudeSyntheticPrompt } from './claude-synthetic'
 // Unmute Remote — reading a Claude Code session the way Claude already wrote it.
 //
 // Claude Code stores every conversation as a JSONL at
@@ -157,7 +158,7 @@ export function parseTurnLine(line: string): Turn | null {
     if (typeof content !== 'string') return null
     if (rec.toolUseResult !== undefined) return null // belt and braces
     const text = content.trim()
-    return text ? { role: 'user', text, at, uuid } : null
+    return text && !isClaudeSyntheticPrompt(text) ? { role: 'user', text, at, uuid } : null
   }
   if (rec.type === 'assistant') {
     const m = parseAssistantLine(line)

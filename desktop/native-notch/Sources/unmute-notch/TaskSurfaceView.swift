@@ -40,7 +40,8 @@ struct TaskSurfaceView: View {
                     // one of them filled the space it was given.
                     ConversationPanel(rows: model.taskConversationRows, id: t.id,
                                       blocks: model.taskBlocks, usage: model.taskUsage,
-                                      running: t.status == .processing, history: t.history)
+                                      running: t.status == .processing, history: t.history, canEditLatestMessage: t.canEditLatestMessage ?? false, olderMessages: t.olderMessages ?? 0,
+                                      loadOlder: { model.emit(.loadOlderMessages(id: t.id)) })
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 10)
                     if t.status == .needsUser, let q = t.question {

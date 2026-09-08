@@ -77,7 +77,7 @@ public enum WallDisclosure {
 
 public enum WallCardLayout {
     public static func columnCount(surfaceFill: Double) -> Int {
-        surfaceFill >= 0.895 ? 2 : 1
+        1
     }
 }
 

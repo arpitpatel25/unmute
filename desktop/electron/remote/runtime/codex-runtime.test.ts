@@ -213,3 +213,39 @@ test('provider-native fork is owned by the persistent runtime and survives UI re
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('persistent edits rollback the child, force recovery, and scope repeated forks by operation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'codex-edit-runtime-'))
+  const calls: Array<{ method: string; params: any }> = []
+  let forks = 0
+  const provider = {
+    running: true, url: 'ws://localhost:9999', async start() {}, stop() {},
+    on() { return () => {} }, onRequest() {}, notify() {},
+    async request(method: string, params: any) {
+      calls.push({ method, params })
+      if (method === 'thread/fork') return { thread: { id: `child-${++forks}`, forkedFromId: params.threadId, turns: [] } }
+      if (method === 'thread/resume') return { thread: { id: params.threadId, turns: [] } }
+      return {}
+    },
+  } as unknown as CodexAppServer
+  let service!: CodexRuntimeService
+  const server = new RuntimeRpcServer(join(root, 'rpc.sock'), (method, args) => service.invoke(method.replace('codex.', ''), args))
+  service = new CodexRuntimeService(join(root, 'data'), event => server.emit('codex.event', event), { makeServer: () => provider })
+  await server.listen()
+  const rpc = new RuntimeRpcClient(join(root, 'rpc.sock'))
+  const hub = new PersistentCodexHub(rpc, { resolveBin: async () => '/codex', onPatch() {}, approvalCap: () => ({ roots: [], fullAccessAllowed: true }) })
+  const options = { cwd: '/tmp', approvalPolicy: 'on-request', sandbox: 'danger-full-access' }
+  try {
+    await hub.forkThread('task', 'source', options)
+    await hub.rollbackLatestTurn('task', options)
+    assert.equal(calls.find(c => c.method === 'thread/rollback')?.params.threadId, 'child-1')
+    await hub.resumeThread('task', 'source', options, true)
+    assert.equal(hub.threadIdFor('task'), 'source')
+    assert.equal((await hub.forkThread('task', 'source', options, 'edit-1')).threadId, 'child-2')
+    assert.equal((await hub.forkThread('task', 'source', options, 'edit-1')).threadId, 'child-2')
+    assert.equal(forks, 2)
+    assert.equal((await hub.forkThread('task', 'child-2', options, 'edit-2')).threadId, 'child-3')
+    assert.deepEqual(await service.invoke('forkResult', ['task', 'source', 'edit-1']), { threadId: 'child-2', forkedFromId: 'source' })
+    await assert.rejects(service.invoke('forkThread', ['task', 'different', options, 'edit-1']), /cannot change its source/)
+  } finally { hub.stop(); rpc.disconnect(); service.close(); await server.close(); await rm(root, { recursive: true, force: true }) }
+})

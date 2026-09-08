@@ -81,3 +81,20 @@ test('rolling v3 upgrade keeps main and v2 task owners and refreshes only the ne
     assert.deepEqual(calls.map(lane => lane.filter(method => method === 'codex.send').length), [1, 1, 0])
   } finally { router.disconnect(); clients.forEach(client => client.disconnect()); await Promise.all(servers.map(server => server.close())); await rm(dir, { recursive: true, force: true }) }
 })
+
+test('a v3 worker is refused before editing mutates a conversation', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'codex-capabilities-'))
+  const calls: string[] = []
+  const server = new RuntimeRpcServer(join(dir, 'rpc.sock'), async method => {
+    calls.push(method)
+    if (method === 'runtime.info') return { capabilities: ['codex.forkThread', 'codex.forkResult', 'codex.targetedSnapshot'] }
+    return true
+  })
+  await server.listen()
+  const rpc = new RuntimeRpcClient(join(dir, 'rpc.sock'))
+  const router = new CompatibleCodexRuntime(rpc, rpc)
+  try {
+    await assert.rejects(router.call('codex.forkThread', 'task', 'source', {}, 'edit-1'), /needs an update/)
+    assert.equal(calls.includes('codex.forkThread'), false)
+  } finally { router.disconnect(); rpc.disconnect(); await server.close() }
+})

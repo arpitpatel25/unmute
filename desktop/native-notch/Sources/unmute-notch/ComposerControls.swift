@@ -36,17 +36,6 @@ struct ComposerControls: View {
 
                 Spacer(minLength: 8)
 
-                if let start = newAgentConversation {
-                    Menu {
-                        Text("This ends the current conversation. It is not kept.")
-                        Button("Start a new conversation", action: start)
-                    } label: {
-                        Label("New", systemImage: "square.and.pencil").foregroundColor(Theme.textFaint)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .help("Ends this Agent conversation and starts a clean one.")
-                }
 
                 if let state = config.dictation {
                     Button(action: dictate) {
@@ -81,7 +70,6 @@ struct ComposerControls: View {
         case .provider:
             Menu {
                 Text("Changing provider starts a new conversation.")
-                Button("New conversation…", action: newConversation)
             } label: { SetupRowLabel(label: "Provider", value: config.providerLabel) }
         case .model:
             choiceRow(label: "Model", choices: config.models, selected: config.model,
@@ -97,7 +85,6 @@ struct ComposerControls: View {
             Menu {
                 Text(config.cwd)
                 Button("Show in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: config.cwd) }
-                Button("New conversation in another folder…", action: newConversation)
             } label: {
                 SetupRowLabel(label: "Working folder", value: URL(fileURLWithPath: config.cwd).lastPathComponent)
             }

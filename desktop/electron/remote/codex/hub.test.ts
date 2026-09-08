@@ -720,3 +720,11 @@ test('a task with no thread fails softly rather than throwing into dispatch', as
   assert.equal(hub.answer('ghost', 'yes'), false)
   hub.release('ghost')   // must not throw
 })
+
+test('editing rolls back the fork rather than the original thread', async () => {
+ const { hub, calls } = makeHub()
+ const options = { cwd: '/project', approvalPolicy: 'never', sandbox: 'danger-full-access' }
+ const fork = await hub.forkThread('edited', 'original', options)
+ await hub.rollbackLatestTurn('edited', options)
+ assert.deepEqual(calls.find(c => c.method === 'thread/rollback')?.params, { threadId: fork.threadId, numTurns: 1 })
+})

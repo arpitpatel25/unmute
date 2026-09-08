@@ -165,6 +165,8 @@ export function blocksFromRollout(text: string): RolloutBlocks {
     // A TORN LAST LINE IS NORMAL. Codex is appending while we read.
     try { entry = JSON.parse(raw) } catch { continue }
     const e = obj(entry)
+    const timestamp = typeof e.timestamp === 'string' ? Date.parse(e.timestamp) : undefined
+    const at = timestamp !== undefined && Number.isFinite(timestamp) ? timestamp : undefined
     const p = obj(e.payload)
     const t = str(p.type) ?? str(e.type)
     if (!t) continue
@@ -175,7 +177,7 @@ export function blocksFromRollout(text: string): RolloutBlocks {
         if (!message || isInjected(message)) break
         if (userTextsThisTurn.has(message)) break   // the response_item got here first
         userTextsThisTurn.add(message)
-        blocks.push({ kind: 'message', role: 'user', text: message })
+        blocks.push({ kind: 'message', role: 'user', text: message, ...(at !== undefined ? { at } : {}) })
         break
       }
 
@@ -202,7 +204,7 @@ export function blocksFromRollout(text: string): RolloutBlocks {
         const textOut = str(p.last_agent_message)
         const d = num(p.duration_ms)
         blocks.push({ kind: 'turnEnd', outcome: 'completed', ...(d !== undefined ? { durationMs: d } : {}) })
-        if (textOut) blocks.push({ kind: 'message', role: 'assistant', text: textOut })
+        if (textOut) blocks.push({ kind: 'message', role: 'assistant', text: textOut, ...(at !== undefined ? { at } : {}) })
         if (d !== undefined) lastTurnDurationMs = d
         break
       }
@@ -358,7 +360,7 @@ export function blocksFromRollout(text: string): RolloutBlocks {
         if (!body || isInjected(body)) break
         if (userTextsThisTurn.has(body)) break      // the event got here first
         userTextsThisTurn.add(body)
-        blocks.push({ kind: 'message', role: 'user', text: body })
+        blocks.push({ kind: 'message', role: 'user', text: body, ...(at !== undefined ? { at } : {}) })
         break
       }
 

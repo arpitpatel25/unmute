@@ -55,3 +55,27 @@ test('Claude reconnect reuses live work, but reopens a dead driver with the same
     assert.equal(options[1].resume, true)
   } finally { service.close(); await rm(root, { recursive: true, force: true }) }
 })
+
+test('Claude checkpoint edits check worker capability before opening and preserve the checkpoint across RPC', async () => {
+  const { PersistentClaudeTaskSession } = await import('./claude-client')
+  const root = await mkdtemp(join(tmpdir(), 'claude-edit-worker-'))
+  const opened: ClaudeTaskOptions[] = []
+  let capable = false
+  const service = new ClaudeRuntimeService(root, () => {}, options => {
+    opened.push(options)
+    return { alive: true, busy: false, models: [], followupBlocked: false, followupUnavailable: false, async start() {}, close() {} } as unknown as ClaudeTaskSession
+  })
+  const server = new RuntimeRpcServer(join(root, 's'), (method, args) => method === 'runtime.info'
+    ? Promise.resolve({ capabilities: capable ? ['claude.resumeSessionAt'] : [] }) : service.invoke(method.replace('claude.', ''), args))
+  await server.listen()
+  const rpc = new RuntimeRpcClient(join(root, 's'))
+  const driver = new PersistentClaudeTaskSession(rpc, { binary: 'claude', cwd: root, sessionId: 'child', forkFromSessionId: 'source', resumeSessionAt: 'answer-1', onEvent() {} })
+  try {
+    await assert.rejects(driver.start(), /checkpoint support/)
+    assert.equal(opened.length, 0)
+    capable = true
+    await driver.start()
+    assert.equal(opened[0].resumeSessionAt, 'answer-1')
+    assert.equal(opened[0].forkFromSessionId, 'source')
+  } finally { driver.detach(); rpc.disconnect(); service.close(); await server.close(); await rm(root, { recursive: true, force: true }) }
+})

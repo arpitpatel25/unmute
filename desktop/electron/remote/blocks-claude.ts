@@ -17,6 +17,7 @@
  * Field names verified across 400 transcripts / 55,956 lines on 2026-08-16.
  */
 
+import { isClaudeSyntheticPrompt } from './claude-synthetic'
 import { asBlock, fullContent, toolStatus, type Block, type Source } from './blocks'
 import { commandLabel } from './codex/blocks-app-server'
 
@@ -113,6 +114,8 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
     try { entry = JSON.parse(raw) } catch { continue }   // torn last line while Claude writes
     const e = obj(entry)
     const type = str(e.type)
+    const timestamp = typeof e.timestamp === 'string' ? Date.parse(e.timestamp) : num(e.timestamp)
+    const at = timestamp !== undefined && Number.isFinite(timestamp) ? timestamp : undefined
 
     // A SIDECHAIN IS ANOTHER AGENT'S CONVERSATION, in the same file. Inlining it
     // would interleave a sub-agent's private working into this thread. The
@@ -188,7 +191,8 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
       // writes into the user slot; they were never spoken.
       if (e.isMeta === true) continue
       const body = textOfContent(content)
-      if (body) blocks.push({ kind: 'message', role: 'user', text: body })
+      if (isClaudeSyntheticPrompt(body)) continue
+      if (body) blocks.push({ kind: 'message', role: 'user', text: body, ...(at !== undefined ? { at } : {}) })
       if (Array.isArray(e.unmuteAttachments)) for (const value of e.unmuteAttachments) {
         const a = obj(value)
         if (str(a.path) && str(a.name) && str(a.mimeType)) blocks.push({ kind: 'attachment', path: str(a.path)!, name: str(a.name)!, mimeType: str(a.mimeType)!, ...(num(a.bytes) !== undefined ? { bytes: num(a.bytes) } : {}) })
@@ -219,7 +223,7 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
       switch (str(c.type)) {
         case 'text': {
           const body = str(c.text)
-          if (body) blocks.push({ kind: 'message', role: 'assistant', text: body })
+          if (body) blocks.push({ kind: 'message', role: 'assistant', text: body, ...(at !== undefined ? { at } : {}) })
           break
         }
         case 'thinking': {
