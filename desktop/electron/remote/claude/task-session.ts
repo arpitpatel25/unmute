@@ -61,6 +61,18 @@ export class ClaudeTaskSession {
   get activeSubmissionId(): string | undefined { return this.active }
   get followupBlocked(): boolean { return this.requests.size > 0 }
   get followupUnavailable(): boolean { return this.acceptancePending || this.acceptanceUncertain || !this.alive }
+
+  /**
+   * A write reached the CLI and the send threw afterwards, so nobody knows
+   * whether that turn landed. Replaying could duplicate it, which is why this
+   * latches and never clears: the only safe way out is a NEW session.
+   *
+   * It is exposed separately from followupUnavailable because that is also
+   * true for a send in flight and for a dead process, and neither of those
+   * wants a reconnect — the first resolves itself and the second already has
+   * one. Only this one is a permanent state that a live process cannot leave.
+   */
+  get acceptanceUnresolved(): boolean { return this.acceptanceUncertain }
   async sendNewTurn(text: string, imagePaths: string[], submissionId: string, ordered?: TaskInput[]): Promise<import('../task-followup').NewTurnOutcome> {
     if (this.followupUnavailable || this.busy || this.requests.size) return { kind: 'not-sent', reason: 'Claude is not ready for a new turn.' }
     try { await this.send(text, imagePaths, submissionId, ordered, true); return { kind: 'accepted', submissionId } }

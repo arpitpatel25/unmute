@@ -24,6 +24,20 @@ test('approval arriving during queued image preparation prevents a user frame; a
   f.child.stdin._write = (_chunk, _encoding, callback) => callback(new Error('write failed'))
   assert.equal((await f.driver.sendNewTurn('possibly written', [], 'q2')).kind, 'uncertain')
   assert.equal((await f.driver.sendNewTurn('must not retry', [], 'q3')).kind, 'not-sent')
+  // AND IT SAYS SO IN A WAY SOMETHING CAN ACT ON.
+  //
+  // The latch is right — replaying a turn that may already have landed would
+  // duplicate it — but the process is still alive, so nothing was ever going
+  // to clear it. followupUnavailable cannot be that signal: it is also true
+  // for a send in flight and for a dead process, and neither wants a
+  // reconnect. connectClaude reads acceptanceUnresolved and replaces the
+  // session; without it the card refused every delivery and disabled its own
+  // composer for the life of the process (2026-09-08).
+  // The latch is exposed on its own, so connectClaude can replace the session.
+  // followupUnavailable cannot serve: it is also true for a send in flight and
+  // for a dead process, and neither of those wants a reconnect.
+  assert.equal(f.driver.acceptanceUnresolved, true)
+  assert.equal(f.driver.followupUnavailable, true)
   f.driver.close()
 })
 import { test } from 'node:test'
@@ -281,3 +295,4 @@ test('editing forks from an exact message checkpoint', async () => {
  assert.equal(f.args()[f.args().indexOf('--resume-session-at') + 1], 'prior-assistant')
  f.driver.close()
 })
+

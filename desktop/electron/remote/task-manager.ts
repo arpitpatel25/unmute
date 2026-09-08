@@ -1293,7 +1293,26 @@ export class TaskManager extends EventEmitter {
     await validateProject(task.cwd)
     resume = resume && !task.chatUnstarted
     if (task.claudeSessionSettings?.permissionMode === 'bypassPermissions' && !this.chatFullAccessAllowed(task.id)) throw new Error('Recorded full access exceeds the configured sandbox roots. Select Ask for approval before resuming.')
-    if (this.claudeTasks.get(task.id)?.driver.alive) return
+    // A LIVE SESSION IS NOT NECESSARILY A USABLE ONE.
+    //
+    // acceptanceUncertain latches when a write reached the CLI and the send
+    // threw after it, and it never clears — deliberately, because replaying an
+    // ambiguous turn could duplicate it. followupGate then answers "Claude is
+    // connecting or its acceptance is uncertain. Reconnect before sending",
+    // which is correct advice that nothing could act on: this line returned
+    // early for any ALIVE driver, so the reconnect it asked for never happened
+    // and the card stayed unusable for the life of the process. On 2026-09-08
+    // that silently refused eight deliveries and disabled a composer, and cost
+    // three wrong diagnoses before the error surfaced in the UI.
+    //
+    // A fresh session is exactly the remedy the message names, so take it.
+    const existing = this.claudeTasks.get(task.id)
+    if (existing?.driver.alive && !existing.driver.acceptanceUnresolved) return
+    if (existing?.driver.acceptanceUnresolved) {
+      log.child({ taskId: task.id }).event('chat-reconnect-after-uncertain-acceptance', {})
+      this.claudeTasks.delete(task.id)
+      existing.driver.close()
+    }
     const pending = this.claudeStarting.get(task.id)
     if (pending) return pending
     const starting = (async () => {
