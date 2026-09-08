@@ -2724,3 +2724,34 @@ test('accepted input outside the composer releases a held pocket order', () => {
   h.flush()
   assert.deepEqual(taskSlots(h).map(s => s.id), ['old', 'recent'])
 })
+
+/**
+ * FIELD FAILURE, 2026-09-08. A card flipped done -> processing -> done every
+ * few seconds, each `processing` about fifty milliseconds long. Freshness is
+ * re-stamped on every state change, so the two-hour demand clock never began
+ * counting down: the card announced itself eight times, took the notch surface
+ * every four seconds, and swallowed the Enter meant for whichever card the
+ * person had actually navigated to.
+ *
+ * It only became visible when a resume promoted that one-off to a session,
+ * because a done ONE-OFF never demands and a done SESSION does — the flapping
+ * had been there all along, silently.
+ */
+test('a momentary processing blip does not reset the demand clock', () => {
+  const h = setup()
+  const id = 'flapper'
+  // A real finish, long ago: demanding has already expired.
+  put(h, makeTask({ id, state: 'done', kind: 'session', name: 'Flapper', alive: false }))
+  h.client.fire({ type: 'pocketOpen' })
+  const before = (pocketOf(h)?.slots ?? []).map((s) => s.id)
+
+  // Now flap: done -> processing -> done inside a few milliseconds.
+  put(h, makeTask({ id, state: 'processing', kind: 'session', name: 'Flapper', alive: false }))
+  put(h, makeTask({ id, state: 'done', kind: 'session', name: 'Flapper', alive: false }))
+  h.client.fire({ type: 'pocketOpen' })
+  const after = (pocketOf(h)?.slots ?? []).map((s) => s.id)
+
+  // The blip changed nothing: it is not new activity, so it cannot renew a
+  // demand that had already lapsed, nor create one that never existed.
+  assert.deepEqual(after, before)
+})

@@ -516,6 +516,8 @@ export class NotchController {
   private cameFromPocket = false
   /** id → presence-clock ms at which it began demanding. See demandSince(). */
   private demandStamp = new Map<string, number>()
+  /** When a task entered `processing`, to tell a real turn from a blip. */
+  private processingSince = new Map<string, number>()
   /** id → the state we last stamped for, so a change restarts the window. */
   private stateSeen = new Map<string, TaskStatusName>()
   /** Set when leaving collapsed an expanded task; a return inside this window
@@ -571,6 +573,7 @@ export class NotchController {
       this.answerStates.delete(t.id)
       this.dequeue(t.id)
       this.demandStamp.delete(t.id)
+      this.processingSince.delete(t.id)
       this.stateSeen.delete(t.id); this.demandSeen.delete(t.id)
       this.scheduleReconcile()
     })
