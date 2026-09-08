@@ -10,21 +10,29 @@ import LevelMeterSupport
 ///
 /// FLAT MEANS SILENT, and that is the whole contract. A decorative animation
 /// that wobbles regardless would be worse than the timer it replaces: it would
-/// look like proof of something it is not checking. Level 0 draws resting
-/// dots, deliberately.
+/// look like proof of something it is not checking. Level 0 draws a straight,
+/// still row, deliberately.
 ///
-/// Stationary dots grow vertically with the current audio level.
+/// A ROW THAT VIBRATES IN PLACE, not a scrolling history. The previous revision
+/// kept the last N levels and shifted them left, which put the loudest motion
+/// in the frame on the horizontal axis: under the notch, beside a cursor that
+/// is also moving, the eye tracked the drift instead of reading the shape, and
+/// the strip read as a second thing scrolling. Nothing moves sideways now. A
+/// handful of dots hold their positions and only rise and fall, together, on
+/// one clock — see `DotWave` for why that reads as a single vibrating string
+/// rather than as a line of independent bouncers.
 struct Waveform: View {
     /// 0…1, as the engine reports it.
     let level: Double
-    // 20 bars at 2/2 measure 78pt — a little longer than the 70 it replaces,
-    // and finer, so the shape reads as a voice rather than a row of blocks.
-    var bars: Int = 20
-    // 14 was most of the reason this looked dead: even a shout only filled 14
-    // points. 16 is what a 36pt capsule can give while keeping 10pt of air.
+    /// Seven is the middle of the five-to-ten range this is drawn for: enough
+    /// dots for the standing pattern to be legible as a wave, few enough that
+    /// each one is an object you can watch rather than a texture.
+    var dots: Int = 7
+    /// The band the dots travel in. 16 is what a 36pt capsule can give while
+    /// keeping 10pt of air.
     var height: CGFloat = 16
-    var barWidth: CGFloat = 2
-    var spacing: CGFloat = 2
+    var dotSize: CGFloat = 3.5
+    var spacing: CGFloat = 5
     /// PURE WHITE, not Theme.text.
     ///
     /// Theme.text is white at 0.95 and the fill below multiplies it again, so a
@@ -36,22 +44,51 @@ struct Waveform: View {
 
     @State private var envelope: Double = 0
 
+    /// How far from the centre line a dot may go without clipping its own
+    /// capsule out of the frame.
+    private var travel: CGFloat { max(0, height / 2 - dotSize / 2) }
+
     var body: some View {
-        HStack(alignment: .center, spacing: spacing) {
-            ForEach(0..<max(1, bars), id: \.self) { index in
-                // Fixed horizontal slots. Audio changes height, never position.
-                let shape = 0.35 + 0.65 * abs(sin(Double(index + 1) * 1.7))
-                Capsule().fill(color.opacity(0.5 + 0.5 * envelope))
-                    .frame(width: barWidth, height: max(barWidth, CGFloat(envelope * shape) * height))
+        // ONE CLOCK FOR THE WHOLE ROW, and none at all while it is silent.
+        //
+        // `paused` is not an optimisation detail — it is the contract. With the
+        // envelope at zero there is nothing to redraw, so a muted mic costs no
+        // frames and, more to the point, CANNOT move: the still row is the
+        // state the view rests in rather than a shape it happens to be drawing.
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: envelope <= 0)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(0..<dots, id: \.self) { i in
+                    let y = DotWave.offset(index: i, count: dots, time: t, amplitude: envelope)
+                    Circle()
+                        // Brighter across the whole range, peaking at pure
+                        // white — and the row lifts as a whole rather than
+                        // per-dot, so brightness reads as LEVEL and the
+                        // vertical spread reads as shape. Silence keeps enough
+                        // opacity to stay a visible row: dots you cannot see
+                        // are indistinguishable from a surface that has stopped
+                        // drawing, which is the one reading this must not have.
+                        .fill(color.opacity(0.4 + 0.6 * envelope))
+                        .frame(width: dotSize, height: dotSize)
+                        .offset(y: CGFloat(y) * travel)
+                }
             }
         }
         .frame(height: height)
-        .animation(.easeOut(duration: 0.08), value: envelope)
-        .onChange(of: level) { envelope = LevelMeter.target(for: $0) }
-        .onAppear { envelope = LevelMeter.target(for: level) }
-        .accessibilityHidden(true)
+        // The single-argument form: the package targets macOS 13, where the
+        // two-argument `onChange` does not exist yet.
+        .onChange(of: level) { new in push(new) }
+        .accessibilityHidden(true)   // the phase label already speaks
     }
 
+    /// The arithmetic lives in `LevelMeterSupport` so it can be tested; see
+    /// there for why every constant is fixed rather than adaptive. The envelope
+    /// is unchanged by the redesign — the same smoothed level that used to set
+    /// a bar's height now sets the whole row's amplitude, so the surface reacts
+    /// to a voice exactly as it did before.
+    private func push(_ v: Double) {
+        envelope = LevelMeter.advance(envelope, toward: LevelMeter.target(for: v))
+    }
 }
 
 /// "YOUR VOICE IS GOING HERE" — the live-aim chip.
@@ -77,10 +114,13 @@ struct AimedChip: View {
             Image(systemName: "mic.fill")
                 .font(.system(size: compact ? 8.5 : 9.5, weight: .semibold))
                 .foregroundColor(Theme.cError)
+            // Fewer dots than the pill and a shorter travel: the chip is an
+            // inline mark in a crowded row, so it carries the bottom of the
+            // five-to-ten range rather than the middle.
             Waveform(level: level,
-                     bars: compact ? 12 : 16,
+                     dots: compact ? 5 : 6,
                      height: compact ? 9 : 11,
-                     barWidth: 1.5, spacing: 1.5,
+                     dotSize: compact ? 2.5 : 3, spacing: compact ? 3 : 3.5,
                      color: Theme.text)
         }
         .padding(.horizontal, compact ? 7 : 8)

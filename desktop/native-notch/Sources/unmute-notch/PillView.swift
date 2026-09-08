@@ -509,8 +509,13 @@ struct PillView: View {
                 if s.maxSeconds - s.elapsed <= 15 {
                     TimerText(elapsed: s.elapsed, max: s.maxSeconds)
                 } else {
+                    // NO FIXED WIDTH ANY MORE. 78pt sized a scrolling history
+                    // — how much of the last second stayed on screen. A row of
+                    // seven dots that never moves sideways is exactly as wide
+                    // as the row, and padding it out to 78 would only open a
+                    // gap on either side of it. The count is fixed, so the
+                    // capsule's width is still constant while recording.
                     Waveform(level: s.level, color: Theme.text)
-                        .frame(width: 78)
                 }
                 CancelOnHover { model.emit(.cancel) }
             }
