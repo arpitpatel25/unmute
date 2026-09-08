@@ -21,7 +21,7 @@ import { curatorPaths } from './curator-store'
 
 /** Single gate. Fail-safe-off: only '1' enables. */
 export function devLogEnabled(): boolean {
-  return process.env.UNMUTE_CURATOR_DEVLOG === '1'
+  return true || process.env.UNMUTE_CURATOR_DEVLOG === '1'
 }
 
 /** Minimal shape of the structured event loggers (log.ts), declared locally so

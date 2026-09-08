@@ -1119,6 +1119,13 @@ export class NotchController {
     if (providerOf(t.agent).transport === 'driver') return true
     // A session sleeps; it does not die. A finished ONE-OFF with no process is
     // genuinely over — there is no thread to continue and nothing to say to it.
+    //
+    // Widening this to "anything the Resume button can wake" was tried on
+    // 2026-09-08 and backed out: it also keeps dead PTY errands, which the
+    // distinction above deliberately drops, and TaskLite carries no signal for
+    // "graphical chat" to narrow it with. The case it was meant to fix — a card
+    // the Agent reopened and delivered into — is handled where it belongs, by
+    // the resume promoting that task to a session (sessions/service.ts).
     if ((t.kind ?? 'oneoff') === 'session') return true
     // CODEX IS NEVER "GENUINELY OVER" EITHER, one-off or not: every thread
     // mints a rollout on disk, so a dead process still has resume() to bring

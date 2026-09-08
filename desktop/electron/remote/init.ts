@@ -699,6 +699,7 @@ const agentContinuations = new AgentContinuationService({
     opened: (id: string) => manager!.opened(id),
     isLive: (id: string) => manager!.isLive(id),
     setShelved: (id: string, shelved: boolean) => manager!.setShelved(id, shelved),
+    setKind: (id: string, kind: 'oneoff' | 'session') => manager!.setKind(id, kind),
   },
   locate: locateSession,
   workspaces: () => groupRegistry,

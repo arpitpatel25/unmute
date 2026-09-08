@@ -21,6 +21,7 @@ interface ContinuationManager {
   isLive?(taskId: string): boolean
   /** Bringing a session back is what un-hides it; see the notch's counterpart. */
   setShelved?(taskId: string, shelved: boolean): void
+  setKind?(taskId: string, kind: 'oneoff' | 'session'): void
   attachProviderSession(input: {
     harness: 'claude' | 'codex'; sessionId: string; cwd: string; intent?: string; title?: string; group?: string; groupId?: string
   }): Promise<{ taskId: string; sessionId: string }>
@@ -37,6 +38,8 @@ export interface AgentContinuationDeps {
   workspaces?(): WorkspaceRegistry | null
   scratchRoot: string
   ensureDirectory(path: string): Promise<void>
+  /** Test seam: the delivery retry ladder, in milliseconds. */
+  deliveryBackoffMs?: readonly number[]
 }
 
 export class AgentContinuationService {
@@ -139,6 +142,14 @@ export class AgentContinuationService {
       // later when the person opened the card by hand.
       manager.setShelved?.(plan.taskId, false)
       manager.opened?.(plan.taskId)
+      // A RESUME THAT CARRIES A MESSAGE IS A THREAD, AND THREADS STAY IN THE
+      // POCKET. Graduation normally waits for a SECOND follow-up, which is the
+      // right rule for a task drifting into a conversation on its own. This is
+      // not that: something deliberately went looking for this session and
+      // brought work back to it, which is the whole definition. Leaving it a
+      // one-off meant the card fell out of the pocket the moment it finished,
+      // taking an undelivered message with it (2026-09-08).
+      if (plan.followUp) manager.setKind?.(plan.taskId, 'session')
       if (plan.followUp) await this.waitUntilLive(plan.taskId)
       const delivered = plan.followUp ? await this.deliverWhenReady(plan.taskId, plan.followUp) : true
       return {
@@ -192,7 +203,11 @@ export class AgentContinuationService {
    * case is a PTY appearing, not a stuck runtime.
    */
   private async deliverWhenReady(taskId: string, text: string): Promise<boolean> {
-    const backoffMs = [0, 250, 750, 1_500, 2_500]
+    // Long enough to WAKE something, not just to catch it already awake. The
+    // old ladder totalled five seconds, which was fine when this only ever ran
+    // after a PTY had come up and hopeless for a chat session being connected
+    // from cold — five failures and a parked draft, every time.
+    const backoffMs = [0, 250, 750, 1_500, 2_500, 4_000, 6_000, 8_000]
     for (const wait of backoffMs) {
       if (wait) await new Promise<void>(resolve => setTimeout(resolve, wait))
       if (await this.manager().deliverDraft(taskId, text, []).catch(() => false)) {

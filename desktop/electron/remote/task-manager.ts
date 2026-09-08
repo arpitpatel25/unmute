@@ -1044,7 +1044,17 @@ export class TaskManager extends EventEmitter {
    *  still exists: a live session takes a follow-up as it is and never needs
    *  resuming. */
   isLive(id: string): boolean {
-    return this.executors.get(id)?.alive === true
+    if (this.executors.get(id)?.alive === true) return true
+    // A CHAT SESSION HAS NO PTY, AND IS NOT DEAD FOR LACKING ONE.
+    //
+    // `executors` holds terminal-hosted sessions; a graphical chat lives in
+    // `claudeTasks`/the codex hub and is connected on demand by deliverDraft.
+    // Answering false for those made every chat resume wait out the caller's
+    // full 20-second liveness poll and then try to deliver in what was left —
+    // which is how a 1,932-character follow-up ended up parked in a composer
+    // on 2026-09-08 while the session it was meant for was perfectly reachable.
+    const task = this.tasks.get(id)
+    return !!(task && (task.claudeSessionSettings || task.codexSessionSettings))
   }
 
   /** Any task mid-turn ('processing')? Feeds the curator's idle-preference gate

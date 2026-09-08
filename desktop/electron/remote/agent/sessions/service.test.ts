@@ -46,6 +46,7 @@ function fixture(existing = false, deliveries: boolean[] = [], startsLive = true
     opened(id: string) { calls.push({ op: 'opened', input: id }); live = true },
     isLive(_id: string) { return live },
     setShelved(id: string, shelved: boolean) { calls.push({ op: 'setShelved', input: { id, shelved } }) },
+    setKind(id: string, kind: string) { calls.push({ op: 'setKind', input: { id, kind } }) },
     async attachProviderSession(input: unknown) { calls.push({ op: 'attach', input }); return { taskId: 'new-task', sessionId: 'source-session' } },
     async forkProviderSession(input: unknown) { calls.push({ op: 'fork', input }); return { taskId: 'child-task', sessionId: 'child-session' } },
   }
@@ -54,6 +55,9 @@ function fixture(existing = false, deliveries: boolean[] = [], startsLive = true
     locate: async id => id === 'source-session' ? located : null,
     workspaces: () => ({ find: label => label.toLowerCase() === 'unmute' ? { id: 'unmute', label: 'Unmute' } : undefined, get: id => id === 'unmute' ? { id, label: 'Unmute' } : undefined }),
     scratchRoot: '/scratch',
+    // The real ladder waits ~23s to wake a cold chat session; tests assert the
+    // shape of the retry, not the patience of it.
+    deliveryBackoffMs: [0, 0, 0, 0, 0, 0, 0, 0],
     ensureDirectory: async path => { calls.push({ op: 'mkdir', input: path }) },
   })
   return { service, calls }
@@ -76,6 +80,8 @@ test('resume wakes an existing card and delivers only the current request', asyn
     // stay out of the pocket once the Agent has reopened it.
     { op: 'setShelved', input: { id: 'existing-task', shelved: false } },
     { op: 'opened', input: 'existing-task' },
+    // A resume carrying a message promotes the task: a thread, not an errand.
+    { op: 'setKind', input: { id: 'existing-task', kind: 'session' } },
     { op: 'deliver', input: { id: 'existing-task', text: 'continue the migration' } },
   ])
 })
@@ -158,7 +164,7 @@ test('a session that is still waking gets the message once it can take it', asyn
 })
 
 test('a message that still cannot be delivered is parked in the card, never lost', async () => {
-  const { service, calls } = fixture(true, [false, false, false, false, false, false])
+  const { service, calls } = fixture(true, [false, false, false, false, false, false, false, false, false])
   const result = await service.resume({ sessionId: 'source-session', intent: 'carry on', title: 'Billing migration', group: 'Unmute' })
   // Reopening SUCCEEDED. Reporting the whole thing as a failure is what left
   // the person with a clipboard and an apology.
@@ -197,4 +203,27 @@ test('reopening a hidden card puts it back in the pocket', async () => {
   // Hiding must never outlive the reason for it: bringing the session back IS
   // the act that un-hides it.
   assert.deepEqual(calls.find(c => c.op === 'setShelved')?.input, { id: 'existing-task', shelved: false })
+})
+
+
+/**
+ * FIELD FAILURE, 2026-09-08. The Agent found the right session and carried a
+ * 1,932-character message to it. The resume took 25.7s, returned
+ * delivered:false, the message sat unsent in a composer, and the card was not
+ * in the pocket to find it in. Retrieval was never the problem: isLive() read
+ * only `executors`, so a graphical chat session was never live and the caller
+ * burned its whole 20-second poll before delivering in what was left; and the
+ * task stayed a one-off, so the pocket dropped it the moment it finished.
+ */
+test('a resume that carries a message makes the task a session', async () => {
+  const { service, calls } = fixture(true)
+  const result = await service.resume({ ...metadata, sessionId: 'source-session', intent: 'carry this over' })
+  assert.equal(result.delivered, true)
+  assert.deepEqual(calls.find(c => c.op === 'setKind'), { op: 'setKind', input: { id: 'existing-task', kind: 'session' } })
+})
+
+test('a resume with nothing to say leaves the kind alone', async () => {
+  const { service, calls } = fixture(true)
+  await service.resume({ ...metadata, sessionId: 'source-session' })
+  assert.equal(calls.find(c => c.op === 'setKind'), undefined)
 })
