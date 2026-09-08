@@ -207,17 +207,27 @@ export class AgentContinuationService {
     // old ladder totalled five seconds, which was fine when this only ever ran
     // after a PTY had come up and hopeless for a chat session being connected
     // from cold — five failures and a parked draft, every time.
-    const backoffMs = [0, 250, 750, 1_500, 2_500, 4_000, 6_000, 8_000]
+    // Injectable so a test can exercise the give-up path without sitting
+    // through the real wait.
+    let lastRefusal: string | undefined
+    const backoffMs = this.deps.deliveryBackoffMs ?? [0, 250, 750, 1_500, 2_500, 4_000, 6_000, 8_000]
     for (const wait of backoffMs) {
       if (wait) await new Promise<void>(resolve => setTimeout(resolve, wait))
-      if (await this.manager().deliverDraft(taskId, text, []).catch(() => false)) {
+      // KEEP THE REASON. This read `.catch(() => false)`, so eight refusals in
+      // a row produced one line saying a delivery was deferred and nothing at
+      // all about why — the card had been flipping in and out of `busy` and
+      // there was no way to learn that from here.
+      const outcome = await this.manager().deliverDraft(taskId, text, [])
+        .then(ok => ({ ok }), (error: unknown) => ({ ok: false, why: (error as Error)?.message }))
+      if (outcome.ok) {
         diagnostic('continuation-delivered', { taskId, afterMs: wait })
         return true
       }
+      if ('why' in outcome && outcome.why) lastRefusal = outcome.why
     }
     // Never drop what they said. The composer is where they will look for it.
     try { this.manager().saveDraft?.(taskId, text) } catch { /* the card may have gone */ }
-    diagnostic('continuation-delivery-deferred', { taskId, chars: text.length })
+    diagnostic('continuation-delivery-deferred', { taskId, chars: text.length, lastRefusal: lastRefusal ?? null })
     return false
   }
 

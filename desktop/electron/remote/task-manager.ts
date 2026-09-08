@@ -655,6 +655,16 @@ function cleanTranscriptTail(raw: string, maxChars = 4000): string {
   return clean.length > maxChars ? clean.slice(-maxChars) : clean
 }
 
+/**
+ * How long a message waits for a busy chat session before giving up.
+ *
+ * Long enough to outlast a real turn that is nearly done, and far longer than
+ * the tens of milliseconds a reconnect raises `busy` for. The draft is never
+ * lost either way — this only decides whether it lands by itself or waits for
+ * you to press send.
+ */
+const CHAT_BUSY_WAIT_MS = 120_000
+
 export class TaskManager extends EventEmitter {
   private followupGenerations = new WeakMap<ClaudeTaskSession, number>()
   private followupNextGeneration = 0
@@ -3661,7 +3671,11 @@ export class TaskManager extends EventEmitter {
     if (payload?.thread_context) task.threadContext = String(payload.thread_context).slice(0, 600)
 
     if (prev !== next) {
-      tlog.event('state-transition', { from: prev, to: next, step: payload?.step })
+      // `reason` exists because a card once flipped done→processing→done nine
+      // times in twenty-three seconds and the log could not say what asked for
+      // any of it. A transition without a reason is a transition nobody can
+      // debug.
+      tlog.event('state-transition', { from: prev, to: next, step: payload?.step, reason: (payload as { reason?: string } | undefined)?.reason ?? null })
     }
 
     switch (next) {
@@ -5626,7 +5640,31 @@ export class TaskManager extends EventEmitter {
         if (runtime.channel.pending) {
           throw new Error('A request is waiting. Review the current question before sending an answer; this new-turn draft is saved.')
         }
-        if (runtime.driver.busy) throw new Error('Claude is still working. Your draft is saved; send it after this turn finishes or stop the turn.')
+        // A BUSY CHAT SESSION WAITS; IT DOES NOT REFUSE.
+        //
+        // The PTY path has always queued a mid-turn follow-up — "the write
+        // below will QUEUE until the REPL is idle" — while this one threw, so
+        // the same spoken sentence was held for you or thrown away depending on
+        // a transport you cannot see. And `busy` is not only "the model is
+        // thinking": reconnecting and reconciling a card raise it too, in
+        // bursts of tens of milliseconds. On 2026-09-08 one card flipped state
+        // eighteen times in twenty-three seconds while nothing at all was
+        // running, and eight delivery attempts each landed on a blip; the last
+        // refusal came twelve milliseconds before it settled.
+        //
+        // So wait it out. A real turn finishing is what this is for, and a blip
+        // becomes invisible rather than fatal.
+        if (runtime.driver.busy) {
+          const deadline = this.clock() + CHAT_BUSY_WAIT_MS
+          while (runtime.driver.busy && this.clock() < deadline) {
+            if ((this.chatStopVersion.get(id) ?? 0) !== stopVersion) throw new Error('Stopped before submission')
+            await new Promise<void>(resolve => setTimeout(resolve, 200))
+          }
+          if (runtime.driver.busy) {
+            throw new Error('Claude is still working. Your draft is saved; send it after this turn finishes or stop the turn.')
+          }
+          log.child({ taskId: id }).event('chat-send-waited-for-idle', { waitedMs: CHAT_BUSY_WAIT_MS - (deadline - this.clock()) })
+        }
         const submissionId = randomUUID()
         runtime.channel.expectSubmission(submissionId, ordered ?? [{ type: 'text', text }, ...attachments.map(path => ({ type: 'image' as const, path }))])
         await runtime.driver.send(text, [...attachments], submissionId, ordered)
