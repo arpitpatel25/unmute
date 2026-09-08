@@ -173,6 +173,28 @@ struct NotchView: View {
     private var inked: some View {
         shape.fill(Color.black)
             .overlay(shape.stroke(Theme.hairlineSoft, lineWidth: 0.5))
+            .overlay(agentRim)
+    }
+
+    /// THE AGENT'S EDGE — the one card that routes work rather than doing it.
+    ///
+    /// Every card looked identical, so nothing said this surface is a different
+    /// kind of thing: you address it and it finds, resumes or starts work
+    /// elsewhere. A rim is the cheapest signal that costs nothing in legibility
+    /// — no material change, no ground change, nothing behind the transcript.
+    ///
+    /// The three colours are already the product's: Theme.cReady, which is what
+    /// "Ready" is written in beside this very title; Theme.cInstruction, which
+    /// the theme already reserves for instruction; and the terracotta of the
+    /// `un` mark. Nothing new is introduced, it is only said louder.
+    @ViewBuilder private var agentRim: some View {
+        if model.task?.id == "unmute-agent" {
+            shape.stroke(
+                LinearGradient(
+                    colors: [Theme.cReady, Theme.cInstruction, Theme.agentMarkTint],
+                    startPoint: .topLeading, endPoint: .bottomTrailing),
+                lineWidth: 1.5)
+        }
     }
 
     /// THE RESTING NUB — off-notch idle, pointer elsewhere.

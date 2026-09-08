@@ -97,6 +97,9 @@ enum Theme {
     /// The one exception, and it is not an accent: a pinned star is gold because
     /// that is what a star is.
     static let pinGold   = Color(nsColor: .systemYellow)
+    /// The terracotta of the `un` mark, for the Agent card's rim. Taken from
+    /// UnMarkArt so the edge and the badge cannot drift apart.
+    static let agentMarkTint = Color(red: 0.788, green: 0.439, blue: 0.353)
 
     // MARK: - Content layer (opaque; never glass)
 

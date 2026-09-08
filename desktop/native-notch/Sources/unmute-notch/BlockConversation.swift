@@ -104,11 +104,16 @@ struct BlockConversation: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 22) {
                             if olderMessages > 0 {
+                                // Centred: it belongs to the transcript as a
+                                // whole rather than to the first message, and
+                                // left-aligned it read as a stray line of text
+                                // tucked under the title.
                                 Button("Load earlier messages (\(olderMessages))") {
                                     olderAnchor = turns.first
                                     loadingOlder = true
                                     loadOlder()
                                 }.buttonStyle(.plain).foregroundColor(Theme.textDim)
+                                    .frame(maxWidth: .infinity, alignment: .center)
                             }
                             ForEach(turns) { turn in
                                 BlockTurnView(turn: turn, taskId: id, canEdit: canEditLatestMessage && turn.id == turns.last(where: { $0.prompt != nil })?.id)

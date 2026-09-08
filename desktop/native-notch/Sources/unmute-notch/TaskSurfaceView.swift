@@ -21,6 +21,21 @@ struct TaskSurfaceView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let t {
                 header(t)
+                // WHAT TO SAY, SAID ONCE.
+                //
+                // The Agent's card looked like every task card, so nothing told
+                // a new person that this one is addressed rather than watched.
+                // Three concrete things beat a description of a capability, and
+                // it goes as soon as the conversation has anything in it —
+                // after the first exchange it would only be taking up the room
+                // the answers need.
+                if t.id == "unmute-agent", model.taskConversationRows.isEmpty, model.taskBlocks.isEmpty {
+                    Text("Ask me to pick up an old session, start a new one, or find something you said.")
+                        .font(Theme.fSub)
+                        .foregroundColor(Theme.textFaint)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
+                }
                 if t.id == "unmute-agent", t.agentCanRetry == true {
                     Button("Retry retained message") { model.emit(.agentRetry) }
                         .buttonStyle(.plain).foregroundColor(Theme.textDim)
@@ -180,7 +195,12 @@ struct TaskSurfaceView: View {
                         model.emit(.shelve(id: t.id, shelved: !(t.shelved ?? false)))
                     }
                     Divider()
-                    Button("Remove", role: .destructive) { model.emit(.remove(id: t.id)) }
+                    // THROUGH THE CONFIRMATION, NOT PAST IT. This fired
+                    // immediately while the duplicate menu beside Next — now
+                    // gone — was the one that asked first. Consolidating to a
+                    // single menu must not consolidate to the unguarded half:
+                    // removing a card is destructive and confirms.
+                    Button("Remove…", role: .destructive) { confirmingRemoval = true }
                 } label: {
                     Image(systemName: "ellipsis").foregroundColor(Theme.textFaint)
                 }
@@ -238,22 +258,10 @@ struct TaskSurfaceView: View {
                 KeyButton(label: "Prev", symbol: "arrow.left") { model.emit(.prev) }
                 // THE ONE TINTED PRIMARY — the crank.
                 ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
-                Menu {
-                    // Removing retires Unmute's task record. The provider's
-                    // transcript and every project file remain where they are.
-                    Button("Remove from Unmute…", role: .destructive) {
-                        confirmingRemoval = true
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(Theme.textDim)
-                        .frame(width: 28, height: 24)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .accessibilityLabel("More task actions")
+                // The overflow menu lives in the header, top right, and nowhere
+                // else. A second one beside Next offered a subset of the same
+                // actions from the opposite corner, so the card had two places
+                // to look for one thing.
             }
         }
         .padding(.top, 10)
