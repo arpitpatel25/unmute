@@ -1,83 +1,140 @@
 /* ==========================================================================
-   THE MACHINE.
+   THE PAGE, AND THE MACHINE.
 
-   A 14" MacBook Pro screen, drawn at its real logical size — 1512 × 982 points
-   with a 200 × 34 camera housing — and then scaled as one object to fit the
-   viewport. Scaling the whole screen rather than sizing its parts is what keeps
-   the notch, the menu bar and the pill in the exact proportions the app draws
-   them at: nothing here is re-tuned to look right at a different size.
+   The machine is a lid: a matte black bezel around a light display, drawn at
+   the real logical size of a 14" MacBook Pro — 1512 × 982 points with a
+   200 × 34 camera housing — then scaled as ONE object. Scaling the whole thing
+   rather than sizing its parts is what keeps the notch, the menu bar and the
+   pill in the exact proportions the app draws them at.
+
+   The bezel is black and the housing is black, so the mass that runs through
+   the housing has nothing to give itself away against. That is the point.
    ========================================================================== */
 
-:root { --screen-w: 1512px; --screen-h: 982px; }
+:root {
+  --screen-w: 1512px;
+  --screen-h: 982px;
+  --ink: #0c0e12;
+  --ink-2: rgba(12, 14, 18, 0.62);
+  --ink-3: rgba(12, 14, 18, 0.40);
+  --page: #f4f6f9;
+  --rule: rgba(12, 14, 18, 0.10);
+}
 
-html, body { height: 100%; }
+html { scroll-behavior: smooth; background: var(--page); }
 body {
   margin: 0;
-  background: #e9ecf1;
+  background:
+    radial-gradient(1200px 700px at 50% -6%, #ffffff 0%, transparent 62%),
+    var(--page);
   font: var(--f-body);
-  color: var(--text);
+  color: var(--ink);
   -webkit-font-smoothing: antialiased;
-  overflow: hidden;
-  display: flex; align-items: center; justify-content: center;
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
+
+/* ── The three things ────────────────────────────────────────────────────── */
+.intro { padding: 96px 0 12px; text-align: center; }
+.intro h1 {
+  font: 600 46px/1.08 var(--font);
+  letter-spacing: -0.028em;
+  margin: 0 0 16px;
+  color: var(--ink);
+}
+.intro p {
+  font: 400 17.5px/1.6 var(--font);
+  color: var(--ink-2);
+  max-width: 44ch; margin: 0 auto;
 }
 
+.features {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px;
+  padding: 52px 0 18px;
+}
+@media (max-width: 900px) { .features { grid-template-columns: 1fr; } }
+.feature {
+  background: #fff;
+  border-radius: 18px;
+  padding: 26px 24px 24px;
+  box-shadow: 0 0 0 1px var(--rule), 0 14px 34px -22px rgba(20, 28, 45, 0.5);
+  display: flex; flex-direction: column; gap: 11px;
+}
+.feature-n {
+  font: 600 11px/1 var(--font); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.feature h2 { font: 600 20px/1.25 var(--font); margin: 0; letter-spacing: -0.015em; }
+.feature p { font: 400 14.5px/1.62 var(--font); color: var(--ink-2); margin: 0; }
+.feature p + p { margin-top: -2px; }
+/* The keys are the product's vocabulary, so they are set as keys everywhere. */
+kbd {
+  font: 600 12px/1 var(--font);
+  background: #fff; color: var(--ink);
+  padding: 4px 7px; border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(12,14,18,0.18), 0 1px 0 rgba(12,14,18,0.10);
+  white-space: nowrap;
+}
+
+/* ── The stage the machine sits on ───────────────────────────────────────── */
+.stage-wrap { padding: 40px 0 0; }
 .machine-fit {
-  /* The scale is set from the viewport in JS; the element keeps its true size
-     so every child can go on using real point values. */
   transform: scale(var(--k, 1));
-  transform-origin: center center;
+  transform-origin: top center;
+  margin: 0 auto;
+  width: max-content;
 }
+/* The scaled element keeps its true height in layout, so the page reserves the
+   space the SCALED machine actually occupies. */
+.machine-slot { height: var(--slot-h, 700px); overflow: visible; }
 
-/* The lid: aluminium bezel, then the display. */
+/* THE LID. Matte black, thin, with the one highlight a real bezel catches. */
 .machine {
   position: relative;
   width: var(--screen-w); height: var(--screen-h);
-  border-radius: 18px;
-  padding: 11px;
+  padding: 12px 12px 13px;
   box-sizing: content-box;
-  background: linear-gradient(168deg, #d7dade 0%, #aeb2b8 42%, #c6cace 100%);
+  border-radius: 26px;
+  background: #0b0c0e;
   box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.13),
-    0 2px 3px rgba(255, 255, 255, 0.55) inset,
-    0 60px 120px -30px rgba(35, 42, 60, 0.35),
-    0 20px 50px -20px rgba(35, 42, 60, 0.28);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 2px 0 rgba(255, 255, 255, 0.5),
+    0 50px 90px -34px rgba(18, 26, 44, 0.45),
+    0 16px 40px -24px rgba(18, 26, 44, 0.35);
 }
 
-/* The display itself — the only thing the app ever draws on. */
+/* The display. Light, because that is what is on it — not because the product
+   is light: every Unmute surface stays pure black on top of this. */
 .screen {
-  /* The four numbers NotchGeometry measures, for the display being drawn.
-     notch.css reads them off its own stage in the gallery; here the screen IS
-     the stage. */
   --cutout-w: 200px;
   --bar-h: 34px;
-  --fillet: 10px;          /* max(round(34 × 0.30), 4) */
+  --fillet: 10px;             /* max(round(34 × 0.30), 4) */
   --bottom-radius: 10px;
 
   position: relative;
   width: 100%; height: 100%;
-  border-radius: 8px;
+  border-radius: 15px;
   overflow: hidden;
   background:
-    radial-gradient(1200px 800px at 18% 4%, #ffffff 0%, transparent 58%),
-    radial-gradient(1000px 760px at 88% 96%, #cfe3ef 0%, transparent 56%),
-    linear-gradient(154deg, #eef1f6 0%, #dfe5ee 46%, #e6eef2 100%);
+    radial-gradient(900px 620px at 16% 2%, #ffffff 0%, transparent 60%),
+    radial-gradient(820px 640px at 92% 98%, #e4eef6 0%, transparent 58%),
+    linear-gradient(160deg, #f7f9fc 0%, #eef2f8 52%, #e9f0f5 100%);
   isolation: isolate;
 }
 
-/* The menu bar the mass is level with. */
 .menubar {
   position: absolute; inset: 0 0 auto 0; height: 34px;
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 16px;
   font: 500 13px/1 var(--font);
-  color: rgba(20, 22, 28, 0.86);
+  color: rgba(18, 20, 26, 0.82);
   z-index: 4; pointer-events: none;
 }
 .menubar-left, .menubar-right { display: flex; align-items: center; gap: 18px; }
 .menubar b { font-weight: 700; }
 .menubar-right { gap: 15px; font-variant-numeric: tabular-nums; }
 
-/* The camera housing. Pure black, and so is the mass that runs through it. */
+/* The camera housing. The bezel is the same black, so there is no join. */
 .housing {
   position: absolute; top: 0; left: 50%; transform: translateX(-50%);
   width: 200px; height: 34px; background: #000;
@@ -87,138 +144,133 @@ body {
 .housing::after {
   content: ""; position: absolute; top: 13px; left: 50%; transform: translateX(-50%);
   width: 7px; height: 7px; border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #1d2430 0%, #05060a 70%);
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.05);
+  background: radial-gradient(circle at 35% 32%, #26303e 0%, #05060a 72%);
 }
 
-/* Where the notch lives — above the housing in z, so the mass covers it. */
-.notch-layer { position: absolute; inset: 0 0 auto 0; height: 220px; z-index: 6; }
-.notch-layer .u-notch { z-index: 6; }
-
-/* The pill cluster: bottom-centre, its bottom edge 30pt above the screen's —
-   NotchGeometry.pillBottomInset (26) plus PillView's own 4pt. */
+.notch-layer { position: absolute; inset: 0 0 auto 0; height: 240px; z-index: 6; }
 .pill-layer {
   position: absolute; inset: auto 0 30px 0;
   display: flex; justify-content: center;
   z-index: 7; pointer-events: none;
 }
 .pill-layer > * { pointer-events: auto; }
-
-/* The notetaker: bottom-left, 16pt in, flush with the pill's baseline. */
 .nt-layer { position: absolute; left: 16px; bottom: 30px; z-index: 7; }
 
-/* ── The document being dictated into ─────────────────────────────────────── */
+/* ── The document ────────────────────────────────────────────────────────── */
 .win {
-  position: absolute; left: 50%; top: 92px; transform: translateX(-50%);
-  width: 820px; height: 560px;
-  border-radius: 12px; overflow: hidden;
-  background: rgba(253, 253, 254, 0.88);
+  position: absolute; left: 50%; top: 84px; transform: translateX(-50%);
+  width: 860px; height: 600px;
+  border-radius: 13px; overflow: hidden;
+  background: rgba(255, 255, 255, 0.94);
   backdrop-filter: blur(28px) saturate(1.6);
-  box-shadow: 0 0 0 0.5px rgba(20, 24, 34, 0.13), 0 30px 80px -22px rgba(28, 36, 56, 0.32);
+  box-shadow: 0 0 0 0.5px rgba(20, 24, 34, 0.14), 0 26px 70px -26px rgba(28, 36, 56, 0.34);
   z-index: 2;
   display: flex; flex-direction: column;
 }
 .win-bar {
-  height: 38px; flex: none;
-  display: flex; align-items: center; gap: 8px; padding: 0 13px;
-  background: rgba(20, 24, 34, 0.035);
+  height: 40px; flex: none;
+  display: flex; align-items: center; gap: 8px; padding: 0 14px;
+  background: rgba(20, 24, 34, 0.028);
   box-shadow: inset 0 -0.5px 0 rgba(20, 24, 34, 0.10);
 }
 .light { width: 12px; height: 12px; border-radius: 50%; }
 .light.r { background: #ff5f57; } .light.y { background: #febc2e; } .light.g { background: #28c840; }
-.win-title {
-  flex: 1; text-align: center; font: 600 13px/1 var(--font);
-  color: rgba(20, 24, 34, 0.52); margin-right: 56px;
-}
-.doc {
-  flex: 1; padding: 30px 38px; overflow-y: auto;
-  font: 400 15.5px/1.72 var(--font);
-  color: rgba(17, 20, 27, 0.88);
-}
+.win-title { flex: 1; text-align: center; font: 600 13px/1 var(--font);
+  color: rgba(20, 24, 34, 0.5); margin-right: 56px; }
+.doc { flex: 1; padding: 32px 40px; overflow-y: auto;
+  font: 400 15.5px/1.72 var(--font); color: rgba(17, 20, 27, 0.88); }
 .doc h1 { font: 600 22px/1.3 var(--font); margin: 0 0 14px; color: #0d1016; }
 .doc p { margin: 0 0 15px; }
-.doc .placeholder { color: rgba(17, 20, 27, 0.34); }
-/* The selection the formatter rewrites. */
-.doc mark {
-  background: rgba(65, 156, 255, 0.28);
-  color: inherit; border-radius: 2px;
-  box-shadow: 0 0 0 1px rgba(65,156,255,0.35);
-}
+.doc .placeholder { color: rgba(17, 20, 27, 0.32); }
 .doc .landing { color: #0d1016; }
+/* An attachment grabbed mid-sentence rides along with the words. */
+.shot {
+  display: inline-flex; align-items: center; gap: 7px;
+  vertical-align: middle; margin: 0 3px;
+  padding: 4px 9px 4px 5px; border-radius: 8px;
+  background: rgba(20, 24, 34, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(20, 24, 34, 0.12);
+  font: 500 12.5px/1 var(--font); color: rgba(17, 20, 27, 0.7);
+  animation: shot-in 240ms cubic-bezier(0, 0, 0.58, 1);
+}
+.shot i {
+  width: 26px; height: 18px; border-radius: 3px; display: block;
+  background: linear-gradient(150deg, #7f9dc4 0%, #b9cde0 60%, #96b6d4 100%);
+  box-shadow: inset 0 0 0 0.5px rgba(20,24,34,0.2);
+}
+@keyframes shot-in { from { opacity: 0; transform: translateY(3px) scale(0.96); } }
 .caret {
   display: inline-block; width: 2px; height: 1.05em;
-  background: #fff; vertical-align: text-bottom;
-  margin-left: 1px;
+  background: #0d1016; vertical-align: text-bottom; margin-left: 1px;
   animation: caret-blink 1.06s steps(1) infinite;
 }
 .caret[data-live] { animation: none; }
 @keyframes caret-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
 
-/* ── The key legend ──────────────────────────────────────────────────────── */
-.keys {
-  position: absolute; left: 50%; bottom: 124px; transform: translateX(-50%);
-  display: flex; gap: 9px; z-index: 8;
-  transition: opacity 320ms var(--ease-out), transform 320ms var(--ease-out);
+/* ── The guide ───────────────────────────────────────────────────────────
+   FIXED TO THE BOTTOM, so the instruction is on screen whatever you have
+   scrolled to and the machine gets the rest of the height. A guide you have to
+   scroll back to is a guide you stop reading.
+   ------------------------------------------------------------------------- */
+.guide {
+  position: fixed; inset: auto 0 0 0; z-index: 40;
+  display: flex; align-items: center; justify-content: center;
+  gap: 22px; padding: 14px 26px 15px;
+  background: rgba(248, 250, 252, 0.86);
+  backdrop-filter: blur(22px) saturate(1.5);
+  box-shadow: 0 -0.5px 0 var(--rule), 0 -20px 40px -30px rgba(20, 28, 45, 0.35);
 }
-.keys[data-dim] { opacity: 0; transform: translateX(-50%) translateY(6px); pointer-events: none; }
+.guide-text { display: flex; flex-direction: column; gap: 4px; max-width: 56ch; }
+.guide-step {
+  font: 600 10px/1 var(--font); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.guide-say { font: 400 16px/1.35 var(--font); color: var(--ink); margin: 0; letter-spacing: -0.01em; }
+.guide-say b { font-weight: 600; }
+.guide-why { font: 400 12.5px/1.5 var(--font); color: var(--ink-2); margin: 0; }
+.guide-dots { display: flex; gap: 5px; flex: none; }
+@media (max-width: 860px) { .guide-why, .guide-dots { display: none; } }
+.guide-dots i {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: rgba(12, 14, 18, 0.16);
+  transition: background 200ms var(--ease-out), transform 200ms var(--ease-out);
+}
+.guide-dots i[data-done] { background: rgba(12, 14, 18, 0.36); }
+.guide-dots i[data-now] { background: var(--ink); transform: scale(1.35); }
+
+.keys { display: flex; gap: 8px; justify-content: center; flex: none; }
 .keycap {
   display: flex; flex-direction: column; align-items: center; gap: 5px;
-  padding: 9px 13px 8px;
-  border: 0; cursor: pointer;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(20px) saturate(1.5);
-  box-shadow: inset 0 0 0 1px rgba(20, 24, 34, 0.10), 0 6px 18px -8px rgba(28, 36, 56, 0.35);
+  padding: 8px 12px 7px; border: 0; cursor: pointer;
+  border-radius: 10px; background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(12,14,18,0.12), 0 2px 0 rgba(12,14,18,0.07);
   transition: background 140ms var(--ease-out), box-shadow 140ms var(--ease-out),
-              transform 90ms var(--ease-out);
+              transform 90ms var(--ease-out), opacity 200ms var(--ease-out);
 }
-.keycap:hover { background: rgba(255, 255, 255, 0.96); }
+.keycap:hover { box-shadow: inset 0 0 0 1px rgba(12,14,18,0.24), 0 2px 0 rgba(12,14,18,0.10); }
 .keycap[data-held] {
-  transform: translateY(1px);
-  background: #14161c;
-  box-shadow: inset 0 0 0 1px rgba(20, 24, 34, 0.5);
+  transform: translateY(2px); background: var(--ink);
+  box-shadow: inset 0 0 0 1px rgba(12,14,18,0.9);
 }
 .keycap[data-held] .keycap-key { color: #fff; }
-.keycap[data-held] .keycap-what { color: rgba(255, 255, 255, 0.62); }
-.keycap[data-disabled] { opacity: 0.34; pointer-events: none; }
-.keycap-key {
-  font: 600 12.5px/1 var(--font); color: rgba(13, 16, 22, 0.95);
-  font-variant-numeric: tabular-nums;
+.keycap[data-held] .keycap-what { color: rgba(255,255,255,0.6); }
+/* The one you are being asked for. */
+.keycap[data-next] { animation: cap-ask 1.9s var(--ease-in-out) infinite; }
+@keyframes cap-ask {
+  0%, 100% { box-shadow: inset 0 0 0 1px rgba(12,14,18,0.14), 0 2px 0 rgba(12,14,18,0.07), 0 0 0 0 rgba(12,14,18,0.16); }
+  50%      { box-shadow: inset 0 0 0 1px rgba(12,14,18,0.30), 0 2px 0 rgba(12,14,18,0.10), 0 0 0 8px rgba(12,14,18,0.06); }
 }
-.keycap-what { font: 500 10.5px/1 var(--font); color: rgba(13, 16, 22, 0.46); }
+.keycap[data-idle] { opacity: 0.4; }
+.keycap-key { font: 600 12.5px/1 var(--font); color: var(--ink); }
+.keycap-what { font: 500 10.5px/1 var(--font); color: var(--ink-3); }
 
-/* ── The narrator: one line, under the keys ──────────────────────────────── */
-.narrator {
-  position: absolute; left: 50%; bottom: 196px; transform: translateX(-50%);
-  max-width: 620px; text-align: center;
-  font: 400 13.5px/1.55 var(--font);
-  color: rgba(24, 28, 38, 0.66);
-  z-index: 8; pointer-events: none;
-  transition: opacity 260ms var(--ease-out);
+.foot {
+  text-align: center; padding: 30px 0 150px;
+  font: 400 12px/1.7 var(--font); color: var(--ink-3);
 }
-.narrator b { color: rgba(11, 14, 20, 0.96); font-weight: 600; }
-.narrator[data-hidden] { opacity: 0; }
-
-/* ── The one bit of chrome that is not the product ───────────────────────── */
-.hint-fn {
-  position: absolute; right: 16px; bottom: 14px;
-  font: 400 11px/1.5 var(--font); color: rgba(24, 28, 38, 0.38);
-  z-index: 8; text-align: right; max-width: 260px;
-}
+.foot b { color: var(--ink-2); font-weight: 600; }
 
 @media (prefers-reduced-motion: reduce) {
-  .caret { animation: none; }
-}
-
-
-/* The bar row sits above the shape and inside the fillets, exactly as
-   NotchView pads its content by `model.bar.fillet`. */
-.u-bar-slot { position: relative; z-index: 1; width: 100%; height: 100%; }
-/* Width and the shape both travel — Theme.surfaceTransitionDuration, on the
-   ease SwiftUI's .easeInOut resolves to. `clip-path: path()` interpolates
-   because notchPath always emits the same commands in the same order. */
-.u-notch { transition: width var(--morph), left var(--morph); }
-.u-notch-shape { transition: clip-path var(--morph), height var(--morph); }
-@media (prefers-reduced-motion: reduce) {
-  .u-notch, .u-notch-shape { transition-duration: var(--reduced-fade); }
+  html { scroll-behavior: auto; }
+  .caret, .keycap[data-next] { animation: none; }
 }

@@ -1,9 +1,10 @@
 /* ==========================================================================
-   DRIVE THE REAL SURFACES.
+   DRIVE THE REAL SURFACES, ONE STEP AT A TIME.
 
-   Nothing here draws anything. Every pixel comes from the replica modules,
-   which were transcribed from the Swift; this file only decides WHICH STATE
-   each surface is in and when, exactly as AppController does in the app.
+   Nothing here draws anything. Every pixel of the product comes from the
+   replica modules, which were transcribed from the Swift; this file decides
+   which state each surface is in, and the tour decides when to ask for the
+   next press.
    ========================================================================== */
 
 import { renderPill, LevelMeter, DotWave } from "../replica/pill.js";
@@ -12,34 +13,41 @@ import { renderNotetaker } from "../replica/notetaker.js";
 import { renderWall, renderTaskSurface, renderPocket, pocketShoulders, panel } from "../replica/expanded.js";
 import { speak } from "./speech.js";
 
-/* ── The display we are drawing, measured the way NotchGeometry measures ──── */
+/* The display being drawn, measured the way NotchGeometry measures. */
 const SCREEN = { width: 1512, barHeight: 34, cutoutWidth: 200, hasNotch: true };
 SCREEN.leftUsable = SCREEN.rightUsable = (SCREEN.width - SCREEN.cutoutWidth) / 2;
 
 const $ = (s) => document.querySelector(s);
 const pillHost = $("#pill"), notchHost = $("#notch"), ntHost = $("#nt"),
-      panelHost = $("#panel"), docEl = $("#doc"), narratorEl = $("#narrator"),
-      keysEl = $("#keys");
+      panelHost = $("#panel"), docEl = $("#doc"), keysEl = $("#keys");
 
-/* ── State ────────────────────────────────────────────────────────────────── */
 const S = {
   pill: { phase: "hidden" },
   notch: "idle",
   notchModel: { working: 0, attention: 0, hasNotch: true },
   hovering: false,
-  expanded: null,           // null | "task" | "cockpit" | "pocket"
-  pocket: null,             // { waiting, at, slots }
-  nt: null,                 // null | "idle" | "discard" | "completed"
-  held: null,               // which key is down
-  busy: false,              // a scripted beat is running
+  expanded: null,
+  pocket: null,
+  nt: null,
+  held: null,
+  busy: false,
 };
 
-/* ── Rendering: re-render, but carry the capsule's width across ──────────────
-   The app morphs one surface rather than swapping two, and the width is the
-   motion you actually see. Re-creating the element loses that, so the new one
-   starts at the old one's width and travels — 240ms on the ease SwiftUI's
-   .easeInOut resolves to, which is Theme.surfaceTransitionDuration exactly.
-   -------------------------------------------------------------------------- */
+/* ── A bus, so the tour can wait for what actually happened ───────────────── */
+const listeners = new Set();
+const emit = (name) => { for (const fn of [...listeners]) fn(name); };
+const until = (name) => new Promise((res) => {
+  const fn = (n) => { if (n === name) { listeners.delete(fn); res(); } };
+  listeners.add(fn);
+});
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ── Rendering ────────────────────────────────────────────────────────────── */
+
+/* The app morphs ONE surface rather than swapping two, and the width is the
+   motion you actually see. A re-created element loses that, so the new one
+   starts at the old one's width and travels — Theme.surfaceTransitionDuration
+   on the ease SwiftUI's .easeInOut resolves to. */
 function morphFrom(host, prevWidth, sel) {
   const el = host.querySelector(sel);
   if (!el || prevWidth == null) return;
@@ -60,9 +68,8 @@ function drawPill() {
 
 /* MOUNTED ONCE, THEN PATCHED. The mass grows on hover, so re-rendering it on
    mouseenter detaches the very node the pointer is over — which cancels the
-   click that was about to happen and leaves the notch unclickable. It is also
-   the only way the width and the shape actually travel: both are animatable
-   here exactly as `animatableData` makes them animatable in the Swift. */
+   click about to happen. It is also the only way the width and the shape
+   actually travel. */
 let notchEl, shapeEl, rowEl;
 function mountNotch() {
   notchHost.innerHTML =
@@ -96,69 +103,56 @@ function drawNotch() {
   if (rowEl.dataset.sig !== n.row) { rowEl.innerHTML = n.row; rowEl.dataset.sig = n.row; }
 }
 
-function drawNotetaker() {
-  ntHost.innerHTML = S.nt ? renderNotetaker(S.nt) : "";
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const drawNotetaker = () => { ntHost.innerHTML = S.nt ? renderNotetaker(S.nt) : ""; };
 
 /* ── The document ─────────────────────────────────────────────────────────── */
-const DOC = { title: "Notes", paras: [], live: "" };
+const SHOT = `<span class="shot"><i></i>Screenshot</span>`;
+const DOC = { paras: [], live: "" };
 function drawDoc() {
   docEl.innerHTML =
-    `<h1>${DOC.title}</h1>` +
+    `<h1>Notes</h1>` +
     (DOC.paras.length || DOC.live
       ? DOC.paras.map((p) => `<p>${p}</p>`).join("") +
-        (DOC.live ? `<p class="landing">${DOC.live}<span class="caret" data-live></span></p>`
-                  : `<p><span class="caret"></span></p>`)
-      : `<p class="placeholder">Hold <b>Fn</b> and say something.<span class="caret"></span></p>`);
+        (DOC.live ? `<p class="landing">${DOC.live}<span class="caret" data-live></span></p>` : "")
+      : `<p class="placeholder">Press <b>Fn</b> and say something.<span class="caret"></span></p>`);
   docEl.scrollTop = docEl.scrollHeight;
 }
 
-function narrate(html) {
-  narratorEl.innerHTML = html;
-  narratorEl.removeAttribute("data-hidden");
-}
-
 /* ── Dictation ────────────────────────────────────────────────────────────
-   The waveform is driven by the SAME LevelMeter + DotWave the app uses; the
-   only difference is where the raw level comes from. Here it is generated from
-   the sentence's own rhythm (see speech.js), so a flat row still means silence
-   and the shape still belongs to the words.
-   -------------------------------------------------------------------------- */
-let dictation = null;
+   The waveform runs on the app's own LevelMeter and DotWave; only the raw
+   level differs, and it is generated from the sentence's own rhythm — so a
+   flat row still means silence and the shape belongs to the words landing.
+   ------------------------------------------------------------------------- */
+let dictation = null, waveRaf = null, envelope = 0;
 
-function startDictation({ kind, text, onLand }) {
+function startDictation({ kind, text, onLand, shotAt = -1, keyId }) {
   const script = speak(text);
-  const started = performance.now();
-  dictation = { script, started, kind, text, onLand, landed: 0, auto: false, keyId: S.held };
-
+  dictation = { script, started: performance.now(), kind, onLand, landed: 0,
+                shotAt, shotDone: shotAt < 0, keyId, open: true };
   S.pill = kind === "remote"
     ? { phase: "recording", kind: "remote", agent: "Claude Code", model: "Opus 4.6",
         agentConnected: true,
         agentOptions: [{ id: "claude", label: "Claude Code", terminal: true },
                        { id: "codex", label: "Codex CLI", terminal: true }],
-        modelOptions: [{ id: "opus", label: "Opus 4.6" }, { id: "sonnet", label: "Sonnet 4.6" }],
+        modelOptions: [{ id: "opus", label: "Opus 4.6" }],
         level: 0, elapsed: 0, maxSeconds: 300 }
     : { phase: "recording", kind, level: 0, elapsed: 0, maxSeconds: 300 };
   drawPill();
+  emit("dict:start");
   tickWave();
 }
 
-/* One clock for the row, and none at all while it is silent. */
-let waveRaf = null, envelope = 0;
 function tickWave() {
   cancelAnimationFrame(waveRaf);
   const step = () => {
     if (!dictation) { envelope = 0; return; }
     const ms = performance.now() - dictation.started;
-    const raw = dictation.script.levelAt(ms);
-    envelope = LevelMeter.advance(envelope, LevelMeter.target(raw));
+    envelope = LevelMeter.advance(envelope, LevelMeter.target(dictation.script.levelAt(ms)));
 
     const row = pillHost.querySelector("[data-wave]");
     if (row) {
       const t = performance.now() / 1000;
-      const travel = 16 / 2 - 3.5 / 2;                 // height/2 − dotSize/2
+      const travel = 16 / 2 - 3.5 / 2;
       for (let i = 0; i < row.children.length; i++) {
         const y = DotWave.offset(i, row.children.length, t, envelope);
         row.children[i].style.transform = `translateY(${(y * travel).toFixed(3)}px)`;
@@ -169,245 +163,108 @@ function tickWave() {
     // transcript that arrives at the end.
     const words = dictation.script.words;
     while (dictation.landed < words.length && ms >= words[dictation.landed].endMs - 40) {
+      if (!dictation.shotDone && dictation.landed === dictation.shotAt) {
+        // The attachment joins the sentence where you grabbed it, and travels
+        // with the words rather than as a second, separate thing.
+        DOC.live += " " + SHOT;
+        dictation.shotDone = true;
+      }
       DOC.live = (DOC.live ? DOC.live + " " : "") + words[dictation.landed].text;
       dictation.landed++;
       if (dictation.kind !== "remote") drawDoc();
     }
-    // The script has run out, and nobody is holding the key.
-    if (dictation.auto && ms > dictation.script.totalMs + 260) { finishDictation(); return; }
+    // The line is over and nobody stopped it: let it stand until they do.
     waveRaf = requestAnimationFrame(step);
   };
   waveRaf = requestAnimationFrame(step);
 }
-
-/** Released. A short press hands over to the script; a long one ends here. */
-function endDictation() {
-  if (!dictation || dictation.auto) return;
-  const heldFor = performance.now() - dictation.started;
-  if (heldFor < TAP_MS) {
-    // A TAP PLAYS THE WHOLE LINE. In the app a tap is genuinely nothing —
-    // too short, no call made — but the point here is to watch it work, so the
-    // sentence finishes on its own and the cap stays lit until it does.
-    dictation.auto = true;
-    S.busy = true;
-    keysEl.querySelector(`[data-key="${dictation.keyId}"]`)?.setAttribute("data-held", "");
-    return;
-  }
-  finishDictation();
-}
-
-const TAP_MS = 380;
 
 async function finishDictation() {
   if (!dictation) return;
   const d = dictation;
   dictation = null;
   cancelAnimationFrame(waveRaf);
-  S.busy = false;
   keysEl.querySelector(`[data-key="${d.keyId}"]`)?.removeAttribute("data-held");
-
-  // Abandoned mid-word without letting it finish: nothing was captured.
-  if (!d.auto && d.landed === 0) {
-    S.pill = { phase: "too-short" }; drawPill();
-    DOC.live = ""; drawDoc();
-    await sleep(1300);
-    S.pill = { phase: "hidden" }; drawPill();
-    return;
-  }
 
   S.pill = { phase: "processing", kind: d.kind, showDiscardHint: true };
   drawPill();
-  await sleep(760);
+  await sleep(700);
   await d.onLand?.(d);
 }
 
-/* ── The four keys ────────────────────────────────────────────────────────── */
-const LINE_1 = "The new direction feels right. Let's give the typography more room and keep the interactions simple.";
-const LINE_2 = "Tighten the typography scale across the marketing pages and show me what changed.";
+/* ── The lines, and what happens when they land ───────────────────────────── */
+const LINE_DICT = "Here is the crash I keep hitting when the session reconnects, and the fix I think we need.";
+const LINE_REMOTE = "Tighten the typography scale across the marketing pages and show me what changed.";
 
-const KEYS = {
-  fn: {
-    code: "KeyF", cap: "Fn", what: "dictate",
-    down() {
-      DOC.live = "";
-      narrate("Speaking. The waveform is the level, so a <b>flat row means silence</b> — nothing here wobbles for decoration.");
-      startDictation({ kind: "dictation", text: LINE_1, onLand: land });
-    },
-    up: endDictation,
-  },
-  caps: {
-    code: "CapsLock", cap: "⇪ Caps Lock", what: "format",
-    enabled: () => DOC.paras.length > 0,
-    down() {
-      // The formatter transforms what you say instead of typing it verbatim —
-      // a different axis from Remote, so it takes its own hue.
-      DOC.selection = true; drawDoc();
-      narrate("The formatter. Same voice, but it <b>rewrites</b> instead of typing — so the capsule takes indigo, the one hue nothing else here uses.");
-      startDictation({ kind: "instruction", text: "make that tighter and drop the second clause", onLand: format });
-    },
-    up: endDictation,
-  },
-  ropt: {
-    code: "AltRight", cap: "right ⌥", what: "hand off",
-    down() {
-      narrate("Remote. The glyph replaces the dot because this is a <b>lane</b>, not a recording state — these words go to a session, not to your cursor.");
-      startDictation({ kind: "remote", text: LINE_2, onLand: handOff });
-    },
-    up: endDictation,
-  },
-  lctrl: {
-    code: "ControlLeft", cap: "left ⌃ ×2", what: "meeting",
-    press: toggleMeeting,
-  },
-};
-
-/* ── What happens when a capture lands ────────────────────────────────────── */
-
-async function land() {
+async function landDictation() {
   // SILENT SUCCESS. The text is already at the cursor; anything more is the
   // pill talking about itself.
   S.pill = { phase: "output" }; drawPill();
   DOC.paras.push(DOC.live); DOC.live = ""; drawDoc();
-  narrate("A green tick, and nothing else — <b>the text is already at your cursor</b>. Now try <b>⇪ Caps Lock</b> to reformat it.");
-  await sleep(1100);
+  emit("dict:landed");
+  await sleep(1000);
   S.pill = { phase: "hidden" }; drawPill();
-  refreshKeys();
 }
 
-async function format() {
+async function landFormat() {
   S.pill = { phase: "output" }; drawPill();
   DOC.live = "";
   DOC.paras[DOC.paras.length - 1] =
-    "The new direction feels right — give the typography more room.";
-  DOC.selection = false; drawDoc();
-  narrate("Rewritten in place. Now hold <b>right ⌥</b> and hand something to an agent instead.");
-  await sleep(1100);
+    `The session drops on reconnect. ${SHOT} The fix is to re-key the socket before the retry, not after.`;
+  drawDoc();
+  emit("format:landed");
+  await sleep(1000);
   S.pill = { phase: "hidden" }; drawPill();
 }
 
-async function handOff() {
+/* A task, said out loud, becomes a real session — and then waits in the pocket
+   rather than interrupting. */
+async function landRemote() {
   DOC.live = "";
   S.pill = { phase: "hidden" }; drawPill();
 
-  // Between the pill vanishing and the task existing, the router is deciding
-  // where the words go. The surface used to say nothing at all here.
-  S.notch = "idle";
   S.notchModel = { ...S.notchModel, capturePhase: "routing" };
   drawNotch();
-  narrate("The pill is gone and the task does not exist yet — so the notch says <b>Sending</b> rather than nothing.");
-  await sleep(1150);
+  await sleep(1100);
 
-  S.notchModel = { ...S.notchModel, capturePhase: null, working: 1,
+  S.notchModel = { working: 1, attention: 0, hasNotch: true,
     task: { status: "processing", title: "Tighten the typography scale",
             activity: "Reading the type ramp" } };
-  S.notch = "active";
-  drawNotch();
-  narrate("Working. One word for one state, the count in the badge — and the right half carries what is <b>actually happening</b>. Hover it.");
-  await sleep(2600);
+  S.notch = "active"; drawNotch();
+  await sleep(2400);
 
-  S.notchModel = { ...S.notchModel,
-    task: { ...S.notchModel.task, activity: "Applying the scale to /pricing" } };
-  drawNotch();
-  await sleep(2600);
-
-  S.notchModel = { working: 0, attention: 1, hasNotch: true,
-    task: { status: "needs-user", title: "Tighten the typography scale",
-            question: { text: "Apply the new scale to the whole site, or only the marketing pages?" } } };
-  S.notch = "attention";
-  drawNotch();
-  narrate("It needs you. The <b>one state that glows</b> — and the question itself is in the bar. <b>Click the notch.</b>");
+  S.notchModel = { working: 0, attention: 0, hasNotch: true };
+  S.pocket = { at: 0, slots: POCKET_SLOTS };
+  S.notch = "idle"; drawNotch();
+  emit("remote:landed");
 }
 
-/* ── Expanding ────────────────────────────────────────────────────────────── */
+const POCKET_SLOTS = [
+  { id: "p1", title: "Tighten the typography scale", backend: "claude", terminal: true,
+    status: "needs-user", demanding: true,
+    ask: "Apply the new scale to the whole site, or only the marketing pages?" },
+  { id: "p2", title: "Reconnect crash", backend: "codex", terminal: true,
+    status: "ready", demanding: true,
+    ask: "Re-keyed the socket before the retry. Want the diff?" },
+  { id: "p3", title: "Notch geometry audit", backend: "codex", terminal: true,
+    status: "done", demanding: false,
+    ask: "Every radius now derives from the measured bar." },
+];
 
+/* ── Expanding ────────────────────────────────────────────────────────────── */
 const TASK = {
   status: "needs-user", title: "Tighten the typography scale",
   backend: "claude", hasTerminal: true, alive: true, kind: "session",
   elapsed: "4m", modelLabel: "opus", isOwned: true,
 };
 const ROWS = [
-  { kind: "user", text: LINE_2 },
+  { kind: "user", text: LINE_REMOTE },
   { kind: "work", durationMs: 38000, steps: [
     { title: "Read the type ramp", ms: 640, ok: true },
     { title: "Apply the scale to /pricing", ms: 2100, ok: true },
     { title: "Diff the marketing templates", ms: 1450, ok: true },
   ] },
   { kind: "answer", text: "The ramp is in `tokens.css` and four pages import it. **Two of them are marketing**; the other two are the app shell, where the scale is tied to the native type sizes.\n\nApply the new scale to the whole site, or only the marketing pages?" },
-];
-
-function openPanel(kind) {
-  S.expanded = kind;
-  if (kind === "pocket") {
-    const slot = S.pocket.slots[S.pocket.at ?? 0];
-    const p = { ...slot, slots: S.pocket.slots.length, at: S.pocket.at ?? 0 };
-    // Counted the way the view stacks it: shoulder row (the cutout's own
-    // height), plane top pad, the card, plane bottom pad.
-    panelHost.innerHTML = panel(renderPocket(p, true), {
-      width: 348, height: 34 + 6 + (p.ask ? 103 : 65) + 6,
-      pocket: true, shoulders: pocketShoulders(p, SCREEN.cutoutWidth),
-    });
-    panelHost.dataset.open = "true";
-    drawNotch();
-    return;
-  }
-  const width = kind === "cockpit" ? 1180 : 900;
-  const height = kind === "cockpit" ? 760 : 620;
-  const inner = kind === "cockpit"
-    ? renderWall(WALL)
-    : renderTaskSurface({ task: TASK, rows: ROWS, attention: 1, surfaceFill: 0.77 });
-  panelHost.innerHTML = panel(inner, { width, height });
-  panelHost.dataset.open = "true";
-  // The reply the question is waiting for.
-  if (kind === "task") {
-    const composer = panelHost.querySelector(".u-composer");
-    if (composer) {
-      composer.insertAdjacentHTML("beforebegin",
-        `<div class="answer-chips">
-           <button type="button" class="u-act-btn" data-answer="Whole site">Whole site</button>
-           <button type="button" class="u-key-btn" data-answer="Marketing only">Marketing only</button>
-         </div>`);
-    }
-  }
-  S.notch = kind === "cockpit" ? "cockpit" : "task";
-  drawNotch();
-}
-
-function closePanel() {
-  S.expanded = null;
-  panelHost.dataset.open = "false";
-  panelHost.innerHTML = "";
-}
-
-function onNotchClick() {
-  if (S.expanded) return;
-  // A tap on a notch that says "2 waiting on you" and getting the task surface
-  // would answer a different question than the one it just asked. Open is
-  // aimed; the pocket never opens itself.
-  if (S.notch === "attention") {
-    openPanel("task");
-    narrate("The whole panel is one shape with the mass — same path, same concave shoulders. <b>Answer it.</b>");
-  } else if (S.pocket && S.pocket.slots.some((x) => x.demanding)) {
-    openPanel("pocket");
-    narrate("The pocket. Identity on the left of the camera, controls on the right, and what it is asking below — <b>the notch itself, opened</b>. Click a pip to walk the carousel, or the card to expand it.");
-  } else {
-    openPanel("cockpit");
-    narrate("Everything at once. Click a card to focus it; drag the size track; <b>Esc</b> to close.");
-  }
-}
-
-/* What is sitting in the pocket once the first hand-off is settled. Only what
-   is WAITING may speak from the closed surface — `waiting`, never the whole
-   list, or work you had already dealt with announces itself as though new. */
-const POCKET_SLOTS = [
-  { id: "p1", title: "Rewrite the onboarding copy", backend: "claude", terminal: true,
-    status: "needs-user", demanding: true,
-    ask: "The second paragraph repeats the first. Cut it, or rewrite it?" },
-  { id: "p2", title: "Parakeet warm-start", backend: "codex", terminal: true,
-    status: "ready", demanding: true,
-    ask: "First token is down to 210ms. Want the profile?" },
-  { id: "p3", title: "Notch geometry audit", backend: "codex", terminal: true,
-    status: "done", demanding: false,
-    ask: "Every radius now derives from the measured bar." },
 ];
 
 const WALL = {
@@ -417,9 +274,9 @@ const WALL = {
       { id: "a", status: "needs-user", title: "Tighten the typography scale",
         activity: "Apply the new scale to the whole site, or only the marketing pages?",
         backend: "claude", kind: "session", dir: "~/site", age: "4m", qpos: 1 },
-      { id: "b", status: "done", title: "Rewrite the onboarding copy",
-        activity: "Three files edited. Here's where it landed.",
-        backend: "claude", kind: "session", dir: "~/site", age: "1h" } ] },
+      { id: "b", status: "ready", title: "Reconnect crash",
+        activity: "Re-keyed the socket before the retry. Want the diff?",
+        backend: "codex", kind: "session", dir: "~/engine", age: "9m" } ] },
     { name: "engine", cards: [
       { id: "c", status: "processing", title: "Parakeet warm-start",
         activity: "Profiling the first-token path", backend: "codex", kind: "session",
@@ -429,30 +286,80 @@ const WALL = {
         backend: "codex", kind: "oneoff", age: "3h" } ] },
   ],
   queue: [{ id: "a", status: "needs-user", name: "Tighten the typography scale" }],
-  oneoffs: [
-    { id: "d", status: "done", name: "Notch geometry audit", age: "3h" },
-    { id: "e", status: "done", name: "Waveform envelope tuning", age: "5h" },
-  ],
+  oneoffs: [{ id: "d", status: "done", name: "Notch geometry audit", age: "3h" }],
   shelf: [{ id: "f", name: "Provider mark optical scale" }],
 };
 
-/* ── The meeting notetaker ────────────────────────────────────────────────── */
-let lctrlLast = 0;
-async function toggleMeeting() {
-  const now = performance.now();
-  if (S.nt) return;
-  if (now - lctrlLast > 600) {           // left ⌃ TWICE — one press is nothing
-    lctrlLast = now;
-    narrate("Once more — <b>left ⌃ twice</b> starts the meeting. Stop is never a single, direct action.");
+function openPanel(kind) {
+  S.expanded = kind;
+  if (kind === "pocket") {
+    const slot = S.pocket.slots[S.pocket.at ?? 0];
+    const p = { ...slot, slots: S.pocket.slots.length, at: S.pocket.at ?? 0 };
+    panelHost.innerHTML = panel(renderPocket(p, true), {
+      width: 348, height: 34 + 6 + (p.ask ? 103 : 65) + 6,
+      pocket: true, shoulders: pocketShoulders(p, SCREEN.cutoutWidth),
+    });
+    panelHost.dataset.open = "true";
+    drawNotch(); emit("pocket:open");
     return;
   }
-  lctrlLast = 0;
-  S.nt = "idle"; drawNotetaker();
-  narrate("Recording the room. Bottom-left, its baseline flush with the pill's. <b>Click it</b> for the actions.");
-  driveNtBars();
+  const width = kind === "cockpit" ? 1180 : 900;
+  const height = kind === "cockpit" ? 760 : 620;
+  panelHost.innerHTML = panel(
+    kind === "cockpit" ? renderWall(WALL)
+      : renderTaskSurface({ task: TASK, rows: ROWS, attention: 1, surfaceFill: 0.77 }),
+    { width, height });
+  if (kind === "task") {
+    panelHost.querySelector(".u-composer")?.insertAdjacentHTML("beforebegin",
+      `<div class="answer-chips">
+         <button type="button" class="u-act-btn" data-answer="Whole site">Whole site</button>
+         <button type="button" class="u-key-btn" data-answer="Marketing only">Marketing only</button>
+       </div>`);
+  }
+  panelHost.dataset.open = "true";
+  S.notch = kind === "cockpit" ? "cockpit" : "task";
+  drawNotch();
+  emit(kind === "cockpit" ? "cockpit:open" : "task:open");
 }
 
-let ntRaf = null, ntLevels = new Array(14).fill(0);
+function closePanel() {
+  S.expanded = null;
+  panelHost.dataset.open = "false";
+  panelHost.innerHTML = "";
+  S.notch = S.notchModel.attention ? "attention" : "idle";
+  drawNotch();
+  emit("panel:closed");
+}
+
+function onNotchClick() {
+  if (S.expanded) return;
+  if (S.notch === "attention") openPanel("task");
+  else if (S.pocket?.slots.some((x) => x.demanding)) openPanel("pocket");
+  else openPanel("cockpit");
+}
+
+/* ── The meeting notetaker ────────────────────────────────────────────────── */
+let lctrlAt = 0, ntRaf = null;
+const ntLevels = new Array(14).fill(0);
+
+function pressLeftCtrl() {
+  const now = performance.now();
+  // Left ⌃ TWICE. One press is nothing: stop is never a single, direct action,
+  // and neither is start.
+  if (now - lctrlAt > 700) { lctrlAt = now; emit("nt:armed"); return; }
+  lctrlAt = 0;
+  if (!S.nt) { S.nt = "idle"; drawNotetaker(); driveNtBars(); emit("nt:start"); }
+  else { endMeeting(); }
+}
+
+async function endMeeting() {
+  S.nt = "completed"; drawNotetaker();
+  cancelAnimationFrame(ntRaf);
+  emit("nt:saved");
+  await sleep(1900);
+  S.nt = null; drawNotetaker();
+}
+
 function driveNtBars() {
   cancelAnimationFrame(ntRaf);
   const step = () => {
@@ -463,8 +370,7 @@ function driveNtBars() {
         const raw = Math.max(0, 0.05 + Math.sin(t * 2.4 + i * 0.66) * 0.15
                                 + Math.sin(t * 0.47 + i * 0.2) * 0.09) * 1.25;
         const gated = raw <= 0.08 ? 0 : (raw - 0.08) / 0.92;
-        const target = Math.min(1, gated);
-        ntLevels[i] += (target - ntLevels[i]) * (target > ntLevels[i] ? 0.28 : 0.07);
+        ntLevels[i] += (Math.min(1, gated) - ntLevels[i]) * (gated > ntLevels[i] ? 0.28 : 0.07);
         const h = Math.round(ntLevels[i] * 20);
         row.children[i].style.height = (h < 2 ? 0 : h) + "px";
         row.children[i].style.opacity = (0.55 + 0.45 * ntLevels[i]).toFixed(3);
@@ -475,31 +381,45 @@ function driveNtBars() {
   ntRaf = requestAnimationFrame(step);
 }
 
-/* ── Input ────────────────────────────────────────────────────────────────── */
-
-function keyDown(id) {
-  const k = KEYS[id];
-  if (!k || S.held || S.busy || S.expanded) return;
-  if (k.enabled && !k.enabled()) return;
-  if (k.press) { k.press(); return; }
-  S.held = id;
-  keysEl.querySelector(`[data-key="${id}"]`)?.setAttribute("data-held", "");
-  k.down();
-}
-function keyUp(id) {
-  if (S.held !== id) return;
-  S.held = null;
-  keysEl.querySelector(`[data-key="${id}"]`)?.removeAttribute("data-held");
-  KEYS[id].up?.();
-}
-
-function refreshKeys() {
-  for (const [id, k] of Object.entries(KEYS)) {
-    const cap = keysEl.querySelector(`[data-key="${id}"]`);
-    if (!cap) continue;
-    cap.toggleAttribute("data-disabled", !!(k.enabled && !k.enabled()));
-  }
-}
+/* ── The keys ─────────────────────────────────────────────────────────────── */
+const KEYS = {
+  fn: {
+    code: "KeyF", cap: "Fn", what: "dictate",
+    press() {
+      // PRESS TO START, PRESS AGAIN TO FINISH — and holding works too.
+      if (dictation) { finishDictation(); return; }
+      DOC.live = "";
+      startDictation({ kind: "dictation", text: LINE_DICT, onLand: landDictation,
+                       shotAt: 11, keyId: "fn" });
+    },
+    release() { if (dictation && performance.now() - dictation.started > 380) finishDictation(); },
+  },
+  caps: {
+    code: "CapsLock", cap: "⇪", what: "reformat",
+    press() {
+      if (dictation) { finishDictation(); return; }
+      startDictation({ kind: "instruction", text: "tighten that and keep the screenshot",
+                       onLand: landFormat, keyId: "caps" });
+    },
+  },
+  ropt: {
+    code: "AltRight", cap: "right ⌥", what: "hand off",
+    press() {
+      if (dictation) { finishDictation(); return; }
+      // With something already holding, right ⌥ aims at the pocket rather than
+      // starting a new task — your voice goes to the card you can see.
+      if (S.pocket?.slots.some((x) => x.demanding) && !S.expanded) { openPanel("pocket"); return; }
+      startDictation({ kind: "remote", text: LINE_REMOTE, onLand: landRemote, keyId: "ropt" });
+    },
+    release() { if (dictation && performance.now() - dictation.started > 380) finishDictation(); },
+  },
+  lctrl: { code: "ControlLeft", cap: "left ⌃ ×2", what: "meeting", press: pressLeftCtrl },
+  esc: { code: "Escape", cap: "esc", what: "put away", press() { if (S.expanded) closePanel(); } },
+  cmdopt: {
+    code: null, cap: "⌘⌥", what: "bring it back",
+    press() { if (!S.expanded) openPanel("cockpit"); },
+  },
+};
 
 keysEl.innerHTML = Object.entries(KEYS).map(([id, k]) =>
   `<button type="button" class="keycap" data-key="${id}">
@@ -507,103 +427,175 @@ keysEl.innerHTML = Object.entries(KEYS).map(([id, k]) =>
      <span class="keycap-what">${k.what}</span>
    </button>`).join("");
 
+function fire(id) {
+  const k = KEYS[id];
+  if (!k) return;
+  const cap = keysEl.querySelector(`[data-key="${id}"]`);
+  cap?.setAttribute("data-held", "");
+  if (!k.release) setTimeout(() => cap?.removeAttribute("data-held"), 160);
+  S.held = k.release ? id : null;
+  k.press();
+}
+
 keysEl.addEventListener("pointerdown", (e) => {
   const cap = e.target.closest(".keycap");
-  if (cap) { e.preventDefault(); keyDown(cap.dataset.key); }
+  if (cap) { e.preventDefault(); fire(cap.dataset.key); }
 });
-window.addEventListener("pointerup", () => { if (S.held) keyUp(S.held); });
+window.addEventListener("pointerup", () => {
+  if (!S.held) return;
+  const id = S.held; S.held = null;
+  keysEl.querySelector(`[data-key="${id}"]`)?.removeAttribute("data-held");
+  KEYS[id].release?.();
+});
 
 window.addEventListener("keydown", (e) => {
   if (e.repeat) return;
-  if (e.code === "Escape" && S.expanded) { closePanel(); S.notch = S.notchModel.attention ? "attention" : "idle"; drawNotch(); return; }
+  if (e.metaKey && e.altKey && !e.ctrlKey) { e.preventDefault(); fire("cmdopt"); return; }
   const id = Object.keys(KEYS).find((k) => KEYS[k].code === e.code);
-  if (id) { e.preventDefault(); keyDown(id); }
+  if (id) { e.preventDefault(); fire(id); }
 });
 window.addEventListener("keyup", (e) => {
   const id = Object.keys(KEYS).find((k) => KEYS[k].code === e.code);
-  if (id) keyUp(id);
+  if (id && S.held === id) {
+    S.held = null;
+    keysEl.querySelector(`[data-key="${id}"]`)?.removeAttribute("data-held");
+    KEYS[id].release?.();
+  }
 });
 
-/* Everything inside the panel that has to do something. */
+/* ── Clicks inside the surfaces ───────────────────────────────────────────── */
 document.addEventListener("click", async (e) => {
   const answer = e.target.closest("[data-answer]");
   if (answer) {
     closePanel();
+    S.pocket.slots = S.pocket.slots.filter((x) => x.id !== "p1");
     S.notchModel = { working: 1, attention: 0, hasNotch: true,
       task: { status: "processing", title: "Tighten the typography scale",
               activity: answer.dataset.answer === "Whole site" ? "Applying to 4 pages" : "Applying to 2 pages" } };
     S.notch = "active"; drawNotch();
-    narrate("Answered. It carries on — and the surface goes back to saying one quiet thing.");
-    await sleep(3200);
+    emit("answered");
+    await sleep(2600);
     S.notchModel = { working: 0, attention: 0, hasNotch: true };
-    S.pocket = { at: 0, slots: POCKET_SLOTS };
     S.notch = "idle"; drawNotch();
-    narrate("Two more are still holding. The closed surface counts <b>only what is waiting</b> — never everything it holds. <b>Click the notch.</b>");
     return;
   }
-  if (e.target.closest('.u-round-btn[aria-label="Close"]')) {
-    closePanel(); S.notch = S.notchModel.attention ? "attention" : "idle"; drawNotch(); return;
+  if (e.target.closest('.u-round-btn[aria-label="Close"]')) { closePanel(); return; }
+
+  if (S.expanded === "pocket") {
+    const pip = e.target.closest(".u-pocket-pip");
+    if (pip) {
+      S.pocket.at = [...pip.parentElement.children].indexOf(pip);
+      openPanel("pocket"); return;
+    }
+    if (e.target.closest('.u-pocket-shoulders .u-round-btn[title^="Open the dashboard"]')) {
+      panelHost.dataset.open = "false"; openPanel("cockpit"); return;
+    }
+    if (e.target.closest('.u-pocket-shoulders .u-round-btn[title^="Close"]')) { closePanel(); return; }
+    if (e.target.closest(".u-pocket")) { panelHost.dataset.open = "false"; openPanel("task"); return; }
   }
-  if (e.target.closest("[data-open-pocket]")) { openPanel("pocket"); return; }
-  // The notetaker: tapping the recording pill opens the actions in place.
+  if (e.target.closest(".u-quiet-btn") && e.target.textContent.includes("Open dashboard")) {
+    panelHost.dataset.open = "false"; openPanel("cockpit"); return;
+  }
+  const card = e.target.closest(".u-card");
+  if (card && S.expanded === "cockpit") { panelHost.dataset.open = "false"; openPanel("task"); return; }
+
   const nt = e.target.closest(".u-nt");
   const act = e.target.closest("[data-action]");
   if (nt && !act && S.nt === "idle") { S.nt = "discard"; drawNotetaker(); return; }
   if (act && ntHost.contains(act)) {
     const a = act.dataset.action;
     if (a === "keep") { S.nt = "idle"; drawNotetaker(); driveNtBars(); }
-    if (a === "discard") { S.nt = null; drawNotetaker(); narrate("Discarded. Nothing was kept."); }
-    if (a === "end") {
-      S.nt = "completed"; drawNotetaker();
-      narrate("The rim and the contents say saved; <b>the fill never changes</b>.");
-      await sleep(1800);
-      S.nt = null; drawNotetaker();
-    }
+    if (a === "discard") { S.nt = null; drawNotetaker(); cancelAnimationFrame(ntRaf); }
+    if (a === "end") endMeeting();
   }
-  // The pocket: the pips walk the carousel, the card expands, ✕ hands your
-  // voice back to normal routing.
-  if (S.expanded === "pocket") {
-    const pip = e.target.closest(".u-pocket-pip");
-    if (pip) {
-      S.pocket.at = [...pip.parentElement.children].indexOf(pip);
-      openPanel("pocket");
-      return;
-    }
-    if (e.target.closest('.u-round-btn[title^="Close"]')) {
-      closePanel(); S.notch = "idle"; drawNotch();
-      narrate("Closed. Your voice goes back to normal routing.");
-      return;
-    }
-    if (e.target.closest('.u-round-btn[title^="Open the dashboard"]')) {
-      closePanel(); openPanel("cockpit");
-      narrate("Everything at once. <b>Esc</b> to close.");
-      return;
-    }
-    if (e.target.closest(".u-pocket")) {
-      closePanel(); openPanel("task");
-      narrate("The pocket hands over to the task. Same surface, more of it.");
-      return;
-    }
-  }
-  // A card on the wall focuses that task — the voice address.
-  const card = e.target.closest(".u-card");
-  if (card && S.expanded === "cockpit") { closePanel(); openPanel("task"); }
 });
 
-/* ── Fit the machine to the viewport ──────────────────────────────────────── */
-/* The machine's true size is a FLOOR, not a ceiling: capping the scale at 1
-   left a large display more than half empty. Scaling a DOM tree up keeps the
-   type sharp — it is re-rasterised, not stretched — so the only limit is how
-   much of the viewport we are willing to fill. */
+/* ── The tour ─────────────────────────────────────────────────────────────
+   Guided, and it waits for what actually happened rather than for a timer.
+   ------------------------------------------------------------------------- */
+const TOUR = [
+  { key: "fn", wait: "dict:start",
+    say: "Press <b>Fn</b> to start listening.",
+    why: "On your Mac that is the key beside ⌃. macOS never reports it to a browser, so here it is <b>F</b> — or click the cap." },
+  { key: "fn", wait: "dict:landed",
+    say: "Say your piece, then press <b>Fn</b> again to finish.",
+    why: "Watch the screenshot join the sentence half-way through — it travels with the words and lands in the same paste." },
+  { key: "caps", wait: "format:landed",
+    say: "Press <b>⇪ Caps Lock</b> to have it rewrite that instead.",
+    why: "Same voice, but the words are an instruction rather than the text. The capsule takes indigo — the one hue nothing else here uses." },
+  { key: "ropt", wait: "remote:landed",
+    say: "Now hold <b>right ⌥</b> and hand some work off.",
+    why: "The glyph replaces the dot because this is a lane, not a recording state: these words go to a Claude Code session, on your own plan, not to your cursor." },
+  { key: "ropt", wait: "pocket:open",
+    say: "It is waiting in your pocket. Press <b>right ⌥</b> again to open it.",
+    why: "The closed surface counts only what is waiting on you — never everything it holds." },
+  { key: null, wait: "task:open",
+    say: "Click the card to open the task.",
+    why: "The pocket hands over to the whole surface. Same shape, more of it." },
+  { key: null, wait: "cockpit:open",
+    say: "Click <b>Open dashboard</b>, at the bottom left of the panel.",
+    why: "Every task at once — the Orchestrator. A card that needs you carries a whisper of its own status hue." },
+  { key: "esc", wait: "panel:closed",
+    say: "Press <b>esc</b> to put it away.",
+    why: "It collapses back into the notch it grew out of. One surface, not two." },
+  { key: "cmdopt", wait: "cockpit:open",
+    say: "Press <b>⌘⌥</b> to bring it straight back.",
+    why: "You never had to find a window, because there was never a window to find." },
+  { key: "lctrl", wait: "nt:start",
+    say: "Press <b>left ⌃</b> twice to start taking meeting notes.",
+    why: "One press is nothing. The widget sits bottom-left, its baseline level with the pill's." },
+  { key: "lctrl", wait: "nt:saved",
+    say: "Press <b>left ⌃</b> twice again to end it.",
+    why: "Or click the widget for End and Discard. Stop is never a single, direct action." },
+];
+
+const stepEl = $("#guide-step"), sayEl = $("#guide-say"), whyEl = $("#guide-why"),
+      dotsEl = $("#guide-dots");
+dotsEl.innerHTML = TOUR.map(() => "<i></i>").join("");
+
+function showStep(i) {
+  const s = TOUR[i];
+  stepEl.textContent = `Step ${i + 1} of ${TOUR.length}`;
+  sayEl.innerHTML = s.say;
+  whyEl.innerHTML = s.why;
+  [...dotsEl.children].forEach((d, n) => {
+    d.toggleAttribute("data-done", n < i);
+    d.toggleAttribute("data-now", n === i);
+  });
+  keysEl.querySelectorAll(".keycap").forEach((cap) => {
+    cap.toggleAttribute("data-next", cap.dataset.key === s.key);
+    cap.toggleAttribute("data-idle", !!s.key && cap.dataset.key !== s.key);
+  });
+}
+
+async function runTour() {
+  for (let i = 0; i < TOUR.length; i++) {
+    showStep(i);
+    await until(TOUR[i].wait);
+    await sleep(320);
+  }
+  stepEl.textContent = "That is the whole thing";
+  sayEl.innerHTML = "You just used Unmute without installing it.";
+  whyEl.innerHTML = "Everything above is the real interface, rebuilt in the browser from the app's own source — the same shape, the same radii, the same 240ms morph. Carry on pressing keys; nothing resets.";
+  [...dotsEl.children].forEach((d) => { d.setAttribute("data-done", ""); d.removeAttribute("data-now"); });
+  keysEl.querySelectorAll(".keycap").forEach((c) => {
+    c.removeAttribute("data-next"); c.removeAttribute("data-idle");
+  });
+}
+
+/* ── Fit ──────────────────────────────────────────────────────────────────── */
 function fit() {
   const m = document.querySelector(".machine");
-  const pad = 30;
-  const k = Math.min((innerWidth - pad) / (m.offsetWidth || 1534),
-                     (innerHeight - pad) / (m.offsetHeight || 1004));
-  document.querySelector(".machine-fit").style.setProperty("--k", Math.min(k, 1.6).toFixed(4));
+  const w = m.offsetWidth || 1536, h = m.offsetHeight || 1007;
+  // The guide is fixed, so the machine only has to clear it — not the whole
+  // block of prose that used to sit under it.
+  const k = Math.min((innerWidth - 44) / w, (innerHeight - 150) / h, 1.15);
+  document.querySelector(".machine-fit").style.setProperty("--k", k.toFixed(4));
+  // The scaled element still occupies its unscaled box in layout, so the slot
+  // reserves what the SCALED machine actually needs.
+  $("#slot").style.setProperty("--slot-h", Math.ceil(h * k) + "px");
 }
 addEventListener("resize", fit);
 
 /* ── Go ───────────────────────────────────────────────────────────────────── */
-drawDoc(); mountNotch(); drawNotch(); drawPill(); refreshKeys(); fit();
-narrate("This is the real interface, rebuilt in the browser. <b>Hold Fn</b> — or press and hold <b>F</b> — and watch the notch.");
+drawDoc(); mountNotch(); drawNotch(); drawPill(); fit(); runTour();

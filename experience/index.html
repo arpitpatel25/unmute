@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unmute — interactive</title>
+<title>Unmute — try it</title>
 <meta name="robots" content="noindex">
 <link rel="stylesheet" href="../replica/tokens.css">
 <link rel="stylesheet" href="../replica/pill.css">
@@ -12,59 +12,106 @@
 <link rel="stylesheet" href="../replica/expanded.css">
 <link rel="stylesheet" href="frame.css">
 <style>
-  /* The expanded panel hangs from the top of the screen, like the mass. */
   #panel {
     position: absolute; top: 0; left: 50%; transform: translateX(-50%);
-    z-index: 9; pointer-events: none;
-    opacity: 0;
+    z-index: 9; pointer-events: none; opacity: 0;
     transition: opacity 140ms cubic-bezier(0, 0, 0.58, 1) 80ms;
   }
   #panel[data-open="true"] { opacity: 1; pointer-events: auto; }
-  /* The scrim: a click outside closes, exactly as the surface does. */
-  #panel[data-open="true"]::before {
-    content: ""; position: fixed; inset: 0; z-index: -1;
-  }
   .answer-chips { display: flex; gap: 8px; padding-top: 10px; flex: none; }
 </style>
 </head>
 <body>
 
-<div class="machine-fit">
-  <div class="machine">
-    <div class="screen" id="screen">
+<div class="wrap">
+  <header class="intro">
+    <h1>Three keys, and your hands never leave what you were doing.</h1>
+    <p>Unmute lives in the notch. It does three things, and you drive all of
+       them without opening a window.</p>
+  </header>
 
-      <div class="menubar">
-        <span class="menubar-left"><b>Notes</b><span>File</span><span>Edit</span><span>Format</span><span>View</span></span>
-        <span class="menubar-right"><span>􀙇</span><span>100%</span><span>Thu 9 Sep 12:04</span></span>
-      </div>
-      <div class="housing"></div>
+  <section class="features">
+    <article class="feature">
+      <span class="feature-n">One</span>
+      <h2>Dictation that carries more than words</h2>
+      <p>Hold <kbd>Fn</kbd> and talk. It types where your cursor already is — a
+         terminal, a notes app, a chat box, anything.</p>
+      <p>Grab a screenshot part-way through a sentence and it travels with the
+         words. When you let go, the whole thing lands in one paste: what you
+         said and what you showed, together.</p>
+    </article>
 
-      <!-- What you are dictating into. -->
-      <div class="win">
-        <div class="win-bar">
-          <span class="light r"></span><span class="light y"></span><span class="light g"></span>
-          <span class="win-title">Untitled</span>
+    <article class="feature">
+      <span class="feature-n">Two</span>
+      <h2>Say the work, and it starts</h2>
+      <p>Hold <kbd>right&nbsp;⌥</kbd> and describe what you want done. It opens a
+         real Claude&nbsp;Code or Codex session — on the plan you already pay
+         for — and gets on with it.</p>
+      <p>The task waits in the pocket until it needs you. <kbd>right&nbsp;⌥</kbd>
+         again to reply, <kbd>left&nbsp;⌥</kbd> to walk between them, or open the
+         Orchestrator and see every one at once.</p>
+    </article>
+
+    <article class="feature">
+      <span class="feature-n">Three</span>
+      <h2>It takes the meeting notes</h2>
+      <p><kbd>left&nbsp;⌃</kbd> twice and it starts listening — your microphone
+         and the room's audio both.</p>
+      <p>What you get back is notes, not a transcript. Nothing leaves the widget
+         until you end it, and ending is never one click.</p>
+    </article>
+  </section>
+</div>
+
+<!-- ── Now do it. ────────────────────────────────────────────────────────── -->
+<div class="stage-wrap">
+  <div class="machine-slot" id="slot">
+    <div class="machine-fit">
+      <div class="machine">
+        <div class="screen" id="screen">
+
+          <div class="menubar">
+            <span class="menubar-left"><b>Notes</b><span>File</span><span>Edit</span><span>Format</span><span>View</span></span>
+            <span class="menubar-right"><span>100%</span><span>Thu 9 Sep 12:04</span></span>
+          </div>
+          <div class="housing"></div>
+
+          <div class="win">
+            <div class="win-bar">
+              <span class="light r"></span><span class="light y"></span><span class="light g"></span>
+              <span class="win-title">Untitled</span>
+            </div>
+            <div class="doc" id="doc"></div>
+          </div>
+
+          <div class="notch-layer" id="notch"></div>
+          <div id="panel" data-open="false"></div>
+          <div class="pill-layer" id="pill"></div>
+          <div class="nt-layer" id="nt"></div>
+
         </div>
-        <div class="doc" id="doc"></div>
       </div>
-
-      <!-- The product. Every one of these is a replica module. -->
-      <div class="notch-layer" id="notch"></div>
-      <div id="panel" data-open="false"></div>
-      <div class="pill-layer" id="pill"></div>
-      <div class="nt-layer" id="nt"></div>
-
-      <p class="narrator" id="narrator"></p>
-      <div class="keys" id="keys"></div>
-
-      <p class="hint-fn">
-        macOS does not report the real <b>Fn</b> key to a browser, so hold
-        <b>F</b> instead — ⇪, right ⌥ and left ⌃ are the genuine keys. Or press
-        and hold any cap above.
-      </p>
-
     </div>
   </div>
+
+  <div class="wrap">
+    <p class="foot">
+      Real keys, on your own Mac. <b>⇪ Caps&nbsp;Lock</b>, <b>right&nbsp;⌥</b>,
+      <b>left&nbsp;⌃</b>, <b>esc</b> and <b>⌘⌥</b> are the genuine ones; macOS
+      never reports <b>Fn</b> to a browser, so that one is bound to <b>F</b>.
+      Every cap above is clickable too.
+    </p>
+  </div>
+</div>
+
+<div class="guide">
+  <div class="guide-dots" id="guide-dots"></div>
+  <div class="guide-text">
+    <span class="guide-step" id="guide-step"></span>
+    <p class="guide-say" id="guide-say"></p>
+    <p class="guide-why" id="guide-why"></p>
+  </div>
+  <div class="keys" id="keys"></div>
 </div>
 
 <script type="module" src="experience.js"></script>
