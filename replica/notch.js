@@ -16,6 +16,11 @@
    The fillets live INSIDE the rect: the body is the rect inset by `topFillet`
    on each side, and the flare fills that inset back out at the top.
    ------------------------------------------------------------------------- */
+
+/** Assets resolve against this module, not the importing document — the
+ *  replica is loaded from more than one directory now. */
+const ASSET = (f) => new URL(`assets/${f}`, import.meta.url).href;
+
 export function notchPath(w, h, topFillet, bottomRadius) {
   // Nothing may exceed half the width or the whole height: a mass narrower
   // than its own corners is the collapse animation's last frame, and it must
@@ -233,7 +238,7 @@ function barRow(c, p, working) {
     left = `${c.dot ? `<span class="u-bar-dot" style="background:${STATUS_COLOR[c.dot]}"
         ${c.dot === "processing" ? "data-breathing" : ""}></span>` : ""}
       ${c.emphasis === "wordmark"
-        ? `<img class="u-bar-mark" src="assets/unmark.png" alt="Unmute"
+        ? `<img class="u-bar-mark" src="${ASSET('unmark.png')}" alt="Unmute"
              style="width:${(Bar.markHeight * Bar.markAspect).toFixed(2)}px">`
         : c.left ? `<span class="u-bar-status" style="color:${leftInk}">${esc(c.left)}</span>` : ""}
       ${c.badge > 1 ? `<span class="u-badge"
@@ -252,6 +257,34 @@ function barRow(c, p, working) {
       <div class="u-bar-mid" style="width:${p.middle}px"></div>
       <div class="u-bar-right" style="${half(p.right)}">${p.right ? right : ""}</div>
     </div>`;
+}
+
+/**
+ * The notch, resolved but not yet mounted: everything a caller needs to PATCH
+ * an existing element rather than replace it.
+ *
+ * Replacing it is not merely wasteful — the surface grows on hover, so a
+ * re-render on `mouseenter` detaches the node the pointer is over, which
+ * cancels the click that was about to happen and makes the mass unclickable.
+ * The app morphs one surface; so must we.
+ */
+export function notchParts(model, state, hovering, screen) {
+  const c = makeBarContent(model, state, hovering);
+  const p = mass(c, screen);
+  const w = p.left + p.middle + p.right + 2 * p.fillet;
+  const nub = !!c.resting;
+  const shapeH = nub ? 7 : screen.barHeight;
+  // ANCHORED ON THE HOLE, not on the screen.
+  const anchorX = screen.width / 2;
+  const midStart = screen.cutoutWidth > 0
+    ? anchorX - screen.cutoutWidth / 2
+    : anchorX - p.middle / 2;
+  return {
+    state, nub, width: w, left: midStart - p.left - p.fillet,
+    shapeH, path: notchPath(w, shapeH, nub ? 3 : p.fillet, nub ? 4 : p.bottomRadius),
+    row: nub ? "" : barRow(c, p, model.working ?? 0),
+    label: [c.left, c.right].filter(Boolean).join(" — ") || "Unmute",
+  };
 }
 
 /**

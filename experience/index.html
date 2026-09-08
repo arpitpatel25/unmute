@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en" data-tone="spaceGray">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unmute — interactive</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="../replica/tokens.css">
+<link rel="stylesheet" href="../replica/pill.css">
+<link rel="stylesheet" href="../replica/notch.css">
+<link rel="stylesheet" href="../replica/notetaker.css">
+<link rel="stylesheet" href="../replica/expanded.css">
+<link rel="stylesheet" href="frame.css">
+<style>
+  /* The expanded panel hangs from the top of the screen, like the mass. */
+  #panel {
+    position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    z-index: 9; pointer-events: none;
+    opacity: 0;
+    transition: opacity 140ms cubic-bezier(0, 0, 0.58, 1) 80ms;
+  }
+  #panel[data-open="true"] { opacity: 1; pointer-events: auto; }
+  /* The scrim: a click outside closes, exactly as the surface does. */
+  #panel[data-open="true"]::before {
+    content: ""; position: fixed; inset: 0; z-index: -1;
+  }
+  .answer-chips { display: flex; gap: 8px; padding-top: 10px; flex: none; }
+</style>
+</head>
+<body>
+
+<div class="machine-fit">
+  <div class="machine">
+    <div class="screen" id="screen">
+
+      <div class="menubar">
+        <span class="menubar-left"><b>Notes</b><span>File</span><span>Edit</span><span>Format</span><span>View</span></span>
+        <span class="menubar-right"><span>􀙇</span><span>100%</span><span>Thu 9 Sep 12:04</span></span>
+      </div>
+      <div class="housing"></div>
+
+      <!-- What you are dictating into. -->
+      <div class="win">
+        <div class="win-bar">
+          <span class="light r"></span><span class="light y"></span><span class="light g"></span>
+          <span class="win-title">Untitled</span>
+        </div>
+        <div class="doc" id="doc"></div>
+      </div>
+
+      <!-- The product. Every one of these is a replica module. -->
+      <div class="notch-layer" id="notch"></div>
+      <div id="panel" data-open="false"></div>
+      <div class="pill-layer" id="pill"></div>
+      <div class="nt-layer" id="nt"></div>
+
+      <p class="narrator" id="narrator"></p>
+      <div class="keys" id="keys"></div>
+
+      <p class="hint-fn">
+        macOS does not report the real <b>Fn</b> key to a browser, so hold
+        <b>F</b> instead — ⇪, right ⌥ and left ⌃ are the genuine keys. Or press
+        and hold any cap above.
+      </p>
+
+    </div>
+  </div>
+</div>
+
+<script type="module" src="experience.js"></script>
+</body>
+</html>

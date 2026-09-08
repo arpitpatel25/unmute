@@ -320,9 +320,13 @@ export function notePenGlyph() {
 }
 
 /** ProviderMarkArt: the vendor logo, plus a terminal glyph when it owns one. */
+/** Assets resolve against this module, not the importing document — the
+ *  replica is loaded from more than one directory now. */
+const ASSET = (f) => new URL(`assets/${f}`, import.meta.url).href;
+
 const PROVIDER = {
-  claude: { file: "assets/mark-claude.png", ink: 0.449, name: "Claude Code CLI", short: "Claude" },
-  codex:  { file: "assets/mark-codex.png",  ink: 0.752, name: "Codex CLI",       short: "Codex" },
+  claude: { file: "mark-claude.png", ink: 0.449, name: "Claude Code CLI", short: "Claude" },
+  codex:  { file: "mark-codex.png",  ink: 0.752, name: "Codex CLI",       short: "Codex" },
 };
 const NAMES = {
   codex: "Codex CLI",
@@ -346,7 +350,7 @@ export function providerMark(backend, terminal, size = 13) {
   return `<span class="u-mark" role="img" aria-label="${label}"
       title="${(NAMES[backend] ?? "Claude Code CLI") + (terminal ? " · has a terminal" : "")}"
       style="--mark-size:${size}px;--mark-gap:${(size * 0.31).toFixed(2)}px">
-      <span class="u-mark-box"><img src="${p.file}" alt=""
+      <span class="u-mark-box"><img src="${ASSET(p.file)}" alt=""
         style="width:${inner}px;height:${inner}px"></span>
       ${terminal ? `<span class="u-mark-term">${icon("terminal", size * 0.78)}</span>` : ""}
     </span>`;

@@ -8,6 +8,11 @@
 import { icon, providerMark } from "./icons.js";
 import { notchPath, STATUS_COLOR } from "./notch.js";
 
+/** Assets resolve against this module, not the importing document — the
+ *  replica is loaded from more than one directory now. */
+const ASSET = (f) => new URL(`assets/${f}`, import.meta.url).href;
+
+
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -100,7 +105,7 @@ export function pocketShoulders(p, cutoutWidth) {
       <div class="u-pocket-shoulder-left">
         ${dot(status, 8)}
         ${p.isAgent
-          ? `<img src="assets/unmark.png" alt="Unmute" style="height:16px;width:25.8px;display:block">`
+          ? `<img src="${ASSET('unmark.png')}" alt="Unmute" style="height:16px;width:25.8px;display:block">`
           : providerMark(p.backend, p.terminal ?? true, 16)}
       </div>
       <div class="u-pocket-shoulder-mid" style="width:${cutoutWidth}px"></div>
@@ -239,7 +244,7 @@ export function renderWall(m) {
 
   return `<div class="u-wall">
     <div class="u-wall-chrome">
-      <img src="assets/unmark.png" alt="Unmute" style="height:13px;width:21px;display:block">
+      <img src="${ASSET('unmark.png')}" alt="Unmute" style="height:13px;width:21px;display:block">
       <span class="u-section-label">Orchestrator</span>
       <div class="u-view-tabs" role="tablist">
         ${VIEW_MODES.map((v) => `<button type="button" class="u-view-tab" role="tab"
@@ -407,7 +412,7 @@ export function renderPocket(p, shoulders = false) {
     <div class="u-pocket-head">
       ${shoulders ? "" : dot(quiet ? "done" : status, 8)}
       ${shoulders ? "" : (p.isAgent
-        ? `<img src="assets/unmark.png" alt="Unmute" style="height:14px;width:22.6px;display:block">`
+        ? `<img src="${ASSET('unmark.png')}" alt="Unmute" style="height:14px;width:22.6px;display:block">`
         : providerMark(p.backend, p.terminal ?? true, 14))}
       ${showTitle ? `<span class="u-pocket-title">${esc(p.title ?? "Nothing in your pocket")}</span>` : ""}
     </div>
