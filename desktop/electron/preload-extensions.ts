@@ -336,9 +336,9 @@ export const paywallPreloadExtensions = {
     ipcRenderer.invoke('remote:get-notetaker-capture-visible'),
   setNotetakerCaptureVisible: (on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-notetaker-capture-visible', on),
-  getSurfaceTone: (): Promise<'spaceGray' | 'black'> =>
+  getSurfaceTone: (): Promise<'spaceGray' | 'black' | 'glass'> =>
     ipcRenderer.invoke('remote:get-surface-tone'),
-  setSurfaceTone: (v: string): Promise<'spaceGray' | 'black'> =>
+  setSurfaceTone: (v: string): Promise<'spaceGray' | 'black' | 'glass'> =>
     ipcRenderer.invoke('remote:set-surface-tone', v),
   getSurfaceAppearance: (): Promise<'system' | 'glass' | 'solid'> =>
     ipcRenderer.invoke('remote:get-surface-appearance'),

@@ -41,6 +41,10 @@ import SwiftUI
 struct PillGlass<S: InsettableShape>: ViewModifier {
     let shape: S
     var tint: Color? = nil
+    /// An explicit edge style that OUTRANKS both the tint and the default white
+    /// hairline. Only the unmute Agent lane passes one — see `Theme.agentRim`
+    /// for why the lane is marked on the edge rather than in the text.
+    var rim: AnyShapeStyle? = nil
     @ObservedObject private var appearance = Appearance.shared
 
     func body(content: Content) -> some View {
@@ -149,11 +153,20 @@ struct PillGlass<S: InsettableShape>: ViewModifier {
                 // so the weight comes off the colour instead: 0.30 over black
                 // is about (77,77,77). The rim's whole job is to say where the
                 // capsule ends, and it should not compete with the waveform.
+                //
+                // 1.5pt FOR THE RIM, and the width is chosen the same way the
+                // widths above were: 3 device pixels on a 2x display, so it
+                // survives any sub-pixel offset the way 0.5pt could not. It
+                // sits between the plain hairline (1) and a tinted mode (2)
+                // because it is an identity, not an alert — a gradient at 1pt
+                // reads as a grey line at arm's length, and the hues are the
+                // entire point of it.
                 .overlay(
                     shape.strokeBorder(
-                        tint.map { AnyShapeStyle($0.opacity(0.95)) }
+                        rim
+                            ?? tint.map { AnyShapeStyle($0.opacity(0.95)) }
                             ?? AnyShapeStyle(Color.white.opacity(0.30)),
-                        lineWidth: tint == nil ? 1 : 2))
+                        lineWidth: rim != nil ? 1.5 : (tint == nil ? 1 : 2)))
                 // NO DROP SHADOW. The original says why, in its own words:
                 // "Unmute must occupy ONLY the widget itself — a soft 36px
                 // shadow pooled behind the whole pill row and read as a
@@ -170,8 +183,9 @@ struct PillGlass<S: InsettableShape>: ViewModifier {
 }
 
 extension View {
-    func pillGlass<S: InsettableShape>(_ shape: S, tint: Color? = nil) -> some View {
-        modifier(PillGlass(shape: shape, tint: tint))
+    func pillGlass<S: InsettableShape>(_ shape: S, tint: Color? = nil,
+                                       rim: AnyShapeStyle? = nil) -> some View {
+        modifier(PillGlass(shape: shape, tint: tint, rim: rim))
     }
 }
 
@@ -185,7 +199,6 @@ struct PillView: View {
     @ObservedObject var scratch: ScratchpadModel
     /// Whether the selector panel is open. Local to the view — main never needs
     /// to know, and a round-trip would make it feel slow.
-    @State private var pillHovered = false
     @State private var selectorOpen = false
 
     private var s: PillState { model.state }
@@ -391,18 +404,16 @@ struct PillView: View {
                 // tightens the INNER sides — 15/12 and 12/14 — which is why it
                 // reads evenly. And there are no icons on either half: the dot
                 // is the connection indicator, the chevron belongs to the model.
-                AgentModelControl(state: s, model: model, open: $selectorOpen)
+                AgentModelControl(state: s, model: model, open: $selectorOpen, rim: agentRim)
             }
 
             pill
-                .environment(\.pillHovered, pillHovered)
-                .onHover { pillHovered = $0 }
-                .pillGlass(Capsule(), tint: pillTint)
+                .pillGlass(Capsule(), tint: pillTint, rim: agentRim)
 
             if chipsVisible {
                 if let opts = s.micOptions, opts.count > 1 {
                     MicChip(current: s.mic, options: opts) { model.emit(.pickMic($0)) }
-                        .pillGlass(Capsule())
+                        .pillGlass(Capsule(), rim: agentRim)
                 }
             }
             // THE SCRATCHPAD CONTROL. It ARMS AND DISARMS ONLY — it never
@@ -421,7 +432,7 @@ struct PillView: View {
                 ScratchpadChip(armed: scratch.state.armed) {
                     scratch.emit(.scratchpadArm(!scratch.state.armed))
                 }
-                .pillGlass(Capsule())
+                .pillGlass(Capsule(), rim: agentRim)
             }
         }
     }
@@ -443,6 +454,16 @@ struct PillView: View {
                      detail: c.remedy ?? "",
                      symbol: c.level == "quiet" ? "mic" : "waveform")
         }
+    }
+
+    /// THE WHOLE ROW WEARS THE LANE, or none of it does.
+    ///
+    /// nil for every ordinary capture, which leaves the existing white hairline
+    /// exactly as it was. Deliberately NOT gated on the capture phase: the
+    /// cluster is the Agent's for as long as it is on screen, and a rim that
+    /// appeared only while recording would read as a status light.
+    private var agentRim: AnyShapeStyle? {
+        s.isAgentLane ? AnyShapeStyle(Theme.agentRim) : nil
     }
 
     /// Only the two states that are telling you something wrong carry a wash.
@@ -471,30 +492,32 @@ struct PillView: View {
             EmptyView()
 
         case .recording:
-            // THE WAVEFORM, AND NOTHING ELSE AT REST.
+            // DISCARD · WHAT IT HEARS · KEEP. Two acts and one reading.
             //
-            // It used to be dot + waveform + stop. All three said the same
-            // thing: a red dot means recording, a moving waveform means
-            // recording, and a stop button is only there while recording. Three
-            // marks for one fact, permanently on screen.
+            // THE HISTORY, because this reverses a decision rather than
+            // ignoring one. The row was once dot + waveform + stop, and the dot
+            // and the stop were dropped as redundant: a red dot, a moving
+            // waveform and a stop button all said "recording", three marks for
+            // one fact. Cancel then lived on hover.
             //
-            // The dot is gone. The stop button is gone — the trigger key
-            // already stops, and it is the only way anyone stops with their
-            // hands off the mouse. What the pointer gains instead is CANCEL,
-            // revealed on hover, which is a different act the key cannot
-            // express: throw this away rather than finish it.
+            // What that reasoning missed is that ✕ and ✓ are not two ways of
+            // saying "recording" — they are the two DIFFERENT things you can do
+            // with a capture, and only one of them has a key. The trigger key
+            // finishes; nothing on the keyboard throws a capture away. Hiding
+            // discard until the pointer arrives meant the surface showed one of
+            // its two acts and kept the other secret, and a hover-only control
+            // is unreachable to anyone who does not already know it is there.
             //
-            // The Remote glyph STAYS. It is not a recording indicator, it is
-            // the lane — "these words are going to a session, not your cursor"
-            // — and no other element carries that, since an untinted pill takes
-            // the plain white rim.
-            HStack(spacing: 10) {
-                if s.kind == .remote {
-                    // A Remote capture reads as Remote AT A GLANCE, from the
-                    // glyph — which is why the original swapped the dot rather
-                    // than adding a word.
-                    RemoteGlyph()
-                }
+            // The red dot stays gone. That one WAS redundant, and the argument
+            // above does not rescue it: it is a status light, not an act.
+            //
+            // THE REMOTE GLYPH IS GONE TOO. It marked the lane rather than the
+            // state, which was a real distinction — but it sat inside a capsule
+            // that is now ✕ · bars · ✓ with nothing to spare, and a pulsing
+            // glyph beside a pulsing waveform read as interference. The lane is
+            // still legible from outside the pill: the Agent wears its rim, and
+            // an Orchestrator capture has the agent chip beside it.
+            HStack(spacing: 9) {
                 // WHAT IT IS HEARING, not how long you have been at it.
                 //
                 // A timer answers a question nobody asks. Mid-sentence the
@@ -506,22 +529,34 @@ struct PillView: View {
                 // The countdown is kept for the last stretch before the cap:
                 // there, seconds remaining IS the information, and losing it
                 // would make the cut-off arrive unannounced.
+                // THROW IT AWAY. Left, because it is the destructive one and
+                // the eye should not have to hunt for the difference: discard
+                // sits where you would not land by accident on the way to the
+                // affirmative one.
+                PillRoundButton(symbol: "xmark",
+                                help: "Discard this recording") { model.emit(.cancel) }
                 if s.maxSeconds - s.elapsed <= 15 {
                     TimerText(elapsed: s.elapsed, max: s.maxSeconds)
                 } else {
-                    // NO FIXED WIDTH ANY MORE. 78pt sized a scrolling history
-                    // — how much of the last second stayed on screen. A row of
-                    // seven dots that never moves sideways is exactly as wide
-                    // as the row, and padding it out to 78 would only open a
-                    // gap on either side of it. The count is fixed, so the
-                    // capsule's width is still constant while recording.
-                    Waveform(level: s.level, color: Theme.text)
+                    // NO FIXED WIDTH. 78pt once sized a scrolling history — how
+                    // much of the last second stayed on screen. A row of bars
+                    // that never moves sideways is exactly as wide as the row.
+                    // The COUNT is fixed, so the capsule's width is constant for
+                    // the whole dictation however loud it gets: volume is spent
+                    // on the bars' height, never on how many there are.
+                    Waveform(level: s.level)
                 }
-                CancelOnHover { model.emit(.cancel) }
+                // FINISH IT. The one filled control on the surface, because it
+                // is the one the trigger key also performs — the pointer's copy
+                // of the default action, and it should look like the default.
+                PillRoundButton(symbol: "checkmark", prominent: true,
+                                help: "Finish — use what you said") { model.emit(.stop) }
             }
-            // SYMMETRIC, because there is no longer anything to counterweight.
-            // 15/7 existed to balance a 30pt stop button hanging off the right.
-            .padding(.horizontal, 14)
+            // TIGHT, because the ends are now round buttons rather than text.
+            // 14pt was air around a centred waveform; against a 22pt circle it
+            // reads as a gap, and the capsule stops looking like it holds its
+            // contents.
+            .padding(.horizontal, 7)
             .frame(height: PillMetrics.height)
 
         case .paused:
@@ -634,21 +669,6 @@ struct PillView: View {
 
 /// A Remote capture swaps the dot for a small remote-control glyph, so the pill
 /// reads as "remote" without a word of explanation.
-private struct RemoteGlyph: View {
-    @State private var small = false
-    var body: some View {
-        Image(systemName: "av.remote")
-            .font(.system(size: 12, weight: .regular))
-            .foregroundColor(Color.white.opacity(0.92))
-            .scaleEffect(small ? 0.86 : 1)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
-                    small = true
-                }
-            }
-    }
-}
-
 private struct Breathing: ViewModifier {
     @State private var dim = false
     func body(content: Content) -> some View {
@@ -702,57 +722,53 @@ private struct TimerText: View {
 ///
 /// WHY WIDTH AND PADDING, NOT `if hovering`. Inserting a view on hover makes
 /// SwiftUI re-lay the row and the waveform jumps sideways. Keeping it in the
-/// hierarchy at zero width and animating the width means the capsule grows and
-/// nothing inside it moves.
+/// THE TWO ACTS ON A LIVE CAPTURE, drawn identically so they read as a pair.
 ///
-/// AND WHY THE PADDING IS ON THIS VIEW. `HStack(spacing:)` applies its spacing
-/// to every child including a zero-width one, so at rest the row would carry
-/// 10pt of dead space on the right and the waveform would sit off-centre in a
-/// capsule that looked symmetric. The leading pad belongs to the control and
-/// collapses with it.
-private struct CancelOnHover: View {
+/// Replaces `CancelOnHover`, which revealed a single ✕ only once the pointer
+/// was already on the capsule. That hid the surface's only irreversible action
+/// behind a gesture you had to know about, and it meant the two things you can
+/// do with a recording were drawn in two different languages — one a phantom
+/// that appeared on hover, the other not drawn at all.
+///
+/// ALWAYS PRESENT, BOTH OF THEM. The width of the capsule is therefore constant
+/// from the first frame, which is also why the old control had to animate its
+/// own width to zero and pull its leading padding with it: none of that
+/// machinery is needed once neither button comes and goes.
+///
+/// `prominent` is the DEFAULT action, filled the way a default button is. Only
+/// one of the two ever carries it — two filled circles either side of a
+/// waveform read as a toggle, which is the one thing this pair is not.
+private struct PillRoundButton: View {
+    let symbol: String
+    var prominent: Bool = false
+    let help: String
     let action: () -> Void
     @State private var hovering = false
-    /// Set by the parent capsule, so the control appears when the pointer is
-    /// anywhere on the pill rather than only on the 22pt target itself.
-    @Environment(\.pillHovered) private var pillHovered
-
-    private var shown: Bool { pillHovered || hovering }
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "xmark")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(Color.white.opacity(hovering ? 0.95 : 0.55))
+            Image(systemName: symbol)
+                // BOLD AND SMALL. At 22pt the circle is mostly fill; a light
+                // glyph inside it reads as a smudge rather than as a mark, and
+                // ✓ against ✕ has to survive being told apart at a glance in
+                // the corner of the eye.
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(prominent
+                                 ? Color.black.opacity(0.88)
+                                 : Color.white.opacity(hovering ? 1 : 0.88))
                 .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.white.opacity(hovering ? 0.14 : 0)))
+                .background(Circle().fill(prominent
+                    ? Color.white.opacity(hovering ? 1 : 0.90)
+                    : Color.white.opacity(hovering ? 0.28 : 0.15)))
+                // The circle IS the button, not the glyph inside it.
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .frame(width: shown ? 22 : 0)
-        .padding(.leading, shown ? 9 : 0)
-        .opacity(shown ? 1 : 0)
-        .allowsHitTesting(shown)
-        .clipped()
-        .animation(Theme.hover, value: shown)
-        .help("Cancel — discard this recording")
+        .animation(Theme.hover, value: hovering)
+        .help(help)
     }
 }
-
-/// True while the pointer is anywhere on the capsule. Read by CancelOnHover so
-/// the control answers to the whole pill, not to its own 22pt.
-private struct PillHoveredKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
-extension EnvironmentValues {
-    var pillHovered: Bool {
-        get { self[PillHoveredKey.self] }
-        set { self[PillHoveredKey.self] = newValue }
-    }
-}
-
 
 private struct CapsuleButton: View {
     let label: String
@@ -829,6 +845,9 @@ private struct AgentModelControl: View {
     let state: PillState
     @ObservedObject var model: PillModel
     @Binding var open: Bool
+    /// Passed in rather than derived here: the whole cluster has to agree on
+    /// the lane, and `PillState.isAgentLane` is the one place that decides it.
+    var rim: AnyShapeStyle? = nil
 
     var body: some View {
         Button(action: { open.toggle() }) {
@@ -849,13 +868,18 @@ private struct AgentModelControl: View {
                 }
                 Text((state.agent ?? "Claude Code") + (state.agentConnected ? "" : " · connect"))
                     .font(.system(size: 12.5, weight: .semibold))
-                    // THE AGENT LANE WEARS ITS OWN COLOUR. There is nothing to
-                    // choose in it, so the label is all there is — and it needs
-                    // to be legible at a glance as a different lane, not a
-                    // differently-worded version of the same one.
-                    .foregroundColor(isAgentLane
-                        ? Theme.cReady
-                        : Theme.text.opacity(state.agentConnected ? 1 : 0.55))
+                    // THE LANE IS ON THE EDGE NOW, NOT IN THE WORDS.
+                    //
+                    // This was Theme.cReady for the Agent — a coloured label,
+                    // which marked the one chip that happened to hold text and
+                    // left the pill and every other capsule beside it wearing
+                    // the same white rim as plain dictation. It also spent a
+                    // status colour on an identity, so the row had a green word
+                    // in it that meant nothing was ready.
+                    //
+                    // `Theme.agentRim` carries the lane around every capsule in
+                    // the cluster instead, and the text is ordinary again.
+                    .foregroundColor(Theme.text.opacity(state.agentConnected ? 1 : 0.55))
                     .lineLimit(1)
                 if let m = state.model {
                     // NOT Claude's brand orange — this chip also represents
@@ -885,15 +909,15 @@ private struct AgentModelControl: View {
         // The Agent has one provider, set once in Settings. Nothing here is a
         // control, so it does not accept a tap at all.
         .allowsHitTesting(!isAgentLane)
-        .pillGlass(Capsule())
+        .pillGlass(Capsule(), rim: rim)
         .animation(Theme.hover, value: open)
     }
 
-    /// The Agent lane is recognised by having nothing to offer: the engine
-    /// blanks both option lists for it, and only for it.
-    private var isAgentLane: Bool {
-        (state.agentOptions?.isEmpty ?? true) && (state.modelOptions?.isEmpty ?? true)
-    }
+    /// ONE DEFINITION, ON THE STATE. This was computed here, which is exactly
+    /// why the lane could only ever be worn by this chip — see
+    /// `PillState.isAgentLane`. The control is only ever built for a remote
+    /// capture, so the state's `kind` test is satisfied by construction.
+    private var isAgentLane: Bool { state.isAgentLane }
 }
 
 /// The panel: Agent · Model · Effort · Speed for Codex, Agent · Model for

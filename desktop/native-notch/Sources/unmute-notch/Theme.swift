@@ -117,6 +117,29 @@ enum Theme {
         ],
         startPoint: .topLeading, endPoint: .bottomTrailing)
 
+    /// THE UNMUTE AGENT'S RIM. Blue → purple → pink, left to right.
+    ///
+    /// The lane used to be marked by colouring the WORDS ("unmute Agent" in
+    /// Theme.cReady). That put the identity inside the capsule, competing with
+    /// the waveform, and it only ever marked the one chip that held the text —
+    /// the pill beside it still wore the same white rim as plain dictation, so
+    /// the row said "Agent" in one place and "ordinary capture" in three.
+    ///
+    /// The EDGE carries it instead: every capsule in the cluster takes this
+    /// rim, the text goes back to ordinary white, and the lane is legible from
+    /// the shape of the whole row rather than from reading a label.
+    ///
+    /// Linear and horizontal rather than angular: on a wide, short capsule an
+    /// angular sweep bunches every hue into the two rounded ends and leaves the
+    /// long edges a flat single colour, which is the opposite of the intent.
+    static let agentRim = LinearGradient(
+        stops: [
+            .init(color: Color(red: 0.290, green: 0.541, blue: 1.000), location: 0.00),
+            .init(color: Color(red: 0.659, green: 0.333, blue: 0.969), location: 0.52),
+            .init(color: Color(red: 0.957, green: 0.447, blue: 0.714), location: 1.00),
+        ],
+        startPoint: .leading, endPoint: .trailing)
+
     // MARK: - Content layer (opaque; never glass)
 
     /// The plane that sits inside the glass shell. Body text has to stand on
@@ -135,11 +158,32 @@ enum Theme {
     ///
     /// A `var`, not a `let`, because it now follows Appearance.tone. Views
     /// re-read it when that @Published value changes.
+    ///
+    /// Under `.glass` it is a SCRIM rather than a ground: the blur lives behind
+    /// the shell (NotchView.inked), and this is the tint that keeps body text
+    /// legible over whatever the blur happened to sample. The two compose —
+    /// shell 0.25 under plane 0.34 lands near 0.50 total, which is the point
+    /// where white text held over both a white page and a photograph.
+    /// In the POCKET the shell behind this is still opaque black, so the same
+    /// scrim resolves back to black there and that surface is unchanged.
     static var plane: Color {
-        Appearance.shared.tone == .black
-            ? Color.black
-            : Color(red: 0.086, green: 0.094, blue: 0.110).opacity(0.94)
+        switch Appearance.shared.tone {
+        case .black: return Color.black
+        case .glass: return Color.black.opacity(0.34)
+        case .spaceGray: return Color(red: 0.086, green: 0.094, blue: 0.110).opacity(0.94)
+        }
     }
+
+    /// The agent's tinted ground, thinned so the blur reads through it. Same
+    /// three stops — the identity has to survive the tone change, or the card
+    /// stops being recognisable on exactly one setting.
+    static let agentSurfaceGlass = LinearGradient(
+        stops: [
+            .init(color: Color(red: 0.016, green: 0.075, blue: 0.094).opacity(0.62), location: 0.00),
+            .init(color: Color(red: 0.035, green: 0.039, blue: 0.086).opacity(0.62), location: 0.52),
+            .init(color: Color(red: 0.075, green: 0.043, blue: 0.035).opacity(0.62), location: 1.00),
+        ],
+        startPoint: .topLeading, endPoint: .bottomTrailing)
     /// A raised element ON the plane — cards, buttons, fields.
     static let raised       = Color.white.opacity(0.055)
 
@@ -156,12 +200,12 @@ enum Theme {
     /// both — only one side of the exchange needs marking, and marking both is
     /// how a transcript turns into a ladder of boxes.
     static var userBubble: Color {
-        Appearance.shared.tone == .black
+        Appearance.shared.tone.onBlackGround
             ? Color.white.opacity(0.11)
             : Color.white.opacity(0.055)
     }
     static var userBubbleEdge: Color {
-        Appearance.shared.tone == .black
+        Appearance.shared.tone.onBlackGround
             ? Color.white.opacity(0.16)
             : Color.white.opacity(0.10)
     }
@@ -180,12 +224,12 @@ enum Theme {
     /// and the resting edge is strengthened to carry the shape. Space Gray is
     /// untouched: it was tuned against that plane and still reads correctly.
     static var composerFill: Color {
-        Appearance.shared.tone == .black
+        Appearance.shared.tone.onBlackGround
             ? Color.white.opacity(0.075)
             : sunken
     }
     static var composerEdge: Color {
-        Appearance.shared.tone == .black
+        Appearance.shared.tone.onBlackGround
             ? Color.white.opacity(0.20)
             : hairline
     }
@@ -207,7 +251,7 @@ enum Theme {
     /// the rail — the same reasoning that turned the dashboard's cards from
     /// fills into edges.
     static var railBg: Color {
-        Appearance.shared.tone == .black ? Color.clear : Color.white.opacity(0.028)
+        Appearance.shared.tone.onBlackGround ? Color.clear : Color.white.opacity(0.028)
     }
 
     // Legacy aliases, kept so call sites read naturally. Both now resolve to
@@ -350,8 +394,24 @@ enum SurfaceAppearance: String, Codable {
 /// object with the mass above it instead of a grey panel hanging off a black
 /// cutout. Which of those is "right" turned out to be taste, so it is a choice
 /// rather than a decision made here.
+///
+/// `glass` is the third: the same black ground, but TRANSLUCENT over a live
+/// `.behindWindow` blur, so the expanded surface picks up whatever is behind
+/// it the way a system popover does. It is deliberately confined to the
+/// EXPANDED states — the bar mass stays opaque black under every tone, because
+/// it is impersonating the physical cutout and the cutout is not see-through.
+/// The scrim is heavy on purpose: a thin blur went milky-grey over a light page
+/// and took the white text with it, so glass here is a tinted window, not a
+/// clear one.
 enum SurfaceTone: String, Codable {
-    case spaceGray, black
+    case spaceGray, black, glass
+
+    /// Every tone except Space Gray sits on the black ground and therefore
+    /// wants the same higher-contrast content treatment. Written as "not
+    /// spaceGray" rather than a list so a fourth tone inherits the right
+    /// default instead of silently falling back to values tuned for a plane
+    /// it is not standing on.
+    var onBlackGround: Bool { self != .spaceGray }
 }
 
 /// Live material state, recomputed whenever the system preference changes.

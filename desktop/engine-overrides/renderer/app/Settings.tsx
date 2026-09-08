@@ -195,6 +195,31 @@ const api = (): SettingsApi =>
  *      that handler, `curatorEnabled` on the remote:get-settings snapshot, and
  *      gate `curator.start()` on it.
  */
+// THE SURFACE GROUND, and the one list that decides what a valid one is.
+//
+// Kept next to each other on purpose: the union, the runtime guard and the
+// swatches previously disagreed three different ways — the state was typed to
+// two names, the change handler collapsed anything unrecognised to Space Gray,
+// and the swatch array repeated the values a fourth time. Adding a tone now
+// means adding it here, and the picker, the guard and the type all follow.
+//
+// These names are the Swift `SurfaceTone` raw values. They cross the wire as
+// strings, so a rename on either side has to be a rename on both.
+type SurfaceTone = 'spaceGray' | 'black' | 'glass'
+const SURFACE_TONES: readonly SurfaceTone[] = ['spaceGray', 'black', 'glass']
+
+/// `plane` is the real colour the expanded surface is filled with, and
+/// `behind` is a stand-in desktop painted under it. Only Glass has a plane you
+/// can see through, so only Glass shows the desktop — the preview composites
+/// exactly the way the surface does rather than illustrating it.
+const TONE_SWATCHES: readonly {
+  v: SurfaceTone; label: string; plane: string; rail: string; behind: string
+}[] = [
+  { v: 'spaceGray', label: 'Space Gray', plane: 'rgb(22,24,28)',    rail: 'rgba(255,255,255,0.028)', behind: 'linear-gradient(#000,#000)' },
+  { v: 'black',     label: 'Black',      plane: '#000000',          rail: 'transparent',             behind: 'linear-gradient(#000,#000)' },
+  { v: 'glass',     label: 'Glass',      plane: 'rgba(0,0,0,0.50)', rail: 'transparent',             behind: 'linear-gradient(135deg,#7c5cff 0%,#3ba3ff 38%,#2ad4a4 68%,#ffb35c 100%)' },
+]
+
 const KILL_SWITCHES_WIRED = false
 
 export default function Settings({ onDictationKeyChange, section = 'triggers' }: SettingsProps = {}) {
@@ -290,7 +315,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // options exist because an older surface cannot follow the system slider, and
   // because an always-on-top panel is a reasonable thing to want solid.
   const [surfaceAppearance, setSurfaceAppearance] = useState<'system' | 'glass' | 'solid'>('system')
-  const [surfaceTone, setSurfaceTone] = useState<'spaceGray' | 'black'>('spaceGray')
+  const [surfaceTone, setSurfaceTone] = useState<SurfaceTone>('spaceGray')
   const [notetakerInCapture, setNotetakerInCapture] = useState(false)
   // DEFAULT ON, matching the setting it writes (remote/init.ts:198 —
   // `overlayAutoPresent: true`). A surface that never comes forward by itself is
@@ -371,7 +396,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
     })
     void api().getNotetakerCaptureVisible?.().then((v) => setNotetakerInCapture(!!v))
     void api().getSurfaceTone?.().then((v) => {
-      if (v === 'black' || v === 'spaceGray') setSurfaceTone(v)
+      if (SURFACE_TONES.includes(v as SurfaceTone)) setSurfaceTone(v as SurfaceTone)
     })
     api().getSurfaceAppearance?.()
       .then((v) => { if (v === 'system' || v === 'glass' || v === 'solid') setSurfaceAppearance(v) })
@@ -504,7 +529,12 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   }
 
   function handleSurfaceToneChange(value: string) {
-    const v = (value === 'black' ? 'black' : 'spaceGray') as 'spaceGray' | 'black'
+    // Validated against the list rather than against one name, so adding a
+    // tone is a one-line change here instead of a ternary that silently
+    // rewrites every unrecognised value back to Space Gray.
+    const v: SurfaceTone = SURFACE_TONES.includes(value as SurfaceTone)
+      ? (value as SurfaceTone)
+      : 'spaceGray'
     setSurfaceTone(v)
     void api().setSurfaceTone?.(v)
   }
@@ -969,14 +999,11 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                 same black the notch housing already is. */}
             <SettingRow
               label="Surface tone"
-              description="The colour every expanded surface stands on. Black matches the notch itself; Space Gray is a shade lighter."
+              description="The ground every expanded surface stands on. Black matches the notch itself, Space Gray is a shade lighter, and Glass lets the desktop through. The bar stays black on all three."
             >
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end' }}>
                 <div style={{ display: 'flex', gap: 10 }}>
-                  {([
-                    { v: 'spaceGray' as const, label: 'Space Gray', plane: 'rgb(22,24,28)', rail: 'rgba(255,255,255,0.028)' },
-                    { v: 'black' as const,     label: 'Black',      plane: '#000000',       rail: 'transparent' },
-                  ]).map((o) => (
+                  {(TONE_SWATCHES).map((o) => (
                     <button
                       key={o.v}
                       type="button"
@@ -994,7 +1021,12 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                           two blacks sit together, so the mass must be here. */}
                       <div style={{
                         width: 132, height: 74, borderRadius: 10, overflow: 'hidden',
-                        background: o.plane, border: '1px solid rgba(255,255,255,0.10)',
+                        // Two layers: the plane painted OVER a stand-in desktop.
+                        // On the opaque tones the plane hides the desktop
+                        // completely, which is the honest preview of them; on
+                        // Glass it does not, which is the whole difference.
+                        backgroundImage: `linear-gradient(${o.plane}, ${o.plane}), ${o.behind}`,
+                        border: '1px solid rgba(255,255,255,0.10)',
                         display: 'flex', flexDirection: 'column',
                       }}>
                         <div style={{ height: 13, background: '#000', flex: 'none' }} />

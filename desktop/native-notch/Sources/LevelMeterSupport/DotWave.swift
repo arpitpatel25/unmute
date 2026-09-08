@@ -54,6 +54,58 @@ public enum DotWave {
     /// That contract is the whole point of the surface and it survives the
     /// redesign unchanged: a decorative wobble that ran regardless would look
     /// like proof of something it is not checking.
+    /// THE SHARE OF THE ROW'S HEIGHT A BAR IS ALLOWED, 0…1.
+    ///
+    /// The row used to be dots DISPLACED from a centre line — `offset` above,
+    /// which is kept because the aimed chip and its tests still read it. What
+    /// that shape could not do is the thing a level meter is for: every dot
+    /// travelled the same distance, so the row rose and fell as one rigid
+    /// string and no bar was ever taller than its neighbour. Loud and quiet
+    /// looked like the same picture moved up and down.
+    ///
+    /// A BAR HAS A HEIGHT INSTEAD OF A POSITION, and heights differ across the
+    /// row, so the shape itself changes rather than the row's altitude.
+    ///
+    /// STILL NOTHING MOVES SIDEWAYS. `arch` is a function of the index alone —
+    /// fixed for the life of the row — so there is no travelling crest and no
+    /// scrolling history. The count never changes either: a bar is a slot, and
+    /// loudness is spent on how tall the slots are, never on how many there
+    /// are.
+    ///
+    /// SILENCE IS EXACTLY ZERO, for every bar, forever. That is the same
+    /// contract `offset` carries and it is the whole reason this surface is
+    /// worth looking at: the caller draws a bar at its minimum height when this
+    /// returns 0, so a muted mic is a flat still row and cannot be mistaken for
+    /// a decorative animation that would wobble regardless.
+    public static func barHeight(index: Int, count: Int, time: Double, amplitude: Double) -> Double {
+        guard amplitude > 0, count > 0 else { return 0 }
+        // THE STRUCTURAL SHARE: short at the ends, tall in the middle. This is
+        // what makes a still frame read as a waveform rather than as a bar
+        // chart of nothing, and it is why the row looks uneven even at a
+        // constant level.
+        let arch = sin(Double.pi * Double(index + 1) / Double(count + 1))
+        // THE LIVE SHARE: the same two incommensurate standing modes, folded
+        // from -1…1 into 0…1 because this modulates a height, which cannot go
+        // negative. Incommensurate for the reason given above — a rational
+        // ratio repeats on a short cycle and starts to look like a loop.
+        let a = shape(modeA, index: index, count: count) * sin(2 * .pi * freqA * time)
+        let b = shape(modeB, index: index, count: count) * sin(2 * .pi * freqB * time)
+        let wobble = 0.5 + 0.5 * ((a + mixB * b) / (1 + mixB))
+        // Both floors exist to stop a bar reaching zero while a voice is
+        // actually going: a bar that vanishes mid-phrase reads as a dropped
+        // frame, not as a quiet band. They apply only once `amplitude > 0`, so
+        // they cannot lift the silent row off its floor.
+        let structural = archFloor + (1 - archFloor) * arch
+        let live = liveFloor + (1 - liveFloor) * wobble
+        return max(0, min(1, amplitude * structural * live))
+    }
+
+    /// How much height the shortest bar keeps relative to the tallest. Below
+    /// about 0.4 the outer bars stop reading as part of the same instrument.
+    static let archFloor: Double = 0.45
+    /// How far a bar may be pulled down by the oscillation at full level.
+    static let liveFloor: Double = 0.25
+
     public static func offset(index: Int, count: Int, time: Double, amplitude: Double) -> Double {
         guard amplitude > 0 else { return 0 }
         let a = shape(modeA, index: index, count: count) * sin(2 * .pi * freqA * time)

@@ -244,6 +244,10 @@ interface KeyboardManagerLike {
   /** Whether the Agent can take work, pushed down so the keyboard can refuse a
    *  press BEFORE it latches the lane rather than after. */
   setUnmuteAgentAvailable?(available: boolean): void
+  /** Finish the live capture exactly as its own trigger key would, whichever
+   *  lane it is on. Returns false if nothing is recording. See the pill's
+   *  `stop` dep below for why the tick needs this and not a widget event. */
+  submitActiveCapture?(): boolean
 }
 export interface RemoteInitDeps {
   sessionManager: SessionManagerLike
@@ -5628,7 +5632,30 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         }
       }
       pillController = new PillController(notchClient, {
-        stop:        () => toWidget('stop'),
+        // THE TICK IS THE TRIGGER KEY, NOT A WIDGET GESTURE.
+        //
+        // This was `toWidget('stop')`, which reached the RENDERER only: it
+        // stopped the renderer's own recorder and drew "Processing", while
+        // main — which owns the session and runs transcribe-and-paste — was
+        // never told the capture had ended. The pill then sat spinning until
+        // the user pressed the trigger key, and THAT is what actually
+        // delivered the text. Reported as "pressing the tick just stays in
+        // processing and then I have to press the function key again".
+        //
+        // Routing it through the keyboard manager makes the tick literally the
+        // same act as releasing the key, on every lane — fn, Caps Lock,
+        // right-Option and the Agent's double-tap — because that is the one
+        // place that knows how each lane ends. Main then emits
+        // `recording:stop` and the renderer follows exactly as it always has.
+        //
+        // The fallback is deliberate and must NOT pre-empt: if the keyboard
+        // says nothing is live, the old path still runs, so a state this
+        // change did not anticipate degrades to today's behaviour instead of
+        // to a dead button.
+        stop: () => {
+          if (deps.keyboardManager.submitActiveCapture?.() === true) return
+          toWidget('stop')
+        },
         cancel:      () => toWidget('cancel'),
         undo:        () => toWidget('undo'),
         acceptDraft: () => toWidget('acceptDraft'),
@@ -6932,8 +6959,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
 
   ipcMain.handle('remote:get-surface-tone', async () => settings.get('surfaceTone') || 'spaceGray')
+  // Validated against the list, not against one name. The ternary this
+  // replaces rewrote every value that was not exactly 'black' back to
+  // 'spaceGray', so a third tone would have been accepted by the renderer,
+  // stored as Space Gray, and read back as Space Gray — a setting that appears
+  // to do nothing rather than one that fails.
+  const SURFACE_TONES = ['spaceGray', 'black', 'glass'] as const
   ipcMain.handle('remote:set-surface-tone', async (_e, v: string) => {
-    const value = v === 'black' ? 'black' : 'spaceGray'
+    const value = (SURFACE_TONES as readonly string[]).includes(v) ? v : 'spaceGray'
     settings.set('surfaceTone', value)
     notchClient?.send({ type: 'surfaceTone', value } as never)
     log.event('surface-tone-set', { value })

@@ -178,10 +178,52 @@ struct NotchView: View {
         // outline of the app instead of the surface. The identity belongs
         // inside the shape: same geometry, same hairline as every other card,
         // a ground that is quietly not black.
-        shape.fill(model.task?.id == "unmute-agent"
-                   ? AnyShapeStyle(Theme.agentSurface)
-                   : AnyShapeStyle(Color.black))
+        //
+        // UNDER THE `glass` TONE THE SHELL IS THE ONE THING THAT THINS.
+        //
+        // D5 above is not negotiable: the bar mass impersonates the hardware
+        // cutout and stays opaque under every tone, which is why the blur is
+        // gated on `expanded` rather than on the tone alone. The expanded
+        // surface is exactly where this file already says "the appearance
+        // setting still applies in full", so that is where it applies.
+        //
+        // The backdrop goes BEHIND the fill rather than replacing it. A bare
+        // blur went milky-grey over a light page and took the white text with
+        // it; the fill is the scrim that stops that, and `Theme.plane` adds the
+        // rest of it inside.
+        shape.fill(glassy
+                   ? (agentCard ? AnyShapeStyle(Theme.agentSurfaceGlass)
+                                : AnyShapeStyle(Color.black.opacity(0.25)))
+                   : (agentCard ? AnyShapeStyle(Theme.agentSurface)
+                                : AnyShapeStyle(Color.black)))
+            .background(glassBackdrop)
             .overlay(shape.stroke(Theme.hairlineSoft, lineWidth: 0.5))
+    }
+
+    private var agentCard: Bool { model.task?.id == "unmute-agent" }
+
+    /// EVERY SURFACE THAT IS NOT THE BAR. The panel, the cockpit, AND the open
+    /// pocket — the pocket is not a state of its own (it borrows a bar state
+    /// and changes only what is drawn), so `expanded` alone missed it and the
+    /// pocket stayed black while the panel went to glass. That read as the
+    /// setting only half working.
+    ///
+    /// What stays opaque is the CLOSED bar, and only that. See D5 at the top of
+    /// the file: the bar mass is impersonating the physical cutout, and a
+    /// see-through cutout puts the seam back at the join. An open pocket is a
+    /// surface hanging off the mass, not the mass.
+    private var glassy: Bool {
+        (expanded || model.pocket.isOpen) && appearance.tone == .glass
+    }
+
+    /// The live `.behindWindow` sample, clipped to the same path the fill uses
+    /// so the blur cannot leak past the fillets. `.hudWindow` is the material
+    /// the system's own popovers use, which is the look this tone was asked
+    /// for; nothing is drawn at all under the other tones.
+    @ViewBuilder private var glassBackdrop: some View {
+        if glassy {
+            VisualEffectBackdrop(material: .hudWindow).clipShape(shape)
+        }
     }
 
     /// THE RESTING NUB — off-notch idle, pointer elsewhere.

@@ -188,6 +188,25 @@ struct PillState: Codable, Equatable {
     /// Undo is offered for a short window after a paste.
     var canUndo: Bool = false
 
+    /// THE UNMUTE AGENT'S OWN LANE — a double-tap of the right command key,
+    /// not an ordinary remote capture.
+    ///
+    /// Recognised by having nothing to offer: the engine blanks BOTH option
+    /// lists for the Agent and only for the Agent, because its provider is set
+    /// once in Settings and there is no per-capture choice. This used to be
+    /// computed privately inside `AgentModelControl`, which is why only that
+    /// one chip could wear the lane's identity; it lives here now so the whole
+    /// cluster can agree on what lane it is in.
+    ///
+    /// `kind == .remote` is part of the test on purpose: plain dictation also
+    /// carries empty option lists, and without it every ordinary capture would
+    /// claim to be the Agent.
+    var isAgentLane: Bool {
+        kind == .remote
+            && (agentOptions?.isEmpty ?? true)
+            && (modelOptions?.isEmpty ?? true)
+    }
+
     static let hidden = PillState()
 
     init() {}

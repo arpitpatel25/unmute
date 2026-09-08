@@ -99,3 +99,92 @@ final class DotWaveTests: XCTestCase {
         XCTAssertNotEqual(ratio, ratio.rounded(), accuracy: 0.05, "an integer ratio repeats immediately")
     }
 }
+
+// MARK: - barHeight
+//
+// The bar row replaced the dot row because the dots all travelled the same
+// distance: the shape never changed, only its altitude. These guard the two
+// properties that make the new row worth having, plus the one contract it
+// inherited unchanged.
+
+final class BarHeightTests: XCTestCase {
+
+    private let count = 11
+
+    // THE INHERITED CONTRACT, and the reason this surface is honest. Flat means
+    // silent — for every bar, at every instant, forever. The view draws a bar
+    // at its floor height when this returns 0, so a muted mic is a still row
+    // and cannot be mistaken for decoration that would wobble regardless.
+    func testSilenceIsExactlyZeroForEveryBar() {
+        for t in stride(from: 0.0, through: 3.0, by: 0.017) {
+            for i in 0..<count {
+                XCTAssertEqual(
+                    DotWave.barHeight(index: i, count: count, time: t, amplitude: 0), 0)
+            }
+        }
+    }
+
+    // THE WHOLE POINT OF THE REDESIGN. At a single instant the bars must NOT
+    // all be the same height — that was the old row's failure ("the length
+    // doesn't increase, it just waves"). The arch alone guarantees it even if
+    // the oscillation happened to be flat.
+    func testBarsDifferFromEachOtherAtTheSameInstant() {
+        for t in stride(from: 0.0, through: 2.0, by: 0.05) {
+            let hs = (0..<count).map {
+                DotWave.barHeight(index: $0, count: count, time: t, amplitude: 1)
+            }
+            let spread = (hs.max() ?? 0) - (hs.min() ?? 0)
+            XCTAssertGreaterThan(spread, 0.1,
+                                 "the row is a flat block at t=\(t) — no shape to read")
+        }
+    }
+
+    // A BAR NEVER LEAVES ITS BAND. The view maps 0…1 onto floor…height, so
+    // anything outside that range would draw a bar clipped out of the capsule.
+    func testHeightStaysWithinTheBand() {
+        for t in stride(from: 0.0, through: 3.0, by: 0.017) {
+            for a in [0.01, 0.25, 0.5, 0.9, 1.0] {
+                for i in 0..<count {
+                    let h = DotWave.barHeight(index: i, count: count, time: t, amplitude: a)
+                    XCTAssertGreaterThanOrEqual(h, 0)
+                    XCTAssertLessThanOrEqual(h, 1)
+                }
+            }
+        }
+    }
+
+    // LOUDER IS TALLER, which is the one thing a level meter must get right.
+    // Compared per-bar at a fixed instant so the oscillation cancels out.
+    func testLouderIsNeverShorter() {
+        for t in stride(from: 0.0, through: 2.0, by: 0.05) {
+            for i in 0..<count {
+                let quiet = DotWave.barHeight(index: i, count: count, time: t, amplitude: 0.3)
+                let loud  = DotWave.barHeight(index: i, count: count, time: t, amplitude: 0.9)
+                XCTAssertGreaterThanOrEqual(loud, quiet)
+            }
+        }
+    }
+
+    // NO BAR COLLAPSES WHILE A VOICE IS GOING. A bar that reaches zero
+    // mid-phrase reads as a dropped frame, not as a quiet band — that is what
+    // the two floors are for, and this is the check that they are wired up.
+    func testNoBarVanishesWhileSpeaking() {
+        for t in stride(from: 0.0, through: 3.0, by: 0.017) {
+            for i in 0..<count {
+                XCTAssertGreaterThan(
+                    DotWave.barHeight(index: i, count: count, time: t, amplitude: 1), 0.05,
+                    "bar \(i) collapsed at t=\(t)")
+            }
+        }
+    }
+
+    // THE COUNT IS A SLOT COUNT, not a budget that grows with volume: the same
+    // index in the same row is a pure function of time and level, so nothing
+    // can make the row wider mid-dictation.
+    func testDeterministic() {
+        for i in 0..<count {
+            XCTAssertEqual(DotWave.barHeight(index: i, count: count, time: 1.25, amplitude: 0.6),
+                           DotWave.barHeight(index: i, count: count, time: 1.25, amplitude: 0.6))
+        }
+    }
+}

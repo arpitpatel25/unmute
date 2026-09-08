@@ -100,6 +100,18 @@ struct BarContent: Equatable {
         ceil(measure("\(n)", NSFont.systemFont(ofSize: 9.5, weight: .semibold)) + 12)
     }
 
+    /// WHAT THIS SAYS, as one comparable value. The key the two-second rule is
+    /// built on — see NotchModel.silenced. Deliberately content, not rung: the
+    /// same sentence shown by two different rungs is the same announcement, and
+    /// two different sentences from one rung are two announcements.
+    ///
+    /// `right` is included because it is the half that names the task or
+    /// carries the question, so a genuinely new question in an unchanged status
+    /// is new news. `resting` is not — a nub says nothing.
+    var signature: String {
+        "\(dot?.rawValue ?? "-")|\(left ?? "")|\(right ?? "")|\(badge ?? 0)"
+    }
+
     var isEmpty: Bool { dot == nil && (left?.isEmpty != false) && (right?.isEmpty != false) }
 
     // MARK: - What each state says
@@ -116,6 +128,31 @@ struct BarContent: Equatable {
     /// resolves the content for the state it is about to move TO, and the model
     /// still holds the one it is leaving.
     static func make(for m: NotchModel, state: NotchState, hovering: Bool) -> BarContent {
+        let c = resolve(for: m, state: state, hovering: hovering)
+        // THE TWO-SECOND RULE, APPLIED WHERE THE WORDS ARE — the one place that
+        // can actually enforce it.
+        //
+        // The stand-down clock in AppController changes the RUNG. That was not
+        // enough on its own and never could be: every branch below the switch
+        // is reached by asking only whether the state is expanded, so resting
+        // from `attention` to `idle` left the pocket count matching just as
+        // well as before and the bar redrew the same sentence at the same
+        // width. The clock was firing into a void.
+        //
+        // Hovering is exempt because hover is a question being asked, and the
+        // surface must answer it. Expanded surfaces are exempt because the user
+        // opened them.
+        guard !hovering, !isExpandedState(state), m.silenced.contains(c.signature) else { return c }
+        // OFF-NOTCH KEEPS THE NUB. Silence means "stop talking", not "stop
+        // existing" — on a display with no cutout there is no hardware landmark,
+        // so a surface that vanished entirely would take the way into the
+        // orchestrator with it. Same reasoning as `idle` below.
+        return m.hasNotch ? BarContent() : BarContent(resting: true)
+    }
+
+    /// The state table from the spec, in code and nowhere else. Everything
+    /// above decides whether to SAY this; this decides what it is.
+    private static func resolve(for m: NotchModel, state: NotchState, hovering: Bool) -> BarContent {
         // Feedback must remain visible at the surface where the action began.
         // Previously collapsed errors were logged and otherwise disappeared.
         if let toast = m.toast, !toast.isEmpty, !isExpandedState(state) {

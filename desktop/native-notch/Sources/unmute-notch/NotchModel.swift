@@ -60,6 +60,29 @@ final class NotchModel: ObservableObject {
     /// disagree about how wide the surface is mid-morph.
     @Published var bar: MassPlacement = .empty
     /// What the two halves say. Same story: measured once, rendered once.
+    /// SENTENCES THAT HAVE ALREADY HAD THEIR TWO SECONDS.
+    ///
+    /// THE RULE: anything the bar says is said for two seconds and then stops
+    /// being said. Not "the rung stands down" — the rung standing down was
+    /// already implemented and did not achieve it, because the content ladder
+    /// in `BarContent.make` sits ABOVE the rung switch: the pocket count only
+    /// asks whether the state is expanded, so the instant the surface rested to
+    /// dormant/idle the identical sentence was rendered again at the identical
+    /// width. Measured in one session's notch.log: "N waiting on you" drawn
+    /// 6,613 times at `idle` against 4,013 at `attention` — more often in the
+    /// rung it had just retreated to than in the rung whose job it was.
+    ///
+    /// So the silencing is keyed on WHAT IS SAID, not on which rung says it.
+    /// A different sentence does not match and speaks for its own two seconds;
+    /// the same sentence returning stays quiet.
+    ///
+    /// A SET, not one value, because two sentences can alternate. A task
+    /// flapping done→processing→done makes the bar swing between "Working" and
+    /// "1 waiting on you", and a single slot would let the pair re-announce
+    /// each other forever. Emptied whenever the bar genuinely has nothing to
+    /// say, which is the real end of an episode — see AppController.refreshBar.
+    @Published var silenced: Set<String> = []
+
     @Published var content: BarContent = BarContent()
     @Published var attention: Int = 0
     @Published var working: Int = 0

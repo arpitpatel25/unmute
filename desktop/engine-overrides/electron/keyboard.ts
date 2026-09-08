@@ -942,6 +942,85 @@ export class KeyboardManager extends EventEmitter {
     this.emit('keyboard', { type: 'chain-expired' } as KeyboardEvent)
   }
 
+  /**
+   * FINISH THE LIVE CAPTURE, EXACTLY AS ITS OWN KEY WOULD.
+   *
+   * WHAT THIS FIXES. The pill's tick emitted `pillStop`, which main forwarded
+   * to the RENDERER as a `stop` event. The renderer stopped its own recorder
+   * and drew "Processing" — and that was all. Main was never told the capture
+   * had ended, so `sessionManager.stopRecording()` never ran, the audio never
+   * went anywhere, and the pill sat spinning until the user pressed the
+   * trigger key, which is what actually finished it. The tick was doing half
+   * the job in the half of the app that cannot do the other half.
+   *
+   * WHY IT LIVES HERE rather than as a new "submit" path beside the existing
+   * ones. Each lane ends differently — the Agent and the Orchestrator dispatch
+   * to a task (`agent-stop` / `remote-stop`), Instruct chains through
+   * `chain-expired`, and a held-key dictation has to release its modifier
+   * before it can grab the selection (see `stopDictation`). A second
+   * implementation of "finish" would be four subtly different copies of rules
+   * that are already written here, and they would drift. The keyboard already
+   * knows which lane is live and how that lane ends; this asks it.
+   *
+   * ORDER MIRRORS THE LOCKS. Agent and Orchestrator are exclusive and are
+   * tested first, exactly as `resetState` and `liveRoute` order them; Instruct
+   * and dictation cannot both be live.
+   *
+   * @returns true if a capture was actually ended. False means the keyboard
+   *   believes nothing is recording, and the caller should not pretend
+   *   otherwise — see the fallback at the call site.
+   */
+  submitActiveCapture(): boolean {
+    const now = Date.now()
+
+    if (this.agentActive) {
+      // Identical to the single-tap stop in `feedAgentGesture`, including the
+      // tap bookkeeping — leaving `lastAgentTapAt` set would let the next
+      // genuine tap read as the second half of a double-tap.
+      this.lastAgentToggleTime = now
+      this.agentActive = false
+      this.lastAgentTapAt = 0
+      this.openedLane = null
+      console.log('[keyboard] Agent capture STOP (pill submit) → dispatch')
+      this.emit('keyboard', { type: 'agent-stop' } as KeyboardEvent)
+      return true
+    }
+
+    if (this.remoteActive) {
+      this.lastRemoteToggleTime = now
+      this.remoteActive = false
+      this.openedLane = null
+      console.log('[keyboard] Remote capture STOP (pill submit) → dispatch')
+      this.emit('keyboard', { type: 'remote-stop' } as KeyboardEvent)
+      return true
+    }
+
+    if (this.instructionActive) {
+      this.lastInstructionToggleTime = now
+      this.instructionActive = false
+      console.log('[keyboard] Instruction STOPPED (pill submit)')
+      this.emit('keyboard', { type: 'session-stop', mode: 'instruction' } as KeyboardEvent)
+      this.emit('keyboard', { type: 'chain-expired' } as KeyboardEvent)
+      return true
+    }
+
+    if (this.dictationActive) {
+      // THE DUAL-MODE STATE HAS TO COME BACK TO IDLE. The physical key may
+      // still be held when the tick is clicked; without this the later key-up
+      // would find `dualState === 'push-recording'` and call `stopDictation` a
+      // second time on a capture that has already been dispatched. Idle makes
+      // that key-up a no-op, which is what a release AFTER a submit means.
+      this.clearDualTimers()
+      this.dualState = 'idle'
+      console.log('[keyboard] Dictation STOP (pill submit)')
+      this.stopDictation()
+      return true
+    }
+
+    console.log('[keyboard] Pill submit ignored — no capture is live')
+    return false
+  }
+
   // ─── Instruction toggle (Caps Lock) ───
 
   private handleInstructionToggle(): void {
