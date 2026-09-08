@@ -172,3 +172,24 @@
   background: color-mix(in srgb, var(--badge-color) 17%, transparent);
   box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--badge-color) 26%, transparent);
 }
+
+
+/* ── Focus ───────────────────────────────────────────────────────────────
+   NO FOCUS RING ON THE MASS. The browser draws one on the element's
+   RECTANGULAR box, so on a clip-path shape it appears as a square-cornered
+   frame with white wedges poking out where the concave shoulders cut the
+   black away — a box around a surface whose whole point is not to be one.
+
+   It is also not a thing the product has: the notch window is deliberately
+   non-key (`canBecomeKey == false`, so dictation never moves the user's
+   caret), and a window that cannot become key never draws a focus ring.
+
+   Keyboard users are not dropped. The ring moves INSIDE the shape, onto the
+   element that carries the clip-path, so it is clipped along with it and
+   follows the fillets instead of fighting them. :focus-visible, so it appears
+   for the keyboard and not for a click. */
+.u-notch:focus { outline: none; }
+.u-notch:focus-visible { outline: none; }
+.u-notch:focus-visible .u-notch-shape {
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.55);
+}

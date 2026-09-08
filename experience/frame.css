@@ -270,6 +270,14 @@ kbd {
 }
 .foot b { color: var(--ink-2); font-weight: 600; }
 
+/* The same rule for everything else the mouse can reach: a ring on click is
+   the browser talking, not the product. Keyboard focus still shows. */
+.screen :focus:not(:focus-visible) { outline: none; }
+.keycap:focus { outline: none; }
+.keycap:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.u-nt:focus { outline: none; }
+.u-nt:focus-visible { box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.55); }
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .caret, .keycap[data-next] { animation: none; }
