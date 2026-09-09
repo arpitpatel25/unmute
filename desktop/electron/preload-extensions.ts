@@ -18,6 +18,14 @@ export type PaywallUpdateStatus =
   | { phase: 'error'; message: string }
 
 export const paywallPreloadExtensions = {
+  onboardingOnPresenterCommand: (cb: (command: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, command: unknown) => cb(command)
+    ipcRenderer.on('onboarding:presenter-command', handler)
+    return () => { ipcRenderer.removeListener('onboarding:presenter-command', handler) }
+  },
+  onboardingPresenterAction: (action: unknown): void => {
+    ipcRenderer.send('onboarding:presenter-action', action)
+  },
   // App version (for the Settings footer build-number display)
   paywallAppVersion: (): Promise<string> =>
     ipcRenderer.invoke('paywall:app-version'),

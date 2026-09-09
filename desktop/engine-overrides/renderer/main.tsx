@@ -12,6 +12,7 @@ import App from './app/App'
 import WidgetApp from './widget/WidgetApp'
 import { OverlayApp } from './remote/OverlayApp'
 import { NotetakerWidgetRoute } from './notetaker/NotetakerWidget'
+import { OnboardingPresenter } from './onboarding/OnboardingPresenter'
 import './styles.css'
 
 const hash = window.location.hash
@@ -20,6 +21,7 @@ function RootApp() {
   if (hash === '#/widget') return <WidgetApp />
   if (hash === '#/overlay') return <OverlayApp />
   if (hash === '#/notetaker-widget') return <NotetakerWidgetRoute />
+  if (hash === '#/onboarding-presenter') return <OnboardingPresenter />
   return <App />
 }
 
