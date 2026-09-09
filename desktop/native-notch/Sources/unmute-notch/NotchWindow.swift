@@ -19,6 +19,10 @@ final class NotchWindow: NSPanel {
 
     /// Flipped by AppController on state changes.
     var allowsKey = false { didSet { if !allowsKey && isKeyWindow { resignKey() } } }
+    /// Called when a click lands anywhere on this panel. The controller uses it
+    /// to let an open pocket take the keyboard back after it has let go — a
+    /// click ON the surface is exactly the deliberate act that earns it.
+    var onClickInside: (() -> Void)?
 
     /// Announced when this window stops being key, so the engine can drop its
     /// record of which composer owns the caret.
@@ -255,6 +259,8 @@ final class ResizeBorderView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // Dragging the resize border is a claim on the surface too.
+        (window as? NotchWindow)?.onClickInside?()
         dragging = true
         resizer?.beginResize(at: event.locationInWindow)
     }
@@ -302,6 +308,12 @@ final class FirstMouseView: NSView {
     }
     override func mouseDown(with event: NSEvent) {
         NotchLog.log("tap: mouseDown(container) clicks=\(event.clickCount) windowKey=\(window?.isKeyWindow == true)")
+        // A CLICK ON THE SURFACE IS A CLAIM ON IT. SwiftUI consumes most clicks
+        // before NSWindow.mouseDown ever runs, so the window's own override is
+        // not reached for a tap that lands on a control — this is the one that
+        // is. It is how an open pocket takes the keyboard back after a click
+        // elsewhere released it.
+        (window as? NotchWindow)?.onClickInside?()
         super.mouseDown(with: event)
     }
 }

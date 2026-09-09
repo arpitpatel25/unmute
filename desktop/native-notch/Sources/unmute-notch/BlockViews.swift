@@ -17,10 +17,22 @@ import ConversationSupport
 
 // MARK: - the turn
 
+/// The conversation's content width, published upward by a canvas so the card
+/// can re-lay its drawing out when the panel is resized. A preference rather
+/// than a GeometryReader wrapper, so measuring costs no layout.
+struct CanvasWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
+    }
+}
+
 struct BlockTurnView: View {
     let turn: BlockTurn
     let taskId: String
     var canEdit: Bool = false
+    @State private var canvasWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -42,7 +54,10 @@ struct BlockTurnView: View {
             // maxWidth on the inner row is what keeps a short row pinned right
             // with the bubble it belongs to; without it a lone tile drifts to
             // the left edge, away from its own message.
-            let attachments = turn.work.filter { $0.kind == "attachment" }
+            // YOURS ONLY. A file the agent fetched is not part of your prompt
+            // and must not sit above the reply — it goes at the bottom with the
+            // drawings, so the written answer stays whole for anyone listening.
+            let attachments = turn.work.filter { $0.kind == "attachment" && $0.role != "assistant" }
             if !attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 8) {
@@ -88,14 +103,62 @@ struct BlockTurnView: View {
                     MessageActions(text: text, at: reply.at)
                 }
             }
+            // THE DRAWING GOES LAST, AFTER EVERY WORD OF THE TURN.
+            //
+            // Not where the model happened to write it. Two reasons, and the
+            // second is the one that matters: a picture between two paragraphs
+            // breaks the reading, and the person who asked may have DICTATED
+            // the question and be listening rather than looking — so the spoken
+            // answer has to be whole before anything visual arrives. canvas.ts
+            // already hoists these to the end of the turn; this is where that
+            // promise is kept on screen.
+            //
+            // THE WIDTH IS MEASURED, NOT OWNED. A bare GeometryReader would
+            // take all the space offered and reserve the card's maximum height
+            // forever, punching a hole under every drawing; reading the width
+            // from a clear background leaves the card free to size itself to
+            // its own content. The panel is resizable, so this has to track —
+            // a drawing re-lays out on a drag rather than scaling a stale
+            // bitmap.
+            ForEach(Array(canvases.enumerated()), id: \.offset) { _, canvas in
+                CanvasCard(block: canvas, width: canvasWidth)
+                    .background(GeometryReader { geo in
+                        Color.clear.preference(key: CanvasWidthKey.self, value: geo.size.width)
+                    })
+            }
+            // A PICTURE THE AGENT FETCHED, in the tile that already knows how to
+            // draw one. Wider than the composer's tray tile because this is the
+            // answer rather than a thing you attached — but capped, so a tall
+            // photograph cannot push the reply off screen.
+            ForEach(Array(fetchedImages.enumerated()), id: \.offset) { _, image in
+                if let path = image.path, !path.isEmpty {
+                    ComposerAttachmentTile(
+                        attachment: DraftAttachmentP(id: image.id, path: path,
+                            mimeType: image.mimeType ?? "image/png",
+                            name: image.name ?? URL(fileURLWithPath: path).lastPathComponent),
+                        remove: {}, restore: {}, readOnly: true, knownBytes: image.bytes)
+                }
+            }
         }
+        .onPreferenceChange(CanvasWidthKey.self) { width in
+            if abs(width - canvasWidth) > 1 { canvasWidth = width }
+        }
+    }
+
+    /// Drawings this turn produced. Kept out of `workSteps` so a canvas never
+    /// appears twice — once as a step and once as itself.
+    private var canvases: [Block] { turn.work.filter { $0.kind == "canvas" } }
+    /// Pictures the agent went and found, as opposed to files you attached.
+    private var fetchedImages: [Block] {
+        turn.work.filter { $0.kind == "attachment" && $0.role == "assistant" }
     }
 
     private static let surfacedKinds: Set<String> = ["fileChange", "denied", "error", "compaction"]
     private var surfaced: [Block] { turn.work.filter { Self.surfacedKinds.contains($0.kind) } }
     private var workSteps: [Block] {
         turn.work.filter { !Self.surfacedKinds.contains($0.kind) && $0.kind != "plan"
-            && $0.kind != "turnStart" && $0.kind != "turnEnd" && $0.kind != "attachment" }
+            && $0.kind != "turnStart" && $0.kind != "turnEnd" && $0.kind != "attachment"
+            && $0.kind != "canvas" }
     }
 
     private func compactionText(_ b: Block) -> String {

@@ -128,6 +128,8 @@ export interface NotchControllerDeps {
   editLatestMessage?(id: string, expected: string, text: string): Promise<boolean>
   getDraft?(id: string): TaskDraft
   setDraftText?(id: string, text: string, clientRevision?: number): void
+  /** Arm a visual tool for the next message on this task, or clear it. */
+  setDraftTool?(id: string, tool: string | null): void
   addDraftImage?(id: string, path: string, mimeType: string, name: string, insertion?: DraftInsertionP): Promise<void> | void
   reserveDraftAttachment?(id: string, operationId: string, name: string, insertion: DraftInsertionP): void
   failDraftAttachment?(id: string, operationId: string, error: string): void
@@ -657,7 +659,10 @@ export class NotchController {
       this.setPocketMode('closed')
       this.reconcile()
     })
-    on('pocketExpand', () => { this.touch(); this.onPocketExpand() })
+    on('pocketExpand', (e) => {
+      this.touch()
+      this.onPocketExpand((e as { id?: string }).id)
+    })
     on('importSession', (e) => void this.onImportSession((e as { sessionId: string }).sessionId))
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
     on('reloadHistory', (e) => { const id = (e as { id: string }).id; if (this.deps.getTask(id)) void this.deps.loadBlocks?.(id, true).catch(() => {}) })
@@ -695,6 +700,19 @@ export class NotchController {
       const { id, text, clientRevision } = e as { id: string; text: string; clientRevision?: number }
       devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'setDraftText', textChars: text.length })
       this.deps.setDraftText?.(id, text, clientRevision)
+      this.scheduleReconcile()
+    })
+    on('setDraftTool', (e) => {
+      this.touch()
+      const { id, tool } = e as { id: string; tool: string | null }
+      // THE AGENT SLOT HAS NO DRAFT STORE. Same rule as setDraftText above: the
+      // Agent is not a task, and its composer is the controller's own. Rather
+      // than write into a record nothing owns, the tool is simply not offered
+      // there — the picker is absent, so this branch is a guard against a
+      // stale surface, not a path anyone takes.
+      if (id === NotchController.AGENT_SLOT) return
+      devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'setDraftTool', tool })
+      this.deps.setDraftTool?.(id, tool)
       this.scheduleReconcile()
     })
     on('reserveDraftAttachment', (e) => {
@@ -1681,9 +1699,30 @@ export class NotchController {
    * It LEAVES the pocket on the way out: it is not set aside any more, it is
    * open in front of you. Leaving or closing puts it straight back.
    */
-  private onPocketExpand(): void {
-    const slot = this.pocketSlots()[this.pocketAt]
+  /**
+   * @param wanted the id of the slot the CARD was showing when the person
+   *   acted. Absent only from a surface older than this change.
+   */
+  private onPocketExpand(wanted?: string): void {
+    const slots = this.pocketSlots()
+    // BY IDENTITY, FALLING BACK TO POSITION.
+    //
+    // This read `slots[this.pocketAt]` alone — a POSITION into a list it
+    // recomputes right here, at expand time. The pocket is ordered by
+    // engagement, so the list re-sorts underneath the index between the card
+    // being drawn and the key being pressed: the card said "Job listing
+    // platform", Return arrived, and position 0 was a different task by then.
+    // Reported as "the task that is open is job listing, but when I press enter
+    // I see this task", and the give-away was the pocket landing on 2/4
+    // afterwards — the index had not moved, the LIST had.
+    //
+    // The index is still the fallback, for a surface that predates the id and
+    // for a slot that has genuinely gone away while the key was in flight.
+    const slot = (wanted ? slots.find((s) => s.id === wanted) : undefined) ?? slots[this.pocketAt]
     if (!slot) return
+    if (wanted && slot.id !== wanted) {
+      log.event('pocket-expand-drifted', { wanted, opened: slot.id, at: this.pocketAt })
+    }
     // THE AGENT EXPANDS INTO ITS CHAT, not into a task panel — there is no task
     // behind it to open, and everything below this line is about one.
     if (slot.kind === 'agent') { this.openAgent(); return }

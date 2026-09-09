@@ -194,12 +194,18 @@ export function SettingRow({ label, description, children }: {
   children: React.ReactNode
 }) {
   return (
-    <div className="flex items-center justify-between px-5 py-4 border-b border-border last:border-b-0">
-      <div>
+    // THE TEXT KEEPS ITS COLUMN. Without `min-w-0 flex-1` on the copy and
+    // `flex-none` on the control, a wide control wins the whole row and squeezes
+    // the description down to its longest WORD — the description then renders
+    // one word per line, as a tall thin ribbon. Seen the moment a third swatch
+    // was added to Surface tone; the row had simply never been asked to hold
+    // anything wide before.
+    <div className="flex items-center justify-between gap-6 px-5 py-4 border-b border-border last:border-b-0">
+      <div className="min-w-0 flex-1">
         <p className="text-[13px] font-medium text-ink">{label}</p>
         <p className="text-[11px] text-ink-35 mt-0.5">{description}</p>
       </div>
-      <div>{children}</div>
+      <div className="flex-none">{children}</div>
     </div>
   )
 }

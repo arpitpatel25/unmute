@@ -450,11 +450,15 @@ export type NotchEvent =
   /** Back to the full task. The pocket is a GLANCE state — it exists
    *  because the panel is large, not because the panel is wrong, so the
    *  trip back has to be one tap or it is a one-way door. */
-  | { type: 'pocketExpand' }
+  /** `id` names the slot the CARD was showing — the queue can re-sort between
+   *  the draw and the keystroke, so position alone opens the wrong task. */
+  | { type: 'pocketExpand'; id?: string }
   | { type: 'chooseOption'; id: string; index: number; reference?: import('../question-reference').QuestionReference }
   | { type: 'answerText'; id: string; text: string; reference?: import('../question-reference').QuestionReference }
   | { type: 'reloadHistory'; id: string }
   | { type: 'setDraftText'; id: string; text: string; clientRevision?: number }
+  /** Arm a visual tool for the next message, or clear it with null. */
+  | { type: 'setDraftTool'; id: string; tool: string | null }
   | ({ type: 'addDraftImage'; id: string; path: string; mimeType: string; name: string } & DraftInsertionP)
   | ({ type: 'reserveDraftAttachment'; id: string; operationId: string; name: string } & DraftInsertionP)
   | { type: 'failDraftAttachment'; id: string; operationId: string; error: string }

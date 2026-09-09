@@ -110,6 +110,11 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
     public let startedAt: Int?
     public let outcome: String?
 
+    // canvas — a drawing the agent produced. `format` is "mermaid" | "svg" |
+    // "html"; `source` is its text, and it is UNTRUSTED. See CanvasCard.
+    public let format: String?
+    public let source: String?
+
     // unknown
     public let raw: String?
 
@@ -132,7 +137,9 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
                 what: String? = nil, reason: String? = nil, message: String? = nil,
                 before: Int? = nil, after: Int? = nil, trigger: String? = nil,
                 startedAt: Int? = nil, raw: String? = nil, mimeType: String? = nil, bytes: Int? = nil,
-                diff: String? = nil, changes: [FileChange]? = nil, error: String? = nil, outcome: String? = nil) {
+                diff: String? = nil, changes: [FileChange]? = nil, error: String? = nil, outcome: String? = nil,
+                format: String? = nil, source: String? = nil) {
+        self.format = format; self.source = source
         self.diff = diff; self.changes = changes; self.error = error; self.outcome = outcome
         self.mimeType = mimeType; self.bytes = bytes
         self.startedAt = startedAt

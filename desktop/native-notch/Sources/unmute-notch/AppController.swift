@@ -191,6 +191,9 @@ final class AppController: NSObject, NotchResizing {
         installTracking()
         installKeyMonitors()
         installOutsideClickMonitor()
+        // Clicking the pocket is how you take the keyboard back after clicking
+        // away from it — the other half of the release in the monitor above.
+        window.onClickInside = { [weak self] in self?.pocketClaimsKey() }
         observeScreens()
         observeAppSwitches()
         NotchLog.log("presented at dormant: window=\(NotchLog.rect(window.frame)) visible=\(window.isVisible)")
@@ -538,20 +541,29 @@ final class AppController: NSObject, NotchResizing {
             // needs a refit — but only when it is the thing being shown. An
             // expanded task outranks it: you are already looking at one address,
             // and a card announcing a second would be two answers to one question.
+            let wasOpen = model.pocket.isOpen
+            let wasAt = model.pocket.at
             model.pocket = p
-            // THE OPEN POCKET HOLDS THE KEYBOARD.
+            // THE POCKET TAKES THE KEYBOARD WHEN YOU ACT ON IT, AND ONLY THEN.
             //
             // Arrow keys can only reach a surface that is key, and a GLOBAL
             // monitor is observe-only by macOS's definition — it cannot consume.
             // Reading the arrows from one would walk the pocket AND move the
-            // caret in whatever the user was typing in, at the same time.
+            // caret in whatever the user was typing in, at the same time. So the
+            // pocket does need key focus to be operable, and it takes it here:
+            // on OPENING, and on the carousel moving, both of which are things
+            // the person just did.
+            //
+            // What it no longer does is take it back for merely BEING open. The
+            // comment this replaces asserted "clicking anything else resigns key
+            // on its own" — which was true of the click and false of everything
+            // after it, because the next engine push re-asserted makeKey() and
+            // the pocket took the keyboard straight back. See applyKeyFocus.
             //
             // Safe because this is a nonactivating panel: taking the keyboard
             // does not activate our app or disturb the frontmost window, which
-            // is the same reasoning applyState already relies on for Escape.
-            // Clicking anything else resigns key on its own, and the arrows go
-            // back where they belong — the pocket stays OPEN and still aimed,
-            // it just stops eating keystrokes.
+            // is the same reasoning applyState relies on for Escape.
+            if p.isOpen, !wasOpen || p.at != wasAt { pocketClaimsKey() }
             updatePocketKeyFocus()
             let pocketIsVisible = !isExpanded(model.state) || model.state == .attention
             NotchLog.log("CMD pocket mode=\(p.mode) at=\(p.at) slots=\(p.slots.count)")
@@ -770,7 +782,6 @@ final class AppController: NSObject, NotchResizing {
         reconcileTerminalSubscription()
         refreshSurfaceControlAvailability()
         let engaged = (state == .task || state == .cockpit)
-        window.allowsKey = engaged || model.pocket.isOpen
         // ESC MUST NOT LEAK TO THE APP UNDERNEATH.
         //
         // `allowsKey` alone only makes the panel key-ABLE; with
@@ -787,9 +798,24 @@ final class AppController: NSObject, NotchResizing {
         // nonactivating panel, so we take the KEYBOARD without activating our
         // app or disturbing the user's frontmost window; on step-down
         // `allowsKey = false` resigns key and the keyboard goes straight back.
-        if engaged || model.pocket.isOpen {
-            if !window.isKeyWindow { window.makeKey() }
-        }
+        // COMING BACK DOWN TO THE POCKET IS ARRIVING AT IT.
+        //
+        // Escape from an expanded surface lands on the pocket, and the person
+        // who pressed it is now looking at the pocket and expects the arrows to
+        // walk it. The pocket command does not fire on that path — the pocket
+        // was already open UNDERNEATH the expanded surface, so there is no
+        // open-transition to notice — and without this the step-down released
+        // the keyboard the instant it arrived. Reported exactly that way: "it
+        // shrinks to the pocket view and that pocket view is not in focus
+        // anymore."
+        //
+        // The rule this restores: every route INTO the pocket keeps the keys.
+        // Only a click outside gives them up.
+        if wasExpanded, !engaged, model.pocket.isOpen { pocketHoldsKey = true }
+        // ONE DECISION, ONE PLACE. This used to re-assert `makeKey()` for a
+        // merely-open pocket on every state push, which is what made the pocket
+        // impossible to click away from — see applyKeyFocus.
+        applyKeyFocus()
         let contentGeneration = expandedContentGeneration
         let revealExpandedContent: (() -> Void)? = expandingFromPocket && !Motion.reduceMotion
             && !preserveContentHandoff && !model.expandedContentReady
@@ -887,19 +913,70 @@ final class AppController: NSObject, NotchResizing {
 
     private func isExpanded(_ s: NotchState) -> Bool { s == .task || s == .cockpit }
 
-    /// Key-ability follows the pocket as well as the state. applyState owns the
-    /// same decision for a state CHANGE; this is for the pocket opening or
-    /// closing underneath a state that did not move.
+    /// AN OPEN POCKET IS NOT A CLAIM ON THE KEYBOARD.
+    ///
+    /// THE BUG THIS FIXES. Both this and applyState used to say "pocket is open,
+    /// therefore take key", and both run on ordinary engine pushes — which
+    /// arrive every few seconds. So the panel did not merely take the keyboard
+    /// when the pocket opened, it took it back again on every push: clicking
+    /// into your editor handed focus over and the next push snatched it
+    /// straight back. From the outside that reads as a card that will not let
+    /// go, and it made the app underneath unusable while a glance surface sat
+    /// on screen doing nothing.
+    ///
+    /// THE RULE NOW. An EXPANDED surface takes the keyboard, because you opened
+    /// it, Escape belongs to it, and letting Escape reach the app underneath is
+    /// a bug this file has already shipped once. The POCKET takes it only when
+    /// you act on it — the chord that opens it, or a click on it — and gives it
+    /// back the moment you click somewhere else, while staying visible.
+    ///
+    /// WHY THAT DOES NOT STRAND YOU. The arrows, Enter and Escape are focused
+    /// affordances and stop working when the pocket is not focused, which is
+    /// correct: a status card must not eat arrow keys aimed at your editor. The
+    /// way back in is the chord, and the chord is a GLOBAL hotkey in the
+    /// keyboard manager rather than a key handler on this window — it fires
+    /// whatever holds focus. There is no state you can reach where the pocket
+    /// is unreachable.
     private func updatePocketKeyFocus() {
-        let wants = isExpanded(model.state) || model.pocket.isOpen
-        window.allowsKey = wants
+        applyKeyFocus()
+    }
+
+    /// True while the pocket is allowed to hold the keyboard. Set by a
+    /// deliberate act on it, cleared by a click elsewhere. Meaningless while
+    /// expanded, which takes key on its own terms.
+    private var pocketHoldsKey = false
+
+    /// The one place key focus is decided. Both callers used to make this
+    /// decision separately and identically, which is how they came to
+    /// re-assert it on every push.
+    private func applyKeyFocus() {
+        let engaged = isExpanded(model.state)
+        if !model.pocket.isOpen { pocketHoldsKey = false }
+        let wants = engaged || (model.pocket.isOpen && pocketHoldsKey)
+        // Key-ABLE whenever we are showing something, so a click can focus the
+        // pocket again after it has let go. `canBecomeKey` returns this, and a
+        // window that cannot become key cannot be clicked into.
+        window.allowsKey = wants || model.pocket.isOpen
         if wants {
             if !window.isKeyWindow { window.makeKey() }
         } else if window.isKeyWindow {
-            // `allowsKey = false` already resigns key (NotchWindow.didSet); this
-            // is only here to say so out loud.
-            NotchLog.log("pocket: released the keyboard")
+            // GIVING IT BACK. Toggling `allowsKey` through false is what
+            // actually resigns key — NotchWindow.didSet does it — and AppKit
+            // then hands the keyboard to whatever the person clicked. Setting
+            // it back to true on the next line keeps the pocket clickable.
+            NotchLog.log("pocket: released the keyboard (open=\(model.pocket.isOpen))")
+            window.allowsKey = false
+            window.allowsKey = model.pocket.isOpen
         }
+    }
+
+    /// A deliberate act on the pocket — the chord, or a click on the surface.
+    /// This is the ONLY thing that lets the pocket take the keyboard.
+    func pocketClaimsKey() {
+        guard model.pocket.isOpen, !isExpanded(model.state) else { return }
+        if !pocketHoldsKey { NotchLog.log("pocket: took the keyboard") }
+        pocketHoldsKey = true
+        applyKeyFocus()
     }
 
     /// Re-resolve the CURRENT state in place.
@@ -1428,10 +1505,26 @@ final class AppController: NSObject, NotchResizing {
     /// clicked the scratchpad would be a bug, not a dismissal.
     private func installOutsideClickMonitor() {
         NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
-            guard let self, self.isExpanded(self.model.state) else { return }
+            guard let self else { return }
             let p = NSEvent.mouseLocation
             if self.window.frame.contains(p) { return }
             if let pw = self.pillWindow, pw.isVisible, pw.frame.contains(p) { return }
+            // AN OPEN POCKET LETS GO OF THE KEYBOARD, BUT STAYS ON SCREEN.
+            //
+            // Two different dismissals, and conflating them would be wrong in
+            // both directions. An EXPANDED surface is closed by a click outside
+            // — you are done with it. The POCKET is a glance surface: clicking
+            // into your editor means "I want to type there", not "take that
+            // card away", so it keeps showing what is waiting and merely stops
+            // owning the keys. Click it, or press the chord, to come back.
+            guard self.isExpanded(self.model.state) else {
+                if self.model.pocket.isOpen, self.pocketHoldsKey {
+                    NotchLog.log("pocket: click outside at \(Int(p.x)),\(Int(p.y)) — releasing keys, staying open")
+                    self.pocketHoldsKey = false
+                    self.applyKeyFocus()
+                }
+                return
+            }
             NotchLog.log("close-all: click outside at \(Int(p.x)),\(Int(p.y))")
             self.closeAll()
         }
@@ -1515,7 +1608,8 @@ final class AppController: NSObject, NotchResizing {
                     }
                 case 36, 76:                               // Return, Enter
                     if self.model.pocket.current != nil {
-                        self.model.emit(.pocketExpand); return nil
+                        // BY ID, NOT BY POSITION — see IPC.pocketExpand.
+                        self.model.emit(.pocketExpand(id: self.model.pocket.current?.id)); return nil
                     }
                 default: break
                 }

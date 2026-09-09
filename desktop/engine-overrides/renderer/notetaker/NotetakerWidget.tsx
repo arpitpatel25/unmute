@@ -15,10 +15,12 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-// 55pt of waveform at 2px bars on a 2px gap. Five fat bars was the old
-// short-pill compromise; at the dictation pill's proportions the same width
-// holds fourteen, which is what makes it read as a voice rather than a meter.
-const BAR_COUNT = 14
+// ELEVEN BARS, 3px on a 2.5px gap — the dictation pill's proportions exactly
+// (Waveform.swift). The two surfaces are the same instrument doing the same
+// job, and there is no reason for a meeting to be drawn differently from a
+// dictation. What stays DIFFERENT is the responsiveness below, not the shape:
+// this one lives in the corner of an hour-long meeting.
+const BAR_COUNT = 11
 
 // HOW EXCITABLE THE NOTETAKER'S WAVEFORM IS. Tuned DOWN from the dictation
 // pill's, deliberately: dictation is a thing you are actively doing and looking
@@ -499,7 +501,13 @@ export function NotetakerWidget({
   // which is the one deliberate difference between the two.
   // MUST MATCH notetakerWidget.ts's widgetBounds() pillHeight.
   const PILL_HEIGHT = 36
-  const WAVE_WIDTH = 55        // the dictation waveform is 78
+  // THE DICTATION PILL'S GEOMETRY, to the point (Waveform.swift): eleven 3pt
+  // bars on a 2.5pt gap in a 16pt band. Stated as constants rather than spread
+  // through the markup so the two surfaces can be checked against each other.
+  const BAR_WIDTH = 3
+  const BAR_GAP = 2.5
+  const WAVE_HEIGHT = 16
+  const WAVE_WIDTH = BAR_COUNT * BAR_WIDTH + (BAR_COUNT - 1) * BAR_GAP   // 58
 
   const waveGlyph = (tone: string) => (
     <span className="flex items-center flex-none" style={{ gap: 2 }}>
@@ -616,56 +624,48 @@ export function NotetakerWidget({
             </button>
           </>
         ) : (
-          /* SILENCE IS A LINE, NOT A ROW OF DOTS.
-             The bars were 3px wide with a 5px floor and `rounded-full`, so at
-             rest each one rendered as a CIRCLE — the pill showed five dots
-             rather than a waveform. Same defect the Swift waveform had, and the
-             same fix: no floor, a hairline behind, and nothing drawn below 2px
-             because a sub-2px rounded div is that dot again by another name.
-             Bars are 2px on a 2px gap, matching Waveform.swift exactly. */
-          <span className="flex items-center" style={{ gap: 7 }}>
-            <span
-              className="rounded-full flex-none"
-              style={{ width: 6, height: 6, background: NOTETAKER_RED, animation: 'notetaker-dot-pulse 1.1s ease-in-out infinite' }}
-            />
-            <span
-              className="relative flex items-center justify-center flex-none"
-              style={{ width: WAVE_WIDTH, height: 20 }}
-            >
-              <span
-                className="absolute rounded-full"
-                style={{ left: 0, right: 0, height: 1, background: 'rgba(255,255,255,0.18)' }}
-              />
-              <span className="relative flex items-center" style={{ gap: 2 }}>
-                {levels.map((level, i) => {
-                  const h = Math.round(level * 20)
-                  return (
-                    <div
-                      key={i}
-                      className="w-[2px] rounded-full bg-white"
-                      style={{
-                        height: h < 2 ? 0 : h,
-                        opacity: 0.55 + 0.45 * level,
-                        transition: 'height 60ms linear',
-                      }}
-                    />
-                  )
-                })}
-              </span>
+          /* THE SAME INSTRUMENT AS THE DICTATION PILL — see Waveform.swift.
+             Bars carry HEIGHT and nothing else. Three things went with the
+             redesign, all for reasons that apply here identically:
+
+             THE RED DOT. It said "recording", which is the one thing a live
+             waveform already says, and it said it in a status colour that means
+             something else everywhere in this app. Two marks for one fact,
+             one of them borrowing a vocabulary it does not belong to.
+
+             THE OPACITY RAMP. Brightness carried level while the heights also
+             carried level, so a quiet moment was punished twice and the row
+             read grey exactly when it was working. Colour no longer carries
+             anything: the bars are white, always.
+
+             THE HAIRLINE. It existed to keep silence looking like a line once
+             bars collapsed to nothing. They no longer collapse — a silent bar
+             rests at its own width, which IS a dot, and eleven of them are the
+             line. One thing drawing one thing. */
+          <span
+            className="relative flex items-center justify-center flex-none"
+            style={{ width: WAVE_WIDTH, height: WAVE_HEIGHT }}
+          >
+            <span className="relative flex items-center" style={{ gap: BAR_GAP }}>
+              {levels.map((level, i) => (
+                <div
+                  key={i}
+                  className="rounded-full bg-white"
+                  style={{
+                    width: BAR_WIDTH,
+                    // Never zero. The floor equals the width, so a bar at rest
+                    // is a circle and the still row reads as a flat line rather
+                    // than as a surface that has stopped drawing.
+                    height: BAR_WIDTH + Math.round(level * (WAVE_HEIGHT - BAR_WIDTH)),
+                    transition: 'height 60ms linear',
+                  }}
+                />
+              ))}
             </span>
           </span>
         )}
       </div>
 
-      {/* @keyframes for the recording dot — inlined (no stylesheet in
-       *  this window), same reasoning as the waveform preferring CSS
-       *  transitions over extra rAF work. */}
-      <style>{`
-        @keyframes notetaker-dot-pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50%      { opacity: 0.5; transform: scale(0.82); }
-        }
-      `}</style>
     </div>
   )
 }

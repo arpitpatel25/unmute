@@ -1,4 +1,5 @@
 import type { Block } from '../blocks'
+import { liftCanvases } from '../canvas'
 /** Bound native decoding/rendering by human-visible messages, retaining intervening work. */
 export function messageWindow(blocks: readonly Block[], limit = 10): { blocks: Block[]; olderMessages: number } {
   const starts: number[] = []
@@ -13,5 +14,20 @@ export function messageWindow(blocks: readonly Block[], limit = 10): { blocks: B
   })
   finish()
   const olderMessages = Math.max(0, starts.length - Math.max(1, limit))
-  return { blocks: blocks.slice(olderMessages ? starts[olderMessages] : 0), olderMessages }
+  const shown = blocks.slice(olderMessages ? starts[olderMessages] : 0)
+  // DRAWINGS ARE LIFTED HERE, and the position is load-bearing twice over.
+  //
+  // AFTER the scan above, because that scan decides which blocks are visible
+  // messages by walking the stream — and its rule is that anything which is
+  // not a turn marker cancels a pending final reply. A canvas block inserted
+  // before the walk would sit between the assistant's message and `turnEnd`,
+  // cancel it, and quietly shift every window boundary. Lifting afterwards
+  // leaves that logic looking at exactly the stream it has always seen.
+  //
+  // AND HERE RATHER THAN IN THE EXTRACTOR, because `blocksFromClaudeTranscript`
+  // returns `pendingTools` as INDEXES into its own array; reordering blocks
+  // underneath those would point in-flight tool rows at the wrong thing. This
+  // is the surface's copy, so the stored transcript keeps the fence verbatim —
+  // replay, copy-as-text and debugging all still see the source.
+  return { blocks: liftCanvases(shown), olderMessages }
 }

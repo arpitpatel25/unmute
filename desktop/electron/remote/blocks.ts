@@ -53,7 +53,14 @@ export function fullContent(value: unknown): string | undefined {
 }
 
 export type Block =
-  | { kind: 'attachment'; path: string; name: string; mimeType: string; bytes?: number }
+  /**
+   * A file beside a message. `role` says WHOSE, and the surface places it
+   * accordingly: a file you attached belongs with your prompt, above the reply;
+   * one the agent fetched belongs beneath the reply, with the drawings, so the
+   * written answer stays whole and uninterrupted for anyone listening to it.
+   * Absent means yours — every attachment predating the image tool is.
+   */
+  | { kind: 'attachment'; path: string; name: string; mimeType: string; bytes?: number; role?: 'user' | 'assistant' }
   | { kind: 'message'; role: 'user' | 'assistant'; text: string; at?: number }
   | { kind: 'reasoning'; text: string; streaming?: boolean }
   | {
@@ -86,6 +93,16 @@ export type Block =
    * them. `startedAt` lets the surface run a live clock; `durationMs` is what
    * the agent reported once the turn ended.
    */
+  /**
+   * A VISUAL ANSWER THE AGENT DREW — see canvas.ts for why it arrives as a
+   * fenced block inside the prose and is lifted out of it.
+   *
+   * `source` is the agent's own text: mermaid, an SVG document, or a
+   * self-contained HTML page. It is never trusted. The renderer runs it in a
+   * WebView with no network, no filesystem and no navigation — see
+   * CanvasBlock.swift, where that sandbox is spelled out.
+   */
+  | { kind: 'canvas'; format: 'mermaid' | 'svg' | 'html'; source: string }
   | { kind: 'turnStart'; startedAt: number }
   | { kind: 'turnEnd'; durationMs?: number; outcome?: TurnOutcome }
   | { kind: 'unknown'; raw: string }
@@ -95,7 +112,7 @@ export type BlockKind = Block['kind']
 const KNOWN: ReadonlySet<string> = new Set<BlockKind>([
   'attachment',
   'message', 'reasoning', 'command', 'fileChange', 'mcpCall', 'fileRead',
-  'search', 'plan', 'subAgent', 'denied', 'error', 'compaction',
+  'search', 'plan', 'subAgent', 'denied', 'error', 'compaction', 'canvas',
   'turnStart', 'turnEnd', 'unknown',
 ])
 

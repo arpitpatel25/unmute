@@ -215,9 +215,21 @@ const SURFACE_TONES: readonly SurfaceTone[] = ['spaceGray', 'black', 'glass']
 const TONE_SWATCHES: readonly {
   v: SurfaceTone; label: string; plane: string; rail: string; behind: string
 }[] = [
+  // Space Gray is a BLUE-GREY, and at swatch size the difference from black is
+  // genuinely small — which is the truth about the setting, so the preview says
+  // it quietly rather than exaggerating it.
   { v: 'spaceGray', label: 'Space Gray', plane: 'rgb(22,24,28)',    rail: 'rgba(255,255,255,0.028)', behind: 'linear-gradient(#000,#000)' },
   { v: 'black',     label: 'Black',      plane: '#000000',          rail: 'transparent',             behind: 'linear-gradient(#000,#000)' },
-  { v: 'glass',     label: 'Glass',      plane: 'rgba(0,0,0,0.50)', rail: 'transparent',             behind: 'linear-gradient(135deg,#7c5cff 0%,#3ba3ff 38%,#2ad4a4 68%,#ffb35c 100%)' },
+  // WHAT GLASS ACTUALLY LOOKS LIKE. The first version put a saturated
+  // blue→green→amber rainbow behind the scrim, which read as a gradient
+  // wallpaper rather than as glass — nothing on a real desktop is that vivid
+  // once a blur and a 50% scrim are over it. A blur DESATURATES and flattens,
+  // so the stand-in is muted blue-grey with one warm patch: what a photograph
+  // looks like through frosted glass, not what a colour picker looks like.
+  {
+    v: 'glass', label: 'Glass', plane: 'rgba(0,0,0,0.46)', rail: 'transparent',
+    behind: 'radial-gradient(120% 120% at 15% 0%, #7d8aa6 0%, #56617d 38%, #3f4a5c 68%, #4a4640 100%)',
+  },
 ]
 
 const KILL_SWITCHES_WIRED = false
@@ -1020,7 +1032,12 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                           plane. The whole point of the setting is how those
                           two blacks sit together, so the mass must be here. */}
                       <div style={{
-                        width: 132, height: 74, borderRadius: 10, overflow: 'hidden',
+                        // 104, not 132. Three of these plus their gaps have to
+                        // sit beside the description without taking the row —
+                        // at 132 they did, and the copy collapsed to one word a
+                        // line. Small enough to fit, large enough that the
+                        // notch mass, the rail and the cards are still legible.
+                        width: 104, height: 62, borderRadius: 9, overflow: 'hidden',
                         // Two layers: the plane painted OVER a stand-in desktop.
                         // On the opaque tones the plane hides the desktop
                         // completely, which is the honest preview of them; on
@@ -1029,13 +1046,13 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                         border: '1px solid rgba(255,255,255,0.10)',
                         display: 'flex', flexDirection: 'column',
                       }}>
-                        <div style={{ height: 13, background: '#000', flex: 'none' }} />
+                        <div style={{ height: 11, background: '#000', flex: 'none' }} />
                         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-                          <div style={{ width: 34, background: o.rail, borderRight: '1px solid rgba(255,255,255,0.06)' }} />
-                          <div style={{ flex: 1, padding: 7 }}>
-                            <div style={{ height: 9, borderRadius: 3, background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.10)', marginBottom: 5 }} />
-                            <div style={{ height: 9, borderRadius: 3, background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.10)', marginBottom: 5 }} />
-                            <div style={{ height: 5, width: '62%', borderRadius: 2, background: 'rgba(255,255,255,0.16)' }} />
+                          <div style={{ width: 27, background: o.rail, borderRight: '1px solid rgba(255,255,255,0.06)' }} />
+                          <div style={{ flex: 1, padding: 6 }}>
+                            <div style={{ height: 7, borderRadius: 3, background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.10)', marginBottom: 4 }} />
+                            <div style={{ height: 7, borderRadius: 3, background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.10)', marginBottom: 4 }} />
+                            <div style={{ height: 4, width: '62%', borderRadius: 2, background: 'rgba(255,255,255,0.16)' }} />
                           </div>
                         </div>
                       </div>

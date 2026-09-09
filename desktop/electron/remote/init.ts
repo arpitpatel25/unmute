@@ -1692,10 +1692,18 @@ async function deliverTaskDraftSnapshot(
     if (trace) emitTaskReplyStep(log, trace, 'delivery-preflight', 'failed', { reason: 'task-no-longer-exists' })
     return false
   }
+  // `draftInput` already carries an armed tool's contract as the leading part —
+  // see the note there for why it cannot live out here. `text` is derived from
+  // the SAME array the structured transports consume, so the flat string and
+  // the parts cannot disagree about what was sent.
   const ordered = await draftInput(draft)
   const text = ordered.flatMap(p => p.type === 'text' ? [p.text] : []).join('')
   const images = draft.attachments.filter((attachment) => attachment.mimeType.startsWith('image/'))
-  if (!text.trim() && !draft.attachments.length) {
+  // MEASURED ON WHAT THE PERSON TYPED, never on the assembled text. An armed
+  // tool prefixes a page of instruction, and measuring that would make an empty
+  // draft look like a real message — you would arm a tool, press send with
+  // nothing written, and the agent would receive rules and no question.
+  if (!draft.text.trim() && !draft.attachments.length) {
     if (trace) emitTaskReplyStep(log, trace, 'delivery-preflight', 'refused', { reason: 'empty-draft' })
     return false
   }
@@ -5388,6 +5396,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
             beforeChars: before.text.length, afterChars: text.length,
             deltaChars: text.length - before.text.length, attachments: before.attachments.length,
           })
+        },
+        setDraftTool: (id, tool) => {
+          taskDrafts.setTool(id, tool)
+          log.event('canvas-tool-armed', { taskId: id, tool })
         },
         addDraftImage: (id, path, mimeType, name, insertion) => addDraftImageFromPath(id, path, mimeType, name, insertion),
         reserveDraftAttachment: (id, operationId, name, insertion) => taskDrafts.reserveAttachment(id, operationId, name, insertion),

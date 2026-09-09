@@ -441,16 +441,7 @@ struct StageComposer: View {
                     .disabled(!canSend || sending || model.questionBusy(taskId, question))
                     .animation(Theme.hover, value: canSend)
                 }
-                if let config {
-                    ComposerControls(config: config,
-                                     change: { model.emit(.configureChat(id: taskId, field: $0, value: $1)) },
-                                     dictate: { model.emit(.toggleDraftDictation(id: taskId, insertionOffset: editorSelection.location,
-                                         selectedLength: editorSelection.length, clientRevision: clientRevision, insertionText: text)) },
-                                     cancelDictation: { model.emit(.cancelDraftDictation(id: taskId)) },
-                                     newConversation: { newChatOpen = true },
-                                     newAgentConversation: taskId == "unmute-agent"
-                                         ? { model.emit(.agentNewConversation) } : nil)
-                }
+                controls
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
@@ -491,6 +482,38 @@ struct StageComposer: View {
         text = value
         clientRevision += 1
         model.emit(.setDraftText(id: taskId, text: value, clientRevision: clientRevision))
+    }
+
+    /// EXTRACTED, not inlined. The composer's body is already at the limit of
+    /// what Swift's type checker will infer in one expression — adding two more
+    /// arguments to this call tipped it over into "unable to type-check in
+    /// reasonable time". Pulling it out costs nothing and keeps the next
+    /// addition from having to discover that again.
+    @ViewBuilder private var controls: some View {
+        if let config {
+            ComposerControls(
+                config: config,
+                change: { model.emit(.configureChat(id: taskId, field: $0, value: $1)) },
+                dictate: {
+                    model.emit(.toggleDraftDictation(id: taskId, insertionOffset: editorSelection.location,
+                                                     selectedLength: editorSelection.length,
+                                                     clientRevision: clientRevision, insertionText: text))
+                },
+                cancelDictation: { model.emit(.cancelDraftDictation(id: taskId)) },
+                newConversation: { newChatOpen = true },
+                newAgentConversation: taskId == "unmute-agent" ? { model.emit(.agentNewConversation) } : nil,
+                // Read from the DRAFT, never from local state: the host owns the
+                // armed tool and clears it once a message is accepted, so the
+                // chip shows what will actually happen rather than what the last
+                // tap hoped for. Same rule every other composer control follows.
+                tool: (draft?.tool).flatMap(ComposerTool.init(rawValue:)),
+                // NOT OFFERED IN THE AGENT'S CHAT. The Agent is not a task and
+                // has no draft store — its composer is the controller's own, so
+                // there is nowhere to arm a tool. A visible control that
+                // silently did nothing would be worse than its absence.
+                pickTool: taskId == "unmute-agent" ? nil
+                    : { model.emit(.setDraftTool(id: taskId, tool: $0?.rawValue)) })
+        }
     }
 
     private func send() {

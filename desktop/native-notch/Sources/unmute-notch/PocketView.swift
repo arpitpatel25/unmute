@@ -307,7 +307,7 @@ struct PocketRow: View {
                 }
             }
             .contentShape(Rectangle())
-            .onTapGesture { if slot != nil { model.emit(.pocketExpand) } }
+            .onTapGesture { if slot != nil { model.emit(.pocketExpand(id: slot?.id)) } }
             Spacer(minLength: 0)
         }
         .padding(.leading, BarContent.inset)
@@ -462,7 +462,7 @@ struct PocketCard: View {
             // 30pt chip; everything else was dead pixels on a surface whose
             // entire job is to be reached at a glance. Buttons inside still win.
             .contentShape(Rectangle())
-            .onTapGesture { if slot != nil { model.emit(.pocketExpand) } }
+            .onTapGesture { if slot != nil { model.emit(.pocketExpand(id: slot?.id)) } }
 
             if !headerInShoulders {
                 HStack(spacing: PocketRowMetrics.buttonGap) {

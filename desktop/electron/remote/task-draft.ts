@@ -2,6 +2,7 @@ import { readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { FollowupRecord } from './task-followup'
+import { CANVAS_TOOLS } from './canvas-contract'
 
 export interface DraftAttachment {
   id: string
@@ -39,6 +40,18 @@ export interface TaskDraft {
   stagingCount?: number
   error?: string
   operations?: DraftOperation[]
+  /**
+   * A VISUAL TOOL ARMED FOR THIS MESSAGE ONLY — "diagram" | "interactive" |
+   * "image", or absent.
+   *
+   * It lives on the draft rather than in a mode somewhere because that is what
+   * makes "next message only" true by construction: the draft IS the next
+   * message, and clearing the draft on accept clears the tool with it. A mode
+   * held anywhere else would outlive the message it was armed for, and the
+   * first thing anyone would notice is a diagram attached to a question that
+   * did not want one.
+   */
+  tool?: string
 }
 
 const emptyDraft = (): TaskDraft => ({ text: '', attachments: [] })
@@ -48,6 +61,7 @@ const copyDraft = (draft: TaskDraft): TaskDraft => ({
   attachments: draft.attachments.map((attachment) => ({ ...attachment })),
   ...(draft.operations?.length ? { operations: draft.operations.map(o => ({ ...o })) } : {}),
   ...(draft.clientRevision !== undefined ? { clientRevision: draft.clientRevision } : {}),
+  ...(draft.tool ? { tool: draft.tool } : {}),
 })
 
 /**
@@ -195,6 +209,24 @@ export class TaskDraftStore {
       attachments: current.attachments.map(a => ({ ...a, offset: movedOffset(current.text, text, a.offset ?? current.text.length) })),
       operations: this.moveOperations(current, text),
       ...(clientRevision !== undefined ? { clientRevision } : {}) }
+    this.save(taskId, next)
+    return this.get(taskId)
+  }
+
+  /**
+   * Arm a visual tool for this draft, or clear it with null.
+   *
+   * VALIDATED HERE, not at the IPC edge, because this is the only writer and a
+   * tool the delivery step cannot honour must never be stored — a draft that
+   * claims "interactive" while nothing knows what that means would send an
+   * ordinary message and leave the chip lit, which reads as the feature being
+   * broken rather than the value being wrong.
+   */
+  setTool(taskId: string, tool: string | null): TaskDraft {
+    const current = this.get(taskId)
+    const next = { ...current }
+    if (tool && CANVAS_TOOLS.has(tool)) next.tool = tool
+    else delete next.tool
     this.save(taskId, next)
     return this.get(taskId)
   }
@@ -437,11 +469,18 @@ export class TaskDraftStore {
     const text = current.text === snapshot.text ? ''
       : snapshot.text && current.text.startsWith(snapshot.text) ? current.text.slice(snapshot.text.length)
         : current.text
-    this.save(taskId, {
+    const next: TaskDraft = {
       ...current, text,
       attachments: current.attachments.filter((attachment) => !acceptedIds.has(attachment.id))
         .map(a => ({ ...a, offset: movedOffset(current.text, text, a.offset ?? current.text.length) })),
-    })
+    }
+    // THE TOOL IS SPENT. This is what makes "next message only" true rather
+    // than merely intended: `...current` above carries every other field
+    // forward, so without this the tool would still be armed for the message
+    // after — and the first anyone would know is a diagram attached to a
+    // question that did not ask for one, on their own tokens.
+    delete next.tool
+    this.save(taskId, next)
     this.traceIds.delete(taskId)
   }
 }

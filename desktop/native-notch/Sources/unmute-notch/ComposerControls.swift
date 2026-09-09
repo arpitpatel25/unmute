@@ -14,6 +14,10 @@ struct ComposerControls: View {
     /// another ends this one — nil everywhere else, where "new conversation"
     /// means an additional chat rather than a replacement.
     var newAgentConversation: (() -> Void)?
+    /// The visual tool armed for the next message, and how to change it. See
+    /// ComposerToolPicker for why this is a control rather than an inference.
+    var tool: ComposerTool? = nil
+    var pickTool: ((ComposerTool?) -> Void)? = nil
 
     private var fields: [ComposerSetupField] {
         composerSetupFields(hasModels: !config.models.isEmpty,
@@ -35,6 +39,15 @@ struct ComposerControls: View {
                 .frame(height: 28)
 
                 Spacer(minLength: 8)
+
+                // OUTSIDE THE SCROLLER, and deliberately. The provider/model
+                // controls scroll horizontally when the panel is narrow; a
+                // control that can scroll out of sight is one people conclude
+                // does not exist. This is the feature's only entry point, so it
+                // holds its place at every width.
+                if let pickTool {
+                    ComposerToolPicker(armed: tool, pick: pickTool)
+                }
 
 
                 if let state = config.dictation {

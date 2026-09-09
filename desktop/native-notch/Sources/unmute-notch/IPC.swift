@@ -113,7 +113,16 @@ struct FollowupP: Codable {
     let canCancel: Bool; let canRestore: Bool; let canQueueAgain: Bool
 }
 struct DraftOperationP: Codable { let id: String; let name: String; let phase: String; let error: String?; let order: Int? }
-struct TaskDraftP: Codable { let text: String; let attachments: [DraftAttachmentP]; let clientRevision: Int?; var stagingCount: Int? = nil; var error: String? = nil; var operations: [DraftOperationP]? = nil }
+struct TaskDraftP: Codable {
+    let text: String; let attachments: [DraftAttachmentP]; let clientRevision: Int?
+    var stagingCount: Int? = nil; var error: String? = nil; var operations: [DraftOperationP]? = nil
+    /// The visual tool armed for this message, echoed back by the host so the
+    /// chip reflects what the ENGINE believes rather than what the last tap
+    /// hoped — the same rule every other composer control follows. Cleared by
+    /// the host once the message is accepted, so a tool is never carried into
+    /// a message the user did not arm it for.
+    var tool: String? = nil
+}
 struct ChatChoiceP: Codable { let id: String; let label: String; let description: String? }
 struct ChatConfigP: Codable {
     let provider: String; let providerLabel: String; let model: String; let modelLabel: String
@@ -609,7 +618,16 @@ enum Event {
     case pocketRelease                             // let go — back to the notch
     /// Back to the FULL task. The pocket is a glance, not a destination:
     /// it exists because the panel is large, not because it is wrong.
-    case pocketExpand
+    /// EXPAND THE SLOT THE CARD IS SHOWING, named by id.
+    ///
+    /// The id is the point. This used to carry nothing and the host opened
+    /// `slots[pocketAt]` — a POSITION into a list it recomputed at expand time.
+    /// The pocket is ordered by engagement, so the list re-sorts underneath the
+    /// index: the card said "Job listing platform", Return arrived, the list had
+    /// moved, and position 0 was a different task by then. Reported exactly
+    /// that way — "the task that is open is job listing, but when I press enter
+    /// I see this task".
+    case pocketExpand(id: String?)
     case chooseOption(id: String, index: Int, reference: QuestionReferenceP? = nil)
     case answerText(id: String, text: String, reference: QuestionReferenceP? = nil)
     case setDraftText(id: String, text: String, clientRevision: Int = 0)
@@ -633,6 +651,14 @@ enum Event {
     case restoreDraftAttachment(id: String, attachmentId: String)
     case undoDraftAttachment(id: String, attachmentId: String)
     case redoDraftAttachment(id: String, attachmentId: String)
+    /// ARM A VISUAL TOOL FOR THE NEXT MESSAGE ONLY, or clear it with nil.
+    ///
+    /// The ONLY way a drawing is ever asked for. Nothing infers it from what
+    /// you said, and nothing infers it from what the answer looks like — a
+    /// surface that decides on your behalf when to draw is one that draws when
+    /// you did not want it to, and the cost of that lands on your own tokens.
+    /// So the tool is a thing you pick, in the composer, before you send.
+    case setDraftTool(id: String, tool: String?)
     case sendDraft(id: String, reference: QuestionReferenceP? = nil)
     case agentSend(submissionId: String, revision: Int)
     case agentRetry
@@ -708,7 +734,10 @@ enum Event {
         case let .pocketMove(delta): return ["type": "pocketMove", "delta": delta]
         case .pocketOpen: return ["type": "pocketOpen"]
         case .pocketRelease: return ["type": "pocketRelease"]
-        case .pocketExpand: return ["type": "pocketExpand"]
+        case .pocketExpand(let id):
+            var payload: [String: Any] = ["type": "pocketExpand"]
+            if let id { payload["id"] = id }
+            return payload
         case .chooseOption(let id, let index, let reference):
             var payload: [String: Any] = ["type": "chooseOption", "id": id, "index": index]
             if let reference { payload["reference"] = reference.payload }; return payload
@@ -751,6 +780,11 @@ enum Event {
         case .restoreDraftAttachment(let id, let attachmentId): return ["type": "restoreDraftAttachment", "id": id, "attachmentId": attachmentId]
         case .undoDraftAttachment(let id, let attachmentId): return ["type": "undoDraftAttachment", "id": id, "attachmentId": attachmentId]
         case .redoDraftAttachment(let id, let attachmentId): return ["type": "redoDraftAttachment", "id": id, "attachmentId": attachmentId]
+        case .setDraftTool(let id, let tool):
+            // NSNull rather than omitting the key: "clear the tool" and "I did
+            // not mention the tool" must not be the same message, or disarming
+            // would silently do nothing.
+            return ["type": "setDraftTool", "id": id, "tool": tool ?? NSNull()]
         case .sendDraft(let id, let reference):
             var payload: [String: Any] = ["type": "sendDraft", "id": id]
             if let reference { payload["reference"] = reference.payload }; return payload
