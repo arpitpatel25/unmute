@@ -118,6 +118,7 @@ import { locateTranscript } from './trace-reducer'
 import { findTranscriptById } from './transcript-locate'
 import { rollupCodexEvents, conversationFromCodexEvents } from './codex/cli-observer'
 import { discoverSessionId, findRollout, isRolloutIntegrityError, parseRolloutJsonl, readRolloutEvents } from './codex/cli-session'
+import { rolloutOutcome } from './codex/rollout-settled'
 import { projectSlug } from './projects'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
@@ -505,6 +506,10 @@ export interface TaskManagerOpts {
   sandboxRoots?: () => string[]
   /** Has the user consented to full-access Codex CLI tasks? Absent ⇒ no. */
   codexFullAccess?: () => boolean
+  /** Resolves a Codex thread id to its rollout file. Default: the ~/.codex
+   *  sessions lookup. Injected so orphan recovery can be tested without
+   *  depending on a real home directory. */
+  rolloutPathFor?: (threadId: string) => Promise<string | null>
   /**
    * Codex CLI's chosen model and effort as WIRE VALUES.
    *
@@ -802,6 +807,7 @@ export class TaskManager extends EventEmitter {
       sandboxRoots: opts.sandboxRoots,
       codexFullAccess: opts.codexFullAccess,
       codexCliChoice: opts.codexCliChoice,
+      rolloutPathFor: opts.rolloutPathFor ?? findRollout,
       groupRegistry: opts.groupRegistry,
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       pollMs: opts.pollMs ?? 1000,
@@ -6303,13 +6309,54 @@ export class TaskManager extends EventEmitter {
 
         tlog.event('auto-resume-on-open', {})
         const ok = await this.resume(id, { touchActivity: false })
-        if (!ok) tlog.warn('auto-resume on open did not take', {})
+        if (!ok) {
+          tlog.warn('auto-resume on open did not take', {})
+          // Nothing is attached and nothing will attach, so no worker is ever
+          // going to deliver this turn's completion. Ask the thread's own
+          // rollout instead of leaving the card spinning on "Working".
+          await this.settleFromRollout(id)
+        }
       } catch (e) {
         tlog.error('auto-resume on open threw', { error: (e as Error).message })
       } finally {
         this.opening.delete(id)
       }
     })()
+  }
+
+  /** Settle a task the event stream abandoned, using the thread's own rollout.
+   *
+   *  A Codex task leaves `processing` when a live worker delivers
+   *  `task_complete`. If nothing is attached when the turn ends, that event is
+   *  dropped and the card spins on "Working" forever — with no Stop button,
+   *  because there is no live turn to stop. The rollout is append-only and is
+   *  the thread's own record, so it can still answer.
+   *
+   *  Returns false for anything it cannot PROVE finished. Wrongly marking a
+   *  running task done is far worse than leaving a finished one spinning a
+   *  little longer, so an unknown outcome must leave the card exactly as it is. */
+  async settleFromRollout(id: string): Promise<boolean> {
+    const task = this.tasks.get(id)
+    if (!task || task.state !== 'processing') return false
+    const rolloutId = task.codexRolloutId ?? task.codexThreadId ?? task.sessionId
+    if (!rolloutId) return false
+    const tlog = log.child({ taskId: id })
+    const path = await this.opts.rolloutPathFor(rolloutId)
+    if (!path) {
+      tlog.event('settle-from-rollout-unreadable', { rolloutId })
+      return false
+    }
+    const outcome = await rolloutOutcome(path)
+    if (!outcome?.settled) {
+      tlog.event('settle-from-rollout-inconclusive', { rolloutId, settled: outcome?.settled ?? null })
+      return false
+    }
+    tlog.event('settled-from-rollout', { rolloutId, at: outcome.at })
+    this.transition(id, 'done', {
+      state: 'done',
+      result: { summary: outcome.lastAgentMessage ?? 'Codex finished this turn.' },
+    } as StatusPayload, outcome.at ? (Date.parse(outcome.at) || undefined) : undefined)
+    return true
   }
 
   /** Tasks currently BLOCKED on a needs-user question, newest first. The router

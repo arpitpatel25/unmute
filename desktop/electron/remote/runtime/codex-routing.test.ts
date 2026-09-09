@@ -98,3 +98,44 @@ test('a v3 worker is refused before editing mutates a conversation', async () =>
     assert.equal(calls.includes('codex.forkThread'), false)
   } finally { router.disconnect(); rpc.disconnect(); await server.close() }
 })
+
+test('a forked task still routes to its owner after an app restart reaps the live session', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'codex-ownership-'))
+  const oldCalls: string[] = [], newCalls: string[] = []
+  // The legacy worker still holds the PRE-FORK thread, so it answers snapshots.
+  const old = new RuntimeRpcServer(join(dir, 'old.sock'), async method => {
+    oldCalls.push(method)
+    if (method === 'codex.forkThread') throw new Error('Unknown Codex runtime command')
+    if (method === 'codex.snapshot') return { running: true, url: '', tasks: [] }
+    return true
+  })
+  // The current worker forked the thread, then reaped the session once idle:
+  // it owns the thread on disk but reports NO live task.
+  const modern = new RuntimeRpcServer(join(dir, 'new.sock'), async method => {
+    newCalls.push(method)
+    if (method === 'runtime.info') return { capabilities: ['codex.forkThread', 'codex.forkResult', 'codex.targetedSnapshot'] }
+    if (method === 'codex.forkThread') return { threadId: 'child', forkedFromId: 'source' }
+    if (method === 'codex.snapshot') return { running: true, url: '', tasks: [] }
+    return true
+  })
+  await old.listen(); await modern.listen()
+
+  // Stands in for durable storage: survives the router, as a file on disk would.
+  const persisted = new Set<string>()
+  const store = { initial: () => persisted, remember: (id: string) => { persisted.add(id) } }
+
+  const a = new RuntimeRpcClient(join(dir, 'old.sock')), b = new RuntimeRpcClient(join(dir, 'new.sock'))
+  try {
+    const before = new CompatibleCodexRuntime(a, b, store)
+    await before.call('codex.forkThread', 'task-a', 'source', {})
+    before.disconnect()
+
+    // App restarts: a brand new router, same durable store, no snapshot yet.
+    const after = new CompatibleCodexRuntime(a, b, store)
+    await after.call('codex.send', 'task-a', 'hello')
+    after.disconnect()
+
+    assert.equal(newCalls.filter(x => x === 'codex.send').length, 1, 'send must reach the forked owner')
+    assert.equal(oldCalls.filter(x => x === 'codex.send').length, 0, 'send must not fall back to the superseded worker')
+  } finally { a.disconnect(); b.disconnect(); await old.close(); await modern.close(); await rm(dir, { recursive: true, force: true }) }
+})

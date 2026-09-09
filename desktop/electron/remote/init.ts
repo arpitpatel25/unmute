@@ -135,6 +135,7 @@ import { CodexAppServer } from './codex/app-server-client'
 import { PersistentRuntimeClient } from './runtime/client'
 import { PersistentCodexHub } from './runtime/codex-client'
 import { CompatibleCodexRuntime } from './runtime/codex-routing'
+import { fileOwnershipStore } from './runtime/codex-ownership'
 import { CompatibleAgentRuntime, recoverAgentRuntime } from './runtime/agent-routing'
 import { PersistentClaudeTaskSession } from './runtime/claude-client'
 import { AgentRuntimeClient } from './runtime/agent-client'
@@ -4985,12 +4986,19 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // land silently on nothing.
   // Preserve older live owners. New forks/edits use v4, which supports
   // operation-scoped fork receipts, rollback, and forced recovery.
+  //
+  // Each layer gets its OWN ownership file. "Owned" means a different worker at
+  // every level — a task owned by v3 is legacy to the v4 layer above it — so one
+  // shared file would route v3 tasks to v4 after a restart and strand them.
   codexRuntimeRouting = new CompatibleCodexRuntime(
     new CompatibleCodexRuntime(
       new CompatibleCodexRuntime(persistentRuntime!,
-        new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v2'), join(__dirname, 'unmute-runtime.js'))),
-      new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v3'), join(__dirname, 'unmute-runtime.js'))),
-    new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v4'), join(__dirname, 'unmute-runtime.js')))
+        new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v2'), join(__dirname, 'unmute-runtime.js')),
+        fileOwnershipStore(runtimeRoot, 'continuity-v2')),
+      new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v3'), join(__dirname, 'unmute-runtime.js')),
+      fileOwnershipStore(runtimeRoot, 'continuity-v3')),
+    new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v4'), join(__dirname, 'unmute-runtime.js')),
+    fileOwnershipStore(runtimeRoot, 'continuity-v4'))
   codexHub = new PersistentCodexHub(codexRuntimeRouting, {
     approvalCap: taskId => ({ fullAccessAllowed: manager?.chatFullAccessAllowed(taskId) === true, roots: settings.get('sandboxRoots') ?? [] }),
     loadPlans: async (taskId, threadId) => {

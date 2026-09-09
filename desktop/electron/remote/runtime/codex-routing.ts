@@ -1,18 +1,44 @@
 import { RuntimeRpcClient } from './rpc'
 import { diagnostic } from '../diagnostics'
 
+/** Durable record of which tasks belong to the current worker.
+ *
+ *  WHY THIS IS NOT JUST A SET. Ownership is a fact about the thread on disk,
+ *  but it used to be inferred from liveness — a task counted as owned only
+ *  while the current worker still listed it in a snapshot or emitted events
+ *  for it. Both of those are lost when the app restarts, and the worker also
+ *  reaps its own idle sessions, so a thread that was forked hours ago stops
+ *  looking owned and silently falls back to the superseded worker. That worker
+ *  still holds the writer lock on the PRE-fork thread, so every resume after
+ *  that fails with `-32600 already has an active writer` and the task is stuck
+ *  as "Working" forever. Measured 2026-09-09: forked 19:40, app restarted
+ *  20:45, dead until manual repair. */
+export interface CodexOwnershipStore {
+  /** Task ids known to belong to the current worker, read once at construction. */
+  initial(): Iterable<string>
+  /** Persist a newly claimed task id so the next process still knows. */
+  remember(taskId: string): void
+}
+
 /** Rolling compatibility: existing threads keep their owner. Only new forks
  * use the current worker. No daemon or in-progress turn is killed to upgrade. */
 export class CompatibleCodexRuntime extends RuntimeRpcClient {
   private owned = new Set<string>()
   private preparations = new Map<string, unknown[]>()
-  constructor(private legacy: RuntimeRpcClient, private current: RuntimeRpcClient) {
+  constructor(private legacy: RuntimeRpcClient, private current: RuntimeRpcClient, private store?: CodexOwnershipStore) {
     super('unused')
+    for (const id of store?.initial() ?? []) this.owned.add(id)
     legacy.on('codex.event', this.oldEvent)
     current.on('codex.event', this.newEvent)
   }
+  /** Ownership is durable, so every route that learns it must write it down. */
+  private claim(id: string): void {
+    if (this.owned.has(id)) return
+    this.owned.add(id)
+    this.store?.remember(id)
+  }
   private oldEvent = (event: any): void => { if (!this.owned.has(event.mirror.taskId)) this.emit('codex.event', event) }
-  private newEvent = (event: any): void => { this.owned.add(event.mirror.taskId); this.emit('codex.event', event) }
+  private newEvent = (event: any): void => { this.claim(event.mirror.taskId); this.emit('codex.event', event) }
   override get connected(): boolean { return this.legacy.connected || this.current.connected }
   override async connect(): Promise<void> { await this.legacy.connect() }
   override async call<T = any>(method: string, ...args: unknown[]): Promise<T> {
@@ -20,7 +46,7 @@ export class CompatibleCodexRuntime extends RuntimeRpcClient {
       const [old, current] = await Promise.all([
         this.legacy.call<any>(method), this.current.call<any>(method),
       ])
-      for (const task of current.tasks) this.owned.add(task.taskId)
+      for (const task of current.tasks) this.claim(task.taskId)
       return { running: old.running || current.running, url: current.url || old.url,
         tasks: [...old.tasks.filter((t: any) => !this.owned.has(t.taskId)), ...current.tasks] } as T
     }
@@ -35,7 +61,7 @@ export class CompatibleCodexRuntime extends RuntimeRpcClient {
         throw new Error('Background runtime needs an update; do not retry this fork')
       }
       diagnostic('codex-fork-routed', { taskId: id, sourceSessionId: args[1], capabilities: info.capabilities })
-      this.owned.add(id)
+      this.claim(id)
       const preparation = this.preparations.get(id)
       if (preparation) await this.current.call('codex.prepare', ...preparation)
     }
