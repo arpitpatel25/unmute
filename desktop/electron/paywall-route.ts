@@ -9,6 +9,7 @@
 import { getPaywallAccessToken, getPaywallEngineMode, getSTTLanguageForRequest, refreshAccessToken, ensureFreshToken } from './paywall-glue'
 import { updateBalanceFromResponse } from './balance-ipc'
 import { paywallFetch } from './paywall-net'
+import { onboardingAllowanceHeaders } from './onboarding/allowance'
 
 // Pipeline URL — bundler injects __PIPELINE_URL__ via electron.vite.config.ts
 declare const __PIPELINE_URL__: string
@@ -126,14 +127,15 @@ export async function tryManagedSTT(
    * continues using its WebM default. */
   audioMime = 'audio/webm',
 ): Promise<ManagedSTTResult | null> {
-  if (!shouldTryManaged()) return null
+  const allowanceHeaders = onboardingAllowanceHeaders()
+  if (!shouldTryManaged() && !allowanceHeaders) return null
 
   // Guarantee a fresh token BEFORE the call so we never eat a mid-request 401
   // (whose reactive refresh adds ~0.4-1.2s and loses the local-fallback race).
   // No-op cost when the token is already fresh.
-  await ensureFreshToken()
+  if (!allowanceHeaders) await ensureFreshToken()
   const token = getPaywallAccessToken()
-  if (!token) return null
+  if (!token && !allowanceHeaders) return null
 
   try {
     const tFormStart = Date.now()
@@ -164,12 +166,12 @@ export async function tryManagedSTT(
     let currentToken = token
     let res = await paywallFetch('/v1/stt', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${currentToken}` },
+      headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : allowanceHeaders!,
       body: form,
       signal,
     })
     // ─── Retry on 401 (token expired) — refresh + retry once ──────
-    if (res.status === 401) {
+    if (res.status === 401 && currentToken) {
       console.log('[paywall-route] STT got 401, refreshing token and retrying')
       const refreshed = await refreshAccessToken()
       if (refreshed) {

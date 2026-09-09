@@ -22,6 +22,14 @@ compatibility_flags = ["nodejs_compat"]
 binding = "USER_BALANCE"
 id = "e7daf8475bd547679f96d0b3ca561519"
 
+[[durable_objects.bindings]]
+name = "ONBOARDING_ALLOWANCE"
+class_name = "OnboardingAllowance"
+
+[[migrations]]
+tag = "v1-onboarding-allowance"
+new_sqlite_classes = ["OnboardingAllowance"]
+
 # ─── Observability ─────────────────────────────────────────────
 [observability]
 enabled = true

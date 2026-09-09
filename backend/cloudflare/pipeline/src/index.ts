@@ -49,6 +49,8 @@ import type {
   LLMRequest,
 } from '../../shared/types'
 import { transcribeNotetakerWithFallback } from './notetakerSttCascade'
+import { authorizeOnboardingGrant, issueOnboardingGrant, OnboardingAllowance } from './onboardingAllowance'
+export { OnboardingAllowance }
 
 // ─── Durable usage recording (the BILL we must never lose) ──────────────────
 // Records a usage event with RETRIES. `rpc` swallows failures and returns null
@@ -89,7 +91,7 @@ const MAX_LLM_BYTES = 1 * 1024 * 1024 // 1 MB — generous
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Unmute-Onboarding-Grant, X-Unmute-Installation, X-Unmute-Onboarding-Action',
   'Access-Control-Max-Age': '86400',
 }
 
@@ -130,18 +132,34 @@ export default {
       return remoteConfigResponse(CORS_HEADERS)
     }
 
+    if (req.method === 'POST' && url.pathname === '/v1/onboarding-grant') {
+      let input: { installationId?: string }
+      try { input = await req.json() } catch { return err('BAD_REQUEST', 'Invalid grant request', 400) }
+      const result = await issueOnboardingGrant(
+        env,
+        { installationId: input.installationId ?? '' },
+        req.headers.get('CF-Connecting-IP') ?? 'unknown',
+      )
+      if (!result.ok) return err('RATE_LIMITED', 'Onboarding allowance unavailable', result.reason === 'issuance-limit' ? 429 : 400)
+      return json({ ok: true, grant: result.grant, expires_at: result.expiresAt })
+    }
+
     // ─── Auth: extract + verify JWT ─────────────────────────────
     const token = extractBearer(req)
-    if (!token) return err('UNAUTHORIZED', 'Missing bearer token', 401)
-
-    const payload = await verifyJWT(token, env.SUPABASE_URL)
-    if (!payload?.sub) return err('UNAUTHORIZED', 'Invalid token', 401)
-
-    const userId = payload.sub
+    const onboardingGrant = req.headers.get('X-Unmute-Onboarding-Grant')
+    let userId: string | null = null
+    if (token) {
+      const payload = await verifyJWT(token, env.SUPABASE_URL)
+      if (!payload?.sub) return err('UNAUTHORIZED', 'Invalid token', 401)
+      userId = payload.sub
+    } else if (!onboardingGrant || (url.pathname !== '/v1/stt' && url.pathname !== '/v1/stt-stream')) {
+      return err('UNAUTHORIZED', 'Missing bearer token', 401)
+    }
 
     // ─── Route ──────────────────────────────────────────────────
     try {
       if (req.method === 'GET' && url.pathname === '/v1/me') {
+        if (!userId) return err('UNAUTHORIZED', 'Sign-in required', 401)
         return await handleMe(env, userId)
       }
       if (req.method === 'POST' && url.pathname === '/v1/stt') {
@@ -151,6 +169,7 @@ export default {
         return await handleSTTStream(req, env, ctx, userId)
       }
       if (req.method === 'POST' && url.pathname === '/v1/llm') {
+        if (!userId) return err('UNAUTHORIZED', 'Onboarding grants cannot call LLM endpoints', 401)
         return await handleLLM(req, env, ctx, userId)
       }
       return err('BAD_REQUEST', `No route for ${req.method} ${url.pathname}`, 404)
@@ -186,7 +205,7 @@ async function handleSTT(
   req: Request,
   env: PipelineEnv,
   ctx: ExecutionContext,
-  userId: string
+  userId: string | null
 ): Promise<Response> {
   const tEnter = Date.now()
   // Read content length cheaply to reject oversized uploads before parsing.
@@ -227,9 +246,18 @@ async function handleSTT(
   const prompt = ((form.get('prompt') as string) || '').slice(0, 800)
 
   // ─── Subscription gate (KV — fast) ────────────────────────────
-  const ent = await getEntitlement(env, userId)
+  const onboardingAuthorized = userId === null && await authorizeOnboardingGrant(
+    env,
+    req.headers.get('X-Unmute-Onboarding-Grant') ?? '',
+    {
+      installationId: req.headers.get('X-Unmute-Installation') ?? '',
+      action: req.headers.get('X-Unmute-Onboarding-Action') ?? '',
+      audioSeconds: duration,
+    },
+  )
+  const ent = userId ? await getEntitlement(env, userId) : null
   const tBalanceChecked = Date.now()
-  if (!isEntitled(ent)) {
+  if (!onboardingAuthorized && !(ent && isEntitled(ent))) {
     return err('SUBSCRIPTION_INACTIVE', 'An active subscription is required', 402, {
       subscribe_url: SUBSCRIBE_URL,
     })
@@ -240,6 +268,7 @@ async function handleSTT(
   // instruction, quote, context and transform request remains byte-for-byte
   // on its established provider/model behavior.
   if (flowType === 'notetaker') {
+    if (!userId) return err('UNAUTHORIZED', 'Onboarding grants cannot transcribe Notetaker audio', 401)
     const audio = new Uint8Array(await file.arrayBuffer())
     const result = await transcribeNotetakerWithFallback({
       audio,
@@ -279,7 +308,7 @@ async function handleSTT(
         p_latency_ms: result.latencyMs,
       }).catch((e) => console.error('[pipeline] log_usage FAILED (bill at risk until retry/reconcile):', e))
     )
-    const fairUseHeader: Record<string, string> = ent.overFairUse ? { 'x-unmute-fair-use': 'notify' } : {}
+    const fairUseHeader: Record<string, string> = ent?.overFairUse ? { 'x-unmute-fair-use': 'notify' } : {}
     return json({
       ok: true,
       data: {
@@ -366,7 +395,7 @@ async function handleSTT(
   // Everything below runs AFTER the response is sent. Critical for latency.
   // Subscriptions are flat-rate: there is NO per-call debit. We still record
   // usage durably — it feeds the fair-use soft cap and analytics.
-  ctx.waitUntil(
+  if (userId) ctx.waitUntil(
     (async () => {
       await logUsageDurable(env, {
         p_user_id: userId,
@@ -386,7 +415,7 @@ async function handleSTT(
   const tDone = Date.now()
   // Fair-use soft cap: non-blocking notify header from the cached flag (no DB
   // call on the hot path). The transcription still returns normally.
-  const fairUseHeader: Record<string, string> = ent.overFairUse ? { 'x-unmute-fair-use': 'notify' } : {}
+  const fairUseHeader: Record<string, string> = ent?.overFairUse ? { 'x-unmute-fair-use': 'notify' } : {}
   return json({
     ok: true,
     data: {
@@ -431,7 +460,7 @@ async function handleSTTStream(
   req: Request,
   env: PipelineEnv,
   ctx: ExecutionContext,
-  userId: string
+  userId: string | null
 ): Promise<Response> {
   const tEnter = Date.now()
   if (!req.body) {
@@ -445,9 +474,18 @@ async function handleSTTStream(
   const prompt = (url.searchParams.get('prompt') || '').slice(0, 800)
 
   // ─── Subscription gate (KV — fast) — done while body buffers at edge ──
-  const ent = await getEntitlement(env, userId)
+  const onboardingAuthorized = userId === null && await authorizeOnboardingGrant(
+    env,
+    req.headers.get('X-Unmute-Onboarding-Grant') ?? '',
+    {
+      installationId: req.headers.get('X-Unmute-Installation') ?? '',
+      action: req.headers.get('X-Unmute-Onboarding-Action') ?? '',
+      audioSeconds: duration,
+    },
+  )
+  const ent = userId ? await getEntitlement(env, userId) : null
   const tBalanceChecked = Date.now()
-  if (!isEntitled(ent)) {
+  if (!onboardingAuthorized && !(ent && isEntitled(ent))) {
     return err('SUBSCRIPTION_INACTIVE', 'An active subscription is required', 402, {
       subscribe_url: SUBSCRIBE_URL,
     })
@@ -538,7 +576,7 @@ async function handleSTTStream(
   }))
 
   // ─── Fire-and-forget usage logging (flat-rate: no debit) ───────
-  ctx.waitUntil(
+  if (userId) ctx.waitUntil(
     (async () => {
       // Record usage durably — feeds the fair-use soft cap and analytics.
       await logUsageDurable(env, {
@@ -558,7 +596,7 @@ async function handleSTTStream(
 
   const tDone = Date.now()
   // Fair-use soft cap: non-blocking notify header from the cached flag.
-  const fairUseHeader: Record<string, string> = ent.overFairUse ? { 'x-unmute-fair-use': 'notify' } : {}
+  const fairUseHeader: Record<string, string> = ent?.overFairUse ? { 'x-unmute-fair-use': 'notify' } : {}
   return json({
     ok: true,
     data: {

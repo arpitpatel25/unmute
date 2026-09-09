@@ -9,9 +9,11 @@ export interface PipelineEnv {
   CEREBRAS_API_KEY: string // /v1/llm runs on Cerebras (gpt-oss-120b); STT stays Groq
   SUPABASE_URL: string
   SUPABASE_SERVICE_ROLE_KEY: string
+  ONBOARDING_GRANT_SECRET: string
 
   // KV namespace binding (declared in wrangler.toml)
   USER_BALANCE: KVNamespace
+  ONBOARDING_ALLOWANCE: DurableObjectNamespace
 }
 
 export interface PaymentsEnv {
