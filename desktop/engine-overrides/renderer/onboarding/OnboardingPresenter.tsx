@@ -5,7 +5,7 @@ import { emptyPresenter, reducePresenter, type PresenterCard, type PresenterMess
 import './presenter.css'
 
 type PresenterAction =
-  | { type: 'continue' | 'retry' | 'open-settings' | 'replay-clip' }
+  | { type: 'continue' | 'retry' | 'open-settings' | 'replay-clip' | 'complete-orientation' | 'open-sign-in' }
   | { type: 'choose-provider'; provider: 'claude' | 'codex' }
 
 type PresenterApi = {
@@ -35,6 +35,9 @@ function CompanionCard({ card }: { card: NonNullable<PresenterCard> }) {
       <button className="ob-presenter__primary" type="button" onClick={() => send({ type: card.kind === 'repair' ? 'retry' : 'continue' })}>
         {card.kind === 'repair' ? 'Try again' : 'Continue'}
       </button>}
+    {card.kind === 'success' && <button className="ob-presenter__primary" type="button" onClick={() => send({ type: card.title === 'One last step' ? 'open-sign-in' : 'complete-orientation' })}>
+      {card.title === 'One last step' ? 'Sign in' : 'Explore Unmute'}
+    </button>}
   </section>
 }
 

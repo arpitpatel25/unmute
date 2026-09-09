@@ -27,6 +27,7 @@ import { splitSpeech } from './speechSplit'
 import { render, type RenderResult } from './insertRender'
 import { canArmScratchpad, type CaptureSettings } from './captureGate'
 import { TEXT_DEDUP_WINDOW_MS, claimContent, createClaims } from './clipboardLedger'
+import { emitOnboardingReceipt } from '../../onboarding/receipts'
 
 /** Where pads live on disk. Unmute-owned, safe to delete, recreated on demand. */
 export const SCRATCHPAD_ROOT = join(homedir(), '.unmute', 'remote', 'scratchpad')
@@ -38,6 +39,7 @@ export function setScratchpadRoot(root: string): void { scratchpadRoot = root }
 let pad: Pad | null = null
 let armed = false
 let openSegmentId: string | null = null
+let activeCaptureId: string | null = null
 
 /** A pad a PREVIOUS RUN left on disk, deserialized at startup and waiting.
  *
@@ -384,7 +386,7 @@ export function adoptPersistedPad(): Pad | null {
  *  Dropping it at the capture boundary makes that impossible on EVERY terminal
  *  path — including the ones that never reach delivery at all (too-short,
  *  empty transcript, API error, cancel). */
-export function beginSegment(origin: Destination, now: number, observe: boolean): string {
+export function beginSegment(origin: Destination, now: number, observe: boolean, captureId?: string): string {
   if (pad && !armed) discardPadFiles(pad)
   if (!armed) pad = null
   if (!pad) pad = emptyPad(randomUUID(), origin, now)
@@ -400,6 +402,7 @@ export function beginSegment(origin: Destination, now: number, observe: boolean)
   // for the same reason a mid-capture switch does.
   else if (pad.origin !== origin) pad = { ...pad, origin, updatedAt: now }
   openSegmentId = randomUUID()
+  activeCaptureId = captureId ?? openSegmentId
   clearOwnSequenceTimer()
   ownSequenceDepth = 0
   suppressDetectedUpTo = 0
@@ -612,10 +615,19 @@ export function recordInsert(
     // TEXT_DEDUP_WINDOW_MS.
     return false
   }
+  const insertId = randomUUID()
   pad = addInsert(pad, {
-    id: randomUUID(), kind: i.kind, content: i.content,
+    id: insertId, kind: i.kind, content: i.content,
     atMs: i.atMs - pad.createdAt, now,
   })
+  if (activeCaptureId) {
+    emitOnboardingReceipt({
+      type: 'capture-observed',
+      captureId: activeCaptureId,
+      kind: i.kind === 'image' ? 'screenshot' : 'clipboard-text',
+      itemId: insertId,
+    })
+  }
   insertDecision('accepted', i, null, pad.entries.filter((e) => e.type === 'insert').length)
   schedulePersist()
   return true
@@ -1069,7 +1081,7 @@ export function composeWithInserts(
   segmentId: string | null,
   text: string,
   dest: Destination,
-  out?: { attachments: string[] },
+  out?: { attachments: string[]; itemIds?: string[] },
 ): string | null {
   if (armed || !pad) return null
   if (!pad.entries.some((e) => e.type === 'insert')) return null
@@ -1101,7 +1113,10 @@ export function composeWithInserts(
   // deliver. (An out-param rather than a richer return type because the null
   // return IS the byte-identity guarantee — see the header — and every caller
   // spells it `composeWithInserts(...) ?? output`.)
-  if (out) out.attachments = rendered.attachments
+  if (out) {
+    out.attachments = rendered.attachments
+    out.itemIds = composed.entries.filter((entry) => entry.type === 'insert').map((entry) => entry.id)
+  }
   return rendered.text
 }
 

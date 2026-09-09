@@ -15,6 +15,24 @@ export type OnboardingAllowanceHeaders = {
   'X-Unmute-Onboarding-Action': string
 }
 
+export type StoredAllowanceGrant = { grant: string; expiresAt: number }
+
+export class AllowanceGrantStore {
+  constructor(private readonly path: string) {}
+  async load(): Promise<StoredAllowanceGrant | null> {
+    try {
+      const value = JSON.parse(await fs.readFile(this.path, 'utf8')) as Partial<StoredAllowanceGrant>
+      return typeof value.grant === 'string' && typeof value.expiresAt === 'number' ? { grant: value.grant, expiresAt: value.expiresAt } : null
+    } catch { return null }
+  }
+  async save(value: StoredAllowanceGrant): Promise<void> {
+    await fs.mkdir(dirname(this.path), { recursive: true, mode: 0o700 })
+    await fs.writeFile(this.path, JSON.stringify(value), { encoding: 'utf8', mode: 0o600 })
+    await fs.chmod(this.path, 0o600)
+  }
+  async reset(): Promise<void> { await fs.rm(this.path, { force: true }) }
+}
+
 export class InstallationIdentityStore {
   constructor(private readonly path: string) {}
 
@@ -62,6 +80,10 @@ export class OnboardingAllowanceSession {
     this.grant = value.grant
     this.expiresAt = value.expiresAt
     this.finished = false
+  }
+
+  snapshotGrant(): StoredAllowanceGrant | null {
+    return this.grant && this.expiresAt > this.clock() ? { grant: this.grant, expiresAt: this.expiresAt } : null
   }
 
   arm(action: ActionId): void { this.action = action }

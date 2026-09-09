@@ -28,6 +28,7 @@ import { conciseLine } from '../agent/conversation'
 import { randomUUID } from 'node:crypto'
 import type { AgentConversationView } from '../agent/lifecycle'
 import { agentModel, agentModelLabel } from '../agent/modelPolicy'
+import { emitOnboardingReceipt } from '../../onboarding/receipts'
 
 const log = createLogger('notch-controller')
 
@@ -748,7 +749,11 @@ export class NotchController {
       const fill = (e as { fill: number }).fill
       if (Number.isFinite(fill)) this.deps.setSurfaceFill?.(fill)
     })
-    on('pocketFocusTask', (e) => this.onPocketFocusTask((e as { id: string }).id))
+    on('pocketFocusTask', (e) => {
+      const id = (e as { id: string }).id
+      emitOnboardingReceipt({ type: 'task-link-opened', taskId: id })
+      this.onPocketFocusTask(id)
+    })
     on('tap', () => this.onTap())
     on('collapsed', () => {
       // THE HOLD DIES WITH THE CARD. Whether or not they pressed it again, a

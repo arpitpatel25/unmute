@@ -207,6 +207,7 @@ interface SessionState {
    * delivers what is on screen.
    */
   typed?: { text: string }
+  captureItemIds: string[]
 }
 
 export interface SessionEndIdentity {
@@ -384,6 +385,14 @@ export class SessionManager {
       }
     }
   }
+  /** Onboarding observes the ordinary shipping delivery; it never substitutes
+   *  its own paste path. The composition item ids prove copied material landed. */
+  public onOnboardingDelivery: ((receipt: {
+    captureId: string
+    mode: 'dictation' | 'instruction'
+    changedSelection: boolean
+    includedItemIds: string[]
+  }) => void | Promise<void>) | null = null
   /** Fired synchronously when a composer delivery enters remoteDispatchQueue,
    * before onSessionEnded releases recording UI state. */
   public onComposerDictationQueued: ((token: string) => void) | null = null
@@ -1025,6 +1034,7 @@ export class SessionManager {
         openedByHeldKey,
         captureSegmentId: null,
         captureAttachments: [],
+        captureItemIds: [],
       }
       stampRoute(this.currentSession, route)
       console.log('[session] New session created:', sessionId, '| route:', route, '| heldKey:', openedByHeldKey)
@@ -1079,7 +1089,7 @@ export class SessionManager {
       const origin = padOriginOf(this.currentSession.route)
       console.log('[session] 📮 capture addressed to:', origin)
       this.currentSession.captureSegmentId = beginSegment(
-        origin, Date.now(), canObserve(getCaptureSettings()),
+        origin, Date.now(), canObserve(getCaptureSettings()), this.currentSession.sessionId,
       )
     } catch (e) { console.warn('[session] capture arm failed:', e) }
 
@@ -1447,10 +1457,11 @@ export class SessionManager {
       // an image gets pasted twice or not at all. It is filled only when a
       // composition actually happened; a null answer is the untouched fast path
       // and leaves the list exactly as it was (empty).
-      const captured = { attachments: [] as string[] }
+      const captured = { attachments: [] as string[], itemIds: [] as string[] }
       const composed = composeWithInserts(session.captureSegmentId, output, dest, captured)
       if (composed == null) return output
       session.captureAttachments = captured.attachments
+      session.captureItemIds = captured.itemIds
       recordCapturedDictation({
         id: session.sessionId,
         createdAt: session.createdAt,
@@ -1463,6 +1474,16 @@ export class SessionManager {
       console.warn('[session] capture compose failed — delivering speech alone:', e)
       return output
     }
+  }
+
+  private announceOnboardingDelivery(session: SessionState): void {
+    const mode = session.flowType === 'instruction' || !!session.instructionTranscript ? 'instruction' : 'dictation'
+    void this.onOnboardingDelivery?.({
+      captureId: session.sessionId,
+      mode,
+      changedSelection: mode === 'instruction' && !!session.selectedText?.trim(),
+      includedItemIds: [...session.captureItemIds],
+    })
   }
 
   /**
@@ -2226,6 +2247,7 @@ export class SessionManager {
               console.log('[session] Injecting output via paste...')
               await injectOutput(output, session.captureAttachments)
               if (!this.isCurrentSession(session)) return
+              this.announceOnboardingDelivery(session)
             } else {
               console.log('[session] Copying output to clipboard...')
               copyToClipboard(output)
@@ -2335,6 +2357,7 @@ export class SessionManager {
             console.log('[session] Injecting output via paste...')
             await injectOutput(output, session.captureAttachments)
             if (!this.isCurrentSession(session)) return
+            this.announceOnboardingDelivery(session)
           } else {
             console.log('[session] Copying output to clipboard...')
             copyToClipboard(output)
@@ -2805,6 +2828,7 @@ export class SessionManager {
             console.log('[session] Injecting output via paste...')
             await injectOutput(output, session.captureAttachments)
             if (!this.isCurrentSession(session)) return
+            this.announceOnboardingDelivery(session)
           } else {
             console.log('[session] Copying output to clipboard...')
             copyToClipboard(output)

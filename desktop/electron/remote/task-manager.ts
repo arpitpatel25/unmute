@@ -34,6 +34,7 @@ import { tapPty } from './pty-tap'
 import { ReconcileScheduler } from './reconcile-scheduler'
 import { AppendFileCache } from './append-file-cache'
 import { sessionLifecycleDev } from './session-lifecycle-devlog'
+import { emitOnboardingReceipt } from '../onboarding/receipts'
 
 type AgentDispatchMetadata = AgentMetadata & { agentRunId: string }
 type DesktopHandoffReceipt = { id: string; before: string[]; metadata: AgentDispatchMetadata; acknowledged: boolean; intent: string; startedAt: number }
@@ -1114,6 +1115,17 @@ export class TaskManager extends EventEmitter {
 
   override emit(event: string | symbol, ...args: any[]): boolean {
     if ((event === 'created' || event === 'updated') && args[0]?.continuationPending) return false
+    const task = args[0] as Task | undefined
+    if (event === 'created' && task) {
+      emitOnboardingReceipt({
+        type: 'task-created',
+        source: task.origin === 'unmute-agent' ? 'agent' : 'orchestrator',
+        taskId: task.id,
+        ...(task.cwd ? { cwd: task.cwd } : {}),
+      })
+    } else if (event === 'done' && task) {
+      emitOnboardingReceipt({ type: 'task-completed', taskId: task.id })
+    }
     return super.emit(event, ...args)
   }
 

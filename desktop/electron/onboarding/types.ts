@@ -38,9 +38,9 @@ export type OnboardingEvent =
   | { type: 'instruction-delivered'; captureId: string; target: string; changedSelection: boolean }
   | { type: 'capture-observed'; captureId: string; kind: 'clipboard-text' | 'screenshot'; itemId: string }
   | { type: 'capture-delivered'; captureId: string; includedItemIds: string[] }
-  | { type: 'task-created'; source: 'orchestrator' | 'agent'; taskId: string }
+  | { type: 'task-created'; source: 'orchestrator' | 'agent'; taskId: string; cwd?: string }
   | { type: 'task-completed'; taskId: string }
-  | { type: 'agent-task-linked'; taskId: string; href: string }
+  | { type: 'agent-task-linked'; taskId: string; href: string; cwd?: string }
   | { type: 'agent-text'; text: string }
   | { type: 'task-link-opened'; taskId: string }
   | { type: 'notetaker-started'; meetingId: string }

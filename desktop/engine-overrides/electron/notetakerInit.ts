@@ -76,6 +76,7 @@ import {
 import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
 import { generateNotes, DEFAULT_SUMMARY_INSTRUCTIONS, type MeetingNotes, type NoteProvider } from './notetaker/notesSummary'
 import { cleanupTranscript } from './notetaker/transcriptCleanup'
+import { emitOnboardingReceipt } from './paywall/onboarding/receipts'
 
 const log = createNotetakerLogger('init')
 
@@ -1060,6 +1061,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         mlog.error('could not write the in-progress meeting row', { error: (e as Error).message })
       }
       hooks.onSessionStart?.()
+      emitOnboardingReceipt({ type: 'notetaker-started', meetingId: sessionMeetingId })
       return tapResult
     }
     stop(): void {
@@ -1092,6 +1094,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       mlog.debug('native audio tap stopCapture() returned', { callDurationMs: Date.now() - nativeStopCalledAt, wasActive })
       if (wasActive) {
         hooks.onSessionStop?.(true)
+        emitOnboardingReceipt({ type: 'notetaker-stopped', meetingId })
         const endedAt = Date.now()
         // Surface a durable processing entry before any in-flight STT request
         // resolves. The app deliberately stays out of the way here: it opens
@@ -1185,7 +1188,10 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
               system.audioFileName,
               speakerSamplesForThisSession,
               wasZoomSession,
-            )
+            ).then(segments => {
+              emitOnboardingReceipt({ type: 'notetaker-saved', meetingId })
+              return segments
+            })
           })
           // Initial capture already has VAD chunks and their real timings.
           // Re-transcribing each entire channel here used to discard that
@@ -1196,6 +1202,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
           .catch((e) => {
             mlog.error('failed to transcribe/persist session', { error: (e as Error).message })
             markMeetingFailed(meetingId)
+            emitOnboardingReceipt({ type: 'notetaker-failed', meetingId, reason: (e as Error).message })
           })
       }
     }

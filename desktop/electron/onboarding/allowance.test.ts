@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { OnboardingAllowanceSession } from './allowance'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { AllowanceGrantStore, OnboardingAllowanceSession } from './allowance'
 
 test('headers exist only for the currently armed transcription action', () => {
   const session = new OnboardingAllowanceSession('installation_123456789', () => 100)
@@ -42,4 +45,14 @@ test('grant acquisition sends only the installation identifier', async () => {
   assert.equal(await session.acquire('https://pipeline.example'), true)
   assert.deepEqual(JSON.parse(String(requests[0].init.body)), { installationId: 'installation_123456789' })
   assert.equal(requests[0].init.headers && 'Authorization' in requests[0].init.headers, false)
+})
+
+test('grant survives an app relaunch without requesting a duplicate', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'unmute-allowance-'))
+  try {
+    const store = new AllowanceGrantStore(join(root, 'grant.json'))
+    await store.save({ grant: 'signed-token', expiresAt: 500 })
+    assert.deepEqual(await store.load(), { grant: 'signed-token', expiresAt: 500 })
+    assert.equal((await readFile(join(root, 'grant.json'))).length > 0, true)
+  } finally { await rm(root, { recursive: true, force: true }) }
 })

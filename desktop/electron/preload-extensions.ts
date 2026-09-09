@@ -26,6 +26,15 @@ export const paywallPreloadExtensions = {
   onboardingPresenterAction: (action: unknown): void => {
     ipcRenderer.send('onboarding:presenter-action', action)
   },
+  onboardingGetSnapshot: (): Promise<unknown> => ipcRenderer.invoke('onboarding:snapshot'),
+  onboardingReset: (): Promise<unknown> => ipcRenderer.invoke('onboarding:reset'),
+  onboardingCompleteOrientation: (): Promise<unknown> => ipcRenderer.invoke('onboarding:orientation-complete'),
+  onboardingFinishAfterSignIn: (signedIn: boolean): Promise<unknown> => ipcRenderer.invoke('onboarding:finish-after-sign-in', signedIn),
+  onboardingOnNavigate: (cb: (destination: 'orchestrator' | 'notetaker' | 'account') => void): (() => void) => {
+    const handler = (_event: unknown, destination: 'orchestrator' | 'notetaker' | 'account') => cb(destination)
+    ipcRenderer.on('onboarding:navigate', handler)
+    return () => { ipcRenderer.removeListener('onboarding:navigate', handler) }
+  },
   // App version (for the Settings footer build-number display)
   paywallAppVersion: (): Promise<string> =>
     ipcRenderer.invoke('paywall:app-version'),

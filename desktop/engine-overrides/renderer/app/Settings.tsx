@@ -39,13 +39,6 @@ import Privacy from './Privacy'
 import MemoryManager from '../remote/MemoryManager'
 import { HELP_PAGES, HelpPage, type HelpPageId } from './help'
 import { selectableMacInputs, AUTOMATIC_DEVICE_ID } from '../widget/micSource'
-// Pack A owns the onboarding gate and exports the reset. Importing it here is a
-// module cycle (App → Settings → App) that resolves under ESM because it is only
-// ever CALLED from a click handler, never read at module-evaluation time.
-// Clearing a key by hand instead would be wrong: `resetOnboarding` clears BOTH
-// the version key and the legacy boolean, and clearing only one of them replays
-// the three-screen what's-new instead of the full flow.
-import { resetOnboarding } from './App'
 import {
   SETTINGS_SECTIONS,
   SectionHeader,
@@ -141,6 +134,7 @@ interface SettingsApi {
   >
   paywallOnUpdateStatus?: (cb: (s: UpdateStatus) => void) => () => void
   paywallInstallUpdate?: () => Promise<boolean>
+  onboardingReset?: () => Promise<unknown>
 }
 
 /** Mirror of `UpdateStatus` in electron/paywall-glue.ts — the live phases the
@@ -1154,12 +1148,7 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
             <SettingRow label="Replay onboarding" description="Walk through the welcome and setup steps again">
               <button
                 onClick={() => {
-                  // Pack A's reset, not a hand-rolled removeItem: it clears the
-                  // version key AND the legacy boolean, which is what puts you
-                  // back at the start of the full flow rather than the
-                  // three-screen what's-new.
-                  resetOnboarding()
-                  location.reload()
+                  void api().onboardingReset?.()
                 }}
                 className="px-4 py-2 rounded-full border border-border text-[12.5px] font-semibold text-ink-60 hover:bg-cream-mid hover:border-border-md transition-all duration-200"
               >
