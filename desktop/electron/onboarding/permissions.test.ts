@@ -15,7 +15,7 @@ test('system audio preflight starts and stops the native tap exactly once', asyn
   const result = await preflightSystemAudio({
     start: async () => { calls.push('start') },
     stop: async () => { calls.push('stop') },
-    status: async () => 'granted',
+    status: () => 'granted',
   })
 
   assert.deepEqual(calls, ['start', 'stop'])
@@ -27,7 +27,7 @@ test('system audio preflight still stops after a denied start', async () => {
   const tap: SystemAudioTapAdapter = {
     start: async () => { calls.push('start'); throw new Error('TCC denied') },
     stop: async () => { calls.push('stop') },
-    status: async () => 'denied',
+    status: () => 'denied',
   }
 
   assert.equal(await preflightSystemAudio(tap), 'denied')
@@ -66,14 +66,14 @@ function permissionHarness(
   calls: string[] = [],
 ): PermissionAdapters {
   return {
-    microphoneStatus: async () => 'not-determined',
-    requestMicrophone: async () => { calls.push('microphone'); return 'granted' },
+    microphoneStatus: () => 'not-determined',
+    requestMicrophone: () => { calls.push('microphone'); return 'granted' },
     accessibilityStatus: async () => values.accessibility ?? false,
     requestAccessibility: async () => { calls.push('accessibility') },
     inputMonitoringStatus: async () => values.inputMonitoring ?? false,
     requestInputMonitoring: async () => { calls.push('input-monitoring') },
     systemAudio: {
-      start: async () => {}, stop: async () => {}, status: async () => 'unknown',
+      start: async () => {}, stop: async () => {}, status: () => 'unknown',
     },
   }
 }
