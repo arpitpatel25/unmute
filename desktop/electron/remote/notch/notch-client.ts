@@ -446,6 +446,8 @@ export type NotchEvent =
    *  is released on collapse too — a mute the user can no longer see is one
    *  they cannot undo. */
   | { type: 'backgroundAudio'; muted: boolean }
+  /** A committed choice from the expanded surface's own size control. */
+  | { type: 'surfaceFillChanged'; fill: number }
   | { type: 'pocketRelease' }
   /** Back to the full task. The pocket is a GLANCE state — it exists
    *  because the panel is large, not because the panel is wrong, so the

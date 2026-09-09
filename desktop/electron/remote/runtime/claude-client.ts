@@ -1,7 +1,7 @@
 import { ClaudeTaskSession, type ClaudeTaskOptions, type ClaudeTaskAnswer } from '../claude/task-session'
 import type { TaskInput } from '../task-input'
 import type { RuntimeRpcClient } from './rpc'
-import type { ClaudeRuntimeEvent, ClaudeRuntimeState } from './claude-service'
+import { CLAUDE_RUNTIME_RELEASED, type ClaudeRuntimeEvent, type ClaudeRuntimeState } from './claude-service'
 
 /** UI-side projection. Provider pipes and continuations belong to the daemon. */
 export class PersistentClaudeTaskSession extends ClaudeTaskSession {
@@ -60,20 +60,42 @@ export class PersistentClaudeTaskSession extends ClaudeTaskSession {
     this.replaying = false
     for (const event of this.buffered.splice(0).sort((a, b) => a.sequence - b.sequence)) this.apply(event)
   }
+  private async sendAfterReopen<T>(send: () => Promise<T>): Promise<T> {
+    try { return await send() }
+    catch (error) {
+      // This rejection happens before the daemon can hand the message to a
+      // provider, so retrying cannot duplicate a turn. Connection errors and
+      // timeouts remain uncertain and must never be retried automatically.
+      if ((error as Error).message !== CLAUDE_RUNTIME_RELEASED) throw error
+      this.attached = undefined
+      this.replaying = true
+      this.buffered = []
+      await this.start()
+      return send()
+    }
+  }
   private apply(record: ClaudeRuntimeEvent): void {
     if (record.sequence <= this.sequence) return
     this.sequence = record.sequence
     this.runtimeState = record.state
     this.models = record.state.models
+    // The daemon may release an idle provider process while this client stays
+    // connected. Forget the completed attachment so the next send calls open
+    // again and resumes the same durable conversation identity.
+    if (record.event.type === 'closed') {
+      this.attached = undefined
+      this.replaying = true
+      this.buffered = []
+    }
     this.remoteOptions.onEvent(record.event)
   }
   override async send(text: string, images: string[] = [], submissionId?: string, ordered?: TaskInput[], newTurnOnly = false) {
     await this.start()
-    return this.rpc.call<{ submissionId: string; sessionId: string }>('claude.send', this.sessionId, text, images, submissionId, ordered, newTurnOnly)
+    return this.sendAfterReopen(() => this.rpc.call<{ submissionId: string; sessionId: string }>('claude.send', this.sessionId, text, images, submissionId, ordered, newTurnOnly))
   }
   override async sendNewTurn(text: string, images: string[], submissionId: string, ordered?: TaskInput[]) {
     await this.start()
-    return this.rpc.call<import('../task-followup').NewTurnOutcome>('claude.sendNewTurn', this.sessionId, text, images, submissionId, ordered)
+    return this.sendAfterReopen(() => this.rpc.call<import('../task-followup').NewTurnOutcome>('claude.sendNewTurn', this.sessionId, text, images, submissionId, ordered))
   }
   override async answer(id: string, decision: ClaudeTaskAnswer): Promise<void> {
     this.runtimeState = await this.rpc.call('claude.answer', this.sessionId, id, decision)

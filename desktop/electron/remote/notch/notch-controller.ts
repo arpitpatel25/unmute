@@ -216,6 +216,8 @@ export interface NotchControllerDeps {
   setDoorbell(on: boolean): void
   getLastSeen(): number
   setLastSeen(ms: number): void
+  /** Persist a size chosen on the native expanded surface. */
+  setSurfaceFill?(fill: number): void
   // scratchpad — each maps 1:1 onto the SAME internals the scratchpad:* IPC
   // handlers call. Optional so a host that does not wire the pad simply never
   // sees these events, exactly like `opened`.
@@ -597,6 +599,10 @@ export class NotchController {
     })
     on('agentRetry', () => { void this.deps.agentRetry?.().catch(error => this.agentUnavailable((error as Error).message)) })
     on('agentNewConversation', () => { void this.deps.agentNewConversation?.().catch(error => this.agentUnavailable((error as Error).message)) })
+    on('surfaceFillChanged', e => {
+      const fill = (e as { fill: number }).fill
+      if (Number.isFinite(fill)) this.deps.setSurfaceFill?.(fill)
+    })
     on('pocketFocusTask', (e) => this.onPocketFocusTask((e as { id: string }).id))
     on('tap', () => this.onTap())
     on('collapsed', () => {

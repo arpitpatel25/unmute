@@ -368,6 +368,8 @@ interface RemoteSettings {
   voiceFeedback: boolean
   /** Share of the screen an expanded surface fills: 0.7 | 0.8 | 0.9. */
   surfaceFill: number
+  /** Ground tone beneath expanded surfaces. */
+  surfaceTone: 'spaceGray' | 'black' | 'glass'
   /** Whether the notch and recording pill appear in screenshots and sharing. */
   showInScreenCapture: boolean
   // DECIDED: docked mode — a compact bottom-right pill (running/stuck counts)
@@ -451,6 +453,7 @@ const settings = new Store<RemoteSettings>({
     notchTerminalAutoExpand: false,
     voiceFeedback: false,
     surfaceFill: 0.8,
+    surfaceTone: 'glass',
     showInScreenCapture: true,
     overlayDocked: true,
     librarianWriteEnabled: false,
@@ -5270,6 +5273,19 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return true
   }
 
+  // ONE WRITER FOR BOTH SIZE CONTROLS. Settings invokes it through IPC; the
+  // live notch invokes it through its helper event. Whichever the user changes
+  // last becomes the value every later expansion receives at bootstrap.
+  const persistSurfaceFill = (fill: number): number => {
+    const value = Number.isFinite(fill)
+      ? Math.round(Math.min(Math.max(fill, 0.4), 0.95) * 100) / 100
+      : 0.8
+    settings.set('surfaceFill', value)
+    notchClient?.send({ type: 'surfaceFill', fill: value })
+    log.event('surface-fill-set', { fill: value })
+    return value
+  }
+
   // ── Notch shell (native Swift helper) ──
   // The single task/attention surface (spec 2026-07-24). Spawned by THIS signed
   // process (like cua-driver) so its NSPanel carries the app's identity and never
@@ -5295,7 +5311,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           appearance: settings.get('surfaceAppearance') || 'solid',
           // Sent at bootstrap, not only on change: otherwise a black surface
           // paints Space Gray for the first frames of every launch.
-          surfaceTone: settings.get('surfaceTone') || 'spaceGray',
+          surfaceTone: settings.get('surfaceTone') || 'glass',
           surfaceFill: settings.get('surfaceFill') ?? 0.8,
           showInScreenCapture: screenCaptureVisibility(settings.get('showInScreenCapture')).show,
           terminalAutoExpand: settings.get('notchTerminalAutoExpand') === true,
@@ -5463,6 +5479,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           voiceTargetMoved()
         },
         opened: (id) => mgr.opened(id),
+        setSurfaceFill: persistSurfaceFill,
         remoteKey: () => getRemoteKey(),
         // THE IMPORT RAIL. Sessions this machine has and unmute does not.
         listImportable: async () => {
@@ -6882,13 +6899,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // The same bounds live in SurfaceSizeStep on the Swift side; both clamp,
   // because the notch process outlives any one engine run.
   ipcMain.handle('remote:set-surface-fill', async (_e, fill: number) => {
-    const v = Number.isFinite(fill)
-      ? Math.round(Math.min(Math.max(fill, 0.4), 0.95) * 100) / 100
-      : 0.8
-    settings.set('surfaceFill', v)
-    notchClient?.send({ type: 'surfaceFill', fill: v })
-    log.event('surface-fill-set', { fill: v })
-    return v
+    return persistSurfaceFill(fill)
   })
   ipcMain.handle('remote:set-show-in-screen-capture', async (_e, on: boolean) => {
     const visibility = screenCaptureVisibility(!!on)
@@ -6970,7 +6981,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return !!on
   })
 
-  ipcMain.handle('remote:get-surface-tone', async () => settings.get('surfaceTone') || 'spaceGray')
+  ipcMain.handle('remote:get-surface-tone', async () => settings.get('surfaceTone') || 'glass')
   // Validated against the list, not against one name. The ternary this
   // replaces rewrote every value that was not exactly 'black' back to
   // 'spaceGray', so a third tone would have been accepted by the renderer,
@@ -6978,7 +6989,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // to do nothing rather than one that fails.
   const SURFACE_TONES = ['spaceGray', 'black', 'glass'] as const
   ipcMain.handle('remote:set-surface-tone', async (_e, v: string) => {
-    const value = (SURFACE_TONES as readonly string[]).includes(v) ? v : 'spaceGray'
+    const value = (SURFACE_TONES as readonly string[]).includes(v) ? v : 'glass'
     settings.set('surfaceTone', value)
     notchClient?.send({ type: 'surfaceTone', value } as never)
     log.event('surface-tone-set', { value })

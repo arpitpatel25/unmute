@@ -157,6 +157,15 @@ function put(h: Harness, t: TaskLite): void {
   h.flush()
 }
 
+test('a size chosen on the live notch becomes the persisted expanded size', () => {
+  const stored: number[] = []
+  const h = setup({ deps: { setSurfaceFill: (fill: number) => { stored.push(fill) } } as unknown as Partial<NotchControllerDeps> })
+
+  h.client.fire({ type: 'surfaceFillChanged', fill: 0.79 } as unknown as NotchEvent)
+
+  assert.deepEqual(stored, [0.79])
+})
+
 test('rendered request identity rejects stale chips and composer answers before delivery', async () => {
   const A = { requestId: 'A', stepId: '0' }, B = { requestId: 'B', stepId: '0' }
   const sent: unknown[] = []

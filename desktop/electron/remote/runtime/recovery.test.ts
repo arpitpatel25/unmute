@@ -56,6 +56,51 @@ test('Claude reconnect reuses live work, but reopens a dead driver with the same
   } finally { service.close(); await rm(root, { recursive: true, force: true }) }
 })
 
+test('an idle-released Claude process resumes transparently on the next send', async () => {
+  const { PersistentClaudeTaskSession } = await import('./claude-client')
+  const root = await mkdtemp(join(tmpdir(), 'claude-idle-resume-'))
+  let clock = 1_000_000
+  const drivers: Array<{ alive: boolean; sent: string[]; newTurns: string[] }> = []
+  let server!: RuntimeRpcServer
+  const service = new ClaudeRuntimeService(root, event => server.emit('claude.event', event), options => {
+    const driver = {
+      alive: false, busy: false, models: [], followupBlocked: false, followupUnavailable: false,
+      sent: [] as string[], newTurns: [] as string[],
+      async start() { this.alive = true },
+      async send(text: string) { this.sent.push(text); return { submissionId: 'next', sessionId: options.sessionId! } },
+      async sendNewTurn(text: string) { this.newTurns.push(text); return { kind: 'accepted', submissionId: 'followup' } },
+      close() { if (!this.alive) return; this.alive = false; options.onEvent({ type: 'closed' }) },
+    }
+    drivers.push(driver)
+    return driver as unknown as ClaudeTaskSession
+  }, { idleMs: 60_000, sweepMs: 60_000, now: () => clock })
+  server = new RuntimeRpcServer(join(root, 's'), (method, args) => service.invoke(method.replace('claude.', ''), args))
+  await server.listen()
+  const rpc = new RuntimeRpcClient(join(root, 's'))
+  const driver = new PersistentClaudeTaskSession(rpc, {
+    binary: 'claude', cwd: root, sessionId: 'conversation', resume: true, onEvent() {},
+  })
+  try {
+    await driver.start()
+    clock += 61_000
+    service.sweepIdle()
+
+    const sent = await driver.send('continue our conversation')
+
+    assert.deepEqual(sent, { submissionId: 'next', sessionId: 'conversation' })
+    assert.equal(drivers.length, 2)
+    assert.deepEqual(drivers[1].sent, ['continue our conversation'])
+
+    clock += 61_000
+    service.sweepIdle()
+    const followup = await driver.sendNewTurn('and keep going', [], 'followup')
+
+    assert.deepEqual(followup, { kind: 'accepted', submissionId: 'followup' })
+    assert.equal(drivers.length, 3)
+    assert.deepEqual(drivers[2].newTurns, ['and keep going'])
+  } finally { driver.detach(); rpc.disconnect(); service.close(); await server.close(); await rm(root, { recursive: true, force: true }) }
+})
+
 test('Claude checkpoint edits check worker capability before opening and preserve the checkpoint across RPC', async () => {
   const { PersistentClaudeTaskSession } = await import('./claude-client')
   const root = await mkdtemp(join(tmpdir(), 'claude-edit-worker-'))

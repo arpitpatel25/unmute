@@ -327,7 +327,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // options exist because an older surface cannot follow the system slider, and
   // because an always-on-top panel is a reasonable thing to want solid.
   const [surfaceAppearance, setSurfaceAppearance] = useState<'system' | 'glass' | 'solid'>('system')
-  const [surfaceTone, setSurfaceTone] = useState<SurfaceTone>('spaceGray')
+  const [surfaceTone, setSurfaceTone] = useState<SurfaceTone>('glass')
   const [notetakerInCapture, setNotetakerInCapture] = useState(false)
   // DEFAULT ON, matching the setting it writes (remote/init.ts:198 —
   // `overlayAutoPresent: true`). A surface that never comes forward by itself is
@@ -546,7 +546,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
     // rewrites every unrecognised value back to Space Gray.
     const v: SurfaceTone = SURFACE_TONES.includes(value as SurfaceTone)
       ? (value as SurfaceTone)
-      : 'spaceGray'
+      : 'glass'
     setSurfaceTone(v)
     void api().setSurfaceTone?.(v)
   }

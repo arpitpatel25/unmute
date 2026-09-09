@@ -725,9 +725,8 @@ final class AppController: NSObject, NotchResizing {
                 model.expandedContentReady = true
             }
         }
-        // Each visit starts at the hard-coded size. A size dragged out for one
-        // look at a task is not a preference — carrying it across would make the
-        // surface's size a hidden setting the user never chose to persist.
+        // A committed size choice is persisted by the engine and becomes the
+        // default for later visits. Clear only any unfinished visit-local state.
         if state != .task && state != .cockpit {
             userScale = 1
             temporarySurfaceFill = nil
@@ -1157,7 +1156,10 @@ final class AppController: NSObject, NotchResizing {
         // never ignored: silently doing nothing would read as a dead control.
         guard isExpanded(model.state) else { return }
         userScale = 1
-        temporarySurfaceFill = SurfaceSizeStep.clamp(fill)
+        let chosen = SurfaceSizeStep.clamp(fill)
+        NotchGeometry.SurfaceFill.user = chosen
+        temporarySurfaceFill = nil
+        model.emit(.surfaceFillChanged(fill: chosen))
         refreshSurfaceControlAvailability()
         refit(animated: true)
     }

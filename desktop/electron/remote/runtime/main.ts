@@ -56,5 +56,42 @@ async function main(): Promise<void> {
   }
   process.once('SIGTERM', shutdown)
   process.once('SIGINT', shutdown)
+
+  // A DAEMON THAT HOLDS NOTHING SHOULD NOT BE RUNNING.
+  //
+  // Once the session reaper has let go of everything, this process is an empty
+  // shell that outlives every app launch — and there is one per runtime ROLE,
+  // so they accumulate quietly over months. Six were found alive on 2026-09-09,
+  // the oldest twenty hours old, still holding finished conversations.
+  //
+  // SAFE BY CONSTRUCTION, because the client already handles our absence: a
+  // connect that fails with ENOENT/ECONNREFUSED spawns a fresh runtime (see
+  // runtime/client.ts). Exiting therefore costs a cold start on the next
+  // message and nothing else — no lost work, no lost conversation.
+  //
+  // CONSERVATIVE ON PURPOSE. It exits only when Claude has no sessions AND
+  // nothing is mid-turn AND no other provider was ever asked for. A runtime
+  // that has done Codex or Agent work stays up: those services keep state this
+  // check cannot see, and guessing wrong there would interrupt real work to
+  // save a few megabytes.
+  let emptySince = Date.now()
+  const idleExit = setInterval(() => {
+    const holding = (claude?.sessionCount ?? 0) > 0 || claude?.busy === true
+      || codex !== undefined || agent !== undefined
+    if (holding) { emptySince = Date.now(); return }
+    const emptyFor = Date.now() - emptySince
+    if (emptyFor < IDLE_EXIT_MS) return
+    diagnostic('runtime-idle-exit', { emptyMs: emptyFor })
+    shutdown()
+  }, 5 * 60_000)
+  ;(idleExit as { unref?: () => void }).unref?.()
 }
+
+/**
+ * How long a runtime may sit holding nothing before it stands down. Generous:
+ * the cost of being wrong is a cold start, but the cost of thrashing is a
+ * respawn on every message, so this wants to be well past any normal gap
+ * between turns.
+ */
+const IDLE_EXIT_MS = 30 * 60_000
 void main().catch(error => { console.error(error); process.exitCode = 1 })
