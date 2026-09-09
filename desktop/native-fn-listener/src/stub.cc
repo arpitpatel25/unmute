@@ -15,11 +15,23 @@ Napi::Value IsAccessibilityTrusted(const Napi::CallbackInfo& info) {
   return Napi::Boolean::New(info.Env(), false);
 }
 
+Napi::Value IsInputMonitoringTrusted(const Napi::CallbackInfo& info) {
+  return Napi::Boolean::New(info.Env(), false);
+}
+
+Napi::Value RequestInputMonitoring(const Napi::CallbackInfo& info) {
+  return Napi::Boolean::New(info.Env(), false);
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("start", Napi::Function::New(env, Start));
   exports.Set("stop", Napi::Function::New(env, Stop));
   exports.Set("isAccessibilityTrusted",
               Napi::Function::New(env, IsAccessibilityTrusted));
+  exports.Set("isInputMonitoringTrusted",
+              Napi::Function::New(env, IsInputMonitoringTrusted));
+  exports.Set("requestInputMonitoring",
+              Napi::Function::New(env, RequestInputMonitoring));
   return exports;
 }
 

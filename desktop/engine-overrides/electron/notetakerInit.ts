@@ -80,6 +80,24 @@ import { cleanupTranscript } from './notetaker/transcriptCleanup'
 const log = createNotetakerLogger('init')
 
 type GestureScreenshot = { path: string; capturedAt: number; mode: 'fullscreen' | 'region' }
+
+let onboardingSystemAudioTap: NativeAudioTap | null = null
+
+/** Trigger the real Core Audio tap without creating a meeting row. This is
+ *  intentionally tiny: onboarding uses it only to make macOS show/revalidate
+ *  the System Audio permission, then tears the tap down immediately. */
+export async function preflightNotetakerSystemAudio(): Promise<'unknown' | 'granted' | 'denied'> {
+  const tap = onboardingSystemAudioTap
+  if (!tap) return 'unknown'
+  try {
+    tap.startCapture(process.pid, () => {})
+    return 'granted'
+  } catch {
+    return 'denied'
+  } finally {
+    try { tap.stopCapture() } catch { /* start may have failed before activation */ }
+  }
+}
 // The repository's deliberately small Electron test declaration omits the
 // protocol surface, while production Electron provides it. Keep the local
 // shape narrow instead of weakening the rest of this module to `any`.
@@ -576,8 +594,10 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     nativeAudioTap = require('unmute-native-audio-tap') as NativeAudioTap
+    onboardingSystemAudioTap = nativeAudioTap
     log.event('native-audio-tap-loaded')
   } catch (e) {
+    onboardingSystemAudioTap = null
     log.error('unmute-native-audio-tap unavailable — meeting notetaker disabled', { error: (e as Error).message })
   }
   const ax = loadNativeAx()
