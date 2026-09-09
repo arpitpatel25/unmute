@@ -66,6 +66,73 @@ function setup(onPrepare: () => void = () => {}) {
 }
 const ended = { taskId: 't', fence: { sessionId: 's', generation: 1, turnId: 'turn1' }, outcome: 'completed' as const }
 
+test('an explicit retry sends preserved text after a terminal attachment staging failure', async () => {
+  const store = new TaskDraftStore()
+  store.setText('t', 'send this without the missing image')
+  store.addAttachment('t', { id: 'kept', path: '/owned/kept.png', mimeType: 'image/png', name: 'kept.png' })
+  await assert.rejects(store.stageAttachment('t', async () => { throw new Error('ENOENT') }), /ENOENT/)
+
+  let delivered: import('./task-draft').TaskDraft | undefined
+  const queue = new TaskFollowupCoordinator({
+    store,
+    assetsRoot: '/unused',
+    scope: () => ({ provider: 'codex', sessionId: 's' }),
+    gate: () => ({ kind: 'idle', sessionId: 's', generation: 1, blocked: false }),
+    deliver: async () => { throw new Error('idle submission must be immediate') },
+    immediate: async (_id, onSnapshot) => {
+      assert.equal(store.get('t').error, undefined)
+      const snapshot = store.snapshot('t')!
+      onSnapshot?.(snapshot)
+      delivered = structuredClone(snapshot)
+      store.acceptSnapshot('t', snapshot)
+      return { kind: 'accepted' }
+    },
+    changed: () => {},
+  })
+
+  assert.deepEqual(await queue.submit('t'), { kind: 'accepted' })
+  assert.deepEqual(delivered, {
+    text: 'send this without the missing image',
+    attachments: [{ id: 'kept', path: '/owned/kept.png', mimeType: 'image/png', name: 'kept.png', offset: 35 }],
+  })
+  assert.equal(store.snapshot('t'), null)
+})
+
+test('a failure created while Send waits stays retained until another explicit Send', async () => {
+  const store = new TaskDraftStore()
+  store.setText('t', 'do not send this on the failing attempt')
+  let fail!: (error: Error) => void
+  const staging = store.stageAttachment('t', () => new Promise((_resolve, reject) => { fail = reject }))
+    .then(() => undefined, error => error as Error)
+  let deliveries = 0
+  const queue = new TaskFollowupCoordinator({
+    store,
+    assetsRoot: '/unused',
+    scope: () => ({ provider: 'codex', sessionId: 's' }),
+    gate: () => ({ kind: 'idle', sessionId: 's', generation: 1, blocked: false }),
+    deliver: async () => { throw new Error('idle submission must be immediate') },
+    immediate: async (_id, onSnapshot) => {
+      deliveries++
+      const snapshot = store.snapshot('t')!
+      onSnapshot?.(snapshot)
+      store.acceptSnapshot('t', snapshot)
+      return { kind: 'accepted' }
+    },
+    changed: () => {},
+  })
+
+  const firstSend = queue.submit('t')
+  await new Promise(resolve => setImmediate(resolve))
+  fail(new Error('ENOENT'))
+  assert.match((await staging)!.message, /ENOENT/)
+  assert.deepEqual(await firstSend, { kind: 'retained', reason: 'Attachment staging failed. Your draft is kept.' })
+  assert.equal(deliveries, 0)
+  assert.match(store.get('t').error!, /ENOENT/)
+
+  assert.deepEqual(await queue.submit('t'), { kind: 'accepted' })
+  assert.equal(deliveries, 1)
+})
+
 test('rendered question context scopes duplicate acknowledgments and never enters the new-turn queue', async () => {
   const store = new TaskDraftStore(); store.setText('t', 'same text')
   const A = { requestId: 'A', stepId: '0' }, B = { requestId: 'B', stepId: '0' }

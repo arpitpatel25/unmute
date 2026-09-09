@@ -320,6 +320,23 @@ export class TaskDraftStore {
     return !this.attachmentStageFailures.has(taskId) && !(this.get(taskId).operations?.length)
   }
 
+  /** Drop only attachment handoffs that have already ended in failure. This is
+   * called by an explicit later Send: live staging and reserved work remain a
+   * fence, while a missing scratchpad file cannot poison the draft forever. */
+  discardFailedAttachmentStages(taskId: string): number {
+    const draft = this.get(taskId)
+    const failed = (draft.operations ?? []).filter(operation => operation.phase === 'failed')
+    const hadUnreservedFailure = this.attachmentStageFailures.delete(taskId)
+    if (!hadUnreservedFailure && !failed.length) return 0
+    this.stageErrors.delete(taskId)
+    for (const operation of failed) this.canceledOperations.add(`${taskId}:${operation.id}`)
+    draft.operations = draft.operations?.filter(operation => operation.phase !== 'failed')
+    if (!draft.operations?.length) delete draft.operations
+    if (failed.length) this.save(taskId, draft)
+    else this.changed(taskId)
+    return failed.length + (hadUnreservedFailure ? 1 : 0)
+  }
+
   private moveOperations(draft: TaskDraft, text: string): DraftOperation[] | undefined {
     return draft.operations?.map(o => {
       const offset = movedOffset(draft.text, text, o.offset)

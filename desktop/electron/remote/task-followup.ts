@@ -97,6 +97,7 @@ export class TaskFollowupCoordinator {
   private async performSubmit(id: string, submission: SubmissionEntry): Promise<SubmitDraftOutcome> {
     const { store } = this.deps, scope = this.deps.scope(id)
     if (!scope) return retained('This conversation does not support queued follow-ups.')
+    store.discardFailedAttachmentStages(id)
     if (!await store.whenSettled(id)) return retained('Attachment staging failed. Your draft is kept.')
     const content = (d: TaskDraft) => JSON.stringify({ text: d.text, attachments: d.attachments, operations: d.operations ?? [] })
     let verifiedSnapshot: TaskDraft | undefined

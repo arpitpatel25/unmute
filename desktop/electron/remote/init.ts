@@ -1760,12 +1760,17 @@ async function performSendTaskDraft(id: string, source: TaskReplySource, onSnaps
   // still in flight; otherwise the text is sent alone and the image appears in
   // a now-empty composer a moment later.
   emitTaskReplyStep(log, trace, 'attachment-staging-barrier', 'started')
+  const discarded = taskDrafts.discardFailedAttachmentStages(id)
   if (!(await taskDrafts.whenSettled(id))) {
     emitTaskReplyStep(log, trace, 'attachment-staging-barrier', 'failed', { draftRetained: true })
     finishTaskReplyTrace(log, trace, 'failed', { reason: 'attachment-staging-failed', draftDisposition: 'retained' })
-    log.warn('draft send refused after image staging failure', { taskId: id })
+    log.warn('draft send refused while image staging remains unsettled', { taskId: id })
     notchController?.toast('The image is not attached yet. Paste it again before sending.')
     return false
+  }
+  if (discarded) {
+    log.warn('discarded failed image staging before explicit draft retry', { taskId: id, discarded })
+    notchController?.toast('The missing image was removed. Sending your reply without it.')
   }
   emitTaskReplyStep(log, trace, 'attachment-staging-barrier', 'succeeded')
   const draft = taskDrafts.snapshot(id)
