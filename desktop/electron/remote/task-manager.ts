@@ -2303,6 +2303,10 @@ export class TaskManager extends EventEmitter {
   applyHubPatch(p: HubPatch): void {
     const task = this.tasks.get(p.taskId)
     if (!task) return
+    if (task.codexRolloutId && p.threadId && task.codexRolloutId !== p.threadId) {
+      sessionLifecycleDev('stale-thread-patch-ignored', { taskId: task.id, sessionId: task.codexRolloutId, receivedSessionId: p.threadId })
+      return
+    }
     const learnedRolloutId = !!p.threadId && !task.codexRolloutId
     if (learnedRolloutId) task.codexRolloutId = p.threadId
     if (p.name && !task.name) task.name = p.name

@@ -631,7 +631,12 @@ export class CodexHub {
   /** Reattach the persisted conversation without creating a new thread or
    * replaying the user's last prompt. Process lifetime is not session lifetime. */
   async resumeThread(taskId: string, threadId: string, o: StartThreadOpts, force = false): Promise<void> {
-    if (!force && this.byTask.has(taskId) && !this.byTask.get(taskId)?.disconnected && this.server?.running) return
+    if (!force && this.byTask.get(taskId)?.threadId === threadId && !this.byTask.get(taskId)?.disconnected && this.server?.running) return
+    if (this.byTask.has(taskId) && this.byTask.get(taskId)!.threadId !== threadId) {
+      const gate = this.followupGate(taskId)
+      if (gate.kind !== 'idle' || gate.blocked) throw new Error('Cannot replace a busy or blocked Codex session binding')
+      this.release(taskId)
+    }
     this.deps.onPatch({ taskId, history: { phase: 'loading' } })
     const previous = this.byTask.get(taskId)
     this.registrations++

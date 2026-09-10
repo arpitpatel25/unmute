@@ -1,5 +1,63 @@
 # Continuation confirmation and diagnostics
 
+## 2026-09-10 field diagnosis and recovery
+
+The job-listing task `35085ff1-08ed-4390-93dc-b249e6091941` retained parent
+`01a08661-ed02-79a1-84e0-7bc476aac6fd` in both `sessionId` and `codexRolloutId`.
+Its continuity-v4 fork receipt instead records child
+`01a08681-5ffb-7410-a8e6-628443caf4f6`. The child's rollout also records this
+parent, and contains the later work and a completed turn. The parent and child
+are not interchangeable.
+
+The surviving v4 runtime's log repeatedly reports an active-writer conflict on
+the **parent**, including 2026-09-09 22:01:07 UTC. This was not merely a wrong
+worker-generation route: Unmute reached v4 but supplied the stale thread ID.
+The installed GUI had canonical-identity recovery code, but the surviving
+runtime did not implement `codex.identity`; both advertised protocol version 4.
+A GUI restart cannot replace code already loaded by a persistent process.
+
+The upgrade now reads durable identity in the client as well. Task-specific
+canonical records win; legacy non-operation forks use the exact hash of task ID,
+source ID and operation kind. Anonymous receipts and transitive fork chains are
+never adopted automatically: a different card can have forked the same source.
+For this job, the verified receipt, edit backup, rollout and successful exact-child
+attachment establish the explicit canonical migration. Contradictions fail closed.
+No cwd/newest-file guessing is used. Normal task rehydration persists the repair.
+
+Two additional registration defects are regression-tested:
+
+- A live old runtime could acknowledge resume based on task ID while still
+  bound to a different thread. New hubs compare thread IDs in the shortcut.
+  Mismatched idle bindings are retired atomically using `codex.releaseIdle`
+  before attachment, so old parent notifications cannot update the child card.
+  Busy/blocked bindings and older workers without safe retirement fail closed.
+  The client verifies the snapshot identity after attachment. The real old job
+  had no registered binding, so its recovery needs no new retirement API.
+- A resumed child must retain its saved fork ancestry. A stale parent resume is
+  rejected before acquiring its writer, not only when saving identity afterward.
+
+On this machine, an exact-child resume against the original surviving v4 daemon
+succeeded: task state `done`, history `ready`, 619 blocks, follow-up gate `idle`.
+No prompt, provider fork, or provider-process restart was submitted for this
+recovery. This establishes the job's root cause and recoverability; it does not
+establish that every historical disconnection had that cause.
+
+History pagination is a separate boundary: `loadOlderMessages` previously only
+increased an in-memory display limit. It now retries a failed/partial/missing
+history load through the read-only history path. Tests verify that retry and
+ordinary ten-message pagination. Both the job and lifetime task have readable
+rollouts. Native UI verification remains separate from these backend checks.
+
+New development events: `durable-client-identity-recovered`,
+`runtime-resume-requested`, `runtime-resume-verified`, and
+`stale-thread-patch-ignored`. Existing older daemons retain their older logging;
+the upgraded GUI supplies recovery-boundary logging without terminating work.
+
+The current router includes continuity-v4 (the older deployment notes below
+describe the earlier v3 rollout). Message editing stays disabled for Codex and
+Claude. Deliberate user removals are not undone, and completed prompts are never
+automatically replayed.
+
 ## Fork identity is separate from history
 
 The provider's exact `thread/fork` child/source pair is written to the worker's

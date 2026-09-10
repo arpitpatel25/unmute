@@ -1,5 +1,7 @@
 import { RuntimeRpcClient } from './rpc'
 import { diagnostic } from '../diagnostics'
+import type { CodexIdentity } from './codex-identity'
+import { sessionLifecycleDev } from '../session-lifecycle-devlog'
 
 /** Durable record of which tasks belong to the current worker.
  *
@@ -18,6 +20,7 @@ export interface CodexOwnershipStore {
   initial(): Iterable<string>
   /** Persist a newly claimed task id so the next process still knows. */
   remember(taskId: string): void
+  recoverIdentity?(taskId: string, source?: string): Promise<CodexIdentity | null>
 }
 
 /** Rolling compatibility: existing threads keep their owner. Only new forks
@@ -34,8 +37,8 @@ export class CompatibleCodexRuntime extends RuntimeRpcClient {
   /** Ownership is durable, so every route that learns it must write it down. */
   private claim(id: string): void {
     if (this.owned.has(id)) return
-    this.owned.add(id)
     this.store?.remember(id)
+    this.owned.add(id)
   }
   private oldEvent = (event: any): void => { if (!this.owned.has(event.mirror.taskId)) this.emit('codex.event', event) }
   private newEvent = (event: any): void => { this.claim(event.mirror.taskId); this.emit('codex.event', event) }
@@ -51,6 +54,16 @@ export class CompatibleCodexRuntime extends RuntimeRpcClient {
         tasks: [...old.tasks.filter((t: any) => !this.owned.has(t.taskId)), ...current.tasks] } as T
     }
     const id = String(args[0])
+    if (method === 'codex.identity') {
+      // Recovery belongs to the upgraded client too: old live daemons cannot
+      // execute newly installed code. Consult this generation's receipts first.
+      const durable = await this.store?.recoverIdentity?.(id, args[1] as string | undefined)
+      if (durable) {
+        this.claim(id)
+        sessionLifecycleDev('durable-client-identity-recovered', { taskId: id, sourceSessionId: args[1], sessionId: durable.threadId })
+        return durable as T
+      }
+    }
     if (method === 'codex.prepare') this.preparations.set(id, args)
     if (method === 'codex.forkThread') {
       const info = await this.current.call<{ capabilities: string[] }>('runtime.info')

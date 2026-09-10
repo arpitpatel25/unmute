@@ -629,6 +629,12 @@ export class NotchController {
       const { id } = e as { id: string }
       if (id !== this.historyTask || (id !== this.focusedId && !(id === NotchController.AGENT_SLOT && this.agentOpen))) return
       this.historyLimit += 10
+      const task = this.deps.getTask(id)
+      if (task && task.history?.phase !== 'ready') {
+        // Enlarging a failed/partial cache cannot fetch its missing messages.
+        // Read history independently of acquiring a provider writer.
+        void this.deps.loadBlocks?.(id, true).catch(() => {}).finally(() => this.scheduleReconcile())
+      }
       this.reconcile()
     })
     on('focusTask', (e) => { this.touch(); this.onFocusTask((e as { id: string }).id) })

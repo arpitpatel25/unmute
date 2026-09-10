@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, readdir } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { writeFileAtomic } from '../atomic-file'
 import { CodexHub, type CodexHubDeps, type HubPatch, type CodexInputMetadata } from '../codex/hub'
 import { CodexAppServer } from '../codex/app-server-client'
 import type { FollowupGate } from '../task-followup'
 import { sessionLifecycleDev } from '../session-lifecycle-devlog'
+import { readCodexIdentity } from './codex-identity'
 
 export type CodexPreparation = {
   bin: string | null; config?: Record<string, unknown>
@@ -71,7 +72,11 @@ export class CodexRuntimeService {
       let existing: CodexIdentity | null = null
       try { existing = JSON.parse(await readFile(file, 'utf8')) }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-      if (existing && (existing.threadId !== identity.threadId || existing.forkedFromId !== identity.forkedFromId)) {
+      if (existing?.threadId === identity.threadId && !identity.forkedFromId) {
+        // An ordinary resume confirms the same child; preserve its ancestry.
+        identity = existing
+      }
+      if (existing && existing.threadId !== identity.threadId && existing.threadId !== identity.forkedFromId) {
         throw new Error('Canonical Codex identity cannot change')
       }
       await writeFileAtomic(file, JSON.stringify(identity))
@@ -81,38 +86,8 @@ export class CodexRuntimeService {
     await write
   }
   private async identity(id: string, expectedSource?: string): Promise<CodexIdentity | null> {
-    let identity: CodexIdentity | null = null
-    try { identity = JSON.parse(await readFile(this.identityFile(id), 'utf8')) }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    if (!identity && expectedSource) {
-      // Upgrade path: older builds persisted fork confirmations under opaque
-      // operation hashes. Recover only an unambiguous source→child mapping and
-      // immediately promote it to the canonical task record.
-      const candidates = new Map<string, CodexIdentity>()
-      for (const file of await readdir(this.root).catch(error => {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-        throw error
-      })) {
-        if (!file.endsWith('.json') || file.startsWith('identity-')) continue
-        try {
-          const value = JSON.parse(await readFile(join(this.root, file), 'utf8'))
-          if (typeof value?.threadId === 'string' && typeof value?.forkedFromId === 'string'
-            && (!expectedSource || value.forkedFromId === expectedSource) && value.threadId !== value.forkedFromId) {
-            candidates.set(`${value.forkedFromId}\0${value.threadId}`, { taskId: id, threadId: value.threadId, forkedFromId: value.forkedFromId })
-          }
-        } catch { /* unrelated or incomplete durable record */ }
-      }
-      if (candidates.size > 1) throw new Error('Ambiguous durable Codex fork identity')
-      identity = [...candidates.values()][0] ?? null
-      if (identity) {
-        sessionLifecycleDev('canonical-identity-migrated', { taskId: id, sessionId: identity.threadId, sourceSessionId: identity.forkedFromId ?? null })
-        await this.saveIdentity(identity)
-      }
-    }
-    if (!identity || identity.taskId !== id) return null
-    if (expectedSource && identity.forkedFromId !== expectedSource && identity.threadId !== expectedSource) {
-      throw new Error('Canonical Codex identity contradicts the requested source')
-    }
+    const identity = await readCodexIdentity(this.root, id, expectedSource, true)
+    if (identity) await this.saveIdentity(identity)
     return identity
   }
   private async read<T>(id: string, thread: string, kind: string, fallback: T): Promise<T> {
@@ -169,7 +144,11 @@ export class CodexRuntimeService {
         return this.read(id, rest[0], kind, null)
       }
       case 'startThread': return this.register(id, async () => this.hub.threadIdFor(id) ? { threadId: this.hub.threadIdFor(id), url: this.hub.url } : this.hub.startThread(id, rest[0]))
-      case 'resumeThread': return this.register(id, () => this.hub.resumeThread(id, rest[0], rest[1], rest[2] === true))
+      case 'resumeThread': return this.register(id, async () => {
+        const identity = await this.identity(id, rest[0])
+        if (identity && identity.threadId !== rest[0]) throw new Error('Resume must use the canonical Codex identity')
+        return this.hub.resumeThread(id, rest[0], rest[1], rest[2] === true)
+      })
       case 'rollbackLatestTurn': return this.register(id, () => this.hub.rollbackLatestTurn(id, rest[0]))
       case 'forkThread': {
         const operationId = rest[2] as string | undefined
@@ -198,6 +177,12 @@ export class CodexRuntimeService {
       case 'interrupt': return this.hub.interrupt(id)
       case 'stopAndRelease': return this.hub.stopAndRelease(id)
       case 'rename': return this.hub.rename(id, rest[0])
+      case 'releaseIdle': return this.register(id, () => {
+        const gate = this.hub.followupGate(id)
+        if (this.hub.threadIdFor(id) !== rest[0] || gate.kind !== 'idle' || gate.blocked) return Promise.resolve(false)
+        this.hub.release(id); this.patches.delete(id); this.prepared.delete(id)
+        return Promise.resolve(true)
+      })
       case 'release': this.hub.release(id); this.patches.delete(id); this.prepared.delete(id); return true
       case 'selfCheck': return this.hub.selfCheck()
       default: throw new Error('Unknown Codex runtime command')

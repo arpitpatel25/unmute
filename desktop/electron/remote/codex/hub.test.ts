@@ -48,6 +48,23 @@ test('native fork passes the exact source and registers only the returned child'
   })
 })
 
+test('resume cannot acknowledge a different thread just because the task is already registered', async () => {
+  const { hub, srv, calls, emit, patches } = makeHub()
+  const options = { cwd: '/project', approvalPolicy: 'never', sandbox: 'danger-full-access' }
+  await hub.startThread('task', options)
+  srv.request = async (method: string, params: any) => {
+    calls.push({ method, params })
+    return method === 'thread/resume' ? { thread: { id: params.threadId, turns: [] } } as any : {} as any
+  }
+  await hub.resumeThread('task', 'canonical-child', options)
+  assert.equal(hub.threadIdFor('task'), 'canonical-child')
+  assert.equal((calls.find(c => c.method === 'thread/resume')?.params as any).threadId, 'canonical-child')
+  const before = patches.length
+  emit('turn/started', { threadId: 'th_1', turn: { id: 'obsolete-turn' } })
+  assert.equal(patches.length, before, 'the obsolete parent cannot update the child card')
+  hub.stop()
+})
+
 test('native fork fails closed when Codex returns the source identity', async () => {
   const { hub, srv } = makeHub()
   srv.request = async (method: string, params: any) => method === 'thread/fork'

@@ -10,6 +10,26 @@ import type { CodexAppServer, ServerRequest } from '../codex/app-server-client'
 import type { HubPatch } from '../codex/hub'
 import { createServer } from 'node:net'
 
+test('idle release atomically refuses changed or active bindings and retains canonical identity', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'codex-release-idle-'))
+  let notify: (value: any) => void = () => {}
+  const provider = { running: true, url: '', async start() {}, stop() {}, on(_name: string, callback: typeof notify) { notify = callback; return () => {} }, onRequest() {},
+    async request(method: string) { return method === 'thread/start' ? { threadId: 'thread' } : method === 'turn/start' ? { turn: { id: 'active' } } : {} },
+  } as unknown as CodexAppServer
+  const service = new CodexRuntimeService(root, () => {}, { makeServer: () => provider })
+  t.after(async () => { service.close(); await rm(root, { recursive: true, force: true }) })
+  await service.invoke('prepare', ['task', { bin: '/codex' }])
+  await service.invoke('startThread', ['task', { cwd: '/tmp' }])
+  assert.equal(await service.invoke('releaseIdle', ['task', 'different']), false)
+  assert.equal(await service.invoke('send', ['task', 'work']), true)
+  assert.equal(await service.invoke('releaseIdle', ['task', 'thread']), false)
+  assert.equal(service.hub.threadIdFor('task'), 'thread')
+  notify({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'active', status: 'completed' } } })
+  assert.equal(await service.invoke('releaseIdle', ['task', 'thread']), true)
+  assert.equal(service.hub.threadIdFor('task'), undefined)
+  assert.equal((await service.invoke('identity', ['task']) as any).threadId, 'thread')
+})
+
 test('fork status returns durable identity while provider history is still loading', async () => {
   const root = await mkdtemp(join(tmpdir(), 'fork-slow-history-'))
   let release!: (value: any) => void
@@ -65,6 +85,9 @@ test('canonical fork identity survives a runtime restart and repairs legacy rece
     assert.deepEqual(await restarted.invoke('identity', ['task', 'source']), { taskId: 'task', threadId: 'child', forkedFromId: 'source' })
     assert.equal(forks, 1, 'identity recovery must never issue another provider fork')
     assert.ok((await readdir(root)).some(file => file.startsWith('identity-')), 'legacy recovery is promoted to the canonical record')
+    await restarted.invoke('prepare', ['task', { bin: '/codex' }])
+    await restarted.invoke('resumeThread', ['task', 'child', { cwd: '/tmp' }])
+    assert.deepEqual(await restarted.invoke('identity', ['task', 'child']), { taskId: 'task', threadId: 'child', forkedFromId: 'source' }, 'resuming a recovered child preserves its lineage')
   } finally { restarted.close(); await rm(root, { recursive: true, force: true }) }
 })
 
@@ -272,13 +295,16 @@ test('persistent edits rollback the child, force recovery, and scope repeated fo
     await hub.forkThread('task', 'source', options)
     await hub.rollbackLatestTurn('task', options)
     assert.equal(calls.find(c => c.method === 'thread/rollback')?.params.threadId, 'child-1')
-    await hub.resumeThread('task', 'source', options, true)
-    assert.equal(hub.threadIdFor('task'), 'source')
-    assert.equal((await hub.forkThread('task', 'source', options, 'edit-1')).threadId, 'child-2')
-    assert.equal((await hub.forkThread('task', 'source', options, 'edit-1')).threadId, 'child-2')
+    const resumes = calls.filter(c => c.method === 'thread/resume').length
+    await assert.rejects(hub.resumeThread('task', 'source', options, true), /canonical/i)
+    assert.equal(calls.filter(c => c.method === 'thread/resume').length, resumes, 'reject a stale parent before acquiring its writer')
+    await hub.resumeThread('task', 'child-1', options, true)
+    assert.equal(hub.threadIdFor('task'), 'child-1')
+    assert.equal((await hub.forkThread('task', 'child-1', options, 'edit-1')).threadId, 'child-2')
+    assert.equal((await hub.forkThread('task', 'child-1', options, 'edit-1')).threadId, 'child-2')
     assert.equal(forks, 2)
     assert.equal((await hub.forkThread('task', 'child-2', options, 'edit-2')).threadId, 'child-3')
-    assert.deepEqual(await service.invoke('forkResult', ['task', 'source', 'edit-1']), { threadId: 'child-2', forkedFromId: 'source' })
+    assert.deepEqual(await service.invoke('forkResult', ['task', 'child-1', 'edit-1']), { threadId: 'child-2', forkedFromId: 'child-1' })
     await assert.rejects(service.invoke('forkThread', ['task', 'different', options, 'edit-1']), /cannot change its source/)
   } finally { hub.stop(); rpc.disconnect(); service.close(); await server.close(); await rm(root, { recursive: true, force: true }) }
 })

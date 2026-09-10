@@ -5,6 +5,7 @@ import type { FollowupGate, NewTurnOutcome } from '../task-followup'
 import type { RuntimeRpcClient } from './rpc'
 import type { CodexMirror, CodexRuntimeEvent, CodexPreparation, CodexIdentity } from './codex-service'
 import { createLogger } from '../log'
+import { sessionLifecycleDev } from '../session-lifecycle-devlog'
 const log = createLogger('codex-projection')
 
 /** UI projection only. Closing this adapter never terminates daemon work. */
@@ -20,21 +21,21 @@ export class PersistentCodexHub extends CodexHub {
   }
   private receive = (event: CodexRuntimeEvent): void => {
     this.mirrors.set(event.mirror.taskId, event.mirror)
-    if (event.kind === 'patch') this.callbacks.onPatch(event.patch)
+    if (event.kind === 'patch') this.callbacks.onPatch({ ...event.patch, threadId: event.patch.threadId ?? event.mirror.threadId })
     else for (const listener of this.listeners) listener(event.event)
   }
   async reconnect(): Promise<void> {
     const snapshot = await this.rpc.call<{ running: boolean; url: string; tasks: CodexMirror[] }>('codex.snapshot')
     this.remoteRunning = snapshot.running; this.remoteUrl = snapshot.url
     this.mirrors.clear()
-    for (const mirror of snapshot.tasks) { this.mirrors.set(mirror.taskId, mirror); this.callbacks.onPatch(mirror.patch) }
+    for (const mirror of snapshot.tasks) { this.mirrors.set(mirror.taskId, mirror); this.callbacks.onPatch({ ...mirror.patch, threadId: mirror.patch.threadId ?? mirror.threadId }) }
   }
   override async refreshTask(id: string): Promise<void> {
     const snapshot = await this.rpc.call<{ running: boolean; url: string; tasks: CodexMirror[] }>('codex.snapshot', id)
     this.remoteRunning = snapshot.running; this.remoteUrl = snapshot.url
     const mirror = snapshot.tasks.find(task => task.taskId === id)
     if (!mirror) throw new Error('Fork exists but history is not yet available')
-    this.mirrors.set(id, mirror); this.callbacks.onPatch(mirror.patch)
+    this.mirrors.set(id, mirror); this.callbacks.onPatch({ ...mirror.patch, threadId: mirror.patch.threadId ?? mirror.threadId })
     log.event('task-history-refreshed', { taskId: id, tasks: snapshot.tasks.length })
   }
   override async recoverIdentity(id: string, sourceThreadId?: string): Promise<CodexIdentity | null> {
@@ -67,9 +68,25 @@ export class PersistentCodexHub extends CodexHub {
     await this.reconnect(); return result
   }
   override async resumeThread(id: string, thread: string, options: StartThreadOpts, force = false): Promise<void> {
+    // Surviving older hubs short-circuit by task ID, not thread ID. Bypass
+    // that shortcut when durable recovery selected a different thread.
+    const bound = this.threadIdFor(id)
+    if (bound && bound !== thread) {
+      const gate = this.followupGate(id)
+      if (gate.kind !== 'idle' || gate.blocked) throw new Error('Cannot replace a busy or blocked Codex session binding')
+      // Atomic in the worker: a request may arrive after our mirror was read.
+      // Older workers without this operation fail closed rather than having
+      // release() silently deny a newly pending approval.
+      const released = await this.rpc.call<boolean>('codex.releaseIdle', id, bound)
+      if (!released) throw new Error('Codex session binding changed during recovery; retry after it is idle')
+      this.mirrors.delete(id)
+    }
     await this.prepare(id, thread)
-    await this.rpc.call('codex.resumeThread', id, thread, options, force)
+    sessionLifecycleDev('runtime-resume-requested', { taskId: id, sessionId: thread, boundSessionId: bound, force: force || !!bound && bound !== thread })
+    await this.rpc.call('codex.resumeThread', id, thread, options, force || !!bound && bound !== thread)
     await this.reconnect()
+    if (this.threadIdFor(id) !== thread) throw new Error('Background runtime did not attach the canonical Codex session')
+    sessionLifecycleDev('runtime-resume-verified', { taskId: id, sessionId: thread, historyPhase: this.mirrors.get(id)?.patch.history?.phase, gate: this.followupGate(id).kind })
   }
   override async forkThread(id: string, source: string, options: StartThreadOpts, operationId?: string): Promise<{ threadId: string; forkedFromId: string }> {
     await this.prepare(id, source)

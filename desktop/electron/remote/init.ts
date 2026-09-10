@@ -5887,7 +5887,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   void manager.rehydrate().then(async () => {
     await persistentRuntimeReady
     await (codexHub as PersistentCodexHub).reconnect()
-    await Promise.all(manager!.list().filter(task => task.codexSessionSettings && task.state === 'processing' && !codexHub.threadIdFor(task.id))
+    await Promise.all(manager!.list().filter(task => task.codexSessionSettings && task.state === 'processing' && !codexHub?.threadIdFor(task.id))
       .map(task => manager!.resume(task.id, { touchActivity: false }).catch(() => false)))
     await Promise.all(manager!.list().filter(task => task.agent === 'codex' || !!task.codexSessionSettings)
       .map(task => manager!.settleFromRollout(task.id).catch(() => false)))

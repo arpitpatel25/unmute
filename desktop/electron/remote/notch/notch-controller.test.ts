@@ -2672,6 +2672,18 @@ test('a link to a card that cannot be pocketed still lands somewhere correct', (
   assert.deepEqual(h.calls.focus?.at(-1), ['a'])
 })
 
+test('load earlier retries unavailable history instead of only expanding a failed cache', async () => {
+  const loads: Array<[string, boolean | undefined]> = []
+  const h = setup({ deps: { loadBlocks: async (id, retry) => { loads.push([id, retry]) } } })
+  put(h, makeTask({ id: 'broken-history', kind: 'session', history: { phase: 'failed', canRetry: true },
+    blocks: Array.from({ length: 30 }, (_, i) => ({ kind: 'message', role: i % 2 ? 'assistant' : 'user', text: `Cached message ${i}` })) }))
+  h.client.fire({ type: 'focusTask', id: 'broken-history' }); h.flush()
+  loads.length = 0
+  h.client.fire({ type: 'loadOlderMessages', id: 'broken-history' }); h.flush()
+  await Promise.resolve()
+  assert.deepEqual(loads, [['broken-history', true]])
+})
+
 test('history pages grow by ten and reset after switching tasks', () => {
   const h = setup()
   const blocks = Array.from({ length: 30 }, (_, i) => ({ kind: 'message' as const, role: i % 2 ? 'assistant' as const : 'user' as const, text: `message-${i}` }))
