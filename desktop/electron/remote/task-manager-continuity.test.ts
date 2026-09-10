@@ -59,6 +59,30 @@ function executorFactory(): never {
   throw new Error('continuity must not use a terminal executor')
 }
 
+test('message editing is disabled for Codex and cannot fork the provider thread', async t => {
+  const baseDir = await base()
+  let forks = 0
+  const hub = {
+    running: true,
+    followupGate() { return { kind: 'idle', blocked: false } },
+    async forkThread() { forks++; return { threadId: 'child', forkedFromId: 'source' } },
+  }
+  const tm = new TaskManager({ executorFactory, codexHub: hub as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  t.after(() => tm.shutdown())
+  const id = await tm.createChat({ provider: 'codex', cwd: baseDir })
+  const task = tm.get(id)!
+  task.sessionId = 'source'
+  task.sessionOwnership = 'unmute'
+  task.chatUnstarted = false
+  task.state = 'completed'
+  task.blocks = [{ kind: 'message', role: 'user', text: 'Original' }]
+  assert.equal(tm.canEditLatestMessage(id), false)
+  assert.equal(await tm.editLatestMessage(id, 'Original', 'Replacement'), false)
+  assert.equal(task.sessionId, 'source')
+  assert.equal(forks, 0)
+})
+
 test('unresolved Desktop handoff retains metadata across restart and refuses ambiguous adoption', async t => {
   const baseDir = await base()
   const groupRegistry = new GroupRegistry({ path: join(baseDir, 'groups.json'), idFactory: () => 'canonical-group' })

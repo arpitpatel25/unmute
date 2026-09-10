@@ -37,6 +37,11 @@ import { AppendFileCache } from './append-file-cache'
 type AgentDispatchMetadata = AgentMetadata & { agentRunId: string }
 type DesktopHandoffReceipt = { id: string; before: string[]; metadata: AgentDispatchMetadata; acknowledged: boolean; intent: string; startedAt: number }
 
+// Message editing currently requires a provider fork. Keep the implementation
+// available for a future safe rollout, but fail closed until fork identity and
+// writer ownership can be made invisible to the user in every failure mode.
+const MESSAGE_EDIT_ENABLED = false
+
 function sessionOwnership(meta: Record<string, unknown>): 'unmute' | 'external' | 'unknown' {
   if (meta.importedFromCli || meta.sessionOwnership === 'external') return 'external'
   if (meta.sessionOwnership === 'unmute' || meta.claudeSessionSettings || meta.codexSessionSettings) return 'unmute'
@@ -5541,6 +5546,7 @@ export class TaskManager extends EventEmitter {
 
   /** Only the latest text-only prompt in an idle owned session can be edited. */
   canEditLatestMessage(id: string): boolean {
+    if (!MESSAGE_EDIT_ENABLED) return false
     const task = this.tasks.get(id)
     if (!task || task.sessionOwnership !== 'unmute' || task.sending || task.state === 'processing' || task.state === 'needs-user'
       || !(task.claudeSessionSettings || task.codexSessionSettings)) return false

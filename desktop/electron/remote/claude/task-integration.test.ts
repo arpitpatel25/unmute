@@ -505,7 +505,7 @@ test('externally owned conversation cannot silently acquire a second structured 
   manager.shutdown()
 })
 
-test('editing latest Claude message forks at the preceding answer and keeps the task identity', async () => {
+test('message editing is disabled for Claude and cannot create a provider fork', async () => {
   const baseDir = await mkdtemp(join(tmpdir(), 'unmute-edit-integration-'))
   const launches: ClaudeTaskOptions[] = []
   const checkpointOwners: boolean[] = []
@@ -532,18 +532,13 @@ test('editing latest Claude message forks at the preceding answer and keeps the 
     const id = await manager.dispatch('First')
     await manager.deliverDraft(id, 'Second', [])
     const source = manager.get(id)!.sessionId
-    assert.equal(manager.canEditLatestMessage(id), true)
-    await assert.rejects(manager.editLatestMessage(id, 'Second', '/clear'), /Terminal-only/ )
+    assert.equal(manager.canEditLatestMessage(id), false)
+    assert.equal(await manager.editLatestMessage(id, 'Second', 'Corrected'), false)
     assert.equal(manager.get(id)!.sessionId, source)
     assert.equal(launches.length, 1)
-    assert.equal(await manager.editLatestMessage(id, 'Second', 'Corrected'), true)
-    assert.notEqual(manager.get(id)!.sessionId, source)
-    assert.equal(launches[1].forkFromSessionId, source)
-    assert.equal(launches[1].resumeSessionAt, 'answer-1')
-    assert.deepEqual(checkpointOwners, [false, true])
+    assert.deepEqual(checkpointOwners, [false])
     const prompts = manager.get(id)!.blocks!.filter(b => b.kind === 'message' && b.role === 'user').map(b => b.kind === 'message' ? b.text : '')
-    assert.deepEqual(prompts, ['First', 'Corrected'])
+    assert.deepEqual(prompts, ['First', 'Second'])
     assert.equal(manager.get(id)!.id, id)
-    await assert.rejects(manager.editLatestMessage(id, 'Second', 'Stale'), /latest message changed/)
   } finally { manager.shutdown() }
 })
