@@ -15,7 +15,7 @@ function makeSupervisedClient(): NotchClient {
     binPath: process.execPath,
     binArgs: [FAKE],
     bootstrap: () => ({
-      type: 'bootstrap', appearance: 'solid', surfaceFill: 0.8,
+      type: 'bootstrap', appearance: 'solid', surfaceTone: 'glass', surfaceFill: 0.8,
       showInScreenCapture: false, terminalAutoExpand: false, autoPresent: true,
     }),
     restartDelayMs: 10,
@@ -63,7 +63,10 @@ test('commands sent before ready are restored only after helper bootstrap', asyn
   const dump = waitFor(client, '__calls' as NotchEvent['type'])
   client.send({ type: '__dump' } as unknown as NotchCommand)
   const commands = ((await dump) as unknown as { commands: NotchCommand[] }).commands
-  assert.equal(commands[0]?.type, 'bootstrap')
+  assert.deepEqual(commands[0], {
+    type: 'bootstrap', appearance: 'solid', surfaceTone: 'glass', surfaceFill: 0.8,
+    showInScreenCapture: false, terminalAutoExpand: false, autoPresent: true,
+  })
   assert.deepEqual(commands[1], { type: 'setState', state: 'active', attention: 0, working: 1 })
   assert.equal(commands[2]?.type, 'present')
   client.dispose()

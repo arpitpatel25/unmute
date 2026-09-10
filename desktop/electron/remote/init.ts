@@ -66,6 +66,11 @@ import { Router, type RoutableTask, type AgentAvailability } from './router'
 import { CodexRouterEngine } from './codex-router-engine'
 import { prefersCodexRouter, routerScopeMatches } from './router-select'
 import { WIDGET_CAPTURE_KEY, setWidgetCaptureReader, refreshWidgetCapturePolicy } from './notetakerWidget'
+import {
+  FIXED_SURFACE_APPEARANCE,
+  FIXED_SURFACE_TONE,
+  enforceFixedSurfacePreferences,
+} from './surface-preferences'
 import { HeadlessRouterEngine } from './headless-router-engine'
 import { CodexExecRouterEngine } from './codex-exec-router-engine'
 import { knownProjects, projectSlug } from './projects'
@@ -4778,6 +4783,9 @@ const LIBRARIAN_PARKED = true
 const CURATOR_PARKED = true
 
 export function initRemote(deps: RemoteInitDeps): TaskManager {
+  // Do this before any helper can be created. Defaults only cover new installs;
+  // this also repairs older persisted choices while the controls are hidden.
+  const fixedSurfacePreferenceChanges = enforceFixedSurfacePreferences(settings)
   taskDrafts.connectFile(join(REMOTE_BASE_DIR, 'drafts.json'), (error) => {
     log.warn('draft persistence failed', { error: (error as Error).message })
   })
@@ -4905,6 +4913,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const runId = String(Date.now())
   const logFile = configureRemoteLogging({ dir: logDir, runId })
   log.event('init-remote', { logFile, permissionMode: settings.get('permissionMode') })
+  if (fixedSurfacePreferenceChanges.surfaceTone || fixedSurfacePreferenceChanges.surfaceAppearance) {
+    log.event('surface-preferences-normalized', fixedSurfacePreferenceChanges)
+  }
 
   // Resolve tmux once: if present, sessions run inside it so the live terminal
   // can be popped out to a real terminal app (same session). Write the minimal
@@ -5329,10 +5340,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         restartDelayMs: 500,
         bootstrap: () => ({
           type: 'bootstrap',
-          appearance: settings.get('surfaceAppearance') || 'solid',
+          appearance: FIXED_SURFACE_APPEARANCE,
           // Sent at bootstrap, not only on change: otherwise a black surface
           // paints Space Gray for the first frames of every launch.
-          surfaceTone: settings.get('surfaceTone') || 'glass',
+          surfaceTone: FIXED_SURFACE_TONE,
           surfaceFill: settings.get('surfaceFill') ?? 0.8,
           showInScreenCapture: screenCaptureVisibility(settings.get('showInScreenCapture')).show,
           terminalAutoExpand: settings.get('notchTerminalAutoExpand') === true,
@@ -6177,18 +6188,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     settings.set('model', 'sonnet')
     log.event('model-migrated-opus-to-sonnet', {})
   }
-  // One-time: move users off the OLD 'system' surface default.
-  //
-  // 'system' was the previous DEFAULT, written into every existing install, so
-  // it carries no signal that anyone chose it — and it resolves to translucent,
-  // which on macOS 26.2 means a cached backdrop showing the previous Space's
-  // colours (developer.apple.com/forums/thread/810314). Changing the default
-  // alone reached nobody who had already run the app, which is precisely how
-  // this shipped looking unfixed. An explicit 'glass' choice is preserved.
-  if (settings.get('surfaceAppearance') === 'system') {
-    settings.set('surfaceAppearance', 'solid')
-    log.event('surface-migrated-system-to-fixed', {})
-  }
+  // Surface customization is temporarily hidden. Module initialization has
+  // already normalized every persisted install to Glass + Fixed before the
+  // helper can bootstrap; the IPC boundary below keeps stale renderers from
+  // restoring an old choice.
   // A STARTUP RESET FORCING CODEX CLI BACK TO CLAUDE LIVED HERE, and it was
   // right when it was written: the CLI adapter was a stub, so a stored 'codex'
   // meant every task failed. It is wired now — dispatch, rollout-driven state,
@@ -6982,12 +6985,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // injection rather than an import cycle.
   setWidgetCaptureReader(() => settings.get(WIDGET_CAPTURE_KEY) === true)
 
-  ipcMain.handle('remote:get-surface-appearance', async () => settings.get('surfaceAppearance') || 'solid')
+  ipcMain.handle('remote:get-surface-appearance', async () => FIXED_SURFACE_APPEARANCE)
   ipcMain.handle('remote:set-surface-appearance', async (_e, v: string) => {
-    const value = v === 'glass' || v === 'solid' ? v : 'system'
+    const value = FIXED_SURFACE_APPEARANCE
     settings.set('surfaceAppearance', value)
     notchClient?.send({ type: 'appearance', value } as never)
-    log.event('surface-appearance-set', { value })
+    log.event('surface-appearance-set', { requested: v, value })
     return value
   })
 
@@ -7007,18 +7010,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return !!on
   })
 
-  ipcMain.handle('remote:get-surface-tone', async () => settings.get('surfaceTone') || 'glass')
-  // Validated against the list, not against one name. The ternary this
-  // replaces rewrote every value that was not exactly 'black' back to
-  // 'spaceGray', so a third tone would have been accepted by the renderer,
-  // stored as Space Gray, and read back as Space Gray — a setting that appears
-  // to do nothing rather than one that fails.
-  const SURFACE_TONES = ['spaceGray', 'black', 'glass'] as const
+  ipcMain.handle('remote:get-surface-tone', async () => FIXED_SURFACE_TONE)
+  // Accept the old setter so a renderer from before this change cannot drift
+  // the helper or persisted state away from the one supported tone.
   ipcMain.handle('remote:set-surface-tone', async (_e, v: string) => {
-    const value = (SURFACE_TONES as readonly string[]).includes(v) ? v : 'glass'
+    const value = FIXED_SURFACE_TONE
     settings.set('surfaceTone', value)
     notchClient?.send({ type: 'surfaceTone', value } as never)
-    log.event('surface-tone-set', { value })
+    log.event('surface-tone-set', { requested: v, value })
     return value
   })
 

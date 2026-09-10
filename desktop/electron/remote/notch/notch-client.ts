@@ -379,7 +379,7 @@ export interface UnmuteAgentActivityP {
 // ── Commands (main → helper) ────────────────────────────────────────────────
 
 export type NotchCommand =
-  | { type: 'bootstrap'; appearance: 'system' | 'glass' | 'solid'; surfaceFill: number; showInScreenCapture: boolean; terminalAutoExpand: boolean; autoPresent: boolean }
+  | { type: 'bootstrap'; appearance: 'system' | 'glass' | 'solid'; surfaceTone: 'spaceGray' | 'black' | 'glass'; surfaceFill: number; showInScreenCapture: boolean; terminalAutoExpand: boolean; autoPresent: boolean }
   | { type: 'present' }
   | { type: 'setState'; state: NotchStateName; attention: number; working: number }
   | { type: 'showTask'; task: TaskDetailP }

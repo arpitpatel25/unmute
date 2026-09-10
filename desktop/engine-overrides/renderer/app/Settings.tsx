@@ -233,6 +233,9 @@ const TONE_SWATCHES: readonly {
 ]
 
 const KILL_SWITCHES_WIRED = false
+// Keep the customization implementation available for a later release, but do
+// not present choices while the product has one supported surface: Glass + Fixed.
+const SURFACE_STYLE_CONTROLS_VISIBLE = false
 
 export default function Settings({ onDictationKeyChange, section = 'triggers' }: SettingsProps = {}) {
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([])
@@ -989,7 +992,9 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                 illusion at the join. The old description also named a macOS
                 version and the bug behind the default; that is an internal
                 detail and does not belong in front of a user. */}
-            <SettingRow
+            {SURFACE_STYLE_CONTROLS_VISIBLE && (
+              <>
+              <SettingRow
               label="Surface material"
               description="How the expanded panel and the recording pill render. The notch itself is always solid."
             >
@@ -1065,7 +1070,9 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                   ))}
                 </div>
               </div>
-            </SettingRow>
+              </SettingRow>
+              </>
+            )}
           </Card>
 
           <SectionHeader icon={<MicIcon />} title="The recording pill" />
