@@ -4836,7 +4836,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   initRuntimeConfig({ userDataDir: app.getPath('userData'), autoRefresh: true })
 
   const runtimeRoot = join(app.getPath('userData'), 'persistent-runtime')
-  await CodexAppServer.reapUnreferencedStrays(runtimeRoot).catch(error => {
+  const legacyCodexCleanup = CodexAppServer.reapUnreferencedStrays(runtimeRoot).catch(error => {
     log.warn('legacy Codex writer cleanup failed', { error: (error as Error).message })
   })
   persistentRuntime = new PersistentRuntimeClient(runtimeRoot, join(__dirname, 'unmute-runtime.js'))
@@ -4875,7 +4875,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
   agentWorker.on('computer.activity', event => broadcastAxActivity(event as Parameters<typeof broadcastAxActivity>[0]))
   persistentRuntime.on('computer.activity', event => broadcastAxActivity(event as Parameters<typeof broadcastAxActivity>[0]))
-  persistentRuntimeReady = persistentRuntime.call('hello').then(info => {
+  // The initializer is deliberately synchronous, so make the runtime's ready
+  // gate own the ordering: no helper (and therefore no replacement app-server)
+  // may connect until legacy writer reconciliation has finished.
+  persistentRuntimeReady = legacyCodexCleanup.then(() => persistentRuntime!.call('hello')).then(info => {
     log.event('persistent-runtime-connected', info as Record<string, unknown>)
   }).catch(error => {
     log.warn('persistent runtime unavailable', { error: (error as Error).message })
