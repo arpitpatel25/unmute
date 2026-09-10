@@ -20,11 +20,21 @@ public struct SurfacePresentation: Equatable, Sendable {
     public let barHovered: Bool
 }
 
-/// The open pocket visually continues the menu-bar/notch mass. Closing its
-/// outline across the screen edge turns that continuation into a floating box.
-public enum SurfaceBorderPolicy {
-    public static func includesTopEdge(pocketOpen: Bool) -> Bool {
-        !pocketOpen
+public struct SurfacePlaneInsets: Equatable, Sendable {
+    public let top: Double
+    public let horizontal: Double
+    public let bottom: Double
+}
+
+/// Every content plane meets the top edge while retaining the shell as a
+/// visible rail on the left, right and bottom.
+public enum SurfacePlanePolicy {
+    public static func insets(panelPadding: Double, topFillet: Double) -> SurfacePlaneInsets {
+        SurfacePlaneInsets(
+            top: 0,
+            horizontal: panelPadding + topFillet,
+            bottom: panelPadding
+        )
     }
 }
 

@@ -114,17 +114,6 @@ struct NotchView: View {
         NotchShape(bottomRadius: model.bar.bottomRadius, topFillet: model.bar.fillet)
     }
 
-    /// The fill must remain closed. Only the visible hairline opens at the top
-    /// while the pocket is out, preserving the curved shoulders, walls and
-    /// bottom edge without drawing a seam against the screen/notch.
-    private var outlineShape: NotchShape {
-        NotchShape(
-            bottomRadius: model.bar.bottomRadius,
-            topFillet: model.bar.fillet,
-            includesTopEdge: SurfaceBorderPolicy.includesTopEdge(pocketOpen: model.pocket.isOpen)
-        )
-    }
-
     // MARK: - Material
 
     @ViewBuilder private var surface: some View {
@@ -209,7 +198,7 @@ struct NotchView: View {
                    : (agentCard ? AnyShapeStyle(Theme.agentSurface)
                                 : AnyShapeStyle(Color.black)))
             .background(glassBackdrop)
-            .overlay(outlineShape.stroke(Theme.hairlineSoft, lineWidth: 0.5))
+            .overlay(shape.stroke(Theme.hairlineSoft, lineWidth: 0.5))
     }
 
     private var agentCard: Bool { model.task?.id == "unmute-agent" }
@@ -443,12 +432,17 @@ struct NotchView: View {
     /// horizontal padding also clears the concave fillets, which take their
     /// width out of the same rect.
     @ViewBuilder private func plane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {
+        let insets = SurfacePlanePolicy.insets(
+            panelPadding: Double(Theme.panelPadding),
+            topFillet: Double(model.bar.fillet)
+        )
         body()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(RoundedRectangle(cornerRadius: Theme.planeRadius).fill(Theme.plane))
             .clipShape(RoundedRectangle(cornerRadius: Theme.planeRadius))
-            .padding(.vertical, Theme.panelPadding)
-            .padding(.horizontal, Theme.panelPadding + model.bar.fillet)
+            .padding(.top, CGFloat(insets.top))
+            .padding(.bottom, CGFloat(insets.bottom))
+            .padding(.horizontal, CGFloat(insets.horizontal))
     }
 
     /// THE POCKET'S PLANE, HELD CLEAR OF THE CAMERA HOUSING.
@@ -472,39 +466,18 @@ struct NotchView: View {
     /// because it is the same colour as the housing. What must stay clear of it
     /// is anything that ISN'T that black: this plane, and the content on it.
     ///
-    /// So the top inset becomes the cutout's height plus breathing room, which
-    /// is exactly the number the task surface and the wall already take. The
-    /// pocket is the one large surface that was never handed it.
-    /// How far down the pocket's plane starts.
-    ///
-    /// ONLY DIFFERENT WHEN THERE IS A CUTOUT TO CLEAR. The first version used
-    /// `topInset` unconditionally, which is 14 on a notchless display against
-    /// the 6 every other plane uses — so the card dropped 8pt inside a window
-    /// that had only been grown on notched Macs. Its bottom 8pt, rounded
-    /// corners included, fell outside the window and was clipped, and its top
-    /// no longer nested in the shape's concave flare. A notch fix that broke
-    /// every machine without one.
-    /// Clears the housing on a notched display, ordinary panel padding
-    /// elsewhere. The card is the only arrangement now, so on a notched Mac it
-    /// DOES have to open below the camera — the row that used to avoid that
-    /// question is gone.
-    ///
-    /// Mirrors `NotchGeometry.pocketTopInset`, which sizes the window. If these
-    /// two ever disagree the card is clipped, and a clipped card looks fine in
-    /// a screenshot right up until the footer is missing.
-    /// Ordinary panel padding on BOTH displays now. The housing clearance is no
-    /// longer padding — `PocketShoulderRow` occupies it and draws in it, which
-    /// is why `NotchGeometry.pocketTopInset` is exactly the cutout height.
-    private var pocketTopPad: CGFloat { Theme.panelPadding }
-
     @ViewBuilder private func pocketPlane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {
+        let insets = SurfacePlanePolicy.insets(
+            panelPadding: Double(Theme.panelPadding),
+            topFillet: Double(model.bar.fillet)
+        )
         body()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(RoundedRectangle(cornerRadius: Theme.planeRadius).fill(Theme.plane))
             .clipShape(RoundedRectangle(cornerRadius: Theme.planeRadius))
-            .padding(.top, pocketTopPad)
-            .padding(.bottom, Theme.panelPadding)
-            .padding(.horizontal, Theme.panelPadding + model.bar.fillet)
+            .padding(.top, CGFloat(insets.top))
+            .padding(.bottom, CGFloat(insets.bottom))
+            .padding(.horizontal, CGFloat(insets.horizontal))
     }
 
     private func toastView(_ toast: String) -> some View {

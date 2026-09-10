@@ -36,12 +36,12 @@ final class SurfaceInteractionStateTests: XCTestCase {
         XCTAssertFalse(state.terminalVisible)
     }
 
-    func testOpenPocketOutlineRemainsAttachedToTheScreenEdge() {
-        XCTAssertFalse(SurfaceBorderPolicy.includesTopEdge(pocketOpen: true))
-    }
+    func testContentPlaneExposesShellOnLeftRightAndBottomOnly() {
+        let insets = SurfacePlanePolicy.insets(panelPadding: 6, topFillet: 14)
 
-    func testClosedSurfaceKeepsItsCompleteOutline() {
-        XCTAssertTrue(SurfaceBorderPolicy.includesTopEdge(pocketOpen: false))
+        XCTAssertEqual(insets.top, 0)
+        XCTAssertEqual(insets.horizontal, 20)
+        XCTAssertEqual(insets.bottom, 6)
     }
 
 }
