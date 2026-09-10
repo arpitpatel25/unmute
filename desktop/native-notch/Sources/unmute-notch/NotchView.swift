@@ -437,8 +437,9 @@ struct NotchView: View {
             topFillet: Double(model.bar.fillet)
         )
         let horizontal = CGFloat(insets.horizontal)
+        let innerRadius = max(model.bar.bottomRadius - Theme.panelPadding, 0)
         let planeShape = NotchShape(
-            bottomRadius: Theme.planeRadius,
+            bottomRadius: innerRadius,
             topFillet: horizontal
         )
         body()
@@ -476,8 +477,9 @@ struct NotchView: View {
             topFillet: Double(model.bar.fillet)
         )
         let horizontal = CGFloat(insets.horizontal)
+        let innerRadius = max(model.bar.bottomRadius - Theme.panelPadding, 0)
         let planeShape = NotchShape(
-            bottomRadius: Theme.planeRadius,
+            bottomRadius: innerRadius,
             topFillet: horizontal
         )
         body()
