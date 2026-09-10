@@ -57,7 +57,7 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, readlink, symlink, unlink } from 'node:fs/promises'
+import { mkdir, readFile, readdir, readlink, symlink, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { createLogger } from '../log'
 import { writeFileAtomic } from '../atomic-file'
@@ -70,6 +70,7 @@ const READY_TIMEOUT_MS = 20_000
 const READY_POLL_MS = 150
 /** A request that never comes back must not wedge a task forever. */
 const REQUEST_TIMEOUT_MS = 120_000
+const OWNER_EXIT_TIMEOUT_MS = 5_000
 
 export interface JsonRpcError { code: number; message: string; data?: unknown }
 
@@ -97,6 +98,13 @@ export interface AppServerDeps {
   killImpl?: (pid: number) => void
   readyTimeoutMs?: number
   readyPollMs?: number
+}
+
+type ProcessRow = { pid: number; ppid: number; command: string }
+export interface AppServerReaperDeps {
+  listProcesses?: () => Promise<ProcessRow[]>
+  inspectProcess?: (pid: number) => Promise<string | null>
+  killImpl?: (pid: number) => void
 }
 
 type AppServerOwner = { pid: number; port: number; generation: string }
@@ -162,7 +170,11 @@ export class CodexAppServer {
       } catch (error) {
         this.ws?.close(); this.ws = null
         sessionLifecycleDev('writer-owner-fenced', { pid: adopted.pid, port: adopted.port, phase: 'health-check' })
-        throw new Error(`existing app-server owner is alive but unreachable: ${(error as Error).message}`)
+        await this.terminateOwner(adopted)
+        await this.clearOwner(adopted)
+        this.owner = null
+        this.port = 0
+        sessionLifecycleDev('writer-owner-reaped', { pid: adopted.pid, port: adopted.port, reason: 'health-check-failed' })
       }
     }
     const spawnClaim = await this.acquireSpawnClaim()
@@ -177,6 +189,7 @@ export class CodexAppServer {
     try {
       this.proc = spawnImpl(this.deps.bin, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
         env: { ...process.env, UNMUTE_APP_SERVER: '1' },
       })
       if (!this.proc.pid) throw new Error('app-server spawn returned no pid')
@@ -293,6 +306,23 @@ export class CodexAppServer {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('app-server-owner-clear-failed', { error: (error as Error).message })
     }
+  }
+
+  private async terminateOwner(owner: AppServerOwner): Promise<void> {
+    sessionLifecycleDev('writer-owner-termination-started', { pid: owner.pid, port: owner.port, generation: owner.generation })
+    try { (this.deps.killImpl ?? ((pid: number) => process.kill(-pid, 'SIGTERM')))(owner.pid) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
+    const deadline = Date.now() + OWNER_EXIT_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if (!await this.inspectProcess(owner.pid)) {
+        sessionLifecycleDev('writer-owner-termination-finished', { pid: owner.pid, port: owner.port })
+        return
+      }
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    throw new Error('existing app-server owner did not exit after termination')
   }
 
   /** Poll /readyz rather than sleeping — a fixed wait is either too short on a
@@ -489,6 +519,51 @@ export class CodexAppServer {
     })
   }
 
+  /**
+   * Upgrade recovery for app-servers created before durable owner records.
+   * Only a parentless, Unmute-marked process tree absent from every current
+   * owner record is eligible. Referenced survivors are adopted by their new
+   * helper; user-launched Codex processes never carry our environment marker.
+   */
+  static async reapUnreferencedStrays(runtimeRoot: string, deps: AppServerReaperDeps = {}): Promise<number[]> {
+    const rows = await (deps.listProcesses ?? listAppServerProcesses)()
+    const byParent = new Map<number, ProcessRow[]>()
+    for (const row of rows) {
+      const children = byParent.get(row.ppid) ?? []
+      children.push(row); byParent.set(row.ppid, children)
+    }
+    const referenced = await readOwnerPids(runtimeRoot)
+    const inspect = deps.inspectProcess ?? inspectSystemProcess
+    const kill = deps.killImpl ?? ((pid: number) => process.kill(pid, 'SIGTERM'))
+    const killed: number[] = []
+    sessionLifecycleDev('legacy-writer-scan-started', { processCount: rows.length, ownerCount: referenced.size })
+    for (const root of rows.filter(row => row.ppid === 1 && /codex.*app-server .*--listen ws:\/\/127\.0\.0\.1/.test(row.command))) {
+      const tree: ProcessRow[] = []
+      const visit = (row: ProcessRow) => { for (const child of byParent.get(row.pid) ?? []) visit(child); tree.push(row) }
+      visit(root)
+      if (tree.some(row => referenced.has(row.pid))) {
+        sessionLifecycleDev('legacy-writer-preserved', { pid: root.pid, members: tree.length, reason: 'owner-record' })
+        continue
+      }
+      const verified: ProcessRow[] = []
+      for (const row of tree) {
+        const command = await inspect(row.pid)
+        if (command?.includes('UNMUTE_APP_SERVER=1') && command.includes('app-server')) verified.push(row)
+      }
+      if (!verified.some(row => row.pid === root.pid)) {
+        sessionLifecycleDev('legacy-writer-preserved', { pid: root.pid, members: tree.length, reason: 'marker-missing' })
+        continue
+      }
+      sessionLifecycleDev('legacy-writer-reap-started', { pid: root.pid, members: verified.length })
+      for (const row of verified) {
+        try { kill(row.pid); killed.push(row.pid); sessionLifecycleDev('legacy-writer-member-reaped', { pid: row.pid, parentPid: row.ppid }) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+      }
+    }
+    sessionLifecycleDev('legacy-writer-scan-finished', { reapedCount: killed.length })
+    return killed
+  }
+
   /** Stop the server. Safe to call twice; safe to call when never started. */
   stop(): void {
     this.stopped = true
@@ -506,4 +581,39 @@ export class CodexAppServer {
     this.port = 0
     log.event('app-server-stopped', {})
   }
+}
+
+async function inspectSystemProcess(pid: number): Promise<string | null> {
+  return new Promise(resolve => execFile('/bin/ps', ['-p', String(pid), '-wwEo', 'command='], (error, stdout) => {
+    resolve(error ? null : String(stdout).trim() || null)
+  }))
+}
+
+async function listAppServerProcesses(): Promise<ProcessRow[]> {
+  const stdout = await new Promise<string>((resolve, reject) => execFile('/bin/ps', ['-axo', 'pid=,ppid=,command='], (error, value) => error ? reject(error) : resolve(String(value))))
+  return stdout.split('\n').map(line => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    return match ? { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] } : null
+  }).filter((row): row is ProcessRow => !!row)
+}
+
+async function readOwnerPids(root: string): Promise<Set<number>> {
+  const result = new Set<number>()
+  const visit = async (dir: string): Promise<void> => {
+    let entries
+    try { entries = await readdir(dir, { withFileTypes: true }) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
+    for (const entry of entries) {
+      const path = `${dir}/${entry.name}`
+      if (entry.isDirectory()) await visit(path)
+      else if (entry.name === 'app-server-owner.json') {
+        try {
+          const owner = JSON.parse(await readFile(path, 'utf8')) as Partial<AppServerOwner>
+          if (Number.isInteger(owner.pid) && owner.pid! > 0) result.add(owner.pid!)
+        } catch { /* malformed records cannot authorize a process */ }
+      }
+    }
+  }
+  await visit(root)
+  return result
 }

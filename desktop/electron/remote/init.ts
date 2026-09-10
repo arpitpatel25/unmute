@@ -4836,6 +4836,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   initRuntimeConfig({ userDataDir: app.getPath('userData'), autoRefresh: true })
 
   const runtimeRoot = join(app.getPath('userData'), 'persistent-runtime')
+  await CodexAppServer.reapUnreferencedStrays(runtimeRoot).catch(error => {
+    log.warn('legacy Codex writer cleanup failed', { error: (error as Error).message })
+  })
   persistentRuntime = new PersistentRuntimeClient(runtimeRoot, join(__dirname, 'unmute-runtime.js'))
   // Checkpoint forks need the updated CLI adapter; existing live sessions keep their owner.
   claudeEditRuntime = new PersistentRuntimeClient(join(runtimeRoot, 'claude-edits-v1'), join(__dirname, 'unmute-runtime.js'))
