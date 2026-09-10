@@ -422,14 +422,18 @@ test('contradictory canonical Codex identity fails closed without changing the t
   const stale = JSON.parse(await fs.readFile(join(home, 'meta.json'), 'utf8'))
   stale.sessionId = 'source'; stale.codexRolloutId = 'source'; stale.chatUnstarted = false
   await fs.writeFile(join(home, 'meta.json'), JSON.stringify(stale))
+  let resumes = 0
   const hub = { running: true, threadIdFor() { return undefined }, async recoverIdentity(taskId: string) {
     return { taskId, threadId: 'unrelated-child', forkedFromId: 'different-source' }
-  } }
-  const restarted = new TaskManager({ executorFactory, codexHub: hub as never, baseDir })
+  }, async resumeThread() { resumes++ } }
+  const restarted = new TaskManager({ executorFactory, codexHub: hub as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
   t.after(() => restarted.shutdown())
   await restarted.rehydrate()
   assert.equal(restarted.get(id)?.sessionId, 'source')
   assert.match(restarted.get(id)?.resumeError ?? '', /could not be verified/i)
+  assert.equal(await restarted.resume(id), false)
+  assert.equal(resumes, 0)
 })
 
 test('Codex fork uses native fork and persists the returned child and source', async () => {

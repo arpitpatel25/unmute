@@ -57,7 +57,7 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, unlink } from 'node:fs/promises'
+import { mkdir, readFile, readlink, symlink, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { createLogger } from '../log'
 import { writeFileAtomic } from '../atomic-file'
@@ -165,6 +165,7 @@ export class CodexAppServer {
         throw new Error(`existing app-server owner is alive but unreachable: ${(error as Error).message}`)
       }
     }
+    const spawnClaim = await this.acquireSpawnClaim()
     this.port = this.deps.port ?? await freePort()
     const spawnImpl = this.deps.spawnImpl ?? spawn
     const args = ['app-server', '--listen', `ws://127.0.0.1:${this.port}`]
@@ -173,17 +174,21 @@ export class CodexAppServer {
     // could own them — each one a Codex process the user never launched and
     // cannot see. `env` is the only channel that survives into `ps` without
     // changing the command Codex parses.
-    this.proc = spawnImpl(this.deps.bin, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, UNMUTE_APP_SERVER: '1' },
-    })
-    if (!this.proc.pid) throw new Error('app-server spawn returned no pid')
-    this.owner = { pid: this.proc.pid, port: this.port, generation: randomUUID() }
-    try { await this.writeOwner(this.owner) }
+    try {
+      this.proc = spawnImpl(this.deps.bin, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, UNMUTE_APP_SERVER: '1' },
+      })
+      if (!this.proc.pid) throw new Error('app-server spawn returned no pid')
+      this.owner = { pid: this.proc.pid, port: this.port, generation: randomUUID() }
+      await this.writeOwner(this.owner)
+    }
     catch (error) {
-      try { this.proc.kill() } catch { /* best-effort rollback */ }
+      try { this.proc?.kill() } catch { /* best-effort rollback */ }
       this.proc = null; this.owner = null
       throw error
+    } finally {
+      await this.releaseSpawnClaim(spawnClaim)
     }
     sessionLifecycleDev('writer-owner-spawned', { pid: this.owner.pid, port: this.owner.port, generation: this.owner.generation })
     log.event('app-server-spawn', { bin: this.deps.bin, port: this.port, pid: this.proc.pid ?? null })
@@ -247,6 +252,34 @@ export class CodexAppServer {
     await mkdir(dirname(this.deps.ownerFile), { recursive: true, mode: 0o700 })
     await writeFileAtomic(this.deps.ownerFile, JSON.stringify(owner))
     sessionLifecycleDev('writer-owner-record-written', { pid: owner.pid, port: owner.port, generation: owner.generation })
+  }
+
+  /** A fixed symlink is an atomic cross-process election. Its target carries
+   * the runtime PID, so a crash before owner publication is recoverable. */
+  private async acquireSpawnClaim(retried = false): Promise<string | null> {
+    if (!this.deps.ownerFile) return null
+    const file = `${this.deps.ownerFile}.claim`
+    const token = `${process.pid}:${randomUUID()}`
+    await mkdir(dirname(file), { recursive: true, mode: 0o700 })
+    try { await symlink(token, file); return token }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      let current = ''
+      try { current = await readlink(file) } catch { throw new Error('app-server owner election could not be verified') }
+      const pid = Number(current.split(':', 1)[0])
+      if (!Number.isInteger(pid) || pid <= 0) throw new Error('invalid app-server owner election')
+      if (await this.inspectProcess(pid)) throw new Error('app-server owner election is already in progress')
+      if (retried) throw new Error('stale app-server owner election could not be cleared')
+      await unlink(file).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error })
+      return this.acquireSpawnClaim(true)
+    }
+  }
+
+  private async releaseSpawnClaim(token: string | null): Promise<void> {
+    if (!this.deps.ownerFile || !token) return
+    const file = `${this.deps.ownerFile}.claim`
+    try { if (await readlink(file) === token) await unlink(file) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('app-server-owner-claim-release-failed', { error: (error as Error).message }) }
   }
 
   private async clearOwner(expected: AppServerOwner | null): Promise<void> {

@@ -2303,14 +2303,8 @@ export class TaskManager extends EventEmitter {
   applyHubPatch(p: HubPatch): void {
     const task = this.tasks.get(p.taskId)
     if (!task) return
-    const learnedIdentity = !!p.threadId && task.codexSessionSettings
-      && (task.sessionId !== p.threadId || task.codexRolloutId !== p.threadId)
-    if (learnedIdentity) {
-      task.sessionId = p.threadId!
-      task.codexRolloutId = p.threadId
-      log.event('codex-live-identity-reconciled', { taskId: task.id, sessionId: p.threadId })
-      void this.persistState(task).catch(() => {})
-    }
+    const learnedRolloutId = !!p.threadId && !task.codexRolloutId
+    if (learnedRolloutId) task.codexRolloutId = p.threadId
     if (p.name && !task.name) task.name = p.name
     if (p.state === 'processing' && 'turnOutcome' in p && p.turnOutcome === null) {
       task.currentTurnAssistantText = undefined
@@ -2371,6 +2365,7 @@ export class TaskManager extends EventEmitter {
         // about what an open chat view should be showing. Emit without
         // transitioning, so the card updates and the wall does not re-sort.
         if (p.blocks || p.errorReason !== undefined || 'activity' in p || 'turnOutcome' in p || p.history || p.mcpStatus) this.emit('updated', task)
+        if (learnedRolloutId) void this.persistState(task)
         return
       }
       this.transition(p.taskId, p.state, status, this.clock())
@@ -2396,13 +2391,13 @@ export class TaskManager extends EventEmitter {
     // Streaming blocks update the open view, not the task's ordering timestamp.
     if (p.assistantText) task.updatedAt = this.clock()
     this.emit('updated', task)
-    if (p.assistantText) void this.persistState(task)
+    if (learnedRolloutId || p.assistantText) void this.persistState(task)
   }
 
   /** Reconcile a task receipt with the provider identity durably committed by
    * the runtime. This runs before a restored task is published, so no consumer
    * can resume or render the superseded parent thread. */
-  private async reconcileCodexIdentity(task: Task): Promise<boolean> {
+  private async reconcileCodexIdentity(task: Task, throwOnFailure = false): Promise<boolean> {
     if (!task.codexSessionSettings || !this.opts.codexHub?.recoverIdentity) return false
     try {
       const identity = await this.opts.codexHub.recoverIdentity(task.id, task.sessionId)
@@ -2424,6 +2419,7 @@ export class TaskManager extends EventEmitter {
     } catch (error) {
       task.resumeError = 'This conversation identity could not be verified. Unmute will not attach another writer.'
       log.error('codex-identity-reconciliation-failed', { taskId: task.id, ...diagnosticError(error) })
+      if (throwOnFailure) throw new Error(task.resumeError, { cause: error })
       return false
     }
   }
@@ -6129,7 +6125,7 @@ export class TaskManager extends EventEmitter {
       if (!this.opts.codexHub) return false
       try {
         await validateProject(task.cwd)
-        if (await this.reconcileCodexIdentity(task)) await this.persistState(task)
+        if (await this.reconcileCodexIdentity(task, true)) await this.persistState(task)
         if (task.codexSessionSettings.sandbox === 'danger-full-access' && !this.chatFullAccessAllowed(id)) throw new Error('Recorded full access exceeds the configured sandbox roots or consent cap. Select Ask for approval before resuming.')
         if (!task.sessionId && task.chatUnstarted) {
           const { threadId } = await this.opts.codexHub.startThread(id, task.codexSessionSettings)
@@ -6392,6 +6388,8 @@ export class TaskManager extends EventEmitter {
           await this.settleFromRollout(id)
         } else this.autoResumeFailedAt.delete(id)
       } catch (e) {
+        this.autoResumeFailedAt.set(id, this.clock())
+        sessionLifecycleDev('auto-resume-cooled-down', { taskId: id, sessionId: task.sessionId, provider: task.agent ?? null, phase: 'exception' })
         tlog.error('auto-resume on open threw', { error: (e as Error).message })
       } finally {
         this.opening.delete(id)
