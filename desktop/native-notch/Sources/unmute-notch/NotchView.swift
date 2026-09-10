@@ -440,7 +440,8 @@ struct NotchView: View {
         let innerRadius = max(model.bar.bottomRadius - Theme.panelPadding, 0)
         let planeShape = NotchShape(
             bottomRadius: innerRadius,
-            topFillet: horizontal
+            topFillet: horizontal,
+            topFilletDepth: model.bar.fillet
         )
         body()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -480,7 +481,8 @@ struct NotchView: View {
         let innerRadius = max(model.bar.bottomRadius - Theme.panelPadding, 0)
         let planeShape = NotchShape(
             bottomRadius: innerRadius,
-            topFillet: horizontal
+            topFillet: horizontal,
+            topFilletDepth: model.bar.fillet
         )
         body()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
