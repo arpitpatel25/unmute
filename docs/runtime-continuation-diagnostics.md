@@ -58,6 +58,29 @@ describe the earlier v3 rollout). Message editing stays disabled for Codex and
 Claude. Deliberate user removals are not undone, and completed prompts are never
 automatically replayed.
 
+### Installed verification
+
+`1.5.25-dev.5` was signed with team `D8ZHT5S2XQ`, notarized and stapled
+(app and DMG), installed in `/Applications/unmute.app`, and relaunched on
+2026-09-10. Gatekeeper accepted it as Notarized Developer ID. The installer
+checksum verified. The previous dev.3 app and job metadata backup are retained
+under `/tmp/unmute-continuity-install.kS9SC3/`. Root ownership was unavailable
+without a sudo password; installation used the existing user's permissions.
+
+`~/.unmute/remote/logs/remote-1789025581435.log` records identity reconciliation
+at 07:33:04 UTC and `runtime-resume-verified` at 07:33:12 UTC with the child,
+history ready and idle gate. Both saved job IDs now equal the child; its state
+is done and it is not unstarted. Root daemon PID 86416 and v4 PID 27138 survived
+the installation. The lifetime conversation also remains done/idle in its
+original runtime.
+
+306 focused runtime, ownership, task-continuity, history and notch tests passed
+after reverting the build-only logging switches. The standalone typecheck still
+reports existing missing engine-overlay modules; application packaging completed.
+The code-review safety findings were resolved before this build. Interactive
+native UI verification was unavailable because Computer Use was disabled; backend
+recovery does not by itself prove every historical popup/rendering issue resolved.
+
 ## Fork identity is separate from history
 
 The provider's exact `thread/fork` child/source pair is written to the worker's
