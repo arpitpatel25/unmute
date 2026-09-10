@@ -443,10 +443,13 @@ struct NotchView: View {
             topFillet: horizontal,
             topFilletDepth: model.bar.fillet
         )
-        body()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, horizontal)
-            .background(planeShape.fill(Theme.plane))
+        ZStack(alignment: .topLeading) {
+            planeShape.fill(Theme.plane)
+            body()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, horizontal)
+        }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipShape(planeShape)
             .padding(.bottom, CGFloat(insets.bottom))
     }
@@ -484,10 +487,13 @@ struct NotchView: View {
             topFillet: horizontal,
             topFilletDepth: model.bar.fillet
         )
-        body()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, horizontal)
-            .background(planeShape.fill(Theme.plane))
+        ZStack(alignment: .topLeading) {
+            planeShape.fill(Theme.plane)
+            body()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, horizontal)
+        }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipShape(planeShape)
             .padding(.bottom, CGFloat(insets.bottom))
     }
