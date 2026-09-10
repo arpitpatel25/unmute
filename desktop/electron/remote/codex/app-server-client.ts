@@ -96,6 +96,7 @@ export interface AppServerDeps {
   ownerFile?: string
   inspectProcess?: (pid: number) => Promise<string | null>
   killImpl?: (pid: number) => void
+  killProcessGroupImpl?: (pid: number) => void
   readyTimeoutMs?: number
   readyPollMs?: number
 }
@@ -105,6 +106,8 @@ export interface AppServerReaperDeps {
   listProcesses?: () => Promise<ProcessRow[]>
   inspectProcess?: (pid: number) => Promise<string | null>
   killImpl?: (pid: number) => void
+  exitTimeoutMs?: number
+  exitPollMs?: number
 }
 
 type AppServerOwner = { pid: number; port: number; generation: string }
@@ -310,9 +313,25 @@ export class CodexAppServer {
 
   private async terminateOwner(owner: AppServerOwner): Promise<void> {
     sessionLifecycleDev('writer-owner-termination-started', { pid: owner.pid, port: owner.port, generation: owner.generation })
-    try { (this.deps.killImpl ?? ((pid: number) => process.kill(-pid, 'SIGTERM')))(owner.pid) }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    const exactKill = this.deps.killImpl ?? ((pid: number) => process.kill(pid, 'SIGTERM'))
+    const groupKill = this.deps.killProcessGroupImpl
+      ?? (this.deps.killImpl ? null : (pid: number) => process.kill(-pid, 'SIGTERM'))
+    const killExactIfPresent = () => {
+      try { exactKill(owner.pid) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+    }
+    if (groupKill) {
+      try { groupKill(owner.pid) }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+        // Owner records written before app-server spawn became detached point
+        // at an ordinary child PID, not a process-group leader. Upgrade those
+        // records by falling back to the exact verified process.
+        sessionLifecycleDev('writer-owner-legacy-signal-fallback', { pid: owner.pid, port: owner.port })
+        killExactIfPresent()
+      }
+    } else {
+      killExactIfPresent()
     }
     const deadline = Date.now() + OWNER_EXIT_TIMEOUT_MS
     while (Date.now() < deadline) {
@@ -559,6 +578,17 @@ export class CodexAppServer {
         try { kill(row.pid); killed.push(row.pid); sessionLifecycleDev('legacy-writer-member-reaped', { pid: row.pid, parentPid: row.ppid }) }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
       }
+      const waiting = new Set(verified.map(row => row.pid))
+      const deadline = Date.now() + (deps.exitTimeoutMs ?? OWNER_EXIT_TIMEOUT_MS)
+      while (waiting.size && Date.now() < deadline) {
+        for (const pid of waiting) if (!await inspect(pid)) waiting.delete(pid)
+        if (waiting.size) await new Promise(resolve => setTimeout(resolve, deps.exitPollMs ?? 25))
+      }
+      if (waiting.size) {
+        sessionLifecycleDev('legacy-writer-reap-timeout', { pid: root.pid, remaining: waiting.size })
+        throw new Error(`legacy app-server writer did not exit after termination (pid ${[...waiting].join(', ')})`)
+      }
+      sessionLifecycleDev('legacy-writer-reap-finished', { pid: root.pid, members: verified.length })
     }
     sessionLifecycleDev('legacy-writer-scan-finished', { reapedCount: killed.length })
     return killed

@@ -50,6 +50,7 @@ test('a verified live but unreachable owner is reaped before one replacement is 
   await writeFile(ownerFile, JSON.stringify({ pid: 5252, port: 54322, generation: 'live-owner' }))
   let spawned = 0, alive = true
   const killed: number[] = []
+  const groupSignals: number[] = []
   const child = Object.assign(new EventEmitter(), {
     pid: 5353, stdout: new EventEmitter(), stderr: new EventEmitter(), kill() { return true },
   })
@@ -57,12 +58,17 @@ test('a verified live but unreachable owner is reaped before one replacement is 
     bin: '/codex', ownerFile, port: 54323,
     spawnImpl: (() => { spawned++; return child }) as never,
     inspectProcess: async pid => pid === 5252 && alive ? 'UNMUTE_APP_SERVER=1 /codex app-server --listen ws://127.0.0.1:54322' : null,
+    killProcessGroupImpl: pid => {
+      groupSignals.push(pid)
+      throw Object.assign(new Error('not a process-group leader'), { code: 'ESRCH' })
+    },
     killImpl: pid => { killed.push(pid); alive = false },
     fetchImpl: async url => String(url).includes('54322') ? Promise.reject(new Error('connection refused')) : ({ ok: true }) as Response,
     wsFactory: () => new FakeSocket() as never,
     readyTimeoutMs: 5, readyPollMs: 1,
   })
   await server.start()
+  assert.deepEqual(groupSignals, [5252])
   assert.deepEqual(killed, [5252])
   assert.equal(spawned, 1)
   assert.equal(JSON.parse(await readFile(ownerFile, 'utf8')).pid, 5353)
@@ -122,13 +128,35 @@ test('startup reaps only unreferenced parentless Unmute app-server trees', async
   ]
   const alive = new Set(processes.map(process => process.pid))
   const killed: number[] = []
+  let rootSignalled = false
+  let exitChecks = 0
 
   const reaped = await (CodexAppServer as any).reapUnreferencedStrays(dir, {
     listProcesses: async () => processes,
-    inspectProcess: async (pid: number) => alive.has(pid) ? `UNMUTE_APP_SERVER=1 ${processes.find(process => process.pid === pid)?.command}` : null,
-    killImpl: (pid: number) => { killed.push(pid); alive.delete(pid) },
+    inspectProcess: async (pid: number) => {
+      if (pid === 100 && rootSignalled && ++exitChecks >= 2) alive.delete(pid)
+      return alive.has(pid) ? `UNMUTE_APP_SERVER=1 ${processes.find(process => process.pid === pid)?.command}` : null
+    },
+    killImpl: (pid: number) => { killed.push(pid); if (pid === 100) rootSignalled = true; else alive.delete(pid) },
+    exitTimeoutMs: 100,
+    exitPollMs: 1,
   })
 
   assert.deepEqual(reaped, [101, 100])
   assert.deepEqual(killed, [101, 100])
+  assert.ok(exitChecks >= 2, 'cleanup waits until the old writer has actually exited')
+})
+
+test('startup refuses to release its gate while a signalled writer remains alive', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'codex-stuck-orphan-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const process = { pid: 700, ppid: 1, command: 'node /codex app-server --listen ws://127.0.0.1:54700' }
+
+  await assert.rejects(CodexAppServer.reapUnreferencedStrays(dir, {
+    listProcesses: async () => [process],
+    inspectProcess: async () => `UNMUTE_APP_SERVER=1 ${process.command}`,
+    killImpl: () => {},
+    exitTimeoutMs: 5,
+    exitPollMs: 1,
+  }), /did not exit/)
 })
