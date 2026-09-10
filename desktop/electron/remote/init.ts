@@ -4837,7 +4837,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
 
   const runtimeRoot = join(app.getPath('userData'), 'persistent-runtime')
   const legacyCodexCleanup = CodexAppServer.reapUnreferencedStrays(runtimeRoot).catch(error => {
-    log.warn('legacy Codex writer cleanup failed', { error: (error as Error).message })
+    log.warn('legacy Codex writer cleanup failed; persistent runtime remains gated', { error: (error as Error).message })
+    throw error
   })
   persistentRuntime = new PersistentRuntimeClient(runtimeRoot, join(__dirname, 'unmute-runtime.js'))
   // Checkpoint forks need the updated CLI adapter; existing live sessions keep their owner.
@@ -4878,7 +4879,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // The initializer is deliberately synchronous, so make the runtime's ready
   // gate own the ordering: no helper (and therefore no replacement app-server)
   // may connect until legacy writer reconciliation has finished.
-  persistentRuntimeReady = legacyCodexCleanup.then(() => persistentRuntime!.call('hello')).then(info => {
+  persistentRuntimeReady = CodexAppServer.gateRuntimeStartup(legacyCodexCleanup, () => persistentRuntime!.call('hello')).then(info => {
     log.event('persistent-runtime-connected', info as Record<string, unknown>)
   }).catch(error => {
     log.warn('persistent runtime unavailable', { error: (error as Error).message })

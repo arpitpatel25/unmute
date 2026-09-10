@@ -141,6 +141,14 @@ export class CodexAppServer {
 
   constructor(private deps: AppServerDeps) {}
 
+  /** Keep helper startup behind writer reconciliation. A rejected cleanup is
+   * deliberately not recoverable here: starting anyway could create a second
+   * app-server writer for the same durable runtime. */
+  static async gateRuntimeStartup<T>(cleanup: Promise<unknown>, start: () => Promise<T>): Promise<T> {
+    await cleanup
+    return start()
+  }
+
   /** The URL a TUI attaches to: `codex --remote <this>`. Empty until started. */
   get url(): string { return this.port ? `ws://127.0.0.1:${this.port}` : '' }
   get running(): boolean { return !!this.ws && this.ws.readyState === 1 /* OPEN */ }

@@ -160,3 +160,15 @@ test('startup refuses to release its gate while a signalled writer remains alive
     exitPollMs: 1,
   }), /did not exit/)
 })
+
+test('a failed writer cleanup never starts the persistent runtime', async () => {
+  let started = 0
+  const cleanupFailure = Promise.reject(new Error('writer remains alive'))
+
+  await assert.rejects(CodexAppServer.gateRuntimeStartup(cleanupFailure, async () => {
+    started++
+    return { pid: 1 }
+  }), /writer remains alive/)
+
+  assert.equal(started, 0)
+})
