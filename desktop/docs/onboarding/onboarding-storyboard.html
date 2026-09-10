@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unmute onboarding — implemented storyboard</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f7f7fa;
+      --muted: rgba(247,247,250,.58);
+      --faint: rgba(247,247,250,.34);
+      --line: rgba(255,255,255,.12);
+      --panel: rgba(6,6,10,.62);
+      --plane: rgba(15,15,20,.84);
+      --blue: #aabaff;
+      --green: #74d998;
+      --amber: #f2c66d;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #09090d; color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif; }
+    button { font: inherit; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 276px minmax(0, 1fr); }
+    .rail { position: sticky; top: 0; height: 100vh; padding: 24px 16px 18px; overflow: auto; border-right: 1px solid var(--line); background: rgba(8,8,12,.94); }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 20px; border-bottom: 1px solid var(--line); }
+    .glyph { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: #fff; color: #09090c; font-size: 13px; font-weight: 850; letter-spacing: -.09em; }
+    .brand strong { display: block; font-size: 15px; letter-spacing: -.02em; }
+    .brand span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .chapter-label { margin: 18px 9px 8px; color: var(--faint); font-size: 10px; font-weight: 650; }
+    .steps { display: grid; gap: 3px; }
+    .step { width: 100%; display: grid; grid-template-columns: 24px 1fr; gap: 8px; align-items: center; padding: 8px; border: 0; border-radius: 11px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
+    .step:hover { color: var(--ink); background: rgba(255,255,255,.05); }
+    .step[aria-current="step"] { color: var(--ink); background: rgba(255,255,255,.1); box-shadow: inset 0 0 0 1px rgba(255,255,255,.06); }
+    .step-num { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(255,255,255,.07); font-size: 10px; font-variant-numeric: tabular-nums; }
+    .step[aria-current="step"] .step-num { background: #fff; color: #09090c; }
+    .step-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 560; }
+    .stage { min-width: 0; padding: 24px 28px 28px; }
+    .topbar { max-width: 1180px; margin: 0 auto 18px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+    .topbar h1 { margin: 0; font-size: 19px; font-weight: 680; letter-spacing: -.03em; }
+    .topbar p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .counter { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .desktop { position: relative; max-width: 1180px; min-height: 716px; margin: auto; overflow: hidden; border: 1px solid rgba(255,255,255,.15); border-radius: 24px; background: radial-gradient(circle at 72% 28%, rgba(191,44,142,.78), transparent 31%), radial-gradient(circle at 26% 22%, rgba(51,71,169,.85), transparent 38%), linear-gradient(135deg, #141225, #4d0e48 56%, #120b2a); box-shadow: 0 32px 90px rgba(0,0,0,.48); }
+    .desktop::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(125deg, transparent 42%, rgba(255,255,255,.08) 55%, transparent 69%); }
+    .menu { position: relative; z-index: 1; height: 30px; display: flex; align-items: center; gap: 14px; padding: 0 13px; color: rgba(255,255,255,.76); background: rgba(8,8,12,.28); backdrop-filter: blur(18px); font-size: 10px; }
+    .traffic { display: flex; gap: 6px; margin-right: 5px; }
+    .traffic i { width: 8px; height: 8px; border-radius: 50%; background: #ff5f57; }
+    .traffic i:nth-child(2) { background: #febc2e; }.traffic i:nth-child(3) { background: #28c840; }
+    .app-ghost { position: absolute; inset: 72px 36px 38px 36px; border-radius: 18px; background: rgba(8,9,15,.72); border: 1px solid rgba(255,255,255,.09); backdrop-filter: blur(26px); box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+    .app-ghost::before { content: "Unmute"; position: absolute; top: 20px; left: 24px; font-weight: 700; font-size: 13px; }
+    .app-ghost::after { content: "Dictation    Notetaker    Agent    Orchestrator    Account    Settings"; position: absolute; left: 24px; top: 64px; bottom: 24px; width: 152px; padding-top: 18px; white-space: pre-wrap; line-height: 3.2; color: rgba(255,255,255,.35); border-top: 1px solid rgba(255,255,255,.08); font-size: 10px; }
+    .presenter { position: relative; z-index: 3; width: 432px; min-height: 660px; margin: 20px 28px 24px auto; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; }
+    .glass, .card { position: relative; overflow: hidden; border: 1px solid rgba(255,255,255,.14); background: var(--panel); box-shadow: 0 22px 60px rgba(0,0,0,.36), inset 0 1px rgba(255,255,255,.08); backdrop-filter: blur(34px) saturate(145%); }
+    .glass { border-radius: 29px; padding: 10px; }
+    .glass::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(118deg, rgba(255,255,255,.13), transparent 18%, transparent 78%, rgba(126,151,255,.1)); mix-blend-mode: screen; }
+    .identity { position: relative; height: 36px; padding: 0 8px 8px; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; }
+    .identity .glyph { width: 20px; height: 20px; border-radius: 7px; background: #050507; color: white; font-size: 9px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.11); }
+    .film { position: relative; aspect-ratio: 5/6; overflow: hidden; border-radius: 21px; background: #08080a; box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); }
+    .founder { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--muted); background: radial-gradient(circle at 42% 28%, rgba(83,100,160,.28), transparent 42%), #09090c; }
+    .founder .portrait { width: 86px; height: 104px; border-radius: 44px 44px 24px 24px; background: linear-gradient(145deg, rgba(255,255,255,.2), rgba(255,255,255,.035)); border: 1px solid rgba(255,255,255,.09); }
+    .founder span { font-size: 11px; }
+    .shade { position: absolute; inset: 40% 0 0; background: linear-gradient(transparent, rgba(0,0,0,.9)); }
+    .caption { position: absolute; z-index: 1; left: 20px; right: 20px; bottom: 18px; font-size: 16px; font-weight: 590; line-height: 1.32; letter-spacing: -.017em; text-wrap: balance; text-shadow: 0 1px 12px #000; }
+    .controls { position: relative; height: 35px; display: flex; align-items: end; gap: 4px; padding: 7px 4px 0; }
+    .control { border: 0; border-radius: 10px; padding: 7px 10px; color: var(--muted); background: transparent; font-size: 11px; cursor: pointer; }
+    .status { margin-left: auto; padding: 7px 7px 2px; color: rgba(255,255,255,.4); font-size: 10px; }
+    .card { min-height: 94px; border-radius: 21px; padding: 17px 18px; background: var(--plane); }
+    .card h2 { margin: 0 0 7px; font-size: 14px; letter-spacing: -.01em; }
+    .card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .phrase { margin: 0; color: #fff; font-size: 15px; line-height: 1.35; }
+    .phrase::before, .phrase::after { color: var(--blue); }.phrase::before { content: "“"; }.phrase::after { content: "”"; }
+    .primary { float: right; margin-top: 10px; border: 0; border-radius: 10px; padding: 8px 12px; background: rgba(255,255,255,.93); color: #09090b; font-size: 11px; font-weight: 650; }
+    .choices { display: flex; gap: 7px; }.choices button { flex: 1; min-height: 36px; border: 0; border-radius: 10px; color: white; background: rgba(255,255,255,.09); font-size: 11px; }
+    .meta { max-width: 1180px; margin: 18px auto 0; display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 10px; }
+    .meta-card { min-height: 112px; padding: 16px; border: 1px solid var(--line); border-radius: 15px; background: rgba(255,255,255,.035); }
+    .meta-card h3 { margin: 0 0 9px; color: var(--faint); font-size: 10px; font-weight: 650; }
+    .meta-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .meta-card .strong { color: var(--ink); }
+    .proof::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 12px rgba(116,217,152,.5); }
+    .nav { max-width: 1180px; margin: 14px auto 0; display: flex; justify-content: space-between; }
+    .nav button { min-width: 108px; padding: 10px 15px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.055); color: var(--ink); cursor: pointer; }
+    .nav button:disabled { opacity: .3; cursor: default; }
+    button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    @media (max-width: 900px) { .shell { grid-template-columns: 1fr; }.rail { position: relative; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }.steps { grid-template-columns: repeat(4, 1fr); }.step-name { display: none; }.stage { padding: 18px 12px 24px; }.desktop { min-height: 700px; }.app-ghost { inset-inline: 12px; }.presenter { margin-inline: auto; width: min(432px, calc(100% - 24px)); }.meta { grid-template-columns: 1fr; } }
+    @media (prefers-reduced-transparency: reduce) { .glass,.card { background: #101015; backdrop-filter: none; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <aside class="rail">
+      <div class="brand"><span class="glyph">un</span><div><strong>Onboarding storyboard</strong><span>Implemented flow · review mode</span></div></div>
+      <div class="chapter-label">16 event-gated frames</div>
+      <nav class="steps" id="steps" aria-label="Onboarding steps"></nav>
+    </aside>
+    <section class="stage">
+      <header class="topbar"><div><h1 id="frameTitle"></h1><p id="clipId"></p></div><span class="counter" id="counter"></span></header>
+      <section class="desktop" aria-label="Onboarding frame preview">
+        <div class="menu"><span class="traffic"><i></i><i></i><i></i></span><b>Unmute</b><span>File</span><span>Edit</span><span style="margin-left:auto">Thu 10 Sep&nbsp;&nbsp; 3:14 PM</span></div>
+        <div class="app-ghost"></div>
+        <article class="presenter">
+          <section class="glass">
+            <header class="identity"><span class="glyph">un</span><span>Unmute</span></header>
+            <div class="film"><div class="founder"><div class="portrait"></div><span>Founder footage placeholder</span></div><div class="shade"></div><div class="caption" id="caption"></div></div>
+            <footer class="controls"><button class="control">Pause</button><button class="control">Replay</button><span class="status">Script mode</span></footer>
+          </section>
+          <section class="card" id="card"></section>
+        </article>
+      </section>
+      <section class="meta">
+        <article class="meta-card"><h3>Founder says</h3><p class="strong" id="spoken"></p></article>
+        <article class="meta-card"><h3>What unlocks this frame</h3><p id="armed"></p></article>
+        <article class="meta-card"><h3>What proves completion</h3><p class="proof" id="proof"></p></article>
+      </section>
+      <footer class="nav"><button id="prev">Previous</button><button id="next">Next frame</button></footer>
+    </section>
+  </main>
+  <script>
+    const frames = [
+      ['privacy','Your privacy','welcome-privacy-v1','Your dictation is sent securely for transcription and is not stored by Unmute. Your Claude Code and Codex interactions stay between you and those tools.','Welcome to Unmute. Your dictation is sent securely for transcription and we do not store it. Your Claude Code and Codex work stays between you and those tools.','permission','', 'First launch','Continue'],
+      ['microphone','Microphone','permission-microphone-v1','Allow microphone access so Unmute can hear your dictation.','First, let Unmute hear the moments when you choose to speak.','permission','', 'Privacy accepted','macOS microphone grant'],
+      ['accessibility','Accessibility','permission-accessibility-v1','Allow Accessibility so Unmute can deliver text into the app you are using.','Accessibility lets Unmute place the finished words at your cursor.','permission','', 'Microphone granted','Signed app is Accessibility-trusted'],
+      ['input-monitoring','Input Monitoring','permission-input-monitoring-v1','Allow Input Monitoring so your global Unmute shortcuts work everywhere.','Input Monitoring makes the global modifier shortcuts work in every app.','permission','', 'Accessibility granted','Native modifier listener reports trusted'],
+      ['system-audio','System Audio','permission-system-audio-v1','Allow system audio so Notetaker can hear the conversation you choose to record.','System audio is used only when you deliberately start Notetaker.','permission','', 'Input Monitoring granted','Real system-audio tap starts'],
+      ['provider-choice','Choose your agent','provider-readiness-v1','Unmute uses the Claude Code or Codex CLI already configured on your Mac.','Unmute works through the Claude Code or Codex CLI you already use. Choose one we found ready.','provider','', 'Permission preflight complete','Isolated CLI replies READY'],
+      ['notes-dictation','Dictate in Notes','dictation-explain-v1','Put your cursor in Apple Notes, hold Function, speak, then release to paste.','Here is the simplest thing. Put your cursor in Notes, hold Function, speak this line, and release.','speak','My first Unmute dictation.', 'Apple Notes is frontmost','Real paste receipt targets Apple Notes'],
+      ['notes-instruct','Rewrite with Instruct','instruct-explain-v1','Select your sentence and use Instruct to rewrite it.','Select that sentence and use Instruct to reshape it.','speak','Make this sound more confident.', 'Dictation was delivered','Selected text is replaced in Apple Notes'],
+      ['clipboard-capture','Capture copied context','capture-clipboard-v1','Copy something while dictating. Unmute will compose it with your words.','While you speak, copy a useful detail. Unmute combines it with your words.','speak','Add this copied detail to my note.', 'Clipboard observer is armed','Observed copy ID appears in final composition'],
+      ['screenshot-capture','Capture a screenshot','capture-screenshot-v1','Take a normal macOS screenshot while dictating, then let Unmute place both into Notes.','Do the same with a normal screenshot. Your words and image arrive together.','speak','Include this screenshot in my note.', 'Screenshot observer is armed','Observed screenshot ID lands in Notes'],
+      ['orchestrator-task','Run an Orchestrator task','orchestrator-explain-v1','Press Right Option and ask Orchestrator to do a real, safely isolated task.','Right Option talks to Orchestrator. Ask it to create this tiny file so you can see a real task run.','speak','Create hello-unmute.txt containing My first Unmute task.', 'Owned onboarding workspace selected','Owned task completes and file contents verify'],
+      ['agent-task-link','Create through Unmute Agent','agent-explain-v1','The Unmute Agent remembers your work and can create or resume tasks. Ask it to create one, then open its task link.','The Unmute Agent remembers your work and can create or resume tasks. Ask it for this follow-up, then open the task link.','speak',"Create a follow-up task to add today's date to hello-unmute.txt.", 'Agent lane uses owned workspace','Structured task receipt and matching link open'],
+      ['notetaker-save','Save a Notetaker recording','notetaker-explain-v1','Double-tap Left Control to start Notetaker, then save the recording from the real pill.','Notetaker uses the excellent models you already pay for. Double-tap Left Control, say this line, then save from the real pill.','speak','This is my first Unmute note.', 'Real Notetaker is armed','Meeting metadata and retained audio persist'],
+      ['product-orientation','Your workspace is ready','orientation-v1','See today’s tasks, automatic workspaces, and saved Notetaker summaries in the Unmute app.','This is home: today’s tasks, automatic workspaces, and your Notetaker summaries—all in the Unmute app.','success','', 'Real Electron app is visible','Explore Unmute action'],
+      ['sign-in','One last step','sign-in-v1','Sign in to keep using Unmute after this guided experience.','Sign in now to keep using Unmute after this guided session.','success','', 'Every exercise completed','Authenticated session confirmed'],
+      ['complete','Welcome to Unmute','complete-v1','You are ready to use Unmute everywhere on your Mac.','That’s it. You now know Unmute because you have actually used it.','success','', 'Sign-in confirmed','Terminal onboarding state']
+    ];
+    let index = 0;
+    const $ = id => document.getElementById(id);
+    function card(frame) {
+      const [,title,,, ,kind,phrase] = frame;
+      if (kind === 'provider') return `<h2>${title}</h2><div class="choices"><button>Claude Code</button><button>Codex</button></div>`;
+      if (kind === 'speak') return `<p class="phrase">${phrase}</p>`;
+      const label = title === 'One last step' ? 'Sign in' : title === 'Welcome to Unmute' ? 'Done' : title === 'Your workspace is ready' ? 'Explore Unmute' : 'Continue';
+      return `<h2>${title}</h2><button class="primary">${label}</button>`;
+    }
+    function render() {
+      const f = frames[index];
+      window.scrollTo({top: 0, behavior: 'instant'});
+      $('frameTitle').textContent = f[1]; $('clipId').textContent = f[2]; $('caption').textContent = f[3]; $('spoken').textContent = f[4]; $('card').innerHTML = card(f); $('armed').textContent = f[7]; $('proof').textContent = f[8]; $('counter').textContent = `${String(index+1).padStart(2,'0')} / ${frames.length}`;
+      $('prev').disabled = index === 0; $('next').disabled = index === frames.length-1; $('next').textContent = index === frames.length-1 ? 'End of flow' : 'Next frame';
+      [...document.querySelectorAll('.step')].forEach((el,i) => el.setAttribute('aria-current', i === index ? 'step' : 'false'));
+      history.replaceState(null,'',`#${f[0]}`);
+    }
+    frames.forEach((f,i) => { const b=document.createElement('button'); b.className='step'; b.innerHTML=`<span class="step-num">${i+1}</span><span class="step-name">${f[1]}</span>`; b.onclick=()=>{index=i;render()}; $('steps').appendChild(b); });
+    $('prev').onclick=()=>{if(index>0){index--;render()}}; $('next').onclick=()=>{if(index<frames.length-1){index++;render()}};
+    document.addEventListener('keydown',e=>{if(e.key==='ArrowLeft')$('prev').click();if(e.key==='ArrowRight')$('next').click()});
+    const hash=location.hash.slice(1); const found=frames.findIndex(f=>f[0]===hash); if(found>=0) index=found; render();
+  </script>
+</body>
+</html>
