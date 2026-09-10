@@ -64,6 +64,16 @@ struct NotchShape: Shape {
     }
 
     func path(in rect: CGRect) -> Path {
+        var p = railPath(in: rect)
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.closeSubpath()
+        return p
+    }
+
+    /// The visible three-sided edge of the surface. It intentionally omits the
+    /// top segment so an inset stroke can form left/right/bottom rails without
+    /// drawing a border along the screen edge.
+    func railPath(in rect: CGRect) -> Path {
         // Nothing may exceed half the width or the whole height: a mass narrower
         // than its own corners is the collapse animation's last frame, and it
         // must degenerate cleanly rather than fold inside out.
@@ -89,10 +99,39 @@ struct NotchShape: Shape {
         p.addLine(to: CGPoint(x: body.maxX, y: rect.minY + depth))
         p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY),
                        control: CGPoint(x: body.maxX, y: rect.minY))
-        // Closed along the screen's top edge, which is where the shape hangs
-        // from. The top is always square: it shares an edge with the display.
-        p.closeSubpath()
         return p
+    }
+}
+
+/// The shell and its three-sided rail use the exact same path geometry. The
+/// rail is open at the top; stroking it inward therefore cannot introduce a
+/// top border or a second, independently tuned curve.
+struct NotchRailShape: Shape {
+    var bottomRadius: CGFloat
+    var topFillet: CGFloat
+    var topFilletDepth: CGFloat
+
+    init(bottomRadius: CGFloat, topFillet: CGFloat = 0, topFilletDepth: CGFloat? = nil) {
+        self.bottomRadius = bottomRadius
+        self.topFillet = topFillet
+        self.topFilletDepth = topFilletDepth ?? topFillet
+    }
+
+    var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>> {
+        get { AnimatablePair(bottomRadius, AnimatablePair(topFillet, topFilletDepth)) }
+        set {
+            bottomRadius = newValue.first
+            topFillet = newValue.second.first
+            topFilletDepth = newValue.second.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        NotchShape(
+            bottomRadius: bottomRadius,
+            topFillet: topFillet,
+            topFilletDepth: topFilletDepth
+        ).railPath(in: rect)
     }
 }
 

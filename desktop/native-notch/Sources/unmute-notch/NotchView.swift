@@ -437,14 +437,13 @@ struct NotchView: View {
             topFillet: Double(model.bar.fillet)
         )
         let horizontal = CGFloat(insets.horizontal)
-        let innerRadius = max(model.bar.bottomRadius - Theme.panelPadding, 0)
         let planeShape = NotchShape(
-            bottomRadius: innerRadius,
-            topFillet: horizontal,
-            topFilletDepth: model.bar.fillet
+            bottomRadius: model.bar.bottomRadius,
+            topFillet: model.bar.fillet
         )
         ZStack(alignment: .topLeading) {
             planeShape.fill(Theme.plane)
+                .mask(threeSidedPlaneMask)
             body()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.horizontal, horizontal)
@@ -481,14 +480,13 @@ struct NotchView: View {
             topFillet: Double(model.bar.fillet)
         )
         let horizontal = CGFloat(insets.horizontal)
-        let innerRadius = max(model.bar.bottomRadius - Theme.panelPadding, 0)
         let planeShape = NotchShape(
-            bottomRadius: innerRadius,
-            topFillet: horizontal,
-            topFilletDepth: model.bar.fillet
+            bottomRadius: model.bar.bottomRadius,
+            topFillet: model.bar.fillet
         )
         ZStack(alignment: .topLeading) {
             planeShape.fill(Theme.plane)
+                .mask(threeSidedPlaneMask)
             body()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.horizontal, horizontal)
@@ -496,6 +494,28 @@ struct NotchView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipShape(planeShape)
             .padding(.bottom, CGFloat(insets.bottom))
+    }
+
+    /// Full outer shape minus a six-point inward stroke of the same open path.
+    /// The subtraction reveals the glass shell as a perfectly parallel rail.
+    private var threeSidedPlaneMask: some View {
+        ZStack {
+            shape.fill(Color.white)
+            NotchRailShape(
+                bottomRadius: model.bar.bottomRadius,
+                topFillet: model.bar.fillet
+            )
+            .stroke(
+                Color.white,
+                style: StrokeStyle(
+                    lineWidth: Theme.panelPadding * 2,
+                    lineCap: .butt,
+                    lineJoin: .round
+                )
+            )
+            .blendMode(.destinationOut)
+        }
+        .compositingGroup()
     }
 
     private func toastView(_ toast: String) -> some View {
