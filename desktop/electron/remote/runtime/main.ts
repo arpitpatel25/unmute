@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   const intercom = new RuntimeTaskIntercom((method, args) => host.call(method, args))
   const computer = new ComputerRuntimeService(event => server.emit('computer.activity', event))
   const server = new RuntimeRpcServer(runtimeSocket(root), async (method, args) => {
-    if (method === 'runtime.info') return { version: 4, pid: process.pid, capabilities: ['codex.forkThread', 'codex.forkResult', 'codex.targetedSnapshot', 'claude.resumeSessionAt'] }
+    if (method === 'runtime.info') return { version: 4, pid: process.pid, capabilities: ['codex.forkThread', 'codex.forkResult', 'codex.targetedSnapshot', 'codex.identity', 'claude.resumeSessionAt'] }
     if (method === 'hello') { host.connected(); return { version: 1, pid: process.pid } }
     if (method === 'host.accept') return host.accept(String(args[0]))
     if (method === 'host.response') return host.response(String(args[0]), args[1], args[2] as string | undefined)

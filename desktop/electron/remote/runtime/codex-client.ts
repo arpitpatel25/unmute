@@ -3,7 +3,7 @@ import type { TaskInput } from '../task-input'
 import { sameQuestion, type QuestionReference } from '../question-reference'
 import type { FollowupGate, NewTurnOutcome } from '../task-followup'
 import type { RuntimeRpcClient } from './rpc'
-import type { CodexMirror, CodexRuntimeEvent, CodexPreparation } from './codex-service'
+import type { CodexMirror, CodexRuntimeEvent, CodexPreparation, CodexIdentity } from './codex-service'
 import { createLogger } from '../log'
 const log = createLogger('codex-projection')
 
@@ -36,6 +36,14 @@ export class PersistentCodexHub extends CodexHub {
     if (!mirror) throw new Error('Fork exists but history is not yet available')
     this.mirrors.set(id, mirror); this.callbacks.onPatch(mirror.patch)
     log.event('task-history-refreshed', { taskId: id, tasks: snapshot.tasks.length })
+  }
+  override async recoverIdentity(id: string, sourceThreadId?: string): Promise<CodexIdentity | null> {
+    return this.rpc.call('codex.identity', id, sourceThreadId).catch(error => {
+      // Rolling compatibility: runtimes predating canonical identity simply
+      // have nothing to reconcile. Other failures remain visible.
+      if ((error as Error).message.includes('Unknown Codex runtime command')) return null
+      throw error
+    })
   }
   private async prepare(id: string, thread?: string): Promise<void> {
     const p: CodexPreparation = {

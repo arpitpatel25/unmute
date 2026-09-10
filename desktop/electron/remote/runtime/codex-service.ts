@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { writeFileAtomic } from '../atomic-file'
 import { CodexHub, type CodexHubDeps, type HubPatch, type CodexInputMetadata } from '../codex/hub'
+import { CodexAppServer } from '../codex/app-server-client'
 import type { FollowupGate } from '../task-followup'
 
 export type CodexPreparation = {
@@ -12,6 +13,7 @@ export type CodexPreparation = {
   inputMetadata?: CodexInputMetadata[]
 }
 export type CodexMirror = { taskId: string; patch: HubPatch; gate: FollowupGate; threadId?: string; validationError?: string }
+export type CodexIdentity = { taskId: string; threadId: string; forkedFromId?: string }
 export type CodexRuntimeEvent = { kind: 'patch'; patch: HubPatch; mirror: CodexMirror }
   | { kind: 'followup'; event: Parameters<Parameters<CodexHub['onFollowup']>[0]>[0]; mirror: CodexMirror }
 export class CodexRuntimeService {
@@ -24,8 +26,16 @@ export class CodexRuntimeService {
   private forks = new Map<string, { source: string; result: Promise<unknown> }>()
   constructor(private root: string, private emit: (event: CodexRuntimeEvent) => void, overrides: Pick<CodexHubDeps, 'makeServer'> = {}) {
     this.hub = new CodexHub({
-      ...overrides, resolveBin: async () => this.bin,
-      onForkConfirmed: (id, result, operationId) => this.save(id, result.forkedFromId, operationId ? `fork:${operationId}` : 'fork', () => result),
+      ...overrides,
+      makeServer: overrides.makeServer ?? (bin => new CodexAppServer({ bin, ownerFile: join(this.root, 'app-server-owner.json') })),
+      resolveBin: async () => this.bin,
+      onForkConfirmed: async (id, result, operationId) => {
+        // The canonical identity is the first durable commit after Codex
+        // confirms a fork. The UI task record may be written later or the GUI
+        // may crash; recovery must still select this exact child.
+        await this.saveIdentity({ taskId: id, ...result })
+        await this.save(id, result.forkedFromId, operationId ? `fork:${operationId}` : 'fork', () => result)
+      },
       threadConfig: async id => this.prepared.get(id)?.config ?? {},
       approvalCap: id => this.prepared.get(id)?.cap ?? { roots: [], fullAccessAllowed: false },
       loadPlans: (id, thread) => this.read(id, thread, 'plans', []),
@@ -48,6 +58,56 @@ export class CodexRuntimeService {
   }
   private file(id: string, thread: string, kind: string): string {
     return join(this.root, createHash('sha256').update(JSON.stringify([id, thread, kind])).digest('hex') + '.json')
+  }
+  private identityFile(id: string): string {
+    return join(this.root, `identity-${createHash('sha256').update(id).digest('hex')}.json`)
+  }
+  private async saveIdentity(identity: CodexIdentity): Promise<void> {
+    const file = this.identityFile(identity.taskId)
+    const write = (this.writes.get(file) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      await mkdir(this.root, { recursive: true, mode: 0o700 })
+      let existing: CodexIdentity | null = null
+      try { existing = JSON.parse(await readFile(file, 'utf8')) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      if (existing && (existing.threadId !== identity.threadId || existing.forkedFromId !== identity.forkedFromId)) {
+        throw new Error('Canonical Codex identity cannot change')
+      }
+      await writeFileAtomic(file, JSON.stringify(identity))
+    })
+    this.writes.set(file, write)
+    await write
+  }
+  private async identity(id: string, expectedSource?: string): Promise<CodexIdentity | null> {
+    let identity: CodexIdentity | null = null
+    try { identity = JSON.parse(await readFile(this.identityFile(id), 'utf8')) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    if (!identity) {
+      // Upgrade path: older builds persisted fork confirmations under opaque
+      // operation hashes. Recover only an unambiguous source→child mapping and
+      // immediately promote it to the canonical task record.
+      const candidates = new Map<string, CodexIdentity>()
+      for (const file of await readdir(this.root).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+        throw error
+      })) {
+        if (!file.endsWith('.json') || file.startsWith('identity-')) continue
+        try {
+          const value = JSON.parse(await readFile(join(this.root, file), 'utf8'))
+          if (typeof value?.threadId === 'string' && typeof value?.forkedFromId === 'string'
+            && (!expectedSource || value.forkedFromId === expectedSource) && value.threadId !== value.forkedFromId) {
+            candidates.set(`${value.forkedFromId}\0${value.threadId}`, { taskId: id, threadId: value.threadId, forkedFromId: value.forkedFromId })
+          }
+        } catch { /* unrelated or incomplete durable record */ }
+      }
+      if (candidates.size > 1) throw new Error('Ambiguous durable Codex fork identity')
+      identity = [...candidates.values()][0] ?? null
+      if (identity) await this.saveIdentity(identity)
+    }
+    if (!identity || identity.taskId !== id) return null
+    if (expectedSource && identity.forkedFromId !== expectedSource && identity.threadId !== expectedSource) {
+      throw new Error('Canonical Codex identity contradicts the requested source')
+    }
+    return identity
   }
   private async read<T>(id: string, thread: string, kind: string, fallback: T): Promise<T> {
     try { return JSON.parse(await readFile(this.file(id, thread, kind), 'utf8')) }
@@ -88,6 +148,7 @@ export class CodexRuntimeService {
       return true
     }
     switch (method) {
+      case 'identity': return this.identity(id, rest[0])
       case 'forkResult': {
         const operationId = rest[1] as string | undefined
         const key = JSON.stringify([id, operationId ?? null])

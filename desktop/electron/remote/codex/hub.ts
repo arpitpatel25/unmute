@@ -188,6 +188,8 @@ export interface CodexHubDeps {
 export class CodexHub {
   /** Remote adapters refresh their projection after the manager saves identity. */
   async refreshTask(_taskId: string): Promise<void> {}
+  /** Return a durable task→thread identity without acquiring writer ownership. */
+  async recoverIdentity(_taskId: string, _sourceThreadId?: string): Promise<{ taskId: string; threadId: string; forkedFromId?: string } | null> { return null }
   private followupListeners = new Set<(event: { type: 'ended'; event: FollowupTurnEnded } | { type: 'changed' | 'disarm'; taskId: string }) => void>()
   private generations = new WeakMap<ThreadState, number>()
   private nextGeneration = 0

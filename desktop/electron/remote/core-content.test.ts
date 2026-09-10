@@ -129,6 +129,23 @@ test('owned Claude distinguishes unstarted, missing, failed and recovered histor
   assert.equal((task.blocks[0] as any).text, '<literal>recovered</literal>')
 })
 
+test('owned Codex history loads from durable rollout without acquiring a writer', async t => {
+  const baseDir = await fs.mkdtemp(join(tmpdir(), 'core-content-codex-history-'))
+  let resumes = 0
+  const hub = { running: true, threadIdFor() { return undefined },
+    async resumeThread() { resumes++; throw new Error('active writer') } }
+  const manager = new TaskManager({ baseDir, codexHub: hub as never,
+    executorFactory: () => { throw new Error('No provider launch') }, codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  t.after(async () => { manager.shutdown(); await fs.rm(baseDir, { recursive: true, force: true }) })
+  const id = await manager.createChat({ provider: 'codex' }), task = manager.get(id)!
+  task.chatUnstarted = false; task.sessionId = 'thread'; task.codexRolloutId = 'thread'
+  ;(manager as any).refreshCodexBlocks = async () => { task.blocks = [{ kind: 'message', role: 'assistant', text: 'Recovered' }] }
+  await manager.loadBlocksFor(id, true)
+  assert.equal(resumes, 0)
+  assert.equal(task.history?.phase, 'ready')
+  assert.equal((task.blocks?.[0] as any).text, 'Recovered')
+})
+
 test('same-state starting activity and error-only failure emit updates while keeping prior blocks', async t => {
   const baseDir = await fs.mkdtemp(join(tmpdir(), 'core-content-state-'))
   const manager = new TaskManager({ baseDir, executorFactory: () => { throw new Error('No provider') } })

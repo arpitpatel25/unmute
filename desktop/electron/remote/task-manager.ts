@@ -2373,6 +2373,32 @@ export class TaskManager extends EventEmitter {
     if (learnedRolloutId || p.assistantText) void this.persistState(task)
   }
 
+  /** Reconcile a task receipt with the provider identity durably committed by
+   * the runtime. This runs before a restored task is published, so no consumer
+   * can resume or render the superseded parent thread. */
+  private async reconcileCodexIdentity(task: Task): Promise<boolean> {
+    if (!task.codexSessionSettings || !this.opts.codexHub?.recoverIdentity) return false
+    try {
+      const identity = await this.opts.codexHub.recoverIdentity(task.id, task.sessionId)
+      if (!identity) return false
+      if (identity.taskId !== task.id || !identity.threadId
+        || identity.forkedFromId && identity.forkedFromId !== task.sessionId && identity.threadId !== task.sessionId) {
+        throw new Error('Canonical Codex identity contradicts the task receipt')
+      }
+      const changed = task.sessionId !== identity.threadId || task.codexRolloutId !== identity.threadId
+      task.sessionId = identity.threadId
+      task.codexRolloutId = identity.threadId
+      if (changed) log.event('codex-identity-reconciled', {
+        taskId: task.id, sourceSessionId: identity.forkedFromId ?? null, sessionId: identity.threadId,
+      })
+      return changed
+    } catch (error) {
+      task.resumeError = 'This conversation identity could not be verified. Unmute will not attach another writer.'
+      log.error('codex-identity-reconciliation-failed', { taskId: task.id, ...diagnosticError(error) })
+      return false
+    }
+  }
+
   /**
    * The Codex analogue of poll(): derive state from the rollout file instead of
    * a status file the agent writes. Same cadence, same transitions, same stuck
@@ -3137,10 +3163,10 @@ export class TaskManager extends EventEmitter {
       return
     }
     if (task.codexSessionSettings) {
-      if (task.sessionId && this.opts.codexHub) {
-        await validateProject(task.cwd)
-        await this.opts.codexHub.resumeThread(id, task.sessionId, task.codexSessionSettings, retry)
-      }
+      // History is a read operation. Resuming here used to acquire app-server
+      // writer ownership first, so an existing writer turned a fully readable
+      // rollout into “Conversation history is unavailable.”
+      await this.refreshCodexBlocks(task)
       return
     }
     if (task.agent === 'codex' || isExternalAgent(task.agent)) {
@@ -4424,13 +4450,14 @@ export class TaskManager extends EventEmitter {
         if (parsed.usage) task.usage = parsed.usage
         if (task.history.phase === 'missing' && task.conversation?.length) task.history = { ...task.history, phase: 'partial' }
       }
+      const identityRepaired = await this.reconcileCodexIdentity(task)
       if (await fs.lstat(join(task.home, 'attachments')).catch(() => null)) {
         try { await this.prepareAttachmentStorage(task) }
         catch (error) { task.deliveryError = `Could not secure attachment storage: ${(error as Error).message}` }
       }
       this.tasks.set(id, task)
       this.emit('created', task)
-      if (persistedState !== recoveredState || repairedStartedCodex) await this.persistState(task)
+      if (persistedState !== recoveredState || repairedStartedCodex || identityRepaired) await this.persistState(task)
       restored++
     }
     if (restored) log.event('rehydrated', { restored })

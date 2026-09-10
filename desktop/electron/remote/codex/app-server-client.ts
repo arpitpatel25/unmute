@@ -56,7 +56,11 @@
 
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
+import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, unlink } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { createLogger } from '../log'
+import { writeFileAtomic } from '../atomic-file'
 
 const log = createLogger('codex-app-server')
 
@@ -87,7 +91,14 @@ export interface AppServerDeps {
   fetchImpl?: typeof fetch
   wsFactory?: (url: string) => WebSocket
   port?: number
+  ownerFile?: string
+  inspectProcess?: (pid: number) => Promise<string | null>
+  killImpl?: (pid: number) => void
+  readyTimeoutMs?: number
+  readyPollMs?: number
 }
+
+type AppServerOwner = { pid: number; port: number; generation: string }
 
 /** Ask the OS for a free loopback port. Racy in principle, immediately reused
  *  in practice, and far better than a hardcoded port that collides with a
@@ -114,6 +125,7 @@ export class CodexAppServer {
   private starting: Promise<void> | null = null
   private port = 0
   private stopped = false
+  private owner: AppServerOwner | null = null
 
   constructor(private deps: AppServerDeps) {}
 
@@ -134,6 +146,22 @@ export class CodexAppServer {
 
   private async doStart(): Promise<void> {
     this.stopped = false
+    const adopted = await this.adoptOwner()
+    if (adopted) {
+      this.port = adopted.port
+      this.owner = adopted
+      try {
+        await this.waitReady(false)
+        await this.connect()
+        await this.request('initialize', { clientInfo: { name: 'unmute', version: '1' } })
+        this.notify('initialized', {})
+        log.event('app-server-adopted', { port: adopted.port, pid: adopted.pid, generation: adopted.generation })
+        return
+      } catch (error) {
+        this.ws?.close(); this.ws = null
+        throw new Error(`existing app-server owner is alive but unreachable: ${(error as Error).message}`)
+      }
+    }
     this.port = this.deps.port ?? await freePort()
     const spawnImpl = this.deps.spawnImpl ?? spawn
     const args = ['app-server', '--listen', `ws://127.0.0.1:${this.port}`]
@@ -146,6 +174,9 @@ export class CodexAppServer {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, UNMUTE_APP_SERVER: '1' },
     })
+    if (!this.proc.pid) throw new Error('app-server spawn returned no pid')
+    this.owner = { pid: this.proc.pid, port: this.port, generation: randomUUID() }
+    await this.writeOwner(this.owner)
     log.event('app-server-spawn', { bin: this.deps.bin, port: this.port, pid: this.proc.pid ?? null })
 
     // Codex writes its banner to stdout and its complaints to stderr. Neither is
@@ -159,6 +190,8 @@ export class CodexAppServer {
       if (!this.stopped) this.dispatchNotification('transport/disconnected', { reason: 'app-server exited' })
       this.ws = null
       this.proc = null
+      void this.clearOwner(this.owner)
+      this.owner = null
     })
 
     await this.waitReady()
@@ -169,22 +202,69 @@ export class CodexAppServer {
     log.event('app-server-ready', { url: this.url })
   }
 
+  private async inspectProcess(pid: number): Promise<string | null> {
+    if (this.deps.inspectProcess) return this.deps.inspectProcess(pid)
+    return new Promise(resolve => execFile('/bin/ps', ['-p', String(pid), '-wwEo', 'command='], (error, stdout) => {
+      resolve(error ? null : String(stdout).trim() || null)
+    }))
+  }
+
+  private async adoptOwner(): Promise<AppServerOwner | null> {
+    if (!this.deps.ownerFile) return null
+    let owner: AppServerOwner
+    try { owner = JSON.parse(await readFile(this.deps.ownerFile, 'utf8')) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+    if (!Number.isInteger(owner.pid) || owner.pid <= 0 || !Number.isInteger(owner.port) || owner.port <= 0 || !owner.generation) {
+      throw new Error('invalid app-server owner record')
+    }
+    const command = await this.inspectProcess(owner.pid)
+    if (!command) { await this.clearOwner(owner); return null }
+    const endpoint = `ws://127.0.0.1:${owner.port}`
+    if (!command.includes('UNMUTE_APP_SERVER=1') || !command.includes('app-server') || !command.includes(endpoint)) {
+      throw new Error('existing app-server owner could not be verified')
+    }
+    return owner
+  }
+
+  private async writeOwner(owner: AppServerOwner): Promise<void> {
+    if (!this.deps.ownerFile) return
+    await mkdir(dirname(this.deps.ownerFile), { recursive: true, mode: 0o700 })
+    await writeFileAtomic(this.deps.ownerFile, JSON.stringify(owner))
+  }
+
+  private async clearOwner(expected: AppServerOwner | null): Promise<void> {
+    if (!this.deps.ownerFile || !expected) return
+    try {
+      const current = JSON.parse(await readFile(this.deps.ownerFile, 'utf8')) as AppServerOwner
+      if (current.generation === expected.generation && current.pid === expected.pid && current.port === expected.port) {
+        await unlink(this.deps.ownerFile)
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('app-server-owner-clear-failed', { error: (error as Error).message })
+    }
+  }
+
   /** Poll /readyz rather than sleeping — a fixed wait is either too short on a
    *  cold machine or wasted on a warm one. */
-  private async waitReady(): Promise<void> {
+  private async waitReady(requireSpawnedProcess = true): Promise<void> {
     const f = this.deps.fetchImpl ?? fetch
-    const deadline = Date.now() + READY_TIMEOUT_MS
+    const timeout = this.deps.readyTimeoutMs ?? READY_TIMEOUT_MS
+    const poll = this.deps.readyPollMs ?? READY_POLL_MS
+    const deadline = Date.now() + timeout
     let lastErr = 'never answered'
     while (Date.now() < deadline) {
-      if (!this.proc) throw new Error(`app-server died before ready: ${lastErr}`)
+      if (requireSpawnedProcess && !this.proc) throw new Error(`app-server died before ready: ${lastErr}`)
       try {
         const res = await f(`http://127.0.0.1:${this.port}/readyz`)
         if (res.ok) return
         lastErr = `status ${res.status}`
       } catch (e) { lastErr = (e as Error).message }
-      await new Promise((r) => setTimeout(r, READY_POLL_MS))
+      await new Promise((r) => setTimeout(r, poll))
     }
-    throw new Error(`app-server not ready after ${READY_TIMEOUT_MS}ms: ${lastErr}`)
+    throw new Error(`app-server not ready after ${timeout}ms: ${lastErr}`)
   }
 
   private async connect(): Promise<void> {
@@ -367,8 +447,14 @@ export class CodexAppServer {
     this.failAllPending(new Error('app-server stopped'))
     try { this.ws?.close() } catch { /* already gone */ }
     this.ws = null
+    const adoptedPid = !this.proc ? this.owner?.pid : undefined
     try { this.proc?.kill() } catch { /* already gone */ }
+    if (adoptedPid) {
+      try { (this.deps.killImpl ?? process.kill)(adoptedPid) } catch { /* already gone */ }
+    }
     this.proc = null
+    void this.clearOwner(this.owner)
+    this.owner = null
     this.port = 0
     log.event('app-server-stopped', {})
   }

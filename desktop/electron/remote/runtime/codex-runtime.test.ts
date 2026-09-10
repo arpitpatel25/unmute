@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RuntimeRpcClient, RuntimeRpcServer } from './rpc'
@@ -33,6 +33,35 @@ test('fork status returns durable identity while provider history is still loadi
       new Promise(resolve => { timer = setTimeout(() => resolve('blocked-on-history'), 200) })])
     assert.deepEqual(result, { threadId: 'child', forkedFromId: 'source' })
   } finally { clearTimeout(timer); release({ data: [] }); await fork; service.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('canonical fork identity survives a runtime restart and repairs legacy receipts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fork-canonical-identity-'))
+  let forks = 0
+  const provider = {
+    running: true, url: '', async start() {}, stop() {}, on() { return () => {} }, onRequest() {}, notify() {},
+    async request(method: string) {
+      if (method === 'thread/fork') { forks++; return { thread: { id: 'child', forkedFromId: 'source', turns: [] } } }
+      return {}
+    },
+  } as unknown as CodexAppServer
+  const first = new CodexRuntimeService(root, () => {}, { makeServer: () => provider })
+  await first.invoke('prepare', ['task', { bin: '/codex' }])
+  await first.invoke('forkThread', ['task', 'source', { cwd: '/tmp' }])
+  assert.deepEqual(await first.invoke('identity', ['task', 'source']), { taskId: 'task', threadId: 'child', forkedFromId: 'source' })
+  first.close()
+
+  // Simulate an upgrade from a build that had the durable fork receipt but no
+  // canonical per-task identity record.
+  const identity = (await readdir(root)).find(file => file.startsWith('identity-'))
+  assert.ok(identity)
+  await unlink(join(root, identity))
+  const restarted = new CodexRuntimeService(root, () => {}, { makeServer: () => provider })
+  try {
+    assert.deepEqual(await restarted.invoke('identity', ['task', 'source']), { taskId: 'task', threadId: 'child', forkedFromId: 'source' })
+    assert.equal(forks, 1, 'identity recovery must never issue another provider fork')
+    assert.ok((await readdir(root)).some(file => file.startsWith('identity-')), 'legacy recovery is promoted to the canonical record')
+  } finally { restarted.close(); await rm(root, { recursive: true, force: true }) }
 })
 
 test('a real socket loss after provider acceptance recovers the same child without retrying the fork', async () => {

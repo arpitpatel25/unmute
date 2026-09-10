@@ -326,6 +326,36 @@ test('restart repairs a persisted Codex identity that was incorrectly left unsta
   assert.equal(JSON.parse(await fs.readFile(join(home, 'meta.json'), 'utf8')).chatUnstarted, false)
 })
 
+test('rehydration repairs stale task metadata from the canonical Codex identity before publication', async t => {
+  const baseDir = await base()
+  const initial = new TaskManager({ executorFactory, codexHub: { running: true, threadIdFor() { return undefined } } as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  const id = await initial.createChat({ provider: 'codex', cwd: baseDir })
+  const home = initial.get(id)!.home
+  initial.shutdown()
+  await Promise.all([...((initial as any).metaChains.values())])
+  const stale = JSON.parse(await fs.readFile(join(home, 'meta.json'), 'utf8'))
+  stale.sessionId = 'source'; stale.codexRolloutId = 'source'; stale.chatUnstarted = false; stale.state = 'done'
+  await fs.writeFile(join(home, 'meta.json'), JSON.stringify(stale))
+  let recovered = 0
+  const hub = { running: true, threadIdFor() { return undefined },
+    async recoverIdentity(taskId: string, source: string) {
+      recovered++
+      assert.equal(taskId, id); assert.equal(source, 'source')
+      return { taskId, threadId: 'child', forkedFromId: 'source' }
+    } }
+  const restarted = new TaskManager({ executorFactory, codexHub: hub as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  t.after(() => restarted.shutdown())
+  await restarted.rehydrate()
+  assert.equal(recovered, 1)
+  assert.equal(restarted.get(id)?.sessionId, 'child')
+  assert.equal(restarted.get(id)?.codexRolloutId, 'child')
+  const repaired = JSON.parse(await fs.readFile(join(home, 'meta.json'), 'utf8'))
+  assert.equal(repaired.sessionId, 'child')
+  assert.equal(repaired.codexRolloutId, 'child')
+})
+
 test('Codex fork uses native fork and persists the returned child and source', async () => {
   const baseDir = await base()
   const calls: Array<{ op: string; value?: string }> = []
