@@ -61,6 +61,7 @@ import { mkdir, readFile, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { createLogger } from '../log'
 import { writeFileAtomic } from '../atomic-file'
+import { sessionLifecycleDev } from '../session-lifecycle-devlog'
 
 const log = createLogger('codex-app-server')
 
@@ -156,9 +157,11 @@ export class CodexAppServer {
         await this.request('initialize', { clientInfo: { name: 'unmute', version: '1' } })
         this.notify('initialized', {})
         log.event('app-server-adopted', { port: adopted.port, pid: adopted.pid, generation: adopted.generation })
+        sessionLifecycleDev('writer-owner-adopted', { pid: adopted.pid, port: adopted.port, generation: adopted.generation })
         return
       } catch (error) {
         this.ws?.close(); this.ws = null
+        sessionLifecycleDev('writer-owner-fenced', { pid: adopted.pid, port: adopted.port, phase: 'health-check' })
         throw new Error(`existing app-server owner is alive but unreachable: ${(error as Error).message}`)
       }
     }
@@ -176,7 +179,13 @@ export class CodexAppServer {
     })
     if (!this.proc.pid) throw new Error('app-server spawn returned no pid')
     this.owner = { pid: this.proc.pid, port: this.port, generation: randomUUID() }
-    await this.writeOwner(this.owner)
+    try { await this.writeOwner(this.owner) }
+    catch (error) {
+      try { this.proc.kill() } catch { /* best-effort rollback */ }
+      this.proc = null; this.owner = null
+      throw error
+    }
+    sessionLifecycleDev('writer-owner-spawned', { pid: this.owner.pid, port: this.owner.port, generation: this.owner.generation })
     log.event('app-server-spawn', { bin: this.deps.bin, port: this.port, pid: this.proc.pid ?? null })
 
     // Codex writes its banner to stdout and its complaints to stderr. Neither is
@@ -217,11 +226,15 @@ export class CodexAppServer {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw error
     }
+    sessionLifecycleDev('writer-owner-record-read', { pid: owner.pid, port: owner.port, generation: owner.generation })
     if (!Number.isInteger(owner.pid) || owner.pid <= 0 || !Number.isInteger(owner.port) || owner.port <= 0 || !owner.generation) {
       throw new Error('invalid app-server owner record')
     }
     const command = await this.inspectProcess(owner.pid)
-    if (!command) { await this.clearOwner(owner); return null }
+    if (!command) {
+      sessionLifecycleDev('writer-owner-stale', { pid: owner.pid, port: owner.port, generation: owner.generation })
+      await this.clearOwner(owner); return null
+    }
     const endpoint = `ws://127.0.0.1:${owner.port}`
     if (!command.includes('UNMUTE_APP_SERVER=1') || !command.includes('app-server') || !command.includes(endpoint)) {
       throw new Error('existing app-server owner could not be verified')
@@ -233,6 +246,7 @@ export class CodexAppServer {
     if (!this.deps.ownerFile) return
     await mkdir(dirname(this.deps.ownerFile), { recursive: true, mode: 0o700 })
     await writeFileAtomic(this.deps.ownerFile, JSON.stringify(owner))
+    sessionLifecycleDev('writer-owner-record-written', { pid: owner.pid, port: owner.port, generation: owner.generation })
   }
 
   private async clearOwner(expected: AppServerOwner | null): Promise<void> {
@@ -241,6 +255,7 @@ export class CodexAppServer {
       const current = JSON.parse(await readFile(this.deps.ownerFile, 'utf8')) as AppServerOwner
       if (current.generation === expected.generation && current.pid === expected.pid && current.port === expected.port) {
         await unlink(this.deps.ownerFile)
+        sessionLifecycleDev('writer-owner-record-cleared', { pid: expected.pid, port: expected.port, generation: expected.generation })
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('app-server-owner-clear-failed', { error: (error as Error).message })

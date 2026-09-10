@@ -42,6 +42,7 @@ test('canonical fork identity survives a runtime restart and repairs legacy rece
     running: true, url: '', async start() {}, stop() {}, on() { return () => {} }, onRequest() {}, notify() {},
     async request(method: string) {
       if (method === 'thread/fork') { forks++; return { thread: { id: 'child', forkedFromId: 'source', turns: [] } } }
+      if (method === 'thread/start') return { thread: { id: 'started' } }
       return {}
     },
   } as unknown as CodexAppServer
@@ -49,6 +50,9 @@ test('canonical fork identity survives a runtime restart and repairs legacy rece
   await first.invoke('prepare', ['task', { bin: '/codex' }])
   await first.invoke('forkThread', ['task', 'source', { cwd: '/tmp' }])
   assert.deepEqual(await first.invoke('identity', ['task', 'source']), { taskId: 'task', threadId: 'child', forkedFromId: 'source' })
+  await first.invoke('prepare', ['fresh', { bin: '/codex' }])
+  await first.invoke('startThread', ['fresh', { cwd: '/tmp' }])
+  assert.deepEqual(await first.invoke('identity', ['fresh']), { taskId: 'fresh', threadId: 'started' })
   first.close()
 
   // Simulate an upgrade from a build that had the durable fork receipt but no

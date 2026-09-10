@@ -33,6 +33,7 @@ import { reconstructTaskMeta } from './meta-reconstruct'
 import { tapPty } from './pty-tap'
 import { ReconcileScheduler } from './reconcile-scheduler'
 import { AppendFileCache } from './append-file-cache'
+import { sessionLifecycleDev } from './session-lifecycle-devlog'
 
 type AgentDispatchMetadata = AgentMetadata & { agentRunId: string }
 type DesktopHandoffReceipt = { id: string; before: string[]; metadata: AgentDispatchMetadata; acknowledged: boolean; intent: string; startedAt: number }
@@ -785,6 +786,9 @@ export class TaskManager extends EventEmitter {
    *  session in that window. */
   private resuming = new Set<string>()
   private opening = new Set<string>()
+  private autoResumeFailedAt = new Map<string, number>()
+  private startupRecovery: Promise<void> = Promise.resolve()
+  private static readonly AUTO_RESUME_COOLDOWN_MS = 5_000
   // Per-task chain serializing meta.json read-modify-writes. Two concurrent
   // merges (e.g. setShelved + setNote in one tick) would otherwise race the
   // read and the last write would silently drop the other's field.
@@ -864,6 +868,23 @@ export class TaskManager extends EventEmitter {
       tickMs: Math.min(this.opts.pollMs, 1_000),
       onError: (id, error) => this.handlePollError(id, error),
     })
+  }
+
+  /** Fence user-driven auto-resume until startup has reconciled durable
+   * runtime ownership and provider identities. Returns an idempotent release. */
+  beginStartupRecovery(): () => void {
+    let release!: () => void
+    let released = false
+    this.startupRecovery = new Promise<void>(resolve => { release = resolve })
+    log.event('startup-recovery-barrier-armed', {})
+    sessionLifecycleDev('startup-barrier-armed')
+    return () => {
+      if (released) return
+      released = true
+      log.event('startup-recovery-barrier-released', {})
+      sessionLifecycleDev('startup-barrier-released')
+      release()
+    }
   }
 
   /**
@@ -2282,8 +2303,14 @@ export class TaskManager extends EventEmitter {
   applyHubPatch(p: HubPatch): void {
     const task = this.tasks.get(p.taskId)
     if (!task) return
-    const learnedRolloutId = !!p.threadId && !task.codexRolloutId
-    if (learnedRolloutId) task.codexRolloutId = p.threadId
+    const learnedIdentity = !!p.threadId && task.codexSessionSettings
+      && (task.sessionId !== p.threadId || task.codexRolloutId !== p.threadId)
+    if (learnedIdentity) {
+      task.sessionId = p.threadId!
+      task.codexRolloutId = p.threadId
+      log.event('codex-live-identity-reconciled', { taskId: task.id, sessionId: p.threadId })
+      void this.persistState(task).catch(() => {})
+    }
     if (p.name && !task.name) task.name = p.name
     if (p.state === 'processing' && 'turnOutcome' in p && p.turnOutcome === null) {
       task.currentTurnAssistantText = undefined
@@ -2344,7 +2371,6 @@ export class TaskManager extends EventEmitter {
         // about what an open chat view should be showing. Emit without
         // transitioning, so the card updates and the wall does not re-sort.
         if (p.blocks || p.errorReason !== undefined || 'activity' in p || 'turnOutcome' in p || p.history || p.mcpStatus) this.emit('updated', task)
-        if (learnedRolloutId) void this.persistState(task)
         return
       }
       this.transition(p.taskId, p.state, status, this.clock())
@@ -2370,7 +2396,7 @@ export class TaskManager extends EventEmitter {
     // Streaming blocks update the open view, not the task's ordering timestamp.
     if (p.assistantText) task.updatedAt = this.clock()
     this.emit('updated', task)
-    if (learnedRolloutId || p.assistantText) void this.persistState(task)
+    if (p.assistantText) void this.persistState(task)
   }
 
   /** Reconcile a task receipt with the provider identity durably committed by
@@ -2389,6 +2415,9 @@ export class TaskManager extends EventEmitter {
       task.sessionId = identity.threadId
       task.codexRolloutId = identity.threadId
       if (changed) log.event('codex-identity-reconciled', {
+        taskId: task.id, sourceSessionId: identity.forkedFromId ?? null, sessionId: identity.threadId,
+      })
+      if (changed) sessionLifecycleDev('task-identity-reconciled', {
         taskId: task.id, sourceSessionId: identity.forkedFromId ?? null, sessionId: identity.threadId,
       })
       return changed
@@ -3132,9 +3161,11 @@ export class TaskManager extends EventEmitter {
     }
     const load = Promise.resolve().then(async () => {
       task.history = { phase: 'loading' }; this.emit('updated', task)
+      sessionLifecycleDev('history-load-started', { taskId: id, provider: task.agent ?? null, sessionId: task.sessionId })
       try { await this.loadTaskHistory(task, retry) }
       catch (error) { task.history = { phase: task.blocks?.length || task.conversation?.length ? 'partial' : 'failed', reason: (error as Error).message, canRetry: true } }
       if (task.history?.phase === 'loading') task.history = task.blocks?.length ? { phase: 'ready' } : { phase: 'missing', reason: 'No readable history was found for this session.', canRetry: true }
+      sessionLifecycleDev('history-load-finished', { taskId: id, provider: task.agent ?? null, sessionId: task.sessionId, phase: task.history.phase, blocks: task.blocks?.length ?? 0 })
       this.emit('updated', task)
     }).finally(() => this.historyLoads.delete(id))
     this.historyLoads.set(id, load)
@@ -3166,7 +3197,7 @@ export class TaskManager extends EventEmitter {
       // History is a read operation. Resuming here used to acquire app-server
       // writer ownership first, so an existing writer turned a fully readable
       // rollout into “Conversation history is unavailable.”
-      await this.refreshCodexBlocks(task)
+      await this.refreshCodexBlocks(task, undefined, undefined, true)
       return
     }
     if (task.agent === 'codex' || isExternalAgent(task.agent)) {
@@ -3225,7 +3256,7 @@ export class TaskManager extends EventEmitter {
    * app-server. When the hub DOES own the thread its pushed blocks are richer
    * (streaming deltas, live plan) and win, so this never overwrites them.
    */
-  private async refreshCodexBlocks(task: Task, knownPath?: string, knownText?: string): Promise<void> {
+  private async refreshCodexBlocks(task: Task, knownPath?: string, knownText?: string, forceFullRead = false): Promise<void> {
     const rolloutId = task.codexRolloutId ?? task.codexThreadId ?? task.sessionId
     if (!rolloutId) return
     const path = knownPath ?? await findRollout(rolloutId)
@@ -3233,9 +3264,12 @@ export class TaskManager extends EventEmitter {
     this.ensureTranscriptWatcher(task.id, path)
     let text = knownText
     if (text === undefined) {
-      const read = await this.transcriptFiles.read(path)
-      if (read.missing || !read.changed) return
-      text = read.text
+      if (forceFullRead) text = await fs.readFile(path, 'utf8')
+      else {
+        const read = await this.transcriptFiles.read(path)
+        if (read.missing || !read.changed) return
+        text = read.text
+      }
     }
     const { blocks, usage } = blocksFromRollout(text)
     if (!blocks.length) return
@@ -4368,7 +4402,7 @@ export class TaskManager extends EventEmitter {
         }
       }
       const recoveredState = nativeCompleted ? 'done' : structured
-        ? (terminal ? status!.state : persistedState === 'done' || persistedState === 'failed' ? persistedState : 'failed')
+        ? (terminal ? status!.state : persistedState ?? (isSession ? 'done' : 'processing'))
         : meta.agent === 'codex' && isSession
         ? persistedState ?? (terminal ? status!.state : 'done')
         : terminal
@@ -4421,7 +4455,7 @@ export class TaskManager extends EventEmitter {
         category: status?.category,
         result: status?.result,
         error: structured
-          ? (recoveredState === 'failed' ? { reason: 'Session disconnected — resume to continue' } : undefined)
+          ? (recoveredState === 'failed' ? status?.error : undefined)
           : nativeCompleted ? undefined : terminal ? status?.error : (isSession ? undefined : { reason: 'Interrupted by an app restart — resume to continue' }),
         question: structured ? undefined : status?.question,
         surface: meta.surface,
@@ -6095,6 +6129,7 @@ export class TaskManager extends EventEmitter {
       if (!this.opts.codexHub) return false
       try {
         await validateProject(task.cwd)
+        if (await this.reconcileCodexIdentity(task)) await this.persistState(task)
         if (task.codexSessionSettings.sandbox === 'danger-full-access' && !this.chatFullAccessAllowed(id)) throw new Error('Recorded full access exceeds the configured sandbox roots or consent cap. Select Ask for approval before resuming.')
         if (!task.sessionId && task.chatUnstarted) {
           const { threadId } = await this.opts.codexHub.startThread(id, task.codexSessionSettings)
@@ -6103,7 +6138,7 @@ export class TaskManager extends EventEmitter {
           await this.persistState(task)
         } else {
           if (!task.sessionId) throw new Error('Session creation was not acknowledged. Start a new conversation.')
-          await this.opts.codexHub.resumeThread(id, task.codexRolloutId ?? task.sessionId, task.codexSessionSettings)
+          await this.opts.codexHub.resumeThread(id, task.sessionId, task.codexSessionSettings)
         }
         if (legacyMigration) {
           task.sessionOwnership = 'unmute'; task.chatUnstarted = false
@@ -6314,11 +6349,16 @@ export class TaskManager extends EventEmitter {
     if (isExternalAgent(task.agent)) return
     if (this.executors.get(id)?.alive) return
     if (this.resuming.has(id) || this.opening.has(id)) return
+    const failedAt = this.autoResumeFailedAt.get(id)
+    if (failedAt !== undefined && this.clock() - failedAt < TaskManager.AUTO_RESUME_COOLDOWN_MS) return
     this.opening.add(id)
     const tlog = log.child({ taskId: id })
 
     void (async () => {
       try {
+        sessionLifecycleDev('task-open-waiting-for-startup', { taskId: id, sessionId: task.sessionId, provider: task.agent ?? null })
+        await this.startupRecovery
+        sessionLifecycleDev('task-open-startup-ready', { taskId: id, sessionId: task.sessionId, provider: task.agent ?? null })
         // ASK TMUX, NOT JUST OURSELVES.
         //
         // The guard above — "do I have a live executor?" — is an IN-PROCESS
@@ -6343,12 +6383,14 @@ export class TaskManager extends EventEmitter {
         tlog.event('auto-resume-on-open', {})
         const ok = await this.resume(id, { touchActivity: false })
         if (!ok) {
+          this.autoResumeFailedAt.set(id, this.clock())
+          sessionLifecycleDev('auto-resume-cooled-down', { taskId: id, sessionId: task.sessionId, provider: task.agent ?? null })
           tlog.warn('auto-resume on open did not take', {})
           // Nothing is attached and nothing will attach, so no worker is ever
           // going to deliver this turn's completion. Ask the thread's own
           // rollout instead of leaving the card spinning on "Working".
           await this.settleFromRollout(id)
-        }
+        } else this.autoResumeFailedAt.delete(id)
       } catch (e) {
         tlog.error('auto-resume on open threw', { error: (e as Error).message })
       } finally {
@@ -6370,7 +6412,9 @@ export class TaskManager extends EventEmitter {
    *  little longer, so an unknown outcome must leave the card exactly as it is. */
   async settleFromRollout(id: string): Promise<boolean> {
     const task = this.tasks.get(id)
-    if (!task || task.state !== 'processing') return false
+    const legacyDisconnect = task?.state === 'failed'
+      && /session disconnected|interrupted by an app restart|connection lost/i.test(task.error?.reason ?? '')
+    if (!task || task.state !== 'processing' && !legacyDisconnect) return false
     const rolloutId = task.codexRolloutId ?? task.codexThreadId ?? task.sessionId
     if (!rolloutId) return false
     const tlog = log.child({ taskId: id })
@@ -6385,6 +6429,9 @@ export class TaskManager extends EventEmitter {
       return false
     }
     tlog.event('settled-from-rollout', { rolloutId, at: outcome.at })
+    task.error = undefined
+    task.resumeError = undefined
+    task.deliveryError = undefined
     this.transition(id, 'done', {
       state: 'done',
       result: { summary: outcome.lastAgentMessage ?? 'Codex finished this turn.' },

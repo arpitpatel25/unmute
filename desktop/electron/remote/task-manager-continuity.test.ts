@@ -83,6 +83,62 @@ test('message editing is disabled for Codex and cannot fork the provider thread'
   assert.equal(forks, 0)
 })
 
+test('opening a restored task waits for the startup recovery barrier before resuming', async t => {
+  const baseDir = await base()
+  let resumes = 0
+  const hub = { running: true, threadIdFor() { return undefined },
+    async resumeThread() { resumes++ } }
+  const tm = new TaskManager({ executorFactory, codexHub: hub as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  t.after(() => tm.shutdown())
+  const finishRecovery = tm.beginStartupRecovery()
+  const id = await tm.createChat({ provider: 'codex', cwd: baseDir })
+  const task = tm.get(id)!
+  task.chatUnstarted = false; task.sessionId = 'thread'; task.codexRolloutId = 'thread'; task.state = 'done'
+  tm.opened(id)
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(resumes, 0)
+  finishRecovery()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(resumes, 1)
+})
+
+test('automatic resume failures are cooled down across repeated open announcements', async t => {
+  const baseDir = await base()
+  let resumes = 0
+  const hub = { running: true, threadIdFor() { return undefined },
+    async resumeThread() { resumes++; throw new Error('active writer') } }
+  const tm = new TaskManager({ executorFactory, codexHub: hub as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  t.after(() => tm.shutdown())
+  const id = await tm.createChat({ provider: 'codex', cwd: baseDir })
+  const task = tm.get(id)!
+  task.chatUnstarted = false; task.sessionId = 'thread'; task.codexRolloutId = 'thread'; task.state = 'done'
+  tm.opened(id)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  tm.opened(id)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(resumes, 1)
+})
+
+test('rehydration does not invent a disconnected failure for a structured runtime awaiting recovery', async t => {
+  const baseDir = await base()
+  const id = 'structured-recovery'
+  const home = join(baseDir, 'local', id)
+  await fs.mkdir(home, { recursive: true })
+  await fs.writeFile(join(home, 'meta.json'), JSON.stringify({
+    id, intent: 'Keep working', agent: 'codex', sessionId: 'thread', codexRolloutId: 'thread',
+    state: 'processing', kind: 'session', sessionOwnership: 'unmute',
+    codexSessionSettings: { cwd: baseDir, approvalPolicy: 'on-request', sandbox: 'workspace-write' },
+  }))
+  await fs.writeFile(join(home, 'status.json'), JSON.stringify({ schema_version: 1, state: 'processing', updated_at: new Date().toISOString() }))
+  const tm = new TaskManager({ executorFactory, codexHub: { running: false, threadIdFor() { return undefined } } as never, baseDir })
+  t.after(() => tm.shutdown())
+  await tm.rehydrate()
+  assert.equal(tm.get(id)?.state, 'processing')
+  assert.equal(tm.get(id)?.error, undefined)
+})
+
 test('unresolved Desktop handoff retains metadata across restart and refuses ambiguous adoption', async t => {
   const baseDir = await base()
   const groupRegistry = new GroupRegistry({ path: join(baseDir, 'groups.json'), idFactory: () => 'canonical-group' })

@@ -136,7 +136,7 @@ test('owned Codex history loads from durable rollout without acquiring a writer'
     async resumeThread() { resumes++; throw new Error('active writer') } }
   const manager = new TaskManager({ baseDir, codexHub: hub as never,
     executorFactory: () => { throw new Error('No provider launch') }, codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
-  t.after(async () => { manager.shutdown(); await fs.rm(baseDir, { recursive: true, force: true }) })
+  t.after(async () => { manager.shutdown(); await Promise.all([...(manager as any).metaChains.values()]); await fs.rm(baseDir, { recursive: true, force: true }) })
   const id = await manager.createChat({ provider: 'codex' }), task = manager.get(id)!
   task.chatUnstarted = false; task.sessionId = 'thread'; task.codexRolloutId = 'thread'
   ;(manager as any).refreshCodexBlocks = async () => { task.blocks = [{ kind: 'message', role: 'assistant', text: 'Recovered' }] }

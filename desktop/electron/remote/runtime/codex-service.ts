@@ -5,6 +5,7 @@ import { writeFileAtomic } from '../atomic-file'
 import { CodexHub, type CodexHubDeps, type HubPatch, type CodexInputMetadata } from '../codex/hub'
 import { CodexAppServer } from '../codex/app-server-client'
 import type { FollowupGate } from '../task-followup'
+import { sessionLifecycleDev } from '../session-lifecycle-devlog'
 
 export type CodexPreparation = {
   bin: string | null; config?: Record<string, unknown>
@@ -29,6 +30,7 @@ export class CodexRuntimeService {
       ...overrides,
       makeServer: overrides.makeServer ?? (bin => new CodexAppServer({ bin, ownerFile: join(this.root, 'app-server-owner.json') })),
       resolveBin: async () => this.bin,
+      onThreadConfirmed: (id, threadId) => this.saveIdentity({ taskId: id, threadId }),
       onForkConfirmed: async (id, result, operationId) => {
         // The canonical identity is the first durable commit after Codex
         // confirms a fork. The UI task record may be written later or the GUI
@@ -73,6 +75,7 @@ export class CodexRuntimeService {
         throw new Error('Canonical Codex identity cannot change')
       }
       await writeFileAtomic(file, JSON.stringify(identity))
+      sessionLifecycleDev('canonical-identity-written', { taskId: identity.taskId, sessionId: identity.threadId, sourceSessionId: identity.forkedFromId ?? null })
     })
     this.writes.set(file, write)
     await write
@@ -81,7 +84,7 @@ export class CodexRuntimeService {
     let identity: CodexIdentity | null = null
     try { identity = JSON.parse(await readFile(this.identityFile(id), 'utf8')) }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    if (!identity) {
+    if (!identity && expectedSource) {
       // Upgrade path: older builds persisted fork confirmations under opaque
       // operation hashes. Recover only an unambiguous source→child mapping and
       // immediately promote it to the canonical task record.
@@ -101,7 +104,10 @@ export class CodexRuntimeService {
       }
       if (candidates.size > 1) throw new Error('Ambiguous durable Codex fork identity')
       identity = [...candidates.values()][0] ?? null
-      if (identity) await this.saveIdentity(identity)
+      if (identity) {
+        sessionLifecycleDev('canonical-identity-migrated', { taskId: id, sessionId: identity.threadId, sourceSessionId: identity.forkedFromId ?? null })
+        await this.saveIdentity(identity)
+      }
     }
     if (!identity || identity.taskId !== id) return null
     if (expectedSource && identity.forkedFromId !== expectedSource && identity.threadId !== expectedSource) {

@@ -5154,6 +5154,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       })
     },
   })
+  const finishTaskRecovery = manager.beginStartupRecovery()
   // File watchers are best-effort across macOS sleep and renderer suspension.
   // One immediate, serialized reconciliation on wake/activation repairs any
   // coalesced event without restoring high-frequency background polling.
@@ -5886,6 +5887,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   void manager.rehydrate().then(async () => {
     await persistentRuntimeReady
     await (codexHub as PersistentCodexHub).reconnect()
+    await Promise.all(manager!.list().filter(task => task.agent === 'codex' || !!task.codexSessionSettings)
+      .map(task => manager!.settleFromRollout(task.id).catch(() => false)))
     const claudeSessions = await listClaudeRuntimeSessions()
     const liveClaude = new Set(claudeSessions.filter(session => session.alive).map(session => session.sessionId))
     await Promise.all(manager!.list().filter(task => task.claudeSessionSettings && liveClaude.has(task.sessionId))
@@ -5894,6 +5897,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   }).catch(error => {
     log.warn('persistent task recovery failed', { error: (error as Error).message })
   }).finally(() => {
+    finishTaskRecovery()
     // Auto-purge dead tasks (>24h): in-memory aged-out tasks AND orphan on-disk
     // dirs from past runs. Kills any leftover session + erases OUR scratch dir +
     // row. Runs once now then hourly. Never touches ~/.claude.

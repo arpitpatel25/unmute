@@ -57,6 +57,17 @@ test('a task orphaned mid-turn is settled from its own rollout instead of spinni
   } finally { manager.kill(id) }
 })
 
+test('a legacy synthetic disconnect is repaired when the rollout proves completion', async () => {
+  const { manager, id } = await orphanedCodexTask([started(), complete('Recovered after restart.')])
+  manager.get(id)!.state = 'failed'
+  manager.get(id)!.error = { reason: 'Session disconnected — resume to continue' }
+  try {
+    assert.equal(await manager.settleFromRollout(id), true)
+    assert.equal(manager.get(id)!.state, 'done')
+    assert.equal(manager.get(id)!.error, undefined)
+  } finally { manager.kill(id) }
+})
+
 test('a task whose turn is genuinely still open is left alone', async () => {
   const { manager, id } = await orphanedCodexTask([started(), complete('first'), started()])
   try {

@@ -167,6 +167,8 @@ interface ThreadState {
 }
 
 export interface CodexHubDeps {
+  /** Durable identity receipt for ordinary start/resume acknowledgements. */
+  onThreadConfirmed?: (taskId: string, threadId: string) => Promise<void>
   /** Durable identity receipt, before potentially large history processing. */
   onForkConfirmed?: (taskId: string, result: { threadId: string; forkedFromId: string }, operationId?: string) => Promise<void>
   approvalCap?: (taskId: string) => import('./app-server-events').ApprovalCap
@@ -297,6 +299,7 @@ export class CodexHub {
     })
     const threadId = String(res?.threadId ?? (res?.thread as { id?: string } | undefined)?.id ?? res?.id ?? '')
     if (!threadId) throw new Error('thread/start returned no thread id')
+    await this.deps.onThreadConfirmed?.(taskId, threadId)
     const { config: _config, ...options } = o
     const st: ThreadState = { taskId, threadId, pending: null, blocks: new CodexBlockStream(), options: { ...options, model } }
     this.byThread.set(threadId, st)
@@ -641,6 +644,7 @@ export class CodexHub {
       config,
     })
     if (result.thread?.id && result.thread.id !== threadId) throw new Error('Codex resumed a different thread')
+    await this.deps.onThreadConfirmed?.(taskId, threadId)
     const blocks = new CodexBlockStream()
     for (const record of await this.deps.loadInputMetadata?.(taskId, threadId) ?? []) blocks.registerInputMetadata(record.input, record.turnId)
     const turns = await this.loadHistory(srv, threadId, result)
