@@ -15,4 +15,24 @@ final class HoverExitDecisionTests: XCTestCase {
             .acceptExit
         )
     }
+
+    func testPhysicalNotchNeverSleepsAnExplicitlyOpenPocket() {
+        XCTAssertFalse(HoverSleepPolicy.shouldSleep(
+            hasPhysicalNotch: true,
+            pocketOpen: true,
+            currentStateIsIdle: true,
+            commandedStateIsDormant: true,
+            hovering: false
+        ))
+    }
+
+    func testClosedPhysicalNotchMaySleepAfterARealHoverExit() {
+        XCTAssertTrue(HoverSleepPolicy.shouldSleep(
+            hasPhysicalNotch: true,
+            pocketOpen: false,
+            currentStateIsIdle: true,
+            commandedStateIsDormant: true,
+            hovering: false
+        ))
+    }
 }

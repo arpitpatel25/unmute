@@ -9,3 +9,22 @@ public enum HoverExitDecision: Equatable {
         pointerInsideSurface ? .keepRevealed : .acceptExit
     }
 }
+
+/// Whether a hover-only reveal may return behind a physical camera housing.
+/// An explicit pocket open is user state, not hover state, and therefore never
+/// participates in the dormant ladder.
+public enum HoverSleepPolicy {
+    public static func shouldSleep(
+        hasPhysicalNotch: Bool,
+        pocketOpen: Bool,
+        currentStateIsIdle: Bool,
+        commandedStateIsDormant: Bool,
+        hovering: Bool
+    ) -> Bool {
+        hasPhysicalNotch
+            && !pocketOpen
+            && currentStateIsIdle
+            && commandedStateIsDormant
+            && !hovering
+    }
+}

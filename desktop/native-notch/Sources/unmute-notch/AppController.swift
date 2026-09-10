@@ -1382,15 +1382,29 @@ final class AppController: NSObject, NotchResizing {
                     self.refreshBar()
                     return
                 }
+                guard !self.model.pocket.isOpen else {
+                    NotchLog.log("hover-sleep: suppressed — pocket remains explicitly open on physical notch")
+                    return
+                }
                 guard self.model.state == .idle, self.commandedState == .dormant else { return }
                 // Off-notch there is no dormant to fall back to (applyState
                 // maps it to idle). Idle IS the resting state there.
                 guard self.geometry.hasNotch else { return }
                 self.hoverTimer?.invalidate()
+                NotchLog.log("hover-sleep: armed state=\(self.model.state.rawValue) commanded=\(self.commandedState.rawValue) pocketOpen=\(self.model.pocket.isOpen) hasNotch=\(self.geometry.hasNotch)")
                 self.hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
-                    guard let self, self.model.state == .idle,
-                          self.commandedState == .dormant,
-                          !self.model.hovering else { return }
+                    guard let self else { return }
+                    let sleep = HoverSleepPolicy.shouldSleep(
+                        hasPhysicalNotch: self.geometry.hasNotch,
+                        pocketOpen: self.model.pocket.isOpen,
+                        currentStateIsIdle: self.model.state == .idle,
+                        commandedStateIsDormant: self.commandedState == .dormant,
+                        hovering: self.model.hovering
+                    )
+                    guard sleep else {
+                        NotchLog.log("hover-sleep: timer refused state=\(self.model.state.rawValue) commanded=\(self.commandedState.rawValue) pocketOpen=\(self.model.pocket.isOpen) hovering=\(self.model.hovering) hasNotch=\(self.geometry.hasNotch)")
+                        return
+                    }
                     NotchLog.log("hover-sleep: idle → dormant")
                     self.applyState(.dormant)
                 }
