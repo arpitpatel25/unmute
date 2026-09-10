@@ -511,7 +511,7 @@ test('resume restores active turn and routes notifications received during resum
   }
   await hub.resumeThread('task', 'old', { cwd: '/tmp', approvalPolicy: 'never', sandbox: 'danger-full-access' })
   assert.equal(await hub.send('task', 'duplicate'), false)
-  assert.ok(patches.some(p => p.blocks?.some(b => b.kind === 'message' && b.text === 'Live')))
+  assert.ok(patches.some(p => p.blockUpdates?.some(({ block }) => block.kind === 'message' && block.text === 'Live')))
 })
 
 test('interrupt during submission waits for the actual turn id', async () => {
