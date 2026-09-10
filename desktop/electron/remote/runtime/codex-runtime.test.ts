@@ -34,6 +34,33 @@ test('live runtime events carry a lightweight mirror while snapshots retain comp
   assert.equal(snapshot.tasks[0].patch.blocks[0].text, 'Hello')
 })
 
+test('snapshot hydration orders an incremental event delivered in the same socket chunk', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'codex-snapshot-barrier-'))
+  const socketPath = join(root, 'rpc.sock')
+  const server = createServer(socket => {
+    socket.once('data', bytes => {
+      const request = JSON.parse(bytes.toString().trim())
+      const task = { taskId: 'task', threadId: 'thread', gate: { kind: 'idle', sessionId: 'thread', generation: 1, blocked: false },
+        patch: { taskId: 'task', blocks: [{ kind: 'message', role: 'user', text: 'Before' }] } }
+      const delta = { kind: 'patch', mirror: { taskId: 'task', threadId: 'thread', gate: task.gate },
+        patch: { taskId: 'task', blockUpdates: [{ index: 1, block: { kind: 'message', role: 'assistant', text: 'After' } }] } }
+      socket.write(JSON.stringify({ id: request.id, result: { running: true, url: '', tasks: [task] } }) + '\n'
+        + JSON.stringify({ event: 'codex.event', data: delta }) + '\n')
+    })
+  })
+  await new Promise<void>(resolve => server.listen(socketPath, resolve))
+  const rpc = new RuntimeRpcClient(socketPath)
+  const patches: HubPatch[] = []
+  const hub = new PersistentCodexHub(rpc, { resolveBin: async () => '/codex', onPatch: patch => patches.push(patch) })
+  t.after(async () => { hub.stop(); rpc.disconnect(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }) })
+
+  await hub.reconnect()
+
+  assert.equal(patches.length, 2)
+  assert.equal(patches[1].blockUpdates?.[0]?.block.kind, 'message')
+  assert.equal((patches[1].blockUpdates?.[0]?.block as any).text, 'After')
+})
+
 test('idle release atomically refuses changed or active bindings and retains canonical identity', async t => {
   const root = await mkdtemp(join(tmpdir(), 'codex-release-idle-'))
   let notify: (value: any) => void = () => {}

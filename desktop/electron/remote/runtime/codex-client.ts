@@ -15,29 +15,66 @@ export class PersistentCodexHub extends CodexHub {
   private remoteRunning = false
   private remoteUrl = ''
   private answering = new Set<string>()
+  private hydrationEvents: CodexRuntimeEvent[] | null = null
+  private hydrationSequence: Promise<void> = Promise.resolve()
   constructor(private rpc: RuntimeRpcClient, private callbacks: CodexHubDeps) {
     super(callbacks)
     rpc.on('codex.event', this.receive)
   }
-  private receive = (event: CodexRuntimeEvent): void => {
+  private applyEvent(event: CodexRuntimeEvent): void {
     const previous = this.mirrors.get(event.mirror.taskId)
     this.mirrors.set(event.mirror.taskId, { ...previous, ...event.mirror,
       patch: event.kind === 'patch' ? mergeCodexPatch(previous?.patch, event.patch) : previous?.patch ?? { taskId: event.mirror.taskId } })
     if (event.kind === 'patch') this.callbacks.onPatch({ ...event.patch, threadId: event.patch.threadId ?? event.mirror.threadId })
     else for (const listener of this.listeners) listener(event.event)
   }
+  private receive = (event: CodexRuntimeEvent): void => {
+    if (this.hydrationEvents) { this.hydrationEvents.push(event); return }
+    this.applyEvent(event)
+  }
+  private hydrate<T>(load: () => Promise<T>, install: (snapshot: T) => void): Promise<T> {
+    const run = async (): Promise<T> => {
+      const buffered: CodexRuntimeEvent[] = []
+      this.hydrationEvents = buffered
+      try {
+        const snapshot = await load()
+        install(snapshot)
+        return snapshot
+      } finally {
+        // Keep the barrier raised while replaying. A callback may synchronously
+        // provoke another runtime event; appending it to this queue preserves
+        // wire order behind everything already received.
+        try {
+          for (let index = 0; index < buffered.length; index++) this.applyEvent(buffered[index])
+        } finally {
+          if (this.hydrationEvents === buffered) this.hydrationEvents = null
+        }
+      }
+    }
+    const result = this.hydrationSequence.then(run, run)
+    this.hydrationSequence = result.then(() => {}, () => {})
+    return result
+  }
   async reconnect(): Promise<void> {
-    const snapshot = await this.rpc.call<{ running: boolean; url: string; tasks: CodexMirror[] }>('codex.snapshot')
-    this.remoteRunning = snapshot.running; this.remoteUrl = snapshot.url
-    this.mirrors.clear()
-    for (const mirror of snapshot.tasks) { this.mirrors.set(mirror.taskId, mirror); this.callbacks.onPatch({ ...mirror.patch, threadId: mirror.patch.threadId ?? mirror.threadId }) }
+    await this.hydrate(
+      () => this.rpc.call<{ running: boolean; url: string; tasks: CodexMirror[] }>('codex.snapshot'),
+      snapshot => {
+        this.remoteRunning = snapshot.running; this.remoteUrl = snapshot.url
+        this.mirrors.clear()
+        for (const mirror of snapshot.tasks) { this.mirrors.set(mirror.taskId, mirror); this.callbacks.onPatch({ ...mirror.patch, threadId: mirror.patch.threadId ?? mirror.threadId }) }
+      },
+    )
   }
   override async refreshTask(id: string): Promise<void> {
-    const snapshot = await this.rpc.call<{ running: boolean; url: string; tasks: CodexMirror[] }>('codex.snapshot', id)
-    this.remoteRunning = snapshot.running; this.remoteUrl = snapshot.url
-    const mirror = snapshot.tasks.find(task => task.taskId === id)
-    if (!mirror) throw new Error('Fork exists but history is not yet available')
-    this.mirrors.set(id, mirror); this.callbacks.onPatch({ ...mirror.patch, threadId: mirror.patch.threadId ?? mirror.threadId })
+    const snapshot = await this.hydrate(
+      () => this.rpc.call<{ running: boolean; url: string; tasks: CodexMirror[] }>('codex.snapshot', id),
+      snapshot => {
+        this.remoteRunning = snapshot.running; this.remoteUrl = snapshot.url
+        const mirror = snapshot.tasks.find(task => task.taskId === id)
+        if (!mirror) throw new Error('Fork exists but history is not yet available')
+        this.mirrors.set(id, mirror); this.callbacks.onPatch({ ...mirror.patch, threadId: mirror.patch.threadId ?? mirror.threadId })
+      },
+    )
     log.event('task-history-refreshed', { taskId: id, tasks: snapshot.tasks.length })
   }
   override async recoverIdentity(id: string, sourceThreadId?: string): Promise<CodexIdentity | null> {
