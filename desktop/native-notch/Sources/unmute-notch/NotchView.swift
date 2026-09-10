@@ -436,13 +436,17 @@ struct NotchView: View {
             panelPadding: Double(Theme.panelPadding),
             topFillet: Double(model.bar.fillet)
         )
+        let horizontal = CGFloat(insets.horizontal)
+        let planeShape = NotchShape(
+            bottomRadius: Theme.planeRadius,
+            topFillet: horizontal
+        )
         body()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: Theme.planeRadius).fill(Theme.plane))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.planeRadius))
-            .padding(.top, CGFloat(insets.top))
+            .padding(.horizontal, horizontal)
+            .background(planeShape.fill(Theme.plane))
+            .clipShape(planeShape)
             .padding(.bottom, CGFloat(insets.bottom))
-            .padding(.horizontal, CGFloat(insets.horizontal))
     }
 
     /// THE POCKET'S PLANE, HELD CLEAR OF THE CAMERA HOUSING.
@@ -471,13 +475,17 @@ struct NotchView: View {
             panelPadding: Double(Theme.panelPadding),
             topFillet: Double(model.bar.fillet)
         )
+        let horizontal = CGFloat(insets.horizontal)
+        let planeShape = NotchShape(
+            bottomRadius: Theme.planeRadius,
+            topFillet: horizontal
+        )
         body()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: Theme.planeRadius).fill(Theme.plane))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.planeRadius))
-            .padding(.top, CGFloat(insets.top))
+            .padding(.horizontal, horizontal)
+            .background(planeShape.fill(Theme.plane))
+            .clipShape(planeShape)
             .padding(.bottom, CGFloat(insets.bottom))
-            .padding(.horizontal, CGFloat(insets.horizontal))
     }
 
     private func toastView(_ toast: String) -> some View {
