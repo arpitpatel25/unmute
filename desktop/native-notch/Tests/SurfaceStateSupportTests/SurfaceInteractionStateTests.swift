@@ -36,4 +36,12 @@ final class SurfaceInteractionStateTests: XCTestCase {
         XCTAssertFalse(state.terminalVisible)
     }
 
+    func testOpenPocketOutlineRemainsAttachedToTheScreenEdge() {
+        XCTAssertFalse(SurfaceBorderPolicy.includesTopEdge(pocketOpen: true))
+    }
+
+    func testClosedSurfaceKeepsItsCompleteOutline() {
+        XCTAssertTrue(SurfaceBorderPolicy.includesTopEdge(pocketOpen: false))
+    }
+
 }

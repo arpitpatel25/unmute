@@ -20,6 +20,14 @@ public struct SurfacePresentation: Equatable, Sendable {
     public let barHovered: Bool
 }
 
+/// The open pocket visually continues the menu-bar/notch mass. Closing its
+/// outline across the screen edge turns that continuation into a floating box.
+public enum SurfaceBorderPolicy {
+    public static func includesTopEdge(pocketOpen: Bool) -> Bool {
+        !pocketOpen
+    }
+}
+
 /// The native helper's sole authority for visit-scoped interaction.
 ///
 /// Domain truth remains in Electron. This value owns only what must react at

@@ -42,10 +42,14 @@ struct NotchShape: Shape {
     var bottomRadius: CGFloat
     /// Concave radius where the top of the mass flares out into the menu bar.
     var topFillet: CGFloat
+    /// Fill paths close across the display edge. Stroke-only paths may leave
+    /// that edge open so a pocket reads as an extension of the notch.
+    var includesTopEdge: Bool
 
-    init(bottomRadius: CGFloat, topFillet: CGFloat = 0) {
+    init(bottomRadius: CGFloat, topFillet: CGFloat = 0, includesTopEdge: Bool = true) {
         self.bottomRadius = bottomRadius
         self.topFillet = topFillet
+        self.includesTopEdge = includesTopEdge
     }
 
     /// BOTH radii animate. A fillet that held still while the radius moved
@@ -82,7 +86,9 @@ struct NotchShape: Shape {
                        control: CGPoint(x: body.maxX, y: rect.minY))
         // Closed along the screen's top edge, which is where the shape hangs
         // from. The top is always square: it shares an edge with the display.
-        p.closeSubpath()
+        if includesTopEdge {
+            p.closeSubpath()
+        }
         return p
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import SurfaceStateSupport
 
 // THE ONE MORPHING SURFACE. A single NotchShape fills the window (sized and
 // positioned per state by AppController); content swaps by state — never a
@@ -113,6 +114,17 @@ struct NotchView: View {
         NotchShape(bottomRadius: model.bar.bottomRadius, topFillet: model.bar.fillet)
     }
 
+    /// The fill must remain closed. Only the visible hairline opens at the top
+    /// while the pocket is out, preserving the curved shoulders, walls and
+    /// bottom edge without drawing a seam against the screen/notch.
+    private var outlineShape: NotchShape {
+        NotchShape(
+            bottomRadius: model.bar.bottomRadius,
+            topFillet: model.bar.fillet,
+            includesTopEdge: SurfaceBorderPolicy.includesTopEdge(pocketOpen: model.pocket.isOpen)
+        )
+    }
+
     // MARK: - Material
 
     @ViewBuilder private var surface: some View {
@@ -197,7 +209,7 @@ struct NotchView: View {
                    : (agentCard ? AnyShapeStyle(Theme.agentSurface)
                                 : AnyShapeStyle(Color.black)))
             .background(glassBackdrop)
-            .overlay(shape.stroke(Theme.hairlineSoft, lineWidth: 0.5))
+            .overlay(outlineShape.stroke(Theme.hairlineSoft, lineWidth: 0.5))
     }
 
     private var agentCard: Bool { model.task?.id == "unmute-agent" }
