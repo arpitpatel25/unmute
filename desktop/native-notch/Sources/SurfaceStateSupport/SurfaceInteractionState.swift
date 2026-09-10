@@ -20,24 +20,6 @@ public struct SurfacePresentation: Equatable, Sendable {
     public let barHovered: Bool
 }
 
-public struct SurfacePlaneInsets: Equatable, Sendable {
-    public let top: Double
-    public let horizontal: Double
-    public let bottom: Double
-}
-
-/// Every content plane meets the top edge while retaining the shell as a
-/// visible rail on the left, right and bottom.
-public enum SurfacePlanePolicy {
-    public static func insets(panelPadding: Double, topFillet: Double) -> SurfacePlaneInsets {
-        SurfacePlaneInsets(
-            top: 0,
-            horizontal: panelPadding + topFillet,
-            bottom: panelPadding
-        )
-    }
-}
-
 /// The native helper's sole authority for visit-scoped interaction.
 ///
 /// Domain truth remains in Electron. This value owns only what must react at

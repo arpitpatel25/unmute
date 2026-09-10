@@ -42,50 +42,31 @@ struct NotchShape: Shape {
     var bottomRadius: CGFloat
     /// Concave radius where the top of the mass flares out into the menu bar.
     var topFillet: CGFloat
-    /// Vertical depth of that flare. Usually equal to `topFillet`; nested
-    /// planes keep this aligned with the shell while widening the flare to
-    /// leave the side rail visible.
-    var topFilletDepth: CGFloat
-    init(bottomRadius: CGFloat, topFillet: CGFloat = 0, topFilletDepth: CGFloat? = nil) {
+
+    init(bottomRadius: CGFloat, topFillet: CGFloat = 0) {
         self.bottomRadius = bottomRadius
         self.topFillet = topFillet
-        self.topFilletDepth = topFilletDepth ?? topFillet
     }
 
     /// BOTH radii animate. A fillet that held still while the radius moved
     /// would be the overlay bug wearing a different hat.
-    var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>> {
-        get { AnimatablePair(bottomRadius, AnimatablePair(topFillet, topFilletDepth)) }
-        set {
-            bottomRadius = newValue.first
-            topFillet = newValue.second.first
-            topFilletDepth = newValue.second.second
-        }
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(bottomRadius, topFillet) }
+        set { bottomRadius = newValue.first; topFillet = newValue.second }
     }
 
     func path(in rect: CGRect) -> Path {
-        var p = railPath(in: rect)
-        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
-        p.closeSubpath()
-        return p
-    }
-
-    /// The visible three-sided edge of the surface. It intentionally omits the
-    /// top segment so an inset stroke can form left/right/bottom rails without
-    /// drawing a border along the screen edge.
-    func railPath(in rect: CGRect) -> Path {
         // Nothing may exceed half the width or the whole height: a mass narrower
         // than its own corners is the collapse animation's last frame, and it
         // must degenerate cleanly rather than fold inside out.
-        let f = max(min(topFillet, rect.width / 2), 0)
-        let depth = max(min(topFilletDepth, rect.height), 0)
+        let f = max(min(topFillet, rect.width / 2, rect.height), 0)
         let body = rect.insetBy(dx: f, dy: 0)
-        let br = max(min(bottomRadius, body.width / 2, max(body.height - depth, 0)), 0)
+        let br = max(min(bottomRadius, body.width / 2, max(body.height - f, 0)), 0)
 
         var p = Path()
         // Top-left, out on the menu bar, then the concave flare inward+down.
         p.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        p.addQuadCurve(to: CGPoint(x: body.minX, y: rect.minY + depth),
+        p.addQuadCurve(to: CGPoint(x: body.minX, y: rect.minY + f),
                        control: CGPoint(x: body.minX, y: rect.minY))
         // Down the left wall to the bottom-left convex corner.
         p.addLine(to: CGPoint(x: body.minX, y: rect.maxY - br))
@@ -96,42 +77,13 @@ struct NotchShape: Shape {
         p.addQuadCurve(to: CGPoint(x: body.maxX, y: rect.maxY - br),
                        control: CGPoint(x: body.maxX, y: rect.maxY))
         // Up the right wall and out through the second flare.
-        p.addLine(to: CGPoint(x: body.maxX, y: rect.minY + depth))
+        p.addLine(to: CGPoint(x: body.maxX, y: rect.minY + f))
         p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY),
                        control: CGPoint(x: body.maxX, y: rect.minY))
+        // Closed along the screen's top edge, which is where the shape hangs
+        // from. The top is always square: it shares an edge with the display.
+        p.closeSubpath()
         return p
-    }
-}
-
-/// The shell and its three-sided rail use the exact same path geometry. The
-/// rail is open at the top; stroking it inward therefore cannot introduce a
-/// top border or a second, independently tuned curve.
-struct NotchRailShape: Shape {
-    var bottomRadius: CGFloat
-    var topFillet: CGFloat
-    var topFilletDepth: CGFloat
-
-    init(bottomRadius: CGFloat, topFillet: CGFloat = 0, topFilletDepth: CGFloat? = nil) {
-        self.bottomRadius = bottomRadius
-        self.topFillet = topFillet
-        self.topFilletDepth = topFilletDepth ?? topFillet
-    }
-
-    var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>> {
-        get { AnimatablePair(bottomRadius, AnimatablePair(topFillet, topFilletDepth)) }
-        set {
-            bottomRadius = newValue.first
-            topFillet = newValue.second.first
-            topFilletDepth = newValue.second.second
-        }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        NotchShape(
-            bottomRadius: bottomRadius,
-            topFillet: topFillet,
-            topFilletDepth: topFilletDepth
-        ).railPath(in: rect)
     }
 }
 

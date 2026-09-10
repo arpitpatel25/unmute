@@ -1,5 +1,4 @@
 import SwiftUI
-import SurfaceStateSupport
 
 // THE ONE MORPHING SURFACE. A single NotchShape fills the window (sized and
 // positioned per state by AppController); content swaps by state — never a
@@ -432,25 +431,12 @@ struct NotchView: View {
     /// horizontal padding also clears the concave fillets, which take their
     /// width out of the same rect.
     @ViewBuilder private func plane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {
-        let insets = SurfacePlanePolicy.insets(
-            panelPadding: Double(Theme.panelPadding),
-            topFillet: Double(model.bar.fillet)
-        )
-        let horizontal = CGFloat(insets.horizontal)
-        let planeShape = NotchShape(
-            bottomRadius: model.bar.bottomRadius,
-            topFillet: model.bar.fillet
-        )
-        ZStack(alignment: .topLeading) {
-            planeShape.fill(Theme.plane)
-                .mask(threeSidedPlaneMask)
-            body()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.horizontal, horizontal)
-        }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipShape(planeShape)
-            .padding(.bottom, CGFloat(insets.bottom))
+        body()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: Theme.planeRadius).fill(Theme.plane))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.planeRadius))
+            .padding(.vertical, Theme.panelPadding)
+            .padding(.horizontal, Theme.panelPadding + model.bar.fillet)
     }
 
     /// THE POCKET'S PLANE, HELD CLEAR OF THE CAMERA HOUSING.
@@ -474,48 +460,39 @@ struct NotchView: View {
     /// because it is the same colour as the housing. What must stay clear of it
     /// is anything that ISN'T that black: this plane, and the content on it.
     ///
-    @ViewBuilder private func pocketPlane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {
-        let insets = SurfacePlanePolicy.insets(
-            panelPadding: Double(Theme.panelPadding),
-            topFillet: Double(model.bar.fillet)
-        )
-        let horizontal = CGFloat(insets.horizontal)
-        let planeShape = NotchShape(
-            bottomRadius: model.bar.bottomRadius,
-            topFillet: model.bar.fillet
-        )
-        ZStack(alignment: .topLeading) {
-            planeShape.fill(Theme.plane)
-                .mask(threeSidedPlaneMask)
-            body()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.horizontal, horizontal)
-        }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipShape(planeShape)
-            .padding(.bottom, CGFloat(insets.bottom))
-    }
+    /// So the top inset becomes the cutout's height plus breathing room, which
+    /// is exactly the number the task surface and the wall already take. The
+    /// pocket is the one large surface that was never handed it.
+    /// How far down the pocket's plane starts.
+    ///
+    /// ONLY DIFFERENT WHEN THERE IS A CUTOUT TO CLEAR. The first version used
+    /// `topInset` unconditionally, which is 14 on a notchless display against
+    /// the 6 every other plane uses — so the card dropped 8pt inside a window
+    /// that had only been grown on notched Macs. Its bottom 8pt, rounded
+    /// corners included, fell outside the window and was clipped, and its top
+    /// no longer nested in the shape's concave flare. A notch fix that broke
+    /// every machine without one.
+    /// Clears the housing on a notched display, ordinary panel padding
+    /// elsewhere. The card is the only arrangement now, so on a notched Mac it
+    /// DOES have to open below the camera — the row that used to avoid that
+    /// question is gone.
+    ///
+    /// Mirrors `NotchGeometry.pocketTopInset`, which sizes the window. If these
+    /// two ever disagree the card is clipped, and a clipped card looks fine in
+    /// a screenshot right up until the footer is missing.
+    /// Ordinary panel padding on BOTH displays now. The housing clearance is no
+    /// longer padding — `PocketShoulderRow` occupies it and draws in it, which
+    /// is why `NotchGeometry.pocketTopInset` is exactly the cutout height.
+    private var pocketTopPad: CGFloat { Theme.panelPadding }
 
-    /// Full outer shape minus a six-point inward stroke of the same open path.
-    /// The subtraction reveals the glass shell as a perfectly parallel rail.
-    private var threeSidedPlaneMask: some View {
-        ZStack {
-            shape.fill(Color.white)
-            NotchRailShape(
-                bottomRadius: model.bar.bottomRadius,
-                topFillet: model.bar.fillet
-            )
-            .stroke(
-                Color.white,
-                style: StrokeStyle(
-                    lineWidth: Theme.panelPadding * 2,
-                    lineCap: .butt,
-                    lineJoin: .round
-                )
-            )
-            .blendMode(.destinationOut)
-        }
-        .compositingGroup()
+    @ViewBuilder private func pocketPlane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {
+        body()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: Theme.planeRadius).fill(Theme.plane))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.planeRadius))
+            .padding(.top, pocketTopPad)
+            .padding(.bottom, Theme.panelPadding)
+            .padding(.horizontal, Theme.panelPadding + model.bar.fillet)
     }
 
     private func toastView(_ toast: String) -> some View {
