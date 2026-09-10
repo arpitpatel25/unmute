@@ -331,6 +331,20 @@ export interface FoldedThread {
   name?: string
 }
 
+export type BlockUpdate = { index: number; block: Block }
+
+export function applyBlockUpdates(blocks: Block[] | undefined, updates: BlockUpdate[]): Block[] {
+  const next = [...(blocks ?? [])]
+  for (const update of updates) {
+    if (!Number.isInteger(update.index) || update.index < 0 || update.index > next.length) {
+      throw new Error(`Codex block update index ${update.index} is outside transcript length ${next.length}`)
+    }
+    if (update.index === next.length) next.push(update.block)
+    else next[update.index] = update.block
+  }
+  return next
+}
+
 /**
  * Streaming accumulator for one thread.
  *
@@ -353,7 +367,9 @@ export class CodexBlockStream {
   }
   private readonly order: string[] = []
   private readonly byId = new Map<string, Block>()
+  private readonly indexById = new Map<string, number>()
   private readonly deltas = new Map<string, string>()
+  private readonly changed = new Map<number, Block>()
   private revision = 0
   private usage: FoldedThread['usage']
   private name: string | undefined
@@ -362,8 +378,12 @@ export class CodexBlockStream {
   private upsert(id: string, block: Block | null): void {
     if (!block) return
     if (JSON.stringify(this.byId.get(id)) === JSON.stringify(block)) return
-    if (!this.byId.has(id)) this.order.push(id)
+    if (!this.byId.has(id)) {
+      this.indexById.set(id, this.order.length)
+      this.order.push(id)
+    }
     this.byId.set(id, block)
+    this.changed.set(this.indexById.get(id)!, block)
     this.revision++
   }
 
@@ -381,6 +401,17 @@ export class CodexBlockStream {
       ...(this.usage ? { usage: this.usage } : {}),
       ...(this.name ? { name: this.name } : {}),
     }
+  }
+
+  /** Drain only blocks changed since the previous transport boundary. */
+  takeBlockUpdates(): BlockUpdate[] {
+    const updates = [...this.changed].sort(([a], [b]) => a - b).map(([index, block]) => ({ index, block }))
+    this.changed.clear()
+    return updates
+  }
+
+  metadata(): Omit<FoldedThread, 'blocks'> {
+    return { ...(this.usage ? { usage: this.usage } : {}), ...(this.name ? { name: this.name } : {}) }
   }
 
   /** Pending approval details use the same item the transcript renders. */

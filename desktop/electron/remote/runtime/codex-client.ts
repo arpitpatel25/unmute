@@ -3,7 +3,7 @@ import type { TaskInput } from '../task-input'
 import { sameQuestion, type QuestionReference } from '../question-reference'
 import type { FollowupGate, NewTurnOutcome } from '../task-followup'
 import type { RuntimeRpcClient } from './rpc'
-import type { CodexMirror, CodexRuntimeEvent, CodexPreparation, CodexIdentity } from './codex-service'
+import { mergeCodexPatch, type CodexMirror, type CodexRuntimeEvent, type CodexPreparation, type CodexIdentity } from './codex-service'
 import { createLogger } from '../log'
 import { sessionLifecycleDev } from '../session-lifecycle-devlog'
 const log = createLogger('codex-projection')
@@ -20,7 +20,9 @@ export class PersistentCodexHub extends CodexHub {
     rpc.on('codex.event', this.receive)
   }
   private receive = (event: CodexRuntimeEvent): void => {
-    this.mirrors.set(event.mirror.taskId, event.mirror)
+    const previous = this.mirrors.get(event.mirror.taskId)
+    this.mirrors.set(event.mirror.taskId, { ...previous, ...event.mirror,
+      patch: event.kind === 'patch' ? mergeCodexPatch(previous?.patch, event.patch) : previous?.patch ?? { taskId: event.mirror.taskId } })
     if (event.kind === 'patch') this.callbacks.onPatch({ ...event.patch, threadId: event.patch.threadId ?? event.mirror.threadId })
     else for (const listener of this.listeners) listener(event.event)
   }

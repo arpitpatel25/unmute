@@ -103,6 +103,7 @@ import { readClaudeHistory, retainClaudeHistoryDisplay } from './claude/chat-his
 import { isDeepStrictEqual } from 'node:util'
 import type { TaskInput } from './task-input'
 import { blocksFromRollout } from './codex/blocks-rollout'
+import { applyBlockUpdates } from './codex/blocks-app-server'
 
 /**
  * Has the chat actually changed?
@@ -2317,10 +2318,10 @@ export class TaskManager extends EventEmitter {
       task.currentTurnAssistantText = p.assistantText
       task.conversation = [...(task.conversation ?? []), { role: 'assistant', text: p.assistantText }]
     }
-    // THE LIVE CHAT VIEW. Replaces wholesale rather than appending: the stream
-    // owns the whole thread and re-sends its current state, so appending would
-    // duplicate every block that arrived before this notification.
+    // Full blocks hydrate reconnect/history. Live events update only changed
+    // indices so a long transcript is not serialized for every streamed token.
     if (p.blocks) task.blocks = p.blocks
+    else if (p.blockUpdates?.length) task.blocks = applyBlockUpdates(task.blocks, p.blockUpdates)
     if (p.usage) task.usage = p.usage
     if (p.history) task.history = p.history
     if ('turnOutcome' in p) task.turnOutcome = p.turnOutcome ?? undefined

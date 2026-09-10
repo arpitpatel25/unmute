@@ -23,6 +23,7 @@
 import type { TaskState, TaskQuestion } from '../status-file'
 import { activityFromCodexItem, clampLabel, type Activity } from '../activity'
 import { fullContent, type Block, type TurnOutcome } from '../blocks'
+import type { BlockUpdate } from './blocks-app-server'
 
 export type HistoryState = { phase: 'empty' | 'loading' | 'missing' | 'partial' | 'failed' | 'ready'; reason?: string; canRetry?: boolean }
 export type McpStatus = { name: string; status: string; error?: string; remedy?: string }
@@ -69,6 +70,8 @@ export interface CodexPatch {
    *  notification feed, not from the fourteen methods this reducer handles —
    *  see the note in hub.onNotification. */
   blocks?: Block[]
+  /** Incremental live transcript changes. Full `blocks` is reserved for hydration. */
+  blockUpdates?: BlockUpdate[]
   /** Token usage for the panel footer. */
   usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number }
 }

@@ -10,6 +10,30 @@ import type { CodexAppServer, ServerRequest } from '../codex/app-server-client'
 import type { HubPatch } from '../codex/hub'
 import { createServer } from 'node:net'
 
+test('live runtime events carry a lightweight mirror while snapshots retain complete blocks', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'codex-light-events-'))
+  let notify: (value: any) => void = () => {}
+  const provider = {
+    running: true, url: 'ws://localhost:9999', async start() {}, stop() {}, on(_name: string, callback: typeof notify) { notify = callback; return () => {} }, onRequest() {}, notify() {},
+    async request(method: string) { return method === 'thread/start' ? { threadId: 'thread' } : method === 'turn/start' ? { turn: { id: 'turn' } } : {} },
+  } as unknown as CodexAppServer
+  const events: any[] = []
+  const service = new CodexRuntimeService(root, event => events.push(event), { makeServer: () => provider })
+  t.after(async () => { service.close(); await rm(root, { recursive: true, force: true }) })
+  await service.invoke('prepare', ['task', { bin: '/codex' }])
+  await service.invoke('startThread', ['task', { cwd: '/tmp' }])
+  events.length = 0
+
+  notify({ method: 'item/agentMessage/delta', params: { threadId: 'thread', turnId: 'turn', itemId: 'answer', delta: 'Hello' } })
+  await new Promise(resolve => setImmediate(resolve))
+
+  const event = events.findLast(candidate => candidate.kind === 'patch')
+  assert.equal(event?.mirror.patch, undefined)
+  assert.equal(event?.patch.blockUpdates?.[0]?.block.text, 'Hello')
+  const snapshot = await service.invoke('snapshot', ['task']) as any
+  assert.equal(snapshot.tasks[0].patch.blocks[0].text, 'Hello')
+})
+
 test('idle release atomically refuses changed or active bindings and retains canonical identity', async t => {
   const root = await mkdtemp(join(tmpdir(), 'codex-release-idle-'))
   let notify: (value: any) => void = () => {}

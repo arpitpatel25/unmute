@@ -89,6 +89,21 @@ function makeHub() {
   return { hub, patches, ...f }
 }
 
+test('live block changes emit only the changed block instead of the complete transcript', async () => {
+  const { hub, emit, patches } = makeHub()
+  await hub.startThread('task', { cwd: '/tmp', approvalPolicy: 'never', sandbox: 'danger-full-access' })
+  emit('item/started', { threadId: 'th_1', turnId: 'turn', item: { id: 'answer', type: 'agentMessage', text: '' } })
+  patches.length = 0
+
+  emit('item/agentMessage/delta', { threadId: 'th_1', turnId: 'turn', itemId: 'answer', delta: 'Hello' })
+
+  const patch = patches.at(-1) as any
+  assert.equal(patch.blocks, undefined)
+  assert.equal(patch.blockUpdates?.length, 1)
+  assert.equal(patch.blockUpdates?.[0]?.index, 0)
+  assert.deepEqual({ ...patch.blockUpdates?.[0]?.block, at: undefined }, { kind: 'message', role: 'assistant', text: 'Hello', at: undefined })
+})
+
 test('approval cards expose exact command scope and map offered session decisions without policy amendments', async () => {
   const { hub, ask, patches } = makeHub()
   await hub.startThread('task', { cwd: '/tmp', approvalPolicy: 'on-request', sandbox: 'workspace-write' })

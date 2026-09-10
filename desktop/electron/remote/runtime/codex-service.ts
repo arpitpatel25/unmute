@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { writeFileAtomic } from '../atomic-file'
 import { CodexHub, type CodexHubDeps, type HubPatch, type CodexInputMetadata } from '../codex/hub'
 import { CodexAppServer } from '../codex/app-server-client'
+import { applyBlockUpdates } from '../codex/blocks-app-server'
 import type { FollowupGate } from '../task-followup'
 import { sessionLifecycleDev } from '../session-lifecycle-devlog'
 import { readCodexIdentity } from './codex-identity'
@@ -16,8 +17,19 @@ export type CodexPreparation = {
 }
 export type CodexMirror = { taskId: string; patch: HubPatch; gate: FollowupGate; threadId?: string; validationError?: string }
 export type CodexIdentity = { taskId: string; threadId: string; forkedFromId?: string }
-export type CodexRuntimeEvent = { kind: 'patch'; patch: HubPatch; mirror: CodexMirror }
-  | { kind: 'followup'; event: Parameters<Parameters<CodexHub['onFollowup']>[0]>[0]; mirror: CodexMirror }
+export type CodexMirrorSummary = Omit<CodexMirror, 'patch'>
+export type CodexRuntimeEvent = { kind: 'patch'; patch: HubPatch; mirror: CodexMirrorSummary }
+  | { kind: 'followup'; event: Parameters<Parameters<CodexHub['onFollowup']>[0]>[0]; mirror: CodexMirrorSummary }
+
+export function mergeCodexPatch(previous: HubPatch | undefined, patch: HubPatch): HubPatch {
+  const merged = { ...previous, ...patch }
+  if (patch.blockUpdates?.length) merged.blocks = applyBlockUpdates(patch.blocks ?? previous?.blocks, patch.blockUpdates)
+  delete merged.blockUpdates
+  if (patch.clearQuestion) delete merged.question
+  else if (patch.question) delete merged.clearQuestion
+  delete merged.assistantText
+  return merged
+}
 export class CodexRuntimeService {
   readonly hub: CodexHub
   private prepared = new Map<string, CodexPreparation>()
@@ -46,17 +58,18 @@ export class CodexRuntimeService {
       loadInputMetadata: (id, thread) => this.read(id, thread, 'input', []),
       saveInputMetadata: (id, thread, record) => this.save(id, thread, 'input', (records: CodexInputMetadata[]) => [...records.filter(r => r.id !== record.id), record]),
       onPatch: patch => {
-        const merged = { ...this.patches.get(patch.taskId), ...patch }
-        if (patch.clearQuestion) delete merged.question
-        else if (patch.question) delete merged.clearQuestion
-        delete merged.assistantText // replay full blocks, never append an old delta twice
+        const merged = mergeCodexPatch(this.patches.get(patch.taskId), patch)
         this.patches.set(patch.taskId, merged)
-        queueMicrotask(() => this.emit({ kind: 'patch', patch, mirror: this.mirror(patch.taskId) }))
+        const memory = process.memoryUsage()
+        sessionLifecycleDev('codex-block-transport', { taskId: patch.taskId, mode: patch.blocks ? 'full' : patch.blockUpdates?.length ? 'delta' : 'state',
+          blockCount: merged.blocks?.length ?? 0, updateCount: patch.blockUpdates?.length ?? 0,
+          heapMb: Math.round(memory.heapUsed / 1_048_576), rssMb: Math.round(memory.rss / 1_048_576), externalMb: Math.round(memory.external / 1_048_576) })
+        queueMicrotask(() => this.emit({ kind: 'patch', patch, mirror: this.mirrorSummary(patch.taskId) }))
       },
     })
     this.hub.onFollowup(event => {
       const id = event.type === 'ended' ? event.event.taskId : event.taskId
-      queueMicrotask(() => this.emit({ kind: 'followup', event, mirror: this.mirror(id) }))
+      queueMicrotask(() => this.emit({ kind: 'followup', event, mirror: this.mirrorSummary(id) }))
     })
   }
   private file(id: string, thread: string, kind: string): string {
@@ -105,6 +118,10 @@ export class CodexRuntimeService {
   }
   private mirror(taskId: string): CodexMirror {
     return { taskId, patch: this.patches.get(taskId) ?? { taskId }, gate: this.hub.followupGate(taskId), threadId: this.hub.threadIdFor(taskId), validationError: this.hub.validationErrorFor(taskId) }
+  }
+  private mirrorSummary(taskId: string): CodexMirrorSummary {
+    const { patch: _patch, ...summary } = this.mirror(taskId)
+    return summary
   }
   private register(id: string, action: () => Promise<unknown>): Promise<unknown> {
     const current = this.registrations.get(id)

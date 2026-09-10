@@ -365,6 +365,7 @@ export class CodexHub {
       this.byThread.set(threadId, st)
       this.byTask.set(taskId, st)
       const snapshot = blocks.snapshot()
+      blocks.takeBlockUpdates()
       if (snapshot.blocks.length) this.deps.onPatch({ taskId, blocks: snapshot.blocks })
       this.deps.onPatch({ taskId, history: historyError
         ? { phase: 'partial', reason: historyError, canRetry: true } : { phase: 'ready' } })
@@ -676,6 +677,7 @@ export class CodexHub {
     this.byThread.set(threadId, st)
     this.byTask.set(taskId, st)
     const snapshot = blocks.snapshot()
+    blocks.takeBlockUpdates()
     if (snapshot.blocks.length) this.deps.onPatch({ taskId, blocks: snapshot.blocks })
     const lastStatus = turns.at(-1)?.status
     this.deps.onPatch({ taskId, state: st.pending ? 'needs-user' : st.turnId ? 'processing' : lastStatus === 'failed' ? 'failed' : 'done', activity: null,
@@ -807,9 +809,10 @@ export class CodexHub {
       if (threadId) log.debug('notification for an unknown thread', { method: m.method, threadId })
       return
     }
-    const snap = blocksChanged ? st.blocks.snapshot() : null
-    if (m.method === 'turn/plan/updated' && snap && this.deps.savePlans) {
-      const plans = snap.blocks.filter(b => b.kind === 'plan')
+    const blockUpdates = blocksChanged ? st.blocks.takeBlockUpdates() : []
+    const metadata = blocksChanged ? st.blocks.metadata() : null
+    if (m.method === 'turn/plan/updated' && blocksChanged && this.deps.savePlans) {
+      const plans = st.blocks.snapshot().blocks.filter(b => b.kind === 'plan')
       const write = (this.planWrites.get(st.taskId) ?? Promise.resolve()).then(() => this.deps.savePlans!(st.taskId, st.threadId, plans))
         .catch(error => this.deps.onPatch({ taskId: st.taskId, history: { phase: 'partial', reason: `Could not save turn plans: ${(error as Error).message}`, canRetry: true } }))
       this.planWrites.set(st.taskId, write)
@@ -818,7 +821,8 @@ export class CodexHub {
     this.deps.onPatch({
       taskId: st.taskId,
       ...(patch ?? {}),
-      ...(snap ? { blocks: snap.blocks, ...(snap.usage ? { usage: snap.usage } : {}) } : {}),
+      ...(blockUpdates.length ? { blockUpdates } : {}),
+      ...(metadata?.usage ? { usage: metadata.usage } : {}),
     })
     if (st.pending) this.presentRequest(st)
     this.followupChanged(st.taskId)
