@@ -412,6 +412,26 @@ test('rehydration repairs stale task metadata from the canonical Codex identity 
   assert.equal(repaired.codexRolloutId, 'child')
 })
 
+test('contradictory canonical Codex identity fails closed without changing the task receipt', async t => {
+  const baseDir = await base()
+  const initial = new TaskManager({ executorFactory, codexHub: { running: true, threadIdFor() { return undefined } } as never, baseDir,
+    codexFullAccess: () => true, permissionMode: () => 'auto-approve' })
+  const id = await initial.createChat({ provider: 'codex', cwd: baseDir })
+  const home = initial.get(id)!.home
+  initial.shutdown(); await Promise.all([...((initial as any).metaChains.values())])
+  const stale = JSON.parse(await fs.readFile(join(home, 'meta.json'), 'utf8'))
+  stale.sessionId = 'source'; stale.codexRolloutId = 'source'; stale.chatUnstarted = false
+  await fs.writeFile(join(home, 'meta.json'), JSON.stringify(stale))
+  const hub = { running: true, threadIdFor() { return undefined }, async recoverIdentity(taskId: string) {
+    return { taskId, threadId: 'unrelated-child', forkedFromId: 'different-source' }
+  } }
+  const restarted = new TaskManager({ executorFactory, codexHub: hub as never, baseDir })
+  t.after(() => restarted.shutdown())
+  await restarted.rehydrate()
+  assert.equal(restarted.get(id)?.sessionId, 'source')
+  assert.match(restarted.get(id)?.resumeError ?? '', /could not be verified/i)
+})
+
 test('Codex fork uses native fork and persists the returned child and source', async () => {
   const baseDir = await base()
   const calls: Array<{ op: string; value?: string }> = []

@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CodexAppServer } from './app-server-client.ts'
@@ -57,4 +58,27 @@ test('a verified live but unreachable owner fails closed instead of spawning a c
   })
   await assert.rejects(server.start(), /existing app-server owner is alive but unreachable/)
   assert.equal(spawned, 0)
+})
+
+test('a proven dead owner is cleared and replaced exactly once', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'codex-owner-stale-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const ownerFile = join(dir, 'owner.json')
+  await writeFile(ownerFile, JSON.stringify({ pid: 6161, port: 54323, generation: 'dead-owner' }))
+  let spawned = 0, killed = 0
+  const child = Object.assign(new EventEmitter(), {
+    pid: 6262, stdout: new EventEmitter(), stderr: new EventEmitter(), kill() { killed++; return true },
+  })
+  const server = new CodexAppServer({
+    bin: '/codex', ownerFile, port: 54324,
+    spawnImpl: (() => { spawned++; return child }) as never,
+    inspectProcess: async () => null,
+    fetchImpl: async () => ({ ok: true }) as Response,
+    wsFactory: () => new FakeSocket() as never,
+  })
+  await server.start()
+  assert.equal(spawned, 1)
+  assert.equal(JSON.parse(await readFile(ownerFile, 'utf8')).pid, 6262)
+  server.stop()
+  assert.equal(killed, 1)
 })
