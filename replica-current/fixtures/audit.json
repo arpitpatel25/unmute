@@ -30061,111 +30061,147 @@
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:21:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'dormant' of NotchState at desktop/native-notch/Sources/unmute-notch/IPC.swift:21 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-dormant-hardware"
+      ],
+      "reason": "notch-dormant-hardware: The source enum input NotchState.dormant selects the concrete notch-dormant-hardware fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:21:2",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'idle' of NotchState at desktop/native-notch/Sources/unmute-notch/IPC.swift:21 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-idle-wordmark"
+      ],
+      "reason": "notch-idle-wordmark: The source enum input NotchState.idle selects the concrete notch-idle-wordmark fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:21:3",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'active' of NotchState at desktop/native-notch/Sources/unmute-notch/IPC.swift:21 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-active-task-activity"
+      ],
+      "reason": "notch-active-task-activity: The source enum input NotchState.active selects the concrete notch-active-task-activity fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:21:4",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'attention' of NotchState at desktop/native-notch/Sources/unmute-notch/IPC.swift:21 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-attention-needs-user"
+      ],
+      "reason": "notch-attention-needs-user: The source enum input NotchState.attention selects the concrete notch-attention-needs-user fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:21:5",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'task' of NotchState at desktop/native-notch/Sources/unmute-notch/IPC.swift:21 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-task-expanded"
+      ],
+      "reason": "notch-task-expanded: The source enum input NotchState.task selects the concrete notch-task-expanded fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:21:6",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'cockpit' of NotchState at desktop/native-notch/Sources/unmute-notch/IPC.swift:21 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-cockpit-expanded"
+      ],
+      "reason": "notch-cockpit-expanded: The source enum input NotchState.cockpit selects the concrete notch-cockpit-expanded fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:26:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'processing' of TaskStatus at desktop/native-notch/Sources/unmute-notch/IPC.swift:26 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-attention-processing"
+      ],
+      "reason": "notch-attention-processing: The source enum input TaskStatus.processing selects the concrete notch-attention-processing fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:27:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'needsUser' of TaskStatus at desktop/native-notch/Sources/unmute-notch/IPC.swift:27 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-attention-needs-user"
+      ],
+      "reason": "notch-attention-needs-user: The source enum input TaskStatus.needsUser selects the concrete notch-attention-needs-user fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:28:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'ready' of TaskStatus at desktop/native-notch/Sources/unmute-notch/IPC.swift:28 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-attention-ready"
+      ],
+      "reason": "notch-attention-ready: The source enum input TaskStatus.ready selects the concrete notch-attention-ready fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:28:2",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'stuck' of TaskStatus at desktop/native-notch/Sources/unmute-notch/IPC.swift:28 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-attention-stuck"
+      ],
+      "reason": "notch-attention-stuck: The source enum input TaskStatus.stuck selects the concrete notch-attention-stuck fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:28:3",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'done' of TaskStatus at desktop/native-notch/Sources/unmute-notch/IPC.swift:28 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-attention-done"
+      ],
+      "reason": "notch-attention-done: The source enum input TaskStatus.done selects the concrete notch-attention-done fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:28:4",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'failed' of TaskStatus at desktop/native-notch/Sources/unmute-notch/IPC.swift:28 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-attention-failed"
+      ],
+      "reason": "notch-attention-failed: The source enum input TaskStatus.failed selects the concrete notch-attention-failed fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:346:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'listening' of AgentActivityState at desktop/native-notch/Sources/unmute-notch/IPC.swift:346 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-listening"
+      ],
+      "reason": "notch-agent-listening: The source enum input AgentActivityState.listening selects the concrete notch-agent-listening fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:346:2",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'searching' of AgentActivityState at desktop/native-notch/Sources/unmute-notch/IPC.swift:346 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-searching"
+      ],
+      "reason": "notch-agent-searching: The source enum input AgentActivityState.searching selects the concrete notch-agent-searching fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:346:3",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'thinking' of AgentActivityState at desktop/native-notch/Sources/unmute-notch/IPC.swift:346 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-thinking"
+      ],
+      "reason": "notch-agent-thinking: The source enum input AgentActivityState.thinking selects the concrete notch-agent-thinking fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:346:4",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'confirming' of AgentActivityState at desktop/native-notch/Sources/unmute-notch/IPC.swift:346 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-confirming"
+      ],
+      "reason": "notch-agent-confirming: The source enum input AgentActivityState.confirming selects the concrete notch-agent-confirming fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:346:5",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'complete' of AgentActivityState at desktop/native-notch/Sources/unmute-notch/IPC.swift:346 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-complete"
+      ],
+      "reason": "notch-agent-complete: The source enum input AgentActivityState.complete selects the concrete notch-agent-complete fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:346:6",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Enum case 'failed' of AgentActivityState at desktop/native-notch/Sources/unmute-notch/IPC.swift:346 is retained as a source-model input; no standalone fixture is claimed without a render predicate."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-failed"
+      ],
+      "reason": "notch-agent-failed: The source enum input AgentActivityState.failed selects the concrete notch-agent-failed fixture."
     },
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/unmute-notch/IPC.swift:411:1",
@@ -34959,9 +34995,13 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1100:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard '!SurfacePresentationPolicy.allowsExpandedRequest( autoPresent: autoPresent, surfaceIsAlreadyExpanded: isExpanded(model.state), hasRecentGesture: hasRecentGesture )' in presentableState at desktop/native-notch/Sources/unmute-notch/AppController.swift:1100 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-auto-present-allowed",
+        "notch-auto-present-held-collapsed",
+        "notch-auto-present-explicit-gesture"
+      ],
+      "reason": "notch-auto-present-allowed: Defines the auto present allowed notch rendering. notch-auto-present-held-collapsed: Defines the auto present held collapsed notch rendering. notch-auto-present-explicit-gesture: Defines the auto present explicit gesture notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1135:1",
@@ -35565,9 +35605,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1821:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'self.departureTransition.cancel() == .keepHidden' in observeAppSwitches at desktop/native-notch/Sources/unmute-notch/AppController.swift:1821 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-departure-return"
+      ],
+      "reason": "notch-departure-return: Defines the departure return notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1824:1",
@@ -35589,9 +35631,12 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1857:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'departureTransition.begin(isExpanded: isExpanded(model.state)) == .hide' in beginAutomaticDeparture at desktop/native-notch/Sources/unmute-notch/AppController.swift:1857 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-departure-expanded-hide",
+        "notch-departure-collapsed-noop"
+      ],
+      "reason": "notch-departure-expanded-hide: Defines the departure expanded hide notch rendering. notch-departure-collapsed-noop: Defines the departure collapsed noop notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1868:1",
@@ -35649,9 +35694,13 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:145:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard '!hovering, !isExpandedState(state), m.silenced.contains(c.signature)' in make at desktop/native-notch/Sources/unmute-notch/BarContent.swift:145 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-silenced-hardware-empty",
+        "notch-silenced-off-notch-nub",
+        "notch-silenced-hover-exempt"
+      ],
+      "reason": "notch-silenced-hardware-empty: Defines the silenced hardware empty notch rendering. notch-silenced-off-notch-nub: Defines the silenced off notch nub notch rendering. notch-silenced-hover-exempt: Defines the silenced hover exempt notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:150:1",
@@ -35661,33 +35710,44 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:158:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'let toast = m.toast, !toast.isEmpty, !isExpandedState(state)' in toast at desktop/native-notch/Sources/unmute-notch/BarContent.swift:158 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-toast-collapsed",
+        "notch-toast-expanded-suppressed"
+      ],
+      "reason": "notch-toast-collapsed: Defines the toast collapsed notch rendering. notch-toast-expanded-suppressed: Defines the toast expanded suppressed notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:161:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'let activity = m.agentActivity, !isExpandedState(state)' in activity at desktop/native-notch/Sources/unmute-notch/BarContent.swift:161 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-expanded-suppressed"
+      ],
+      "reason": "notch-agent-expanded-suppressed: Defines the agent expanded suppressed notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:165:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional switch-case '.listening' in activity at desktop/native-notch/Sources/unmute-notch/BarContent.swift:165 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-listening"
+      ],
+      "reason": "notch-agent-listening: Defines the agent listening notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:166:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional switch-case '.searching' in activity at desktop/native-notch/Sources/unmute-notch/BarContent.swift:166 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-searching"
+      ],
+      "reason": "notch-agent-searching: Defines the agent searching notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:167:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional switch-case '.thinking' in activity at desktop/native-notch/Sources/unmute-notch/BarContent.swift:167 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-thinking"
+      ],
+      "reason": "notch-agent-thinking: Defines the agent thinking notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:168:1",
@@ -35695,19 +35755,23 @@
       "stateIds": [
         "notch-agent-confirming"
       ],
-      "reason": "notch-agent-confirming: Maps confirming Agent activity to Needs User and the Confirming label."
+      "reason": "notch-agent-confirming: Defines the agent confirming notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:169:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional switch-case '.complete' in activity at desktop/native-notch/Sources/unmute-notch/BarContent.swift:169 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-complete"
+      ],
+      "reason": "notch-agent-complete: Defines the agent complete notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:170:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional switch-case '.failed' in activity at desktop/native-notch/Sources/unmute-notch/BarContent.swift:170 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-agent-failed"
+      ],
+      "reason": "notch-agent-failed: Defines the agent failed notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:175:1",
@@ -35717,53 +35781,75 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:189:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'm.capturePhase == \"routing\", !isExpandedState(state)' in resolve at desktop/native-notch/Sources/unmute-notch/BarContent.swift:189 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-routing",
+        "notch-routing-expanded-suppressed"
+      ],
+      "reason": "notch-routing: Defines the routing notch rendering. notch-routing-expanded-suppressed: Defines the routing expanded suppressed notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:210:1",
       "kind": "render-affecting",
       "stateIds": [
-        "notch-pocket-waiting"
+        "notch-pocket-waiting-one",
+        "notch-pocket-open-does-not-announce"
       ],
-      "reason": "notch-pocket-waiting: Makes the closed bar announce only the exact waiting count."
+      "reason": "notch-pocket-waiting-one: Defines the pocket waiting one notch rendering. notch-pocket-open-does-not-announce: Defines the pocket open does not announce notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:224:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'hovering, let first = m.pocket.slots.first' in first at desktop/native-notch/Sources/unmute-notch/BarContent.swift:224 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-pocket-waiting-hover-detail"
+      ],
+      "reason": "notch-pocket-waiting-hover-detail: Defines the pocket waiting hover detail notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:230:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional switch-case '.dormant' in resolve at desktop/native-notch/Sources/unmute-notch/BarContent.swift:230 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-dormant-hardware"
+      ],
+      "reason": "notch-dormant-hardware: Defines the dormant hardware notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:235:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional switch-case '.idle' in resolve at desktop/native-notch/Sources/unmute-notch/BarContent.swift:235 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-idle-wordmark"
+      ],
+      "reason": "notch-idle-wordmark: Defines the idle wordmark notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:247:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if '!m.hasNotch && !hovering' in resolve at desktop/native-notch/Sources/unmute-notch/BarContent.swift:247 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-idle-resting-nub",
+        "notch-idle-hover"
+      ],
+      "reason": "notch-idle-resting-nub: Defines the idle resting nub notch rendering. notch-idle-hover: Defines the idle hover notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:257:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional switch-case '.active' in resolve at desktop/native-notch/Sources/unmute-notch/BarContent.swift:257 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-active-task-activity",
+        "notch-active-multiple-badge",
+        "notch-active-live-capture"
+      ],
+      "reason": "notch-active-task-activity: Defines the active task activity notch rendering. notch-active-multiple-badge: Defines the active multiple badge notch rendering. notch-active-live-capture: Defines the active live capture notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:270:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'm.working == 1, let t = m.task, t.status == .processing' in t at desktop/native-notch/Sources/unmute-notch/BarContent.swift:270 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-active-task-hover-title",
+        "notch-right-segment-fit",
+        "notch-right-segment-truncated",
+        "notch-right-segment-dropped"
+      ],
+      "reason": "notch-active-task-hover-title: Defines the active task hover title notch rendering. notch-right-segment-fit: Defines the right segment fit notch rendering. notch-right-segment-truncated: Defines the right segment truncated notch rendering. notch-right-segment-dropped: Defines the right segment dropped notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:271:1",
@@ -35773,15 +35859,25 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:275:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional switch-case '.attention' in resolve at desktop/native-notch/Sources/unmute-notch/BarContent.swift:275 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-attention-processing",
+        "notch-attention-needs-user",
+        "notch-attention-ready",
+        "notch-attention-stuck",
+        "notch-attention-done",
+        "notch-attention-failed"
+      ],
+      "reason": "notch-attention-processing: Defines the attention processing notch rendering. notch-attention-needs-user: Defines the attention needs user notch rendering. notch-attention-ready: Defines the attention ready notch rendering. notch-attention-stuck: Defines the attention stuck notch rendering. notch-attention-done: Defines the attention done notch rendering. notch-attention-failed: Defines the attention failed notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:285:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional switch-case '.task, .cockpit' in resolve at desktop/native-notch/Sources/unmute-notch/BarContent.swift:285 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-task-expanded",
+        "notch-cockpit-expanded"
+      ],
+      "reason": "notch-task-expanded: Defines the task expanded notch rendering. notch-cockpit-expanded: Defines the cockpit expanded notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BlockConversation.swift:106:1",
@@ -39279,9 +39375,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:138:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional else-if 'model.state == .dormant' in surface at desktop/native-notch/Sources/unmute-notch/NotchView.swift:138 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-dormant-no-notch"
+      ],
+      "reason": "notch-dormant-no-notch: Defines the dormant no notch notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:153:1",
@@ -39309,9 +39407,12 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:224:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'glassy' in glassBackdrop at desktop/native-notch/Sources/unmute-notch/NotchView.swift:224 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "notch-expanded-glass-tone",
+        "notch-collapsed-glass-remains-black"
+      ],
+      "reason": "notch-expanded-glass-tone: Defines the expanded glass tone notch rendering. notch-collapsed-glass-remains-black: Defines the collapsed glass remains black notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:268:1",
@@ -51941,8 +52042,10 @@
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/Theme.swift:173:4",
       "kind": "render-affecting",
-      "stateIds": [],
-      "reason": "metric '0.94' in plane at desktop/native-notch/Sources/unmute-notch/Theme.swift:173 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "stateIds": [
+        "notch-expanded-solid-space-gray-fill"
+      ],
+      "reason": "notch-expanded-solid-space-gray-fill: Defines the expanded solid space gray fill notch rendering."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/Theme.swift:182:1",

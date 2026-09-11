@@ -200,6 +200,75 @@ test("Pill local view state is allowlisted and source-provenanced", async () => 
   }
 });
 
+test("Notch gate covers every source state, task status, and Agent activity case", async () => {
+  const { manifest, evidence, validateManifest } = await loadInventory();
+  assert.deepEqual(validateManifest(manifest, evidence), []);
+  const notch = manifest.entries.filter(({ family }) => family === "notch");
+  const inputs = notch.map((entry) => manifest.fixtures[entry.fixture].input);
+  assert.deepEqual([...new Set(inputs.map(({ model }) => model.state))].sort(),
+    ["active", "attention", "cockpit", "dormant", "idle", "task"]);
+  assert.deepEqual([...new Set(inputs.map(({ model }) => model.task?.status).filter(Boolean))].sort(),
+    ["done", "failed", "needs-user", "processing", "ready", "stuck"]);
+  assert.deepEqual([...new Set(inputs.map(({ model }) => model.agentActivity?.state).filter(Boolean))].sort(),
+    ["complete", "confirming", "failed", "listening", "searching", "thinking"]);
+  for (const symbol of ["NotchState", "TaskStatus", "AgentActivityState"])
+    for (const item of evidence.enumCases.filter((candidate) => candidate.symbol === symbol))
+      assert.ok(evidence.classifications.find(({ occurrenceId }) => occurrenceId === item.id).stateIds.some((id) => id.startsWith("notch-")), `uncovered ${symbol}.${item.value}`);
+});
+
+test("Notch fixtures keep wire model, local view, geometry, appearance, and controller state exact", async () => {
+  const { manifest } = await loadInventory();
+  const notch = manifest.entries.filter(({ family }) => family === "notch");
+  for (const entry of notch) {
+    const input = manifest.fixtures[entry.fixture].input;
+    assert.equal(input.surface, "notch");
+    assert.deepEqual(Object.keys(input).sort(), ["appearance", "controller", "geometry", "model", "surface", "viewState"].sort());
+    assert.equal(typeof input.model.state, "string");
+    assert.equal(typeof input.model.hovering, "boolean");
+    assert.ok(Array.isArray(input.model.silenced));
+    assert.equal(typeof input.geometry.hasNotch, "boolean");
+    assert.ok(Number.isFinite(input.geometry.leftUsable));
+    assert.ok(Number.isFinite(input.geometry.rightUsable));
+    assert.ok(["system", "glass", "solid"].includes(input.appearance.preference));
+    assert.ok(["spaceGray", "black", "glass"].includes(input.appearance.tone));
+    assert.equal(typeof input.controller.autoPresent, "boolean");
+  }
+});
+
+test("Notch precedence, hover, silence, fit/drop, and lifecycle branches record both outcomes", async () => {
+  const { manifest } = await loadInventory();
+  const coverage = manifest.entries.filter(({ family }) => family === "notch").flatMap(({ predicates = [] }) => predicates);
+  const outcomes = (predicate) => [...new Set(coverage.filter((item) => item.predicate === predicate).map(({ outcome }) => outcome))].sort();
+  for (const predicate of ["toast visible while collapsed", "agent activity visible while collapsed", "capturePhase == routing while collapsed", "pocket waiting while closed and collapsed", "hovering", "content signature silenced", "hasNotch", "right segment fits", "auto-present permits expansion", "expanded automatic departure"])
+    assert.deepEqual(outcomes(predicate), [false, true], `missing outcomes for ${predicate}`);
+});
+
+test("every retained Notch render backlink has an outcome and reachable ancestors", async () => {
+  const { manifest } = await loadInventory();
+  for (const entry of manifest.entries.filter(({ family }) => family === "notch")) {
+    for (const link of entry.audit.filter(({ id }) => id.startsWith("branch:"))) {
+      assert.equal(typeof link.outcome, "boolean", `${entry.id} ${link.id}`);
+      assert.ok(Array.isArray(link.ancestors), `${entry.id} ${link.id}`);
+      assert.ok(link.ancestors.every(({ predicate, outcome }) => predicate && outcome === true), `${entry.id} ${link.id}`);
+    }
+  }
+});
+
+test("Notch interactions are concrete source transitions, never synthetic expanded aliases", async () => {
+  const { manifest } = await loadInventory();
+  const controls = manifest.entries.filter(({ family }) => family === "notch").flatMap(({ interactions }) => interactions.controls ?? []);
+  const types = new Set(controls.map(({ result }) => result.type));
+  assert.equal(types.has("expanded"), false);
+  for (const expected of ["tap", "pointerEntered", "pointerExited", "userLeft", "userReturned"])
+    assert.ok(types.has(expected), `missing notch transition ${expected}`);
+  assert.ok(controls.every(({ provenance }) => provenance?.source.endsWith(".swift") && Number.isInteger(provenance.line)));
+  for (const entry of manifest.entries.filter(({ family }) => family === "notch")) {
+    const input = manifest.fixtures[entry.fixture].input;
+    if (["task", "cockpit"].includes(input.model.state) && !entry.id.startsWith("notch-departure"))
+      assert.equal(entry.interactions.kind, "none", `${entry.id} claims a hidden bar control`);
+  }
+});
+
 test("control provenance is independently extracted and selector dismissal is complete", async () => {
   const { manifest, controlEmitSites } = await loadInventory();
   const sites = await controlEmitSites();
@@ -319,10 +388,10 @@ test("family fixtures preserve exact source model values and transitions", async
   assert.equal(input("pill-payment-failed").state.offline, "payment_failed");
   assert.equal(controls("pill-payment-failed")[0].result.type, "pillOpenBillingPortal");
 
-  assert.deepEqual(input("notch-agent-confirming").agentActivity, {
-    state: "confirming", summary: "Send the release update?", interactionId: "interaction-7", agentRunId: "run-3", provider: "codex",
+  assert.deepEqual(input("notch-agent-confirming").model.agentActivity, {
+    state: "confirming", summary: "confirming release work", interactionId: "interaction-7", agentRunId: "run-3", provider: "codex",
   });
-  assert.equal(input("notch-pocket-waiting").pocket.waiting, 2);
+  assert.equal(input("notch-pocket-waiting-hover-detail").model.pocket.waiting, 2);
 
   assert.equal(input("pocket-task-question").pocket.slots[0].ask, "Which environment should I deploy to?");
   assert.equal(input("pocket-agent-listening").capturePhase, "listening");
