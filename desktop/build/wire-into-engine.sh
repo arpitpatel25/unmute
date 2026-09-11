@@ -249,6 +249,10 @@ wire_paywall() {
     // install-app-deps rebuilds it against Electron's ABI, and its .node
     // binary must be unpacked from the asar so it can be dlopen'd at runtime.
     pkg.dependencies['node-pty'] = '^1.1.0'
+    // Computer Use CDP lane: copied paywall sources import ws directly, so the
+    // reconstructed OSS engine must declare it rather than relying on a stale
+    // node_modules from an earlier checkout.
+    pkg.dependencies['ws'] = '^8.21.1'
     // Personal Memory: SQLCipher-capable SQLite is the encrypted index. This
     // exact native binding is rebuilt against Electron's ABI; ordinary
     // better-sqlite3 is deliberately not a fallback.
