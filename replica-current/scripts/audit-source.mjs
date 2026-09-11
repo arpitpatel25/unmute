@@ -132,6 +132,39 @@ export async function notchControlEmitSites() {
   return [...scanNotchControlEmitSites(view), ...scanAppControllerNotchEmitSites(controller)];
 }
 
+export function scanPocketControlEmitSites(sources) {
+  const sites = [];
+  for (const [source, text] of Object.entries(sources)) text.split("\n").forEach((line, index) => {
+    for (const match of line.matchAll(/model\.emit\(\.((?:pocketMove|pocketExpand|pocketRelease|openDashboard))\b/g))
+      sites.push({ type: match[1], source, line: index + 1 });
+  });
+  return sites;
+}
+
+export async function pocketControlEmitSites() {
+  const names = ["PocketView.swift", "NotchView.swift", "AppController.swift"];
+  const sources = Object.fromEntries(await Promise.all(names.map(async (name) => [swift(name), await git(["show", `${SOURCE_REVISION}:${swift(name)}`])])));
+  return scanPocketControlEmitSites(sources);
+}
+
+export function evaluatePocketSwipe(samples) {
+  let travelX = 0; let travelY = 0; let spent = false; const steps = [];
+  const reset = () => { travelX = 0; travelY = 0; spent = false; };
+  for (const sample of samples) {
+    const s = { isMomentum: false, isGestureStart: false, isGestureEnd: false, hasPreciseDeltas: true, ...sample };
+    if (s.isMomentum) continue;
+    if (!s.hasPreciseDeltas) {
+      if (Math.abs(s.deltaX) >= 0.5 && Math.abs(s.deltaX) > Math.abs(s.deltaY)) steps.push(s.deltaX < 0 ? 1 : -1);
+      continue;
+    }
+    if (s.isGestureStart) reset();
+    if (s.isGestureEnd) { reset(); continue; }
+    travelX += s.deltaX; travelY += s.deltaY;
+    if (!spent && Math.abs(travelX) >= 26 && Math.abs(travelX) > Math.abs(travelY) * 1.4) { spent = true; steps.push(travelX < 0 ? 1 : -1); }
+  }
+  return steps;
+}
+
 function splitEnumCases(value) {
   const parts = []; let depth = 0; let start = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -255,9 +288,62 @@ const PROVIDER_LINKS = { 21: "pill-provider-claude-cli", 37: "pill-provider-clau
 const WAVEFORM_LINKS = { 77: "pill-recording-waveform-zero", 86: "pill-recording-waveform-zero", 142: "pocket-agent-listening", 144: "pocket-agent-listening", 150: "pocket-agent-listening", 151: "pocket-agent-listening", 152: "pocket-agent-listening", 154: "pocket-agent-listening", 155: "pocket-agent-listening" };
 const EVALUABLE_PILL_LINES = new Set([250, 309, 310, 314, 348, 359, 368, 383, 396, 414, 431, 441, 449, 466, 472, 473, 481, 482, 483, 491, 494, 538, 540, 562, 580, 594, 596, 598, 605, 613, 619, 626, 632, 642, 649, 661, 662, 865, 867, 869, 882, 884, 896, 900, 957, 972, 977, 983, 989, 1017, 1072, 1077, 1083, 1087, 1088, 1098, 1113, 1150, 1154, 1242, 1263, 1266, 1268, 1282]);
 const pocketSlot = { id: "task-42", title: "Deploy checkout", kind: null, ask: "Which environment should I deploy to?", status: "needs-user", demanding: true, backend: "codex-desktop", terminal: false };
+const pocketAgent = { id: "unmute-agent", title: "Unmute", kind: "agent", ask: null, status: "processing", demanding: false, backend: "codex", terminal: false };
 const taskBase = { id: "task-42", title: "Deploy checkout", origin: null, agentRunId: null, status: "needs-user", kind: "session", alive: true, shelved: false, dir: "/Users/zodpatel/work/checkout", age: "2m", elapsed: "00:42", warmup: null, note: null, activity: "Which environment should I deploy to?", result: null, error: null, mcpGap: null, deliveryError: null, sending: false, modelLabel: "GPT-5.3 Codex High", agentCanRetry: false, backend: "codex-desktop", conversation: [], blocks: [], usage: { inputTokens: 1240, outputTokens: 318, contextWindow: 200000 }, project: "checkout", terminal: false, resumable: true, owned: true, resuming: false, resumeError: null };
 
 const notchControl = (id, event, result, source, line) => ({ id, event, result, provenance: { source: swift(source), line } });
+const pocketControl = (id, event, result, source, line) => ({ id, event, result, provenance: { source, line } });
+const pocketSwift = (name) => name === "PocketSwipe.swift" ? "desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift" : swift(name);
+const pocketControls = (slotId = "task-42", many = false, notched = false) => interactive(
+  pocketControl("expand", "click Pocket card", { type: "pocketExpand", id: slotId }, swift("PocketView.swift"), 465),
+  pocketControl("dashboard", "click Open the dashboard", { type: "openDashboard" }, swift("PocketView.swift"), notched ? 406 : 470),
+  pocketControl("release", "click Close — your voice goes back to normal routing", { type: "pocketRelease" }, swift("PocketView.swift"), notched ? 410 : 474),
+  ...(many ? [
+    pocketControl("previous", "click chevron.left", { type: "pocketMove", delta: -1 }, swift("PocketView.swift"), 253),
+    pocketControl("next", "click chevron.right", { type: "pocketMove", delta: 1 }, swift("PocketView.swift"), 253),
+  ] : []),
+);
+const pocketGeometry = (hasNotch = false) => ({ hasNotch, cutoutHeight: hasNotch ? 34 : 0, pocketCardWidth: 348, panelPadding: 6, fillet: 14 });
+const pocketModel = (overrides = {}) => ({ state: "idle", toast: null, captureAimed: false, captureLevel: 0, expandedContentReady: false, transitionPocket: null, ...overrides });
+const pocketPayload = (slots, overrides = {}) => ({ mode: "open", at: 0, waiting: slots.filter((s) => s.demanding === true).length, remoteKey: "right-option", slots, ...overrides });
+function derivePocket(input) {
+  const { pocket, model, geometry } = input;
+  const expanded = ["task", "cockpit"].includes(model.state);
+  const current = pocket.at >= 0 && pocket.at < pocket.slots.length ? pocket.slots[pocket.at] : null;
+  const isOpen = pocket.mode === "open" && pocket.slots.length > 0;
+  const rendered = !expanded && isOpen;
+  const known = current?.status && STATUS[current.status] ? current.status : current?.demanding === true ? "needs-user" : "ready";
+  const hasAsk = Boolean(current?.ask && current.ask.length > 0);
+  const visibleMiddle = model.toast ?? (hasAsk ? current.ask : null);
+  const cardHeight = hasAsk ? 106 : 68;
+  const status = STATUS[known];
+  return {
+    rendered, expanded, isOpen, currentId: current?.id ?? null,
+    arrangement: geometry.hasNotch ? "shoulders+card" : "card",
+    headerInShoulders: geometry.hasNotch,
+    title: current?.title ?? "Nothing in your pocket",
+    titleVisible: !(current?.kind === "agent") || geometry.hasNotch,
+    agentTreatment: current?.kind === "agent" ? "UnMark" : "ProviderMark",
+    provider: current?.kind === "agent" ? null : { backend: current?.backend ?? null, terminal: current?.terminal ?? true },
+    quiet: current?.demanding === false,
+    dotStatus: current?.demanding === false ? "done" : known,
+    status, recomputedStatus: STATUS[known], hasAsk, visibleMiddle,
+    middleColor: model.toast != null ? "systemRed" : visibleMiddle != null ? "white@0.72" : null,
+    footer: model.captureAimed ? { kind: "AimedChip", level: model.captureLevel, compact: true } : { kind: "status", ...status },
+    count: `${Math.min(pocket.at + 1, pocket.slots.length)}/${pocket.slots.length}`,
+    rail: pocket.slots.length > 1, swipeEnabled: pocket.slots.length > 1,
+    cardHeight, frame: { width: 348, height: cardHeight + 12 + (geometry.hasNotch ? geometry.cutoutHeight : 0) },
+    plane: { topAligned: true, fill: "plane", radius: 12, top: 6, bottom: 6, horizontal: 20 },
+    metrics: { cardPadX: 12, cardPadTop: 11, cardPadBottom: 9, rowGap: 7, askHeight: 31, footerHeight: 21, headerSpacing: 8, titleFont: 13.5, footerSpacing: 6, statusFont: 11.5, railSpacing: 4, arrowFrame: 18, arrowFont: 9, arrowRadius: 5, roundButton: 17, shoulderGap: 7, shoulderDot: 8, shoulderMark: 16, shoulderControlGap: 6, shoulderInset: 13 },
+    assets: { dashboard: "square.grid.2x2@8.5-semibold", close: "xmark@8-semibold", previous: "chevron.left@9-semibold", next: "chevron.right@9-semibold" },
+    tokens: { text: "white@0.95", textDim: "white@0.62", error: "systemRed", onBlackFill: "white@0.085", onBlackEdge: "white@0.14" },
+  };
+}
+const pocketState = (id, line, pocket, options = {}) => {
+  const input = { surface: "pocket", pocket, model: pocketModel(options.model), geometry: pocketGeometry(options.hasNotch), controller: { motionReduceMotion: false, pocketHoldsKey: true, ...(options.controller ?? {}) } };
+  input.expectation = derivePocket(input);
+  return { id, family: "pocket", cite: B(options.source ?? swift("PocketView.swift"), line, options.contribution ?? `Defines ${id.replaceAll("-", " ")} Pocket behavior.`), input, interactions: options.interactions ?? (input.expectation.rendered && input.expectation.currentId ? pocketControls(input.expectation.currentId, input.expectation.rail, input.geometry.hasNotch) : none("This source state has no reachable visible Pocket control.")) };
+};
 const notchModel = (overrides = {}) => ({
   state: "idle", hovering: false, silenced: [], attention: 0, working: 0,
   agentActivity: null, task: null, capturePhase: null, captureTarget: null,
@@ -419,13 +505,54 @@ const NOTCH_STATES = [
   notchState("notch-departure-return", 1821, { state: "task", task: task("processing") }, { source: "AppController.swift", controller: { departureTransition: { phase: "returning" } }, interactions: interactive(notchControl("return-app", "reactivate Unmute", { type: "userReturned" }, "AppController.swift", 1831)) }),
 ];
 
+const pocketTask = (status, overrides = {}) => ({ ...pocketSlot, ask: null, status, ...overrides });
+const threeSlots = [pocketTask("processing", { id: "task-1", title: "First task" }), pocketTask("ready", { id: "task-2", title: "Middle task" }), pocketTask("done", { id: "task-3", title: "Last task", demanding: false })];
+const POCKET_STATES = [
+  pocketState("pocket-closed-empty", 138, pocketPayload([], { mode: "closed", waiting: 0 }), { contribution: "A zero-slot payload cannot satisfy PocketP.isOpen and falls through to the bar." }),
+  pocketState("pocket-open-zero-slots", 138, pocketPayload([], { mode: "open", waiting: 0 }), { contribution: "Even mode=open cannot satisfy PocketP.isOpen without slots and therefore falls through to the bar." }),
+  pocketState("pocket-closed-slots-quiet", 175, pocketPayload([pocketTask("done", { demanding: false })], { mode: "closed", waiting: 0 })),
+  pocketState("pocket-open-invalid-negative", 138, pocketPayload(threeSlots, { at: -1 }), { contribution: "Invalid negative current index renders fallback identity and disables card expansion." }),
+  pocketState("pocket-open-invalid-high", 175, pocketPayload(threeSlots, { at: 9 }), { contribution: "Past-end current index renders fallback Ready and the clamped N/N count." }),
+  ...Object.keys(STATUS).map((status) => pocketState(`pocket-status-${status}`, 175, pocketPayload([pocketTask(status)]))),
+  pocketState("pocket-status-unknown-demanding", 175, pocketPayload([pocketTask("unknown", { demanding: true })])),
+  pocketState("pocket-status-unknown-quiet", 176, pocketPayload([pocketTask("unknown", { demanding: false })])),
+  pocketState("pocket-demanding-nil", 175, pocketPayload([pocketTask(null, { demanding: null })])),
+  pocketState("pocket-quiet-dot-footer-mismatch", 485, pocketPayload([pocketTask("processing", { demanding: false })])),
+  pocketState("pocket-task-question", 449, pocketPayload([pocketSlot])),
+  pocketState("pocket-empty-ask", 153, pocketPayload([pocketTask("ready", { ask: "" })])),
+  pocketState("pocket-toast-over-ask", 449, pocketPayload([pocketSlot]), { model: { toast: "Could not send answer" } }),
+  pocketState("pocket-toast-without-ask", 449, pocketPayload([pocketTask("ready")]), { model: { toast: "Could not send answer" }, contribution: "Toast draws a 31pt row while controller frame remains the 68pt quiet size; preserves the pinned clipping defect." }),
+  pocketState("pocket-task-listening-question", 511, pocketPayload([pocketSlot]), { model: { captureAimed: true, captureLevel: 0.18 } }),
+  pocketState("pocket-agent-listening", 511, pocketPayload([pocketAgent], { remoteKey: "fn" }), { hasNotch: true, model: { captureAimed: true, captureLevel: 0.82 } }),
+  pocketState("pocket-agent-notchless", 487, pocketPayload([pocketAgent])),
+  pocketState("pocket-agent-notched", 389, pocketPayload([pocketAgent]), { hasNotch: true }),
+  pocketState("pocket-notched-question", 288, pocketPayload([pocketSlot]), { hasNotch: true, source: swift("NotchView.swift") }),
+  pocketState("pocket-page-first", 509, pocketPayload(threeSlots, { at: 0 })),
+  pocketState("pocket-page-middle", 509, pocketPayload(threeSlots, { at: 1 })),
+  pocketState("pocket-page-last", 509, pocketPayload(threeSlots, { at: 2 })),
+  pocketState("pocket-long-markdown", 449, pocketPayload([{ ...pocketSlot, title: "An exceptionally long **checkout** deployment title that collides with controls", ask: "Choose the **production** environment from this deliberately long [linked question](https://example.com) before the release window closes." }])),
+  pocketState("pocket-expanded-hidden", 270, pocketPayload([pocketSlot]), { source: swift("NotchView.swift"), model: { state: "task", expandedContentReady: true }, contribution: "Expanded task content wins before the open-Pocket branch." }),
+  pocketState("pocket-transition-snapshot", 270, pocketPayload([pocketSlot]), { source: swift("NotchView.swift"), model: { state: "task", transitionPocket: pocketPayload([pocketSlot]), expandedContentReady: false }, contribution: "Expanded handoff renders a non-hit-testable PocketCard snapshot before expanded content is ready." }),
+  pocketState("pocket-transition-reduce-motion", 270, pocketPayload([pocketSlot]), { source: swift("NotchView.swift"), model: { state: "task", transitionPocket: null, expandedContentReady: true }, controller: { motionReduceMotion: true }, contribution: "Reduced Motion skips the delayed snapshot and presents expanded content immediately." }),
+  pocketState("pocket-swipe-precise-next", 94, pocketPayload(threeSlots), { source: pocketSwift("PocketSwipe.swift"), interactions: interactive(pocketControl("swipe-next", "precise gesture accumulates x=-26, y=0", { type: "pocketMove", delta: 1 }, swift("NotchView.swift"), 324)) }),
+  pocketState("pocket-swipe-precise-previous", 94, pocketPayload(threeSlots), { source: pocketSwift("PocketSwipe.swift"), interactions: interactive(pocketControl("swipe-previous", "precise gesture accumulates x=26, y=0", { type: "pocketMove", delta: -1 }, swift("NotchView.swift"), 324)) }),
+  pocketState("pocket-wheel-previous", 81, pocketPayload(threeSlots), { source: pocketSwift("PocketSwipe.swift"), interactions: interactive(pocketControl("wheel-previous", "non-precise wheel x=0.5, y=0", { type: "pocketMove", delta: -1 }, swift("NotchView.swift"), 324)) }),
+  pocketState("pocket-swipe-rejections", 76, pocketPayload(threeSlots), { source: pocketSwift("PocketSwipe.swift"), interactions: none("Momentum, vertical drift, sub-threshold travel, gesture end, outside-window events, and a spent latch propagate without an emitted event.") }),
+  pocketState("pocket-keyboard-actions", 509, pocketPayload(threeSlots), { interactions: interactive(
+    pocketControl("key-left", "press bare Left Arrow while Pocket owns keys", { type: "pocketMove", delta: -1 }, swift("AppController.swift"), 1619),
+    pocketControl("key-right", "press bare Right Arrow while Pocket owns keys", { type: "pocketMove", delta: 1 }, swift("AppController.swift"), 1623),
+    pocketControl("key-enter", "press Return while Pocket owns keys", { type: "pocketExpand", id: "task-1" }, swift("AppController.swift"), 1628),
+    pocketControl("key-escape", "press Escape while Pocket is open", { type: "pocketRelease" }, swift("AppController.swift"), 1777),
+  ) }),
+  pocketState("pocket-outside-click-retains-open", 288, pocketPayload([pocketSlot]), { source: swift("NotchView.swift"), controller: { pocketHoldsKey: false }, contribution: "Outside click releases keyboard ownership without changing the open Pocket payload." }),
+];
+
 const STATES = [
   { id: "foundations-theme-status", family: "foundations", cite: B(swift("Theme.swift"), 77, "Maps processing status to the exact green status color."), input: { surface: "foundations", component: "status", status: "processing", label: "Working" }, interactions: none("A status token specimen has no source-defined control.") },
   { id: "foundations-waveform-level", family: "foundations", cite: B(swift("Waveform.swift"), 44, "Fixes each of the eleven waveform bars at the source-defined 3pt width while level 0.64 controls height."), input: { surface: "foundations", component: "waveform", level: 0.64, barCount: 11, barWidth: 3, gap: 2.5 }, interactions: none("The waveform visualizes input level and is not directly interactive.") },
   ...PILL_STATES,
   ...NOTCH_STATES,
-  { id: "pocket-task-question", family: "pocket", cite: B(swift("PocketView.swift"), 139, "The task ask replaces its coarse status on the open Pocket face."), input: { surface: "pocket", capturePhase: null, hasNotch: false, pocket: { mode: "open", at: 0, waiting: 1, remoteKey: "right-option", slots: [pocketSlot] } }, interactions: interactive(control("expand", "click task card", { type: "pocketExpand", id: "task-42" }), control("close", "click close", { type: "pocketClose" })) },
-  { id: "pocket-agent-listening", family: "pocket", cite: B(swift("PocketView.swift"), 321, "Replaces Pocket status with the live aimed-capture chip."), input: { surface: "pocket", capturePhase: "listening", hasNotch: true, pocket: { mode: "open", at: 0, waiting: 0, remoteKey: "fn", slots: [{ id: "unmute-agent", title: "Unmute", kind: "agent", ask: null, status: "processing", demanding: false, backend: "codex", terminal: false }] } }, interactions: interactive(control("close", "click close", { type: "pocketClose" })) },
+  ...POCKET_STATES,
   { id: "conversation-question-choice", family: "conversation", cite: B(swift("TaskSurfaceView.swift"), 62, "Renders a source QuestionP only for a Needs User task."), input: { surface: "conversation", task: { ...taskBase, question: { reference: { requestId: "request-9", questionId: "question-2" }, acknowledgment: null, text: "Which environment should I deploy to?", details: "Production changes customer traffic.", kind: "choice", choices: ["Staging", "Production"], irreversible: true } } }, interactions: interactive(control("choice-production", "click Production", { type: "questionAnswer", id: "task-42", answer: "Production" })) },
   { id: "conversation-composer-attachment", family: "conversation", cite: B(swift("TaskSurfaceView.swift"), 73, "Selects the composable footer for a live writable task."), input: { surface: "conversation", task: { ...taskBase, status: "processing", question: null, draft: { text: "Use this screenshot", attachments: [{ id: "attachment-1", path: "/tmp/checkout.png", mimeType: "image/png", name: "checkout.png", reservationOrder: 0 }], clientRevision: 3, stagingCount: 0, error: null, operations: [], tool: "image" }, chatConfig: { provider: "codex", providerLabel: "Codex", model: "gpt-5.3-codex", modelLabel: "GPT-5.3 Codex", providers: [{ id: "codex", label: "Codex", description: null }], models: [{ id: "gpt-5.3-codex", label: "GPT-5.3 Codex", description: null }], efforts: [{ id: "high", label: "High", description: null }], effort: "high", permissions: [{ id: "workspace-write", label: "Workspace write", description: null }], permission: "workspace-write", permissionScope: "/Users/zodpatel/work/checkout", cwd: "/Users/zodpatel/work/checkout", mutable: true, busy: false, error: null, dictation: null, dictationError: null }, canCompose: true } }, interactions: interactive(control("send", "click Send", { type: "taskMessage", id: "task-42", text: "Use this screenshot" }), control("remove-attachment", "click remove attachment", { type: "draftRemoveAttachment", id: "attachment-1" })) },
   { id: "conversation-session-not-running", family: "conversation", cite: B(swift("TaskSurfaceView.swift"), 90, "Selects SessionNotRunning for a resumable stopped session."), input: { surface: "conversation", task: { ...taskBase, status: "ready", alive: false, question: null, canCompose: false, resumable: true, resumeError: "Codex process exited" } }, interactions: interactive(control("resume", "click Resume", { type: "resume", id: "task-42" })) },
@@ -448,7 +575,7 @@ export async function auditSource() {
   const productHead = (await git(["rev-parse", "HEAD"])).trim();
   const listed = (await git(["ls-tree", "-r", "--name-only", SOURCE_REVISION])).trim().split("\n");
   const files = listed.filter((source) => (source.startsWith("desktop/native-notch/Sources/") && source.endsWith(".swift")) || TS_FILES.has(source) || (source.startsWith(TS_PREFIX) && /\.(?:ts|tsx)$/.test(source) && !/\.(?:test|spec)\./.test(source)));
-  const report = { sourceRevision: SOURCE_REVISION, productHead, sourceDrift: productHead !== SOURCE_REVISION, files, enumCases: [], branches: [], sfSymbols: [], metrics: [], tokens: [], pillControlEmitSites: await controlEmitSites(), notchControlEmitSites: await notchControlEmitSites() };
+  const report = { sourceRevision: SOURCE_REVISION, productHead, sourceDrift: productHead !== SOURCE_REVISION, files, enumCases: [], branches: [], sfSymbols: [], metrics: [], tokens: [], pillControlEmitSites: await controlEmitSites(), notchControlEmitSites: await notchControlEmitSites(), pocketControlEmitSites: await pocketControlEmitSites() };
   for (const source of files) {
     const scanned = scanSourceText(source, await git(["show", `${SOURCE_REVISION}:${source}`]));
     for (const category of ["enumCases", "branches", "sfSymbols", "metrics", "tokens"]) report[category].push(...scanned[category]);
@@ -611,6 +738,42 @@ export function evaluateNotchBranch(item, input) {
 
 const notchBranchCoverage = evaluateNotchBranch;
 
+export function evaluatePocketBranch(item, input) {
+  const e = derivePocket(input); const slot = input.pocket.at >= 0 && input.pocket.at < input.pocket.slots.length ? input.pocket.slots[input.pocket.at] : null;
+  const ancestors = []; let predicate = item.value; let outcome = false;
+  const live = () => ancestors.push({ predicate: "expanded branch not selected", outcome: !e.expanded }, { predicate: "model.pocket.isOpen", outcome: e.isOpen });
+  if (item.source.endsWith("/NotchView.swift")) {
+    if (item.line === 270) { predicate = "transitionPocket != nil"; outcome = input.model.transitionPocket != null; ancestors.push({ predicate: "expanded", outcome: e.expanded }); }
+    if (item.line === 288) { predicate = "model.pocket.isOpen"; outcome = e.isOpen; ancestors.push({ predicate: "expanded branch not selected", outcome: !e.expanded }); }
+  } else if (item.source.endsWith("/PocketCardHeight.swift")) { predicate = "hasAsk"; outcome = e.hasAsk; }
+  else if (item.source.endsWith("/PocketView.swift")) {
+    if (item.line >= 266 && item.line <= 348) return { predicate: "PocketRow has a pinned call site", outcome: false, ancestors: [] };
+    if (item.line > 190) live();
+    if ([389, 487].includes(item.line)) { predicate = "slot.kind == agent"; outcome = slot?.kind === "agent"; ancestors.push({ predicate: item.line === 389 ? "hasNotch" : "!headerInShoulders", outcome: item.line === 389 ? input.geometry.hasNotch : !e.headerInShoulders }); }
+    else if ([391, 489].includes(item.line)) { predicate = "slot.kind != agent"; outcome = slot?.kind !== "agent"; ancestors.push({ predicate: item.line === 391 ? "hasNotch" : "!headerInShoulders", outcome: item.line === 391 ? input.geometry.hasNotch : !e.headerInShoulders }); }
+    else if (item.line === 449) { predicate = "toast ?? nonempty ask exists"; outcome = e.visibleMiddle != null; }
+    else if (item.line === 451) { predicate = "toast == nil"; outcome = input.model.toast == null; }
+    else if (item.line === 467 || item.line === 484) { predicate = "!headerInShoulders"; outcome = !e.headerInShoulders; }
+    else if ([388, 485, 497].includes(item.line)) { predicate = "quiet"; outcome = e.quiet; if (item.line === 388) ancestors.push({ predicate: "hasNotch", outcome: input.geometry.hasNotch }); }
+    else if (item.line === 494) { predicate = "task slot || headerInShoulders"; outcome = slot?.kind !== "agent" || e.headerInShoulders; }
+    else if (item.line === 504) { predicate = "headerInShoulders"; outcome = e.headerInShoulders; }
+    else if (item.line === 509) { predicate = "slots.count > 1"; outcome = e.rail; }
+    else if (item.line === 511) { predicate = "listening"; outcome = input.model.captureAimed; }
+    else if (item.line === 513) { predicate = "!listening"; outcome = !input.model.captureAimed; }
+    else if (item.line === 138) { predicate = "current slot exists"; outcome = slot != null; }
+    else if (item.line === 139 || item.line === 153) { predicate = "current ask is nonempty"; outcome = e.hasAsk; }
+    else if (item.line === 175) { predicate = "status is a known TaskStatus"; outcome = Boolean(slot?.status && STATUS[slot.status]); }
+    else if (item.line === 176) { predicate = "demanding == true fallback"; outcome = slot?.demanding === true; }
+    else { predicate = item.value; outcome = true; }
+  } else if (item.source.endsWith("/PocketSwipe.swift")) {
+    const cases = {
+      76: ["isMomentum", true], 80: ["hasPreciseDeltas", false], 81: ["wheel qualifies: abs(x) >= 0.5 && abs(x) > abs(y)", item.line === 81],
+      86: ["isGestureStart", true], 87: ["isGestureEnd", true], 94: ["!spent && abs(travelX) >= 26 && abs(travelX) > abs(travelY) * 1.4", true],
+    }; [predicate, outcome] = cases[item.line] ?? [item.value, true]; ancestors.push({ predicate: "Pocket swipe enabled for slots.count > 1", outcome: e.swipeEnabled });
+  } else if (item.source.endsWith("/PocketSwipeArea.swift")) { predicate = item.value; outcome = true; ancestors.push({ predicate: "Pocket swipe enabled for slots.count > 1", outcome: e.swipeEnabled }); }
+  return { predicate, outcome, ancestors };
+}
+
 export function createInventory(raw) {
   const occurrences = ["enumCases", "branches", "sfSymbols", "metrics", "tokens"].flatMap((category) => raw[category]);
   const occurrenceByLocation = new Map(occurrences.map((item) => [`${item.source}:${item.line}`, item]));
@@ -628,7 +791,7 @@ export function createInventory(raw) {
     if (!auditItem) throw new Error(`Missing curated citation for ${state.id}: ${state.cite.source}:${state.cite.line}`);
     const fixture = `fixture-${state.id}`;
     fixtures[fixture] = { stateId: state.id, input: state.input };
-    const primaryCoverage = state.family === "pill" && auditItem.id.startsWith("branch:") ? branchCoverage(auditItem, state.input) : state.family === "notch" && auditItem.id.startsWith("branch:") ? notchBranchCoverage(auditItem, state.input) : {};
+    const primaryCoverage = state.family === "pill" && auditItem.id.startsWith("branch:") ? branchCoverage(auditItem, state.input) : state.family === "notch" && auditItem.id.startsWith("branch:") ? notchBranchCoverage(auditItem, state.input) : state.family === "pocket" && auditItem.id.startsWith("branch:") ? evaluatePocketBranch(auditItem, state.input) : {};
     entries.push({ id: state.id, family: state.family, source: auditItem.source, symbol: auditItem.symbol, condition: auditItem.value, fixture, interactions: state.interactions, ...(state.expectations ? { expectations: state.expectations } : {}), baseline: { status: "pending", reason: "Task 2 creates and verifies the native baseline artifact." }, audit: [{ id: auditItem.id, contribution: state.cite.contribution, ...primaryCoverage }] });
     const links = linked.get(auditItem.id) ?? []; links.push({ stateId: state.id, contribution: state.cite.contribution }); linked.set(auditItem.id, links);
   }
@@ -647,10 +810,22 @@ export function createInventory(raw) {
     const input = fixtures[entry.fixture].input; const outcomes = notchPredicateOutcomes(input);
     entry.predicates = Object.entries(outcomes).map(([predicate, outcome]) => ({ predicate, outcome, source: predicate.includes("departure") || predicate.includes("auto-present") ? swift("AppController.swift") : predicate === "hasNotch" || predicate === "right segment fits" ? swift("NotchGeometry.swift") : swift("BarContent.swift"), line: predicate.includes("departure") ? 1857 : predicate.includes("auto-present") ? 1097 : predicate === "hasNotch" ? 185 : predicate === "right segment fits" ? 214 : predicate === "hovering" ? 224 : predicate.includes("silenced") ? 145 : predicate.startsWith("toast") ? 158 : predicate.startsWith("agent") ? 161 : predicate.startsWith("capture") ? 189 : 210 }));
   }
+  for (const entry of entries.filter(({ family }) => family === "pocket")) {
+    const input = fixtures[entry.fixture].input; const e = derivePocket(input);
+    entry.predicates = [
+      { predicate: "expanded", outcome: e.expanded, source: swift("NotchView.swift"), line: 268 },
+      { predicate: "model.pocket.isOpen", outcome: e.isOpen, source: swift("NotchView.swift"), line: 288 },
+      { predicate: "hasNotch", outcome: input.geometry.hasNotch, source: swift("NotchView.swift"), line: 300 },
+      { predicate: "current slot exists", outcome: e.currentId != null, source: swift("IPC.swift"), line: 102 },
+      { predicate: "headerInShoulders", outcome: e.headerInShoulders, source: swift("PocketView.swift"), line: 430 },
+      { predicate: "slots.count > 1", outcome: e.rail, source: swift("PocketView.swift"), line: 509 },
+      { predicate: "listening", outcome: input.model.captureAimed, source: swift("PocketView.swift"), line: 511 },
+    ];
+  }
   const attach = (item, stateId, contribution) => {
     const entry = entries.find(({ id }) => id === stateId);
     if (!entry || entry.audit.some(({ id }) => id === item.id)) return;
-    const coverage = entry.family === "pill" && item.id.startsWith("branch:") ? branchCoverage(item, fixtures[entry.fixture].input) : {};
+    const coverage = entry.family === "pill" && item.id.startsWith("branch:") ? branchCoverage(item, fixtures[entry.fixture].input) : entry.family === "pocket" && item.id.startsWith("branch:") ? evaluatePocketBranch(item, fixtures[entry.fixture].input) : {};
     entry.audit.push({ id: item.id, contribution, ...coverage });
     const links = linked.get(item.id) ?? []; links.push({ stateId, contribution }); linked.set(item.id, links);
   };
@@ -668,12 +843,19 @@ export function createInventory(raw) {
     if (item.source.endsWith("/PillView.swift") && EVALUABLE_PILL_LINES.has(item.line)) stateId = PILL_VIEW_LINKS[item.line];
     else if (item.source.endsWith("/Waveform.swift")) stateId = WAVEFORM_LINKS[item.line];
     else if (item.source.endsWith("/ProviderMark.swift") || item.source.endsWith("/ProviderMarkArt.swift")) stateId = PROVIDER_LINKS[item.line];
+    else if (item.source.endsWith("/PocketView.swift")) {
+      const links = { 138: "pocket-open-invalid-negative", 139: "pocket-task-question", 153: "pocket-empty-ask", 175: "pocket-status-processing", 176: "pocket-status-unknown-demanding", 388: "pocket-agent-notched", 389: "pocket-agent-notched", 391: "pocket-notched-question", 449: "pocket-toast-over-ask", 451: "pocket-task-question", 467: "pocket-notched-question", 484: "pocket-task-question", 485: "pocket-quiet-dot-footer-mismatch", 487: "pocket-agent-notchless", 489: "pocket-task-question", 494: "pocket-agent-notched", 497: "pocket-quiet-dot-footer-mismatch", 504: "pocket-agent-notched", 509: "pocket-page-middle", 511: "pocket-agent-listening", 513: "pocket-status-ready" }; stateId = links[item.line];
+    } else if (item.source.endsWith("/PocketSwipe.swift")) stateId = item.line === 76 ? "pocket-swipe-rejections" : item.line === 81 ? "pocket-wheel-previous" : "pocket-swipe-precise-next";
+    else if (item.source.endsWith("/PocketSwipeArea.swift")) stateId = "pocket-swipe-precise-next";
+    else if (item.source.endsWith("/PocketCardHeight.swift")) stateId = "pocket-task-question";
+    else if (item.source.endsWith("/NotchView.swift") && [270, 288].includes(item.line)) stateId = item.line === 270 ? "pocket-transition-snapshot" : "pocket-notched-question";
     if (stateId) attach(item, stateId, `The source render condition '${item.value}' contributes the visible configuration captured by ${stateId}.`);
   }
   const classifications = occurrences.map((item) => {
     const links = linked.get(item.id) ?? [];
     if (links.length) return { occurrenceId: item.id, kind: "render-affecting", stateIds: links.map(({ stateId }) => stateId), reason: links.map(({ stateId, contribution }) => `${stateId}: ${contribution}`).join(" ") };
     const category = item.id.split(":", 1)[0];
+    if (item.source.endsWith("/PocketView.swift") && (item.symbol === "make" || item.symbol === "PocketRow" || (item.line >= 266 && item.line <= 348))) return { occurrenceId: item.id, kind: "non-rendering", stateIds: [], reason: `Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '${item.value}' at ${item.source}:${item.line} cannot affect the current Pocket arrangement.` };
     const nonvisualReason = nonvisual.get(`${item.source}:${item.line}`);
     if (nonvisualReason) return { occurrenceId: item.id, kind: "non-rendering", stateIds: [], reason: `${nonvisualReason} Audited occurrence: ${item.kind ?? category} '${item.value}' in ${item.symbol} at ${item.source}:${item.line}.` };
     if (["sf-symbol", "metric", "token"].includes(category)) return { occurrenceId: item.id, kind: "render-affecting", stateIds: [], reason: `${category} '${item.value}' in ${item.symbol} at ${item.source}:${item.line} is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state.` };
@@ -739,6 +921,18 @@ export function validateManifest(manifest, evidence) {
         if (!expected || link.predicate !== expected.predicate || link.outcome !== expected.outcome || JSON.stringify(link.ancestors) !== JSON.stringify(expected.ancestors) || link.ancestors.some(({ outcome }) => !outcome)) errors.push(`Notch branch outcome or ancestor reachability mismatch for ${entry.id}:${link.id}`);
       }
       for (const item of entry.interactions.controls ?? []) if (!(evidence.notchControlEmitSites ?? []).some((site) => site.type === item.result.type && site.source === item.provenance?.source && site.line === item.provenance?.line)) errors.push(`Invalid Notch control provenance for ${entry.id}:${item.id}`);
+    }
+    if (entry.family === "pocket" && fixture) {
+      const input = fixture.input;
+      if (JSON.stringify(Object.keys(input).sort()) !== JSON.stringify(["controller", "expectation", "geometry", "model", "pocket", "surface"].sort()) || input.surface !== "pocket") errors.push(`Invalid Pocket fixture partition for ${entry.id}`);
+      const slotsValid = Array.isArray(input.pocket?.slots) && input.pocket.slots.every((slot) => JSON.stringify(Object.keys(slot).sort()) === JSON.stringify(["ask", "backend", "demanding", "id", "kind", "status", "terminal", "title"].sort()));
+      if (!slotsValid || !["open", "closed"].includes(input.pocket?.mode) || !Number.isInteger(input.pocket?.at) || !Number.isInteger(input.pocket?.waiting) || !(input.pocket?.remoteKey == null || ["fn", "right-option"].includes(input.pocket.remoteKey))) errors.push(`Invalid PocketP wire fixture for ${entry.id}`);
+      if (JSON.stringify(input.expectation) !== JSON.stringify(derivePocket(input))) errors.push(`Pocket derived expectation mismatch for ${entry.id}`);
+      for (const link of entry.audit.filter(({ id }) => id.startsWith("branch:"))) {
+        const occurrence = occurrenceById.get(link.id); const expected = occurrence && evaluatePocketBranch(occurrence, input);
+        if (!expected || link.predicate !== expected.predicate || link.outcome !== expected.outcome || JSON.stringify(link.ancestors) !== JSON.stringify(expected.ancestors) || link.ancestors.some(({ outcome }) => !outcome)) errors.push(`Pocket branch outcome or ancestor reachability mismatch for ${entry.id}:${link.id}`);
+      }
+      for (const item of entry.interactions.controls ?? []) if (!(evidence.pocketControlEmitSites ?? []).some((site) => site.type === item.result.type && site.source === item.provenance?.source && site.line === item.provenance?.line)) errors.push(`Invalid Pocket control provenance for ${entry.id}:${item.id}`);
     }
   }
   for (const [id, fixture] of Object.entries(fixtures)) if (!entryById.has(fixture.stateId) || entryById.get(fixture.stateId).fixture !== id) errors.push(`Orphan fixture: ${id}`);

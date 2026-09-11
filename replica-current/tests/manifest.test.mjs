@@ -172,6 +172,76 @@ test("Pill owns zero and nonzero Waveform states but no AimedChip branches", asy
   assert.equal(pill.some((entry) => entry.audit.some(({ id }) => id.includes("Waveform.swift:14"))), false);
 });
 
+test("Pocket gate exhaustively covers faces, status behavior, display treatments, and geometry", async () => {
+  const { manifest, evidence, validateManifest } = await loadInventory();
+  assert.deepEqual(validateManifest(manifest, evidence), []);
+  const pocket = manifest.entries.filter(({ family }) => family === "pocket");
+  const inputs = pocket.map((entry) => manifest.fixtures[entry.fixture].input);
+  assert.deepEqual([...new Set(inputs.map(({ pocket }) => pocket.slots[pocket.at]?.status).filter(Boolean))].sort(),
+    ["done", "failed", "needs-user", "processing", "ready", "stuck", "unknown"]);
+  assert.ok(inputs.some((x) => x.expectation.rendered === false && x.pocket.slots.length === 0));
+  assert.ok(inputs.some((x) => x.expectation.rendered === false && x.model.state === "task"));
+  assert.ok(inputs.some((x) => x.expectation.hasAsk && x.expectation.cardHeight === 106));
+  assert.ok(inputs.some((x) => !x.expectation.hasAsk && x.expectation.cardHeight === 68));
+  assert.ok(inputs.some((x) => x.geometry.hasNotch && x.expectation.headerInShoulders));
+  assert.ok(inputs.some((x) => !x.geometry.hasNotch && !x.expectation.headerInShoulders));
+  for (const input of inputs.filter((x) => x.expectation.rendered && x.pocket.slots[x.pocket.at])) {
+    assert.deepEqual(input.expectation.status, input.expectation.recomputedStatus);
+    assert.equal(input.expectation.count, `${Math.min(input.pocket.at + 1, input.pocket.slots.length)}/${input.pocket.slots.length}`);
+  }
+});
+
+test("Pocket controls and gestures use independently extracted exact emit sites", async () => {
+  const { manifest, evidence } = await loadInventory();
+  const controls = manifest.entries.filter(({ family }) => family === "pocket").flatMap(({ interactions }) => interactions.controls ?? []);
+  const sites = evidence.pocketControlEmitSites;
+  assert.ok(sites.length >= 9);
+  for (const control of controls) assert.ok(sites.some((site) => site.type === control.result.type && site.source === control.provenance.source && site.line === control.provenance.line), `${control.result.type}:${control.provenance?.line}`);
+  for (const type of ["pocketMove", "pocketExpand", "openDashboard", "pocketRelease"])
+    assert.ok(controls.some(({ result }) => result.type === type), `missing ${type}`);
+  assert.ok(manifest.entries.some(({ id, interactions }) => id === "pocket-swipe-precise-next" && interactions.controls[0].result.delta === 1));
+  assert.ok(manifest.entries.some(({ id, interactions }) => id === "pocket-wheel-previous" && interactions.controls[0].result.delta === -1));
+});
+
+test("Pocket swipe arithmetic proves thresholds, direction, rejection, reset, and one-step latch", async () => {
+  const { evaluatePocketSwipe } = await loadInventory();
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: -25, deltaY: 0 }]), []);
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: -26, deltaY: 0 }]), [1]);
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: 26, deltaY: 0 }]), [-1]);
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: -30, deltaY: 22 }]), []);
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: -30, deltaY: 20 }, { deltaX: -30, deltaY: 0 }]), [1]);
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: -40, deltaY: 0, isMomentum: true }]), []);
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: -30, deltaY: 0 }, { deltaX: -30, deltaY: 0 }]), [1]);
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: -20, deltaY: 0 }, { deltaX: 0, deltaY: 0, isGestureEnd: true }, { deltaX: -20, deltaY: 0 }]), []);
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: -0.5, deltaY: 0, hasPreciseDeltas: false }]), [1]);
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: 0.5, deltaY: 0, hasPreciseDeltas: false }]), [-1]);
+  assert.deepEqual(evaluatePocketSwipe([{ deltaX: 0.49, deltaY: 0, hasPreciseDeltas: false }, { deltaX: 0.5, deltaY: 0.5, hasPreciseDeltas: false }]), []);
+});
+
+test("Pocket branch backlinks carry independently recomputed outcomes and full ordered ancestry", async () => {
+  const { manifest, evidence, validateManifest, evaluatePocketBranch } = await loadInventory();
+  assert.deepEqual(validateManifest(manifest, evidence), []);
+  const occurrences = new Map(evidence.branches.map((item) => [item.id, item]));
+  for (const entry of manifest.entries.filter(({ family }) => family === "pocket")) {
+    const input = manifest.fixtures[entry.fixture].input;
+    for (const link of entry.audit.filter(({ id }) => id.startsWith("branch:"))) {
+      const expected = evaluatePocketBranch(occurrences.get(link.id), input);
+      assert.equal(link.predicate, expected.predicate, `${entry.id}:${link.id}`);
+      assert.equal(link.outcome, expected.outcome, `${entry.id}:${link.id}`);
+      assert.deepEqual(link.ancestors, expected.ancestors, `${entry.id}:${link.id}`);
+      assert.ok(link.ancestors.every(({ outcome }) => outcome === true));
+    }
+  }
+});
+
+test("Pocket mutation checks reject forged derivations and provenance", async () => {
+  const { manifest, evidence, validateManifest } = await loadInventory();
+  const mutate = (fn) => { const copy = structuredClone(manifest); fn(copy); return validateManifest(copy, evidence); };
+  assert.ok(mutate((m) => { m.fixtures["fixture-pocket-task-question"].input.expectation.cardHeight = 105; }).some((e) => /Pocket derived expectation/i.test(e)));
+  assert.ok(mutate((m) => { m.fixtures["fixture-pocket-agent-listening"].input.expectation.agentTreatment = "provider"; }).some((e) => /Pocket derived expectation/i.test(e)));
+  assert.ok(mutate((m) => { const e = m.entries.find(({ id }) => id === "pocket-task-question"); e.interactions.controls[0].provenance.line = 1; }).some((e) => /Pocket control provenance/i.test(e)));
+});
+
 test("each Pill render backlink carries a reachable verified branch outcome", async () => {
   const { manifest, evidence, validateManifest } = await loadInventory();
   assert.deepEqual(validateManifest(manifest, evidence), []);
@@ -512,7 +582,7 @@ test("family fixtures preserve exact source model values and transitions", async
   assert.equal(input("notch-pocket-waiting-hover-detail").model.pocket.waiting, 2);
 
   assert.equal(input("pocket-task-question").pocket.slots[0].ask, "Which environment should I deploy to?");
-  assert.equal(input("pocket-agent-listening").capturePhase, "listening");
+  assert.equal(input("pocket-agent-listening").model.captureAimed, true);
   assert.equal(controls("pocket-task-question")[0].result.type, "pocketExpand");
 
   assert.equal(input("conversation-question-choice").task.question.kind, "choice");

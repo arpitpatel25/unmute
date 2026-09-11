@@ -78,3 +78,11 @@ Notch correction commit: `a2ea6f8`. Scoped rereview: REJECT — 1 critical and 1
 Ruling: Every cited `NotchState` switch case must be evaluated as an exact case comparison. Reaching a switch or nested state branch requires the four ordered failed early returns followed by the actual selected case; a generic “state switch reached” ancestor is insufficient.
 
 Ruling: Notch event provenance has no exceptions. `userLeft` and `userReturned` must be independently extracted from pinned `AppController.swift` and validated by event type, source path, and exact emit line, just like `tap`, `pocketOpen`, and hover.
+
+Pocket family gate implementation: 37 source-shaped states added at pinned product revision `20dfd8fe5135371b7c4b5178a4124225a2e15662`. Pocket evidence now covers current notched shoulder+card and notchless card arrangements, closed/suppressed and invalid-current cases, every `TaskStatus`, fallback and quiet behavior, ask/toast/listening precedence, Agent/task identity, paging, keyboard and pointer controls, precise/wheel swipe arithmetic, expanded handoff, Reduce Motion, exact geometry/tokens/assets, and controller key/refit semantics. The declaration-only `PocketRow` arrangement is explicitly non-rendering.
+
+Ruling: `PocketP.isOpen` is the exact source predicate (`mode == "open" && !slots.isEmpty`); a zero-slot “open” payload is a bar fallback, not an invented empty open card. Invalid `at` remains a separately inventoried defensive rendering because `isOpen` can be true while `current` is nil.
+
+Ruling: Pocket frame height follows raw nonempty current ask only. A live toast can add the 31pt middle row without increasing a quiet 68pt card/frame; preserve and report this pinned-source clipping risk instead of silently correcting it in inventory.
+
+Ruling: Current Pocket rendering does not call `PocketRow` or `PocketRowMetrics.make`. Their declaration-only branches are non-rendering evidence; shared constants still used by `PocketShoulderRow`, `PocketCard`, `SlotRail`, and `RoundButton` remain authoritative.

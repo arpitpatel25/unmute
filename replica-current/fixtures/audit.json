@@ -29677,6 +29677,78 @@
       "line": 1862
     }
   ],
+  "pocketControlEmitSites": [
+    {
+      "type": "pocketMove",
+      "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+      "line": 253
+    },
+    {
+      "type": "pocketExpand",
+      "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+      "line": 310
+    },
+    {
+      "type": "openDashboard",
+      "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+      "line": 339
+    },
+    {
+      "type": "pocketRelease",
+      "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+      "line": 343
+    },
+    {
+      "type": "openDashboard",
+      "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+      "line": 406
+    },
+    {
+      "type": "pocketRelease",
+      "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+      "line": 410
+    },
+    {
+      "type": "pocketExpand",
+      "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+      "line": 465
+    },
+    {
+      "type": "openDashboard",
+      "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+      "line": 470
+    },
+    {
+      "type": "pocketRelease",
+      "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+      "line": 474
+    },
+    {
+      "type": "pocketMove",
+      "source": "desktop/native-notch/Sources/unmute-notch/NotchView.swift",
+      "line": 324
+    },
+    {
+      "type": "pocketMove",
+      "source": "desktop/native-notch/Sources/unmute-notch/AppController.swift",
+      "line": 1619
+    },
+    {
+      "type": "pocketMove",
+      "source": "desktop/native-notch/Sources/unmute-notch/AppController.swift",
+      "line": 1623
+    },
+    {
+      "type": "pocketExpand",
+      "source": "desktop/native-notch/Sources/unmute-notch/AppController.swift",
+      "line": 1628
+    },
+    {
+      "type": "pocketRelease",
+      "source": "desktop/native-notch/Sources/unmute-notch/AppController.swift",
+      "line": 1777
+    }
+  ],
   "classifications": [
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/ComposerSupport/ComposerAvailability.swift:36:1",
@@ -33924,39 +33996,52 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:76:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 's.isMomentum' in feed at desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:76 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-rejections"
+      ],
+      "reason": "pocket-swipe-rejections: Defines pocket swipe rejections Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:80:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 's.hasPreciseDeltas' in feed at desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:80 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 's.hasPreciseDeltas' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:81:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'abs(s.deltaX) >= Self.wheelDetent, abs(s.deltaX) > abs(s.deltaY)' in feed at desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:81 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-wheel-previous"
+      ],
+      "reason": "pocket-wheel-previous: Defines pocket wheel previous Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:86:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 's.isGestureStart' in feed at desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:86 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 's.isGestureStart' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:87:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 's.isGestureEnd' in feed at desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:87 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 's.isGestureEnd' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:94:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard '!spent, abs(travelX) >= Self.threshold, abs(travelX) > abs(travelY) * Self.axisRatio' in feed at desktop/native-notch/Sources/PocketSwipeSupport/PocketSwipe.swift:94 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next",
+        "pocket-swipe-precise-previous"
+      ],
+      "reason": "pocket-swipe-precise-next: Defines pocket swipe precise next Pocket behavior. pocket-swipe-precise-previous: Defines pocket swipe precise previous Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/StageSupport/StagePresentation.swift:17:1",
@@ -33996,9 +34081,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/SurfaceSizeSupport/PocketCardHeight.swift:45:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional ternary 'hasAsk' in pocketCardHeight at desktop/native-notch/Sources/SurfaceSizeSupport/PocketCardHeight.swift:45 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-task-question"
+      ],
+      "reason": "pocket-task-question: The source render condition 'hasAsk' contributes the visible configuration captured by pocket-task-question."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/SurfaceSizeSupport/SurfaceSizeStep.swift:39:1",
@@ -39456,9 +39543,13 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:270:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'let pocket = model.transitionPocket' in pocket at desktop/native-notch/Sources/unmute-notch/NotchView.swift:270 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-expanded-hidden",
+        "pocket-transition-snapshot",
+        "pocket-transition-reduce-motion"
+      ],
+      "reason": "pocket-expanded-hidden: Expanded task content wins before the open-Pocket branch. pocket-transition-snapshot: Expanded handoff renders a non-hit-testable PocketCard snapshot before expanded content is ready. pocket-transition-reduce-motion: Reduced Motion skips the delayed snapshot and presents expanded content immediately."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:278:1",
@@ -39468,9 +39559,12 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:288:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional else-if 'model.pocket.isOpen' in content at desktop/native-notch/Sources/unmute-notch/NotchView.swift:288 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-notched-question",
+        "pocket-outside-click-retains-open"
+      ],
+      "reason": "pocket-notched-question: Defines pocket notched question Pocket behavior. pocket-outside-click-retains-open: Outside click releases keyboard ownership without changing the open Pocket payload."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:301:1",
@@ -40495,63 +40589,79 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:38:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'view.enabled != enabled' in updateNSView at desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:38 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 'view.enabled != enabled' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:53:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional ternary 'nil' in monitor at desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:53 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 'nil' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:65:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'monitor == nil' in startWatching at desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:65 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 'monitor == nil' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:67:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'let self' in self at desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:67 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 'let self' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:73:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'let monitor' in monitor at desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:73 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 'let monitor' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:82:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'enabled, let window, event.window === window' in window at desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:82 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 'enabled, let window, event.window === window' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:83:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'bounds.contains(convert(event.locationInWindow, from: nil))' in handle at desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:83 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 'bounds.contains(convert(event.locationInWindow, from: nil))' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:97:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'let step = swipe.feed(sample)' in step at desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:97 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-swipe-precise-next"
+      ],
+      "reason": "pocket-swipe-precise-next: The source render condition 'let step = swipe.feed(sample)' contributes the visible configuration captured by pocket-swipe-precise-next."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:100:1",
-      "kind": "render-input",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Conditional if 'PocketFace.isAgent(slot)' in make at desktop/native-notch/Sources/unmute-notch/PocketView.swift:100 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'PocketFace.isAgent(slot)' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:100 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:102:1",
-      "kind": "render-input",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Conditional else 'else' in make at desktop/native-notch/Sources/unmute-notch/PocketView.swift:102 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'else' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:102 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:108:1",
@@ -40561,15 +40671,19 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:109:1",
-      "kind": "render-input",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Conditional if 'pocket.slots.count > 1' in make at desktop/native-notch/Sources/unmute-notch/PocketView.swift:109 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'pocket.slots.count > 1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:109 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:138:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'let slot' in slot at desktop/native-notch/Sources/unmute-notch/PocketView.swift:138 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-closed-empty",
+        "pocket-open-zero-slots",
+        "pocket-open-invalid-negative"
+      ],
+      "reason": "pocket-closed-empty: A zero-slot payload cannot satisfy PocketP.isOpen and falls through to the bar. pocket-open-zero-slots: Even mode=open cannot satisfy PocketP.isOpen without slots and therefore falls through to the bar. pocket-open-invalid-negative: Invalid negative current index renders fallback identity and disables card expansion."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:139:1",
@@ -40577,165 +40691,218 @@
       "stateIds": [
         "pocket-task-question"
       ],
-      "reason": "pocket-task-question: The task ask replaces its coarse status on the open Pocket face."
+      "reason": "pocket-task-question: The source render condition 'let ask = slot.ask, !ask.isEmpty' contributes the visible configuration captured by pocket-task-question."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:153:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'let slot, let ask = slot.ask, !ask.isEmpty' in slot at desktop/native-notch/Sources/unmute-notch/PocketView.swift:153 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-empty-ask"
+      ],
+      "reason": "pocket-empty-ask: Defines pocket empty ask Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:175:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'let raw = slot?.status, !raw.isEmpty, let known = TaskStatus(rawValue: raw)' in raw at desktop/native-notch/Sources/unmute-notch/PocketView.swift:175 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-closed-slots-quiet",
+        "pocket-open-invalid-high",
+        "pocket-status-processing",
+        "pocket-status-needs-user",
+        "pocket-status-ready",
+        "pocket-status-stuck",
+        "pocket-status-done",
+        "pocket-status-failed",
+        "pocket-status-unknown-demanding",
+        "pocket-demanding-nil"
+      ],
+      "reason": "pocket-closed-slots-quiet: Defines pocket closed slots quiet Pocket behavior. pocket-open-invalid-high: Past-end current index renders fallback Ready and the clamped N/N count. pocket-status-processing: Defines pocket status processing Pocket behavior. pocket-status-needs-user: Defines pocket status needs user Pocket behavior. pocket-status-ready: Defines pocket status ready Pocket behavior. pocket-status-stuck: Defines pocket status stuck Pocket behavior. pocket-status-done: Defines pocket status done Pocket behavior. pocket-status-failed: Defines pocket status failed Pocket behavior. pocket-status-unknown-demanding: Defines pocket status unknown demanding Pocket behavior. pocket-demanding-nil: Defines pocket demanding nil Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:176:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional ternary 'true' in resolved at desktop/native-notch/Sources/unmute-notch/PocketView.swift:176 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-status-unknown-quiet",
+        "pocket-status-unknown-demanding"
+      ],
+      "reason": "pocket-status-unknown-quiet: Defines pocket status unknown quiet Pocket behavior. pocket-status-unknown-demanding: The source render condition 'true' contributes the visible configuration captured by pocket-status-unknown-demanding."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:294:1",
-      "kind": "render-input",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Conditional ternary 'quiet' in identity at desktop/native-notch/Sources/unmute-notch/PocketView.swift:294 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'quiet' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:294 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:297:1",
-      "kind": "render-input",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Conditional if 'PocketFace.isAgent(slot)' in identity at desktop/native-notch/Sources/unmute-notch/PocketView.swift:297 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'PocketFace.isAgent(slot)' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:297 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:299:1",
-      "kind": "render-input",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Conditional else 'else' in identity at desktop/native-notch/Sources/unmute-notch/PocketView.swift:299 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'else' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:299 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:305:1",
-      "kind": "render-input",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Conditional ternary 'quiet' in identity at desktop/native-notch/Sources/unmute-notch/PocketView.swift:305 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'quiet' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:305 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:321:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pocket-agent-listening"
-      ],
-      "reason": "pocket-agent-listening: Replaces Pocket status with the live aimed-capture chip."
+      "kind": "non-rendering",
+      "stateIds": [],
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'listening' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:321 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:323:1",
-      "kind": "render-input",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Conditional else 'else' in state at desktop/native-notch/Sources/unmute-notch/PocketView.swift:323 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'else' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:323 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:327:1",
-      "kind": "render-input",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Conditional if 'model.pocket.slots.count > 1' in state at desktop/native-notch/Sources/unmute-notch/PocketView.swift:327 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'model.pocket.slots.count > 1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:327 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:388:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional ternary 'quiet' in body at desktop/native-notch/Sources/unmute-notch/PocketView.swift:388 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-agent-notched"
+      ],
+      "reason": "pocket-agent-notched: The source render condition 'quiet' contributes the visible configuration captured by pocket-agent-notched."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:389:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'PocketFace.isAgent(slot)' in body at desktop/native-notch/Sources/unmute-notch/PocketView.swift:389 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-agent-notched"
+      ],
+      "reason": "pocket-agent-notched: Defines pocket agent notched Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:391:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional else 'else' in body at desktop/native-notch/Sources/unmute-notch/PocketView.swift:391 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-notched-question"
+      ],
+      "reason": "pocket-notched-question: The source render condition 'else' contributes the visible configuration captured by pocket-notched-question."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:449:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'let saying = model.toast ?? PocketFace.ask(for: slot)' in saying at desktop/native-notch/Sources/unmute-notch/PocketView.swift:449 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-task-question",
+        "pocket-toast-over-ask",
+        "pocket-toast-without-ask",
+        "pocket-long-markdown"
+      ],
+      "reason": "pocket-task-question: Defines pocket task question Pocket behavior. pocket-toast-over-ask: Defines pocket toast over ask Pocket behavior. pocket-toast-without-ask: Toast draws a 31pt row while controller frame remains the 68pt quiet size; preserves the pinned clipping defect. pocket-long-markdown: Defines pocket long markdown Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:451:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional ternary 'nil' in saying at desktop/native-notch/Sources/unmute-notch/PocketView.swift:451 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-task-question"
+      ],
+      "reason": "pocket-task-question: The source render condition 'nil' contributes the visible configuration captured by pocket-task-question."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:467:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if '!headerInShoulders' in body at desktop/native-notch/Sources/unmute-notch/PocketView.swift:467 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-notched-question"
+      ],
+      "reason": "pocket-notched-question: The source render condition '!headerInShoulders' contributes the visible configuration captured by pocket-notched-question."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:484:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if '!headerInShoulders' in header at desktop/native-notch/Sources/unmute-notch/PocketView.swift:484 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-task-question"
+      ],
+      "reason": "pocket-task-question: The source render condition '!headerInShoulders' contributes the visible configuration captured by pocket-task-question."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:485:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional ternary 'quiet' in header at desktop/native-notch/Sources/unmute-notch/PocketView.swift:485 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-quiet-dot-footer-mismatch"
+      ],
+      "reason": "pocket-quiet-dot-footer-mismatch: Defines pocket quiet dot footer mismatch Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:487:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'PocketFace.isAgent(slot)' in header at desktop/native-notch/Sources/unmute-notch/PocketView.swift:487 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-agent-notchless"
+      ],
+      "reason": "pocket-agent-notchless: Defines pocket agent notchless Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:489:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional else 'else' in header at desktop/native-notch/Sources/unmute-notch/PocketView.swift:489 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-task-question"
+      ],
+      "reason": "pocket-task-question: The source render condition 'else' contributes the visible configuration captured by pocket-task-question."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:494:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if '!PocketFace.isAgent(slot) || headerInShoulders' in header at desktop/native-notch/Sources/unmute-notch/PocketView.swift:494 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-agent-notched"
+      ],
+      "reason": "pocket-agent-notched: The source render condition '!PocketFace.isAgent(slot) || headerInShoulders' contributes the visible configuration captured by pocket-agent-notched."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:497:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional ternary 'quiet' in header at desktop/native-notch/Sources/unmute-notch/PocketView.swift:497 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-quiet-dot-footer-mismatch"
+      ],
+      "reason": "pocket-quiet-dot-footer-mismatch: The source render condition 'quiet' contributes the visible configuration captured by pocket-quiet-dot-footer-mismatch."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:504:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional ternary 'headerInShoulders' in header at desktop/native-notch/Sources/unmute-notch/PocketView.swift:504 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-agent-notched"
+      ],
+      "reason": "pocket-agent-notched: The source render condition 'headerInShoulders' contributes the visible configuration captured by pocket-agent-notched."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:509:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'pocket.slots.count > 1' in footer at desktop/native-notch/Sources/unmute-notch/PocketView.swift:509 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-page-first",
+        "pocket-page-middle",
+        "pocket-page-last",
+        "pocket-keyboard-actions"
+      ],
+      "reason": "pocket-page-first: Defines pocket page first Pocket behavior. pocket-page-middle: Defines pocket page middle Pocket behavior. pocket-page-last: Defines pocket page last Pocket behavior. pocket-keyboard-actions: Defines pocket keyboard actions Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:511:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'listening' in footer at desktop/native-notch/Sources/unmute-notch/PocketView.swift:511 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-task-listening-question",
+        "pocket-agent-listening"
+      ],
+      "reason": "pocket-task-listening-question: Defines pocket task listening question Pocket behavior. pocket-agent-listening: Defines pocket agent listening Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:513:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional else 'else' in footer at desktop/native-notch/Sources/unmute-notch/PocketView.swift:513 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-status-ready"
+      ],
+      "reason": "pocket-status-ready: The source render condition 'else' contributes the visible configuration captured by pocket-status-ready."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:21:1",
@@ -50011,21 +50178,21 @@
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:120:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '20' in make at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '20' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:120:2",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '30' in make at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '30' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:120:3",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '10' in make at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '10' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:150:1",
@@ -50077,69 +50244,69 @@
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:277:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '0' in body at desktop/native-notch/Sources/unmute-notch/PocketView.swift:277 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '0' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:277 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:292:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '0' in identity at desktop/native-notch/Sources/unmute-notch/PocketView.swift:292 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '0' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:292 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:304:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '12.5' in identity at desktop/native-notch/Sources/unmute-notch/PocketView.swift:304 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '12.5' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:304 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:306:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '1' in identity at desktop/native-notch/Sources/unmute-notch/PocketView.swift:306 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:306 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:324:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '12' in state at desktop/native-notch/Sources/unmute-notch/PocketView.swift:324 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '12' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:324 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:324:2",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '0.68' in state at desktop/native-notch/Sources/unmute-notch/PocketView.swift:324 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '0.68' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:324 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:325:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '1' in state at desktop/native-notch/Sources/unmute-notch/PocketView.swift:325 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:325 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:330:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '1' in state at desktop/native-notch/Sources/unmute-notch/PocketView.swift:330 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:330 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:330:2",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '0.5' in state at desktop/native-notch/Sources/unmute-notch/PocketView.swift:330 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '0.5' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:330 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:338:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '8.5' in state at desktop/native-notch/Sources/unmute-notch/PocketView.swift:338 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '8.5' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:338 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:341:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "metric '8' in state at desktop/native-notch/Sources/unmute-notch/PocketView.swift:341 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '8' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:341 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:384:1",
@@ -53511,9 +53678,9 @@
     },
     {
       "occurrenceId": "token:desktop/native-notch/Sources/unmute-notch/PocketView.swift:281:1",
-      "kind": "render-affecting",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "token 'Color.clear' in body at desktop/native-notch/Sources/unmute-notch/PocketView.swift:281 is shared visual evidence; it changes asset, geometry, typography, color, or material but does not independently define a state."
+      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'Color.clear' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:281 cannot affect the current Pocket arrangement."
     },
     {
       "occurrenceId": "token:desktop/native-notch/Sources/unmute-notch/PocketView.swift:401:1",
