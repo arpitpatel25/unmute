@@ -67,6 +67,57 @@ test("actual-source conditional forms are extracted independently at their real 
   assert.equal(find("NotetakerWidget.tsx", 575, "ternary")?.value, "showDiscard");
 });
 
+test("Pill gate exhaustively covers source enums without associated-value false positives", async () => {
+  const { manifest, evidence, validateManifest } = await loadInventory();
+  assert.deepEqual(validateManifest(manifest, evidence), []);
+  const pill = manifest.entries.filter(({ family }) => family === "pill");
+  const inputs = pill.map((entry) => manifest.fixtures[entry.fixture].input);
+  assert.deepEqual([...new Set(inputs.map(({ state }) => state.phase))].sort(),
+    ["cancelled", "error", "hidden", "output", "output-fallback", "paused", "processing", "recording", "too-short"]);
+  assert.deepEqual([...new Set(inputs.map(({ state }) => state.kind))].sort(), ["dictation", "instruction", "remote"]);
+  assert.deepEqual([...new Set(inputs.map(({ state }) => state.offline).filter(Boolean))].sort(),
+    ["chose_on_device", "cloud_unreachable", "no_subscription", "not_signed_in", "payment_failed"]);
+  const eventCases = evidence.enumCases.filter((item) => item.symbol === "PillEvent").map(({ value }) => value);
+  assert.deepEqual(eventCases, ["stop", "cancel", "undo", "acceptDraft", "pickModel", "pickAxis", "cycleAgent", "pickAgent", "pickMic", "toggleRaw", "openBillingPortal", "dismissOffline"]);
+  for (const item of evidence.enumCases.filter((item) => ["PillPhase", "PillKind", "PillOfflineReason"].includes(item.symbol))) {
+    const classification = evidence.classifications.find(({ occurrenceId }) => occurrenceId === item.id);
+    assert.ok(classification.stateIds.some((id) => id.startsWith("pill-")), `uncovered ${item.symbol}.${item.value}`);
+  }
+});
+
+test("Pill fixtures pin exact branch values, menus, controls, and transitions", async () => {
+  const { manifest } = await loadInventory();
+  const entry = (id) => manifest.entries.find((candidate) => candidate.id === id);
+  const input = (id) => manifest.fixtures[entry(id).fixture].input;
+  const events = (id) => entry(id).interactions.kind === "interactive" ? entry(id).interactions.controls.map((c) => c.result) : [];
+  assert.equal(input("pill-recording-countdown-15").state.elapsed, 285);
+  assert.equal(input("pill-recording-waveform-16").state.elapsed, 284);
+  assert.equal(input("pill-processing-draft").state.draftOffer, true);
+  assert.equal(input("pill-processing-on-device").state.engineNotice, true);
+  assert.equal(input("pill-output-fallback-preview").state.outputPreview, "Ship the checkout update");
+  assert.equal(input("pill-error-limit").state.message, "Daily limit reached");
+  assert.equal(input("pill-hint-mic-precedence").state.micStatus, "AirPods — Move closer");
+  assert.equal(input("pill-hint-mic-precedence").state.coaching.kind, "quiet");
+  assert.equal(input("pill-selector-codex-axes").openMenu, "model");
+  assert.deepEqual(input("pill-selector-codex-axes").state.modelAxes.map((axis) => axis.id), ["model", "effort"]);
+  assert.equal(input("pill-selector-task-addressed").state.taskId, "task-42");
+  assert.equal(input("pill-agent-lane-processing").presentation.agentRim, true);
+  assert.equal(input("pill-mic-iphone").state.mic, "iphone");
+  assert.equal(input("pill-scratchpad-armed").scratchpad.armed, true);
+  const allResults = manifest.entries.filter(({ family }) => family === "pill").flatMap(({ interactions }) => interactions.controls?.map((c) => c.result.type) ?? []);
+  for (const type of ["pillStop", "pillCancel", "pillUndo", "pillAcceptDraft", "pillPickModel", "pillPickAxis", "pillCycleAgent", "pillPickAgent", "pillPickMic", "pillToggleRaw", "pillOpenBillingPortal", "pillDismissOffline", "scratchpadArm"])
+    assert.ok(allResults.includes(type), `missing Pill transition ${type}`);
+});
+
+test("every Pill render conditional has a manual Pill backlink", async () => {
+  const { evidence } = await loadInventory();
+  const renderSources = /\/(?:PillView|Waveform|ProviderMark|ProviderMarkArt)\.swift$/;
+  for (const item of evidence.branches.filter(({ source }) => renderSources.test(source))) {
+    const classification = evidence.classifications.find(({ occurrenceId }) => occurrenceId === item.id);
+    assert.ok(classification.stateIds.some((id) => id.startsWith("pill-")), `uncovered Pill render branch ${item.source}:${item.line} ${item.value}`);
+  }
+});
+
 test("the audit uses only approved visual source sets at current product HEAD", async () => {
   const { evidence } = await loadInventory();
   assert.equal(evidence.sourceRevision, CURRENT_REVISION);
@@ -117,10 +168,9 @@ test("family fixtures preserve exact source model values and transitions", async
   const input = (id) => manifest.fixtures[state(id).fixture].input;
   const controls = (id) => state(id).interactions.controls;
 
-  assert.deepEqual(input("pill-recording-remote-warning"), {
-    surface: "pill", openMenu: null,
-    state: { phase: "recording", kind: "remote", taskId: "task-42", level: 0.64, elapsed: 286, maxSeconds: 300 },
-  });
+  assert.equal(input("pill-recording-remote-warning").surface, "pill");
+  assert.deepEqual(Object.fromEntries(["phase", "kind", "taskId", "level", "elapsed", "maxSeconds"].map((key) => [key, input("pill-recording-remote-warning").state[key]])),
+    { phase: "recording", kind: "remote", taskId: "task-42", level: 0.64, elapsed: 286, maxSeconds: 300 });
   assert.deepEqual(controls("pill-recording-remote-warning").map(({ event, result }) => [event, result]), [
     ["click discard", { type: "pillCancel" }], ["click finish", { type: "pillStop" }],
   ]);

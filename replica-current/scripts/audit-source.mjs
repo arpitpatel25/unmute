@@ -52,7 +52,7 @@ export function scanSourceText(source, text, language = source.endsWith(".swift"
     const enumDeclaration = line.match(/\benum\s+([A-Za-z_$][\w$]*)/);
     if (enumDeclaration) enumScopes.push({ depth: depth - closes, symbol: enumDeclaration[1] });
     symbolByLine[index + 1] = symbol;
-    if (enumScopes.length && /^case\s+/.test(line)) line.replace(/^case\s+/, "").split(",").forEach((part, item) => {
+    if (enumScopes.length && depth === enumScopes.at(-1).depth + 1 && /^case\s+/.test(line)) splitEnumCases(line.replace(/^case\s+/, "")).forEach((part, item) => {
       const value = part.trim().match(/^([A-Za-z_$][\w$]*)/)?.[1];
       if (value) result.enumCases.push(occurrence("enum", source, index + 1, value, enumScopes.at(-1).symbol, item + 1));
     });
@@ -78,10 +78,25 @@ export function scanSourceText(source, text, language = source.endsWith(".swift"
       if (expression.includes("&&") && !candidates.some(([kind]) => kind === "if" || kind === "else-if")) candidates.push(["logical-and", expression.split("?")[0].trim()]);
       const questions = expression.match(/(?<!\?)\?(?![?.])/g) ?? [];
       questions.forEach(() => candidates.push(["ternary", expression.split("?")[0].trim().split(":").at(-1).replace(/^[{()\s]+/, "")]));
+    } else {
+      for (const ternary of value.matchAll(/([A-Za-z_][\w.]*|[A-Za-z_][\w.]*\s*<=\s*-?\d+(?:\.\d+)?)\s+\?\s+/g)) candidates.push(["ternary", ternary[1]]);
+      const paused = value.match(/\bpaused:\s*([^,)]+)/);
+      if (paused) candidates.push(["conditional-argument", paused[1].trim()]);
     }
     candidates.forEach(([kind, condition], n) => result.branches.push(occurrence("branch", source, statement.line, condition.trim(), symbolByLine[statement.line] ?? "file scope", n + 1, kind)));
   }
   return result;
+}
+
+function splitEnumCases(value) {
+  const parts = []; let depth = 0; let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === "(") depth += 1;
+    else if (value[index] === ")") depth -= 1;
+    else if (value[index] === "," && depth === 0) { parts.push(value.slice(start, index)); start = index + 1; }
+  }
+  parts.push(value.slice(start));
+  return parts;
 }
 
 const B = (source, line, contribution) => ({ source, line, contribution });
@@ -90,17 +105,95 @@ const control = (id, event, result) => ({ id, event, result });
 const none = (reason) => ({ kind: "none", reason });
 const interactive = (...controls) => ({ kind: "interactive", controls });
 const pillBase = (state) => ({ surface: "pill", openMenu: null, state });
+const pillDefaults = {
+  phase: "hidden", kind: "dictation", taskId: null, level: 0, elapsed: 0, maxSeconds: 300,
+  message: null, draftOffer: false, engineNotice: false, showDiscardHint: false,
+  outputPreview: null, fallbackMessage: null, mutedText: null, model: null,
+  modelOptions: [], modelAxes: [], modelEmpty: null, agent: null, agentOptions: [],
+  agentConnected: true, micStatus: null, raw: false, micOptions: [], mic: null,
+  coaching: null, offline: null, canUndo: false,
+};
+const pillState = (id, line, state, interactions, extra = {}) => ({
+  id, family: "pill", cite: B(swift("PillView.swift"), line, id.startsWith("pill-recording-countdown") ? "Switches from waveform to countdown during the final 15 seconds." : `Defines the ${id.replace(/^pill-/, "").replaceAll("-", " ")} Pill rendering.`),
+  input: { ...pillBase({ ...pillDefaults, ...state }), presentation: { controlState: "resting", agentRim: false }, scratchpad: { enabled: false, armed: false, visible: false, pad: null }, ...extra }, interactions,
+});
+const recordControls = interactive(control("discard", "click discard", { type: "pillCancel" }), control("finish", "click finish", { type: "pillStop" }));
+const agentOptions = [
+  { id: "claude", label: "Claude Code", detail: "Anthropic CLI", available: true, terminal: true },
+  { id: "codex-desktop", label: "Codex", detail: "OpenAI desktop", available: false, terminal: false },
+];
+const modelOptions = [{ id: "sonnet", label: "Claude Sonnet 4.5" }, { id: "opus", label: "Claude Opus 4.1" }];
+const modelAxes = [
+  { id: "model", label: "Model", current: "gpt-5.3-codex", options: [{ id: "gpt-5.3-codex", label: "GPT-5.3 Codex" }, { id: "gpt-5.2-codex", label: "GPT-5.2 Codex" }] },
+  { id: "effort", label: "Effort", current: "high", options: [{ id: "medium", label: "Medium" }, { id: "high", label: "High" }] },
+];
+const PILL_STATES = [
+  pillState("pill-hidden", 491, { phase: "hidden" }, none("The hidden phase deliberately renders no Pill or source-defined control.")),
+  pillState("pill-recording-waveform-16", 540, { phase: "recording", level: 0.64, elapsed: 284 }, recordControls),
+  pillState("pill-recording-cancel-hover", 758, { phase: "recording", level: 0.64, elapsed: 24 }, recordControls, { presentation: { pillHover: true, cancelHover: true } }),
+  pillState("pill-recording-countdown-15", 538, { phase: "recording", level: 0.64, elapsed: 285 }, recordControls),
+  pillState("pill-recording-countdown-zero", 538, { phase: "recording", elapsed: 300 }, recordControls),
+  pillState("pill-recording-instruction", 481, { phase: "recording", kind: "instruction", level: 0.42, elapsed: 8 }, recordControls),
+  pillState("pill-recording-remote-warning", 396, { phase: "recording", kind: "remote", taskId: "task-42", level: 0.64, elapsed: 286, agent: "Claude Code", agentOptions, model: "Claude Sonnet 4.5", modelOptions, micOptions: ["mac", "iphone"], mic: "mac" }, recordControls),
+  pillState("pill-paused", 562, { phase: "paused", elapsed: 18 }, none("Paused shows only its amber status dot and label; the source defines no phase action.")),
+  pillState("pill-processing-default", 580, { phase: "processing", elapsed: 12 }, none("Default processing is an animated status with no source-defined control.")),
+  pillState("pill-processing-draft", 594, { phase: "processing", kind: "instruction", elapsed: 12, draftOffer: true }, interactive(control("quick-draft", "click Use quick draft", { type: "pillAcceptDraft" }))),
+  pillState("pill-processing-on-device", 596, { phase: "processing", engineNotice: true }, none("On-device processing exposes an informational engine notice, not a control.")),
+  pillState("pill-processing-discard-hint", 598, { phase: "processing", showDiscardHint: true }, none("Esc to discard is keyboard guidance; this Pill phase has no clickable action.")),
+  pillState("pill-output", 605, { phase: "output" }, none("Output is a transient success acknowledgment with no source-defined control.")),
+  pillState("pill-output-fallback-default", 613, { phase: "output-fallback" }, none("Fallback output reports raw paste completion and has no source-defined control.")),
+  pillState("pill-output-fallback-preview", 619, { phase: "output-fallback", fallbackMessage: "Formatting unavailable — pasted raw", outputPreview: "Ship the checkout update" }, none("The preview is output text, not an interactive control.")),
+  pillState("pill-too-short-default", 626, { phase: "too-short" }, none("The default capture failure acknowledgment has no source-defined control.")),
+  pillState("pill-too-short-custom", 626, { phase: "too-short", mutedText: "No speech detected" }, none("Custom muted text is an acknowledgment with no source-defined control.")),
+  pillState("pill-cancelled", 632, { phase: "cancelled", canUndo: true }, interactive(control("undo", "click Undo", { type: "pillUndo" }))),
+  pillState("pill-error-default", 642, { phase: "error" }, none("The default error exposes retry guidance but no clickable Pill control.")),
+  pillState("pill-error", 649, { phase: "error", message: "Transcription failed" }, none("Retry is keyboard guidance; the source defines no clickable Pill control.")),
+  pillState("pill-error-limit", 649, { phase: "error", message: "Daily limit reached" }, none("Limit-reached errors suppress retry guidance and expose no control.")),
+  pillState("pill-offline-not-signed-in", 314, { phase: "recording", offline: "not_signed_in" }, interactive(control("dismiss", "click dismiss", { type: "pillDismissOffline" }))),
+  pillState("pill-offline-no-subscription", 314, { phase: "recording", offline: "no_subscription" }, interactive(control("dismiss", "click dismiss", { type: "pillDismissOffline" }))),
+  pillState("pill-payment-failed", 1268, { phase: "recording", offline: "payment_failed" }, interactive(control("update-card", "click Update card", { type: "pillOpenBillingPortal" }), control("dismiss", "click dismiss", { type: "pillDismissOffline" }))),
+  pillState("pill-offline-cloud-unreachable", 314, { phase: "recording", offline: "cloud_unreachable" }, interactive(control("dismiss", "click dismiss", { type: "pillDismissOffline" }))),
+  pillState("pill-offline-on-device", 314, { phase: "recording", offline: "chose_on_device" }, interactive(control("dismiss", "click dismiss", { type: "pillDismissOffline" }))),
+  pillState("pill-hint-mic", 441, { phase: "recording", micStatus: "AirPods" }, recordControls),
+  pillState("pill-hint-mic-precedence", 441, { phase: "recording", micStatus: "AirPods — Move closer", coaching: { kind: "quiet", remedy: "Speak louder" } }, recordControls),
+  pillState("pill-hint-coaching-quiet", 449, { phase: "recording", coaching: { kind: "quiet", remedy: "Speak louder" } }, recordControls),
+  pillState("pill-hint-coaching-noisy", 449, { phase: "recording", coaching: { kind: "noisy", remedy: "Move somewhere quieter" } }, recordControls),
+  pillState("pill-selector-closed", 250, { phase: "recording", kind: "remote", agent: "Claude Code", agentOptions, model: "Claude Sonnet 4.5", modelOptions }, interactive(control("selector", "click Agent and model", { type: "pillSelectorOpen", menu: "model" }))),
+  pillState("pill-selector-list", 983, { phase: "recording", kind: "remote", agent: "Claude Code", agentOptions, model: "Claude Sonnet 4.5", modelOptions }, interactive(control("model-opus", "click Claude Opus 4.1", { type: "pillPickModel", value: "opus" }), control("agent-codex", "click Codex", { type: "pillPickAgent", value: "codex-desktop" })), { openMenu: "model", presentation: { controlState: "hover", agentRim: false } }),
+  pillState("pill-selector-row-unselected-hover", 1088, { phase: "recording", kind: "remote", agent: "Claude Code", agentOptions, model: "Claude Sonnet 4.5", modelOptions }, interactive(control("model-opus", "click Claude Opus 4.1", { type: "pillPickModel", value: "opus" })), { openMenu: "model", presentation: { selectorRow: "unselected-hover" } }),
+  pillState("pill-selector-codex-axes", 977, { phase: "recording", kind: "remote", agent: "Codex", agentOptions, model: "GPT-5.3 Codex · High", modelAxes }, interactive(control("axis-model", "click GPT-5.2 Codex", { type: "pillPickAxis", axis: "model", value: "gpt-5.2-codex" }), control("axis-effort", "click Medium", { type: "pillPickAxis", axis: "effort", value: "medium" })), { openMenu: "model" }),
+  pillState("pill-selector-empty", 989, { phase: "recording", kind: "remote", agent: "Claude Code", agentOptions, modelEmpty: "No models available" }, interactive(control("agent-cycle", "click Agent control", { type: "pillCycleAgent" })), { openMenu: "model" }),
+  pillState("pill-selector-task-addressed", 972, { phase: "recording", kind: "remote", taskId: "task-42", agent: "Claude Code", agentOptions, model: "Claude Sonnet 4.5", modelOptions }, interactive(control("model-opus", "click Claude Opus 4.1", { type: "pillPickModel", value: "opus", taskId: "task-42" })), { openMenu: "model" }),
+  pillState("pill-agent-disconnected", 865, { phase: "recording", kind: "remote", agent: "Claude Code", agentOptions, agentConnected: false, model: "Claude Sonnet 4.5", modelOptions }, interactive(control("agent-claude", "click Claude Code", { type: "pillPickAgent", value: "claude" })), { openMenu: "model" }),
+  pillState("pill-agent-lane-processing", 896, { phase: "processing", kind: "remote", agent: "Codex", agentOptions: [], modelOptions: [] }, none("Agent lane disables selector hit testing while retaining the full-cluster rim."), { presentation: { controlState: "disabled", agentRim: true } }),
+  pillState("pill-provider-terminal", 896, { phase: "recording", kind: "remote", agent: "Claude Code", agentOptions, modelOptions }, interactive(control("agent-cycle", "click Agent control", { type: "pillCycleAgent" })), { presentation: { controlState: "pressed", agentRim: false, providerMark: { backend: "claude", terminal: true } } }),
+  pillState("pill-provider-fallback", 1077, { phase: "recording", kind: "remote", agent: "Local Agent", agentOptions: [{ id: "local", label: "Local Agent", detail: "Custom backend", available: true, terminal: false }], modelOptions }, interactive(control("agent-local", "click Local Agent", { type: "pillPickAgent", value: "local" })), { openMenu: "model", presentation: { controlState: "resting", agentRim: false, providerMark: { backend: "local", terminal: false, fallback: "LA" } } }),
+  pillState("pill-mic-iphone", 414, { phase: "recording", micOptions: ["mac", "iphone"], mic: "iphone" }, interactive(control("mic", "click iPhone mic", { type: "pillPickMic", value: "mac" }))),
+  pillState("pill-mic-mac", 1113, { phase: "recording", micOptions: ["mac", "iphone"], mic: "mac" }, interactive(control("mic", "click Mac mic", { type: "pillPickMic", value: "iphone" }))),
+  pillState("pill-mic-single-suppressed", 414, { phase: "recording", micOptions: ["mac"], mic: "mac" }, recordControls),
+  pillState("pill-raw-enabled", 431, { phase: "recording", raw: true }, interactive(control("raw", "toggle raw off", { type: "pillToggleRaw", value: false }))),
+  pillState("pill-scratchpad-armed", 431, { phase: "paused" }, interactive(control("scratchpad", "click scratchpad", { type: "scratchpadArm", value: false })), { scratchpad: { enabled: true, armed: true, visible: true, pad: { id: "pad-7", origin: "dictation", entries: [] } } }),
+  pillState("pill-scratchpad-unarmed", 1154, { phase: "recording" }, interactive(control("scratchpad", "click scratchpad", { type: "scratchpadArm", value: true })), { scratchpad: { enabled: true, armed: false, visible: false, pad: null } }),
+  pillState("pill-scratchpad-expanded", 348, { phase: "paused", offline: "cloud_unreachable" }, interactive(control("scratchpad-collapse", "click collapse", { type: "scratchpadCollapse" })), { presentation: { padExpanded: true }, scratchpad: { enabled: true, armed: true, visible: true, pad: { id: "pad-7", origin: "dictation", entries: [{ id: "entry-1", kind: "text", text: "Keep this thought" }] } } }),
+];
+const PILL_PHASE_LINKS = { hidden: "pill-hidden", recording: "pill-recording-waveform-16", paused: "pill-paused", processing: "pill-processing-default", output: "pill-output", outputFallback: "pill-output-fallback-default", tooShort: "pill-too-short-default", cancelled: "pill-cancelled", error: "pill-error-default" };
+const PILL_KIND_LINKS = { dictation: "pill-recording-waveform-16", instruction: "pill-recording-instruction", remote: "pill-recording-remote-warning" };
+const PILL_OFFLINE_LINKS = { notSignedIn: "pill-offline-not-signed-in", noSubscription: "pill-offline-no-subscription", paymentFailed: "pill-payment-failed", cloudUnreachable: "pill-offline-cloud-unreachable", choseOnDevice: "pill-offline-on-device" };
+const PILL_VIEW_LINKS = {
+  54: "pill-recording-waveform-16", 55: "pill-recording-waveform-16", 65: "pill-recording-waveform-16", 69: "pill-recording-waveform-16", 73: "pill-recording-waveform-16", 102: "pill-recording-waveform-16", 169: "pill-agent-lane-processing",
+  250: "pill-selector-list", 309: "pill-recording-waveform-16", 310: "pill-selector-list", 314: "pill-payment-failed", 348: "pill-scratchpad-expanded", 359: "pill-scratchpad-armed", 368: "pill-scratchpad-armed", 383: "pill-scratchpad-expanded", 396: "pill-recording-remote-warning", 413: "pill-mic-iphone", 414: "pill-mic-single-suppressed", 431: "pill-scratchpad-armed", 441: "pill-hint-mic-precedence", 449: "pill-hint-coaching-quiet",
+  466: "pill-agent-lane-processing", 472: "pill-error-default", 473: "pill-output-fallback-default", 481: "pill-recording-instruction", 482: "pill-recording-instruction", 483: "pill-output", 491: "pill-hidden", 494: "pill-recording-waveform-16", 538: "pill-recording-countdown-15", 540: "pill-recording-waveform-16", 562: "pill-paused", 580: "pill-processing-default", 594: "pill-processing-draft", 596: "pill-processing-on-device", 598: "pill-processing-discard-hint", 605: "pill-output", 613: "pill-output-fallback-default", 619: "pill-output-fallback-preview", 626: "pill-too-short-custom", 632: "pill-cancelled", 642: "pill-error-default", 649: "pill-error-limit", 661: "pill-processing-draft", 662: "pill-processing-on-device", 675: "pill-processing-default", 690: "pill-processing-default", 707: "pill-recording-countdown-15", 710: "pill-recording-countdown-15", 758: "pill-recording-cancel-hover", 761: "pill-recording-cancel-hover", 762: "pill-recording-cancel-hover", 782: "pill-processing-draft", 783: "pill-cancelled", 786: "pill-processing-draft", 787: "pill-cancelled", 788: "pill-cancelled",
+  865: "pill-agent-disconnected", 867: "pill-agent-disconnected", 869: "pill-agent-disconnected", 882: "pill-agent-disconnected", 884: "pill-selector-closed", 896: "pill-agent-lane-processing", 900: "pill-selector-list", 957: "pill-selector-codex-axes", 972: "pill-selector-task-addressed", 977: "pill-selector-codex-axes", 983: "pill-selector-list", 985: "pill-selector-list", 989: "pill-selector-empty", 1017: "pill-selector-codex-axes", 1072: "pill-selector-list", 1077: "pill-provider-fallback", 1083: "pill-selector-list", 1087: "pill-selector-list", 1088: "pill-selector-row-unselected-hover", 1098: "pill-mic-iphone", 1113: "pill-mic-mac", 1150: "pill-scratchpad-armed", 1154: "pill-scratchpad-unarmed", 1242: "pill-selector-list", 1263: "pill-payment-failed", 1266: "pill-payment-failed", 1268: "pill-payment-failed", 1282: "pill-payment-failed",
+};
+const PROVIDER_LINKS = { 21: "pill-provider-terminal", 37: "pill-provider-terminal", 51: "pill-provider-terminal", 61: "pill-provider-terminal", 62: "pill-provider-fallback", 63: "pill-provider-terminal", 67: "pill-provider-terminal", 68: "pill-provider-terminal", 69: "pill-provider-terminal", 72: "pill-provider-terminal", 79: "pill-provider-fallback", 87: "pill-provider-terminal", 88: "pill-provider-terminal", 89: "pill-provider-terminal", 90: "pill-provider-fallback" };
+const WAVEFORM_LINKS = { 77: "pill-recording-waveform-16", 86: "pill-recording-waveform-16", 142: "pill-recording-waveform-16", 144: "pill-recording-waveform-16", 150: "pill-recording-waveform-16", 151: "pill-recording-waveform-16", 152: "pill-recording-waveform-16", 154: "pill-recording-waveform-16", 155: "pill-recording-waveform-16" };
 const pocketSlot = { id: "task-42", title: "Deploy checkout", kind: null, ask: "Which environment should I deploy to?", status: "needs-user", demanding: true, backend: "codex-desktop", terminal: false };
 const taskBase = { id: "task-42", title: "Deploy checkout", origin: null, agentRunId: null, status: "needs-user", kind: "session", alive: true, shelved: false, dir: "/Users/zodpatel/work/checkout", age: "2m", elapsed: "00:42", warmup: null, note: null, activity: "Which environment should I deploy to?", result: null, error: null, mcpGap: null, deliveryError: null, sending: false, modelLabel: "GPT-5.3 Codex High", agentCanRetry: false, backend: "codex-desktop", conversation: [], blocks: [], usage: { inputTokens: 1240, outputTokens: 318, contextWindow: 200000 }, project: "checkout", terminal: false, resumable: true, owned: true, resuming: false, resumeError: null };
 
 const STATES = [
   { id: "foundations-theme-status", family: "foundations", cite: B(swift("Theme.swift"), 77, "Maps processing status to the exact green status color."), input: { surface: "foundations", component: "status", status: "processing", label: "Working" }, interactions: none("A status token specimen has no source-defined control.") },
   { id: "foundations-waveform-level", family: "foundations", cite: B(swift("Waveform.swift"), 44, "Fixes each of the eleven waveform bars at the source-defined 3pt width while level 0.64 controls height."), input: { surface: "foundations", component: "waveform", level: 0.64, barCount: 11, barWidth: 3, gap: 2.5 }, interactions: none("The waveform visualizes input level and is not directly interactive.") },
-  { id: "pill-recording-remote-warning", family: "pill", cite: B(swift("PillView.swift"), 538, "Switches from waveform to countdown during the final 15 seconds."), input: pillBase({ phase: "recording", kind: "remote", taskId: "task-42", level: 0.64, elapsed: 286, maxSeconds: 300 }), interactions: interactive(control("discard", "click discard", { type: "pillCancel" }), control("finish", "click finish", { type: "pillStop" })) },
-  { id: "pill-processing-draft", family: "pill", cite: B(swift("PillView.swift"), 594, "Shows the exact quick-draft action while processing."), input: pillBase({ phase: "processing", kind: "instruction", level: 0, elapsed: 12, maxSeconds: 300, draftOffer: true, engineNotice: false, showDiscardHint: false }), interactions: interactive(control("quick-draft", "click Use quick draft", { type: "pillAcceptDraft" })) },
-  { id: "pill-payment-failed", family: "pill", cite: B(swift("PillModel.swift"), 99, "Provides exact recoverable payment-failure copy."), input: pillBase({ phase: "recording", kind: "dictation", level: 0.2, elapsed: 8, maxSeconds: 300, offline: "payment_failed" }), interactions: interactive(control("update-card", "click Update card", { type: "pillOpenBillingPortal" }), control("dismiss", "click dismiss", { type: "pillDismissOffline" })) },
-  { id: "pill-cancelled", family: "pill", cite: B(swift("PillView.swift"), 632, "Selects the Cancelled phase with its Undo control."), input: pillBase({ phase: "cancelled", kind: "dictation", canUndo: true, elapsed: 4, maxSeconds: 300 }), interactions: interactive(control("undo", "click Undo", { type: "pillUndo" })) },
-  { id: "pill-error", family: "pill", cite: B(swift("PillView.swift"), 649, "Shows retry guidance only when error copy is not a limit-reached message."), input: pillBase({ phase: "error", kind: "dictation", message: "Transcription failed", elapsed: 12, maxSeconds: 300 }), interactions: none("The source error phase exposes retry guidance but no control on the pill.") },
+  ...PILL_STATES,
   { id: "notch-agent-confirming", family: "notch", cite: B(swift("BarContent.swift"), 168, "Maps confirming Agent activity to Needs User and the Confirming label."), input: { surface: "notch", state: "attention", hasNotch: true, hovering: false, attention: 1, working: 0, agentActivity: { state: "confirming", summary: "Send the release update?", interactionId: "interaction-7", agentRunId: "run-3", provider: "codex" }, pocket: { mode: "closed", at: 0, waiting: 0, remoteKey: "right-option", slots: [] } }, interactions: interactive(control("open", "click bar", { type: "expanded" })) },
   { id: "notch-pocket-waiting", family: "notch", cite: B(swift("BarContent.swift"), 210, "Makes the closed bar announce only the exact waiting count."), input: { surface: "notch", state: "attention", hasNotch: true, hovering: true, attention: 2, working: 0, agentActivity: null, pocket: { mode: "closed", at: 0, waiting: 2, remoteKey: "right-option", slots: [pocketSlot, { ...pocketSlot, id: "task-43", title: "Release checklist" }] } }, interactions: interactive(control("open-pocket", "click bar", { type: "pocketOpen" })) },
   { id: "pocket-task-question", family: "pocket", cite: B(swift("PocketView.swift"), 139, "The task ask replaces its coarse status on the open Pocket face."), input: { surface: "pocket", capturePhase: null, hasNotch: false, pocket: { mode: "open", at: 0, waiting: 1, remoteKey: "right-option", slots: [pocketSlot] } }, interactions: interactive(control("expand", "click task card", { type: "pocketExpand", id: "task-42" }), control("close", "click close", { type: "pocketClose" })) },
@@ -154,6 +247,23 @@ export function createInventory(raw) {
     fixtures[fixture] = { stateId: state.id, input: state.input };
     entries.push({ id: state.id, family: state.family, source: auditItem.source, symbol: auditItem.symbol, condition: auditItem.value, fixture, interactions: state.interactions, baseline: { status: "pending", reason: "Task 2 creates and verifies the native baseline artifact." }, audit: [{ id: auditItem.id, contribution: state.cite.contribution }] });
     const links = linked.get(auditItem.id) ?? []; links.push({ stateId: state.id, contribution: state.cite.contribution }); linked.set(auditItem.id, links);
+  }
+  const attach = (item, stateId, contribution) => {
+    const entry = entries.find(({ id }) => id === stateId);
+    if (!entry || entry.audit.some(({ id }) => id === item.id)) return;
+    entry.audit.push({ id: item.id, contribution });
+    const links = linked.get(item.id) ?? []; links.push({ stateId, contribution }); linked.set(item.id, links);
+  };
+  for (const item of raw.enumCases) {
+    const stateId = item.symbol === "PillPhase" ? PILL_PHASE_LINKS[item.value] : item.symbol === "PillKind" ? PILL_KIND_LINKS[item.value] : item.symbol === "PillOfflineReason" ? PILL_OFFLINE_LINKS[item.value] : null;
+    if (stateId) attach(item, stateId, `The source enum input ${item.symbol}.${item.value} selects the concrete ${stateId} fixture.`);
+  }
+  for (const item of raw.branches) {
+    let stateId = null;
+    if (item.source.endsWith("/PillView.swift")) stateId = PILL_VIEW_LINKS[item.line];
+    else if (item.source.endsWith("/Waveform.swift")) stateId = WAVEFORM_LINKS[item.line];
+    else if (item.source.endsWith("/ProviderMark.swift") || item.source.endsWith("/ProviderMarkArt.swift")) stateId = PROVIDER_LINKS[item.line];
+    if (stateId) attach(item, stateId, `The source render condition '${item.value}' contributes the visible configuration captured by ${stateId}.`);
   }
   const classifications = occurrences.map((item) => {
     const links = linked.get(item.id) ?? [];

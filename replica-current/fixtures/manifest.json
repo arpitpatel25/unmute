@@ -21,6 +21,282 @@
         "gap": 2.5
       }
     },
+    "fixture-pill-hidden": {
+      "stateId": "pill-hidden",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "hidden",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-recording-waveform-16": {
+      "stateId": "pill-recording-waveform-16",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0.64,
+          "elapsed": 284,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-recording-cancel-hover": {
+      "stateId": "pill-recording-cancel-hover",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0.64,
+          "elapsed": 24,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "pillHover": true,
+          "cancelHover": true
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-recording-countdown-15": {
+      "stateId": "pill-recording-countdown-15",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0.64,
+          "elapsed": 285,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-recording-countdown-zero": {
+      "stateId": "pill-recording-countdown-zero",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 300,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-recording-instruction": {
+      "stateId": "pill-recording-instruction",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "instruction",
+          "taskId": null,
+          "level": 0.42,
+          "elapsed": 8,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
     "fixture-pill-recording-remote-warning": {
       "stateId": "pill-recording-remote-warning",
       "input": {
@@ -32,7 +308,157 @@
           "taskId": "task-42",
           "level": 0.64,
           "elapsed": 286,
-          "maxSeconds": 300
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": "Claude Sonnet 4.5",
+          "modelOptions": [
+            {
+              "id": "sonnet",
+              "label": "Claude Sonnet 4.5"
+            },
+            {
+              "id": "opus",
+              "label": "Claude Opus 4.1"
+            }
+          ],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": "Claude Code",
+          "agentOptions": [
+            {
+              "id": "claude",
+              "label": "Claude Code",
+              "detail": "Anthropic CLI",
+              "available": true,
+              "terminal": true
+            },
+            {
+              "id": "codex-desktop",
+              "label": "Codex",
+              "detail": "OpenAI desktop",
+              "available": false,
+              "terminal": false
+            }
+          ],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [
+            "mac",
+            "iphone"
+          ],
+          "mic": "mac",
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-paused": {
+      "stateId": "pill-paused",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "paused",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 18,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-processing-default": {
+      "stateId": "pill-processing-default",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "processing",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 12,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
         }
       }
     },
@@ -44,27 +470,363 @@
         "state": {
           "phase": "processing",
           "kind": "instruction",
+          "taskId": null,
           "level": 0,
           "elapsed": 12,
           "maxSeconds": 300,
+          "message": null,
           "draftOffer": true,
           "engineNotice": false,
-          "showDiscardHint": false
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
         }
       }
     },
-    "fixture-pill-payment-failed": {
-      "stateId": "pill-payment-failed",
+    "fixture-pill-processing-on-device": {
+      "stateId": "pill-processing-on-device",
       "input": {
         "surface": "pill",
         "openMenu": null,
         "state": {
-          "phase": "recording",
+          "phase": "processing",
           "kind": "dictation",
-          "level": 0.2,
-          "elapsed": 8,
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
           "maxSeconds": 300,
-          "offline": "payment_failed"
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": true,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-processing-discard-hint": {
+      "stateId": "pill-processing-discard-hint",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "processing",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": true,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-output": {
+      "stateId": "pill-output",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "output",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-output-fallback-default": {
+      "stateId": "pill-output-fallback-default",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "output-fallback",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-output-fallback-preview": {
+      "stateId": "pill-output-fallback-preview",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "output-fallback",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": "Ship the checkout update",
+          "fallbackMessage": "Formatting unavailable — pasted raw",
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-too-short-default": {
+      "stateId": "pill-too-short-default",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "too-short",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-too-short-custom": {
+      "stateId": "pill-too-short-custom",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "too-short",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": "No speech detected",
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
         }
       }
     },
@@ -76,9 +838,87 @@
         "state": {
           "phase": "cancelled",
           "kind": "dictation",
-          "canUndo": true,
-          "elapsed": 4,
-          "maxSeconds": 300
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": true
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-error-default": {
+      "stateId": "pill-error-default",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "error",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
         }
       }
     },
@@ -90,9 +930,1543 @@
         "state": {
           "phase": "error",
           "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
           "message": "Transcription failed",
-          "elapsed": 12,
-          "maxSeconds": 300
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-error-limit": {
+      "stateId": "pill-error-limit",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "error",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": "Daily limit reached",
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-offline-not-signed-in": {
+      "stateId": "pill-offline-not-signed-in",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": "not_signed_in",
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-offline-no-subscription": {
+      "stateId": "pill-offline-no-subscription",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": "no_subscription",
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-payment-failed": {
+      "stateId": "pill-payment-failed",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": "payment_failed",
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-offline-cloud-unreachable": {
+      "stateId": "pill-offline-cloud-unreachable",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": "cloud_unreachable",
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-offline-on-device": {
+      "stateId": "pill-offline-on-device",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": "chose_on_device",
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-hint-mic": {
+      "stateId": "pill-hint-mic",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": "AirPods",
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-hint-mic-precedence": {
+      "stateId": "pill-hint-mic-precedence",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": "AirPods — Move closer",
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": {
+            "kind": "quiet",
+            "remedy": "Speak louder"
+          },
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-hint-coaching-quiet": {
+      "stateId": "pill-hint-coaching-quiet",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": {
+            "kind": "quiet",
+            "remedy": "Speak louder"
+          },
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-hint-coaching-noisy": {
+      "stateId": "pill-hint-coaching-noisy",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": {
+            "kind": "noisy",
+            "remedy": "Move somewhere quieter"
+          },
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-selector-closed": {
+      "stateId": "pill-selector-closed",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "remote",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": "Claude Sonnet 4.5",
+          "modelOptions": [
+            {
+              "id": "sonnet",
+              "label": "Claude Sonnet 4.5"
+            },
+            {
+              "id": "opus",
+              "label": "Claude Opus 4.1"
+            }
+          ],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": "Claude Code",
+          "agentOptions": [
+            {
+              "id": "claude",
+              "label": "Claude Code",
+              "detail": "Anthropic CLI",
+              "available": true,
+              "terminal": true
+            },
+            {
+              "id": "codex-desktop",
+              "label": "Codex",
+              "detail": "OpenAI desktop",
+              "available": false,
+              "terminal": false
+            }
+          ],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-selector-list": {
+      "stateId": "pill-selector-list",
+      "input": {
+        "surface": "pill",
+        "openMenu": "model",
+        "state": {
+          "phase": "recording",
+          "kind": "remote",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": "Claude Sonnet 4.5",
+          "modelOptions": [
+            {
+              "id": "sonnet",
+              "label": "Claude Sonnet 4.5"
+            },
+            {
+              "id": "opus",
+              "label": "Claude Opus 4.1"
+            }
+          ],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": "Claude Code",
+          "agentOptions": [
+            {
+              "id": "claude",
+              "label": "Claude Code",
+              "detail": "Anthropic CLI",
+              "available": true,
+              "terminal": true
+            },
+            {
+              "id": "codex-desktop",
+              "label": "Codex",
+              "detail": "OpenAI desktop",
+              "available": false,
+              "terminal": false
+            }
+          ],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "hover",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-selector-row-unselected-hover": {
+      "stateId": "pill-selector-row-unselected-hover",
+      "input": {
+        "surface": "pill",
+        "openMenu": "model",
+        "state": {
+          "phase": "recording",
+          "kind": "remote",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": "Claude Sonnet 4.5",
+          "modelOptions": [
+            {
+              "id": "sonnet",
+              "label": "Claude Sonnet 4.5"
+            },
+            {
+              "id": "opus",
+              "label": "Claude Opus 4.1"
+            }
+          ],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": "Claude Code",
+          "agentOptions": [
+            {
+              "id": "claude",
+              "label": "Claude Code",
+              "detail": "Anthropic CLI",
+              "available": true,
+              "terminal": true
+            },
+            {
+              "id": "codex-desktop",
+              "label": "Codex",
+              "detail": "OpenAI desktop",
+              "available": false,
+              "terminal": false
+            }
+          ],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "selectorRow": "unselected-hover"
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-selector-codex-axes": {
+      "stateId": "pill-selector-codex-axes",
+      "input": {
+        "surface": "pill",
+        "openMenu": "model",
+        "state": {
+          "phase": "recording",
+          "kind": "remote",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": "GPT-5.3 Codex · High",
+          "modelOptions": [],
+          "modelAxes": [
+            {
+              "id": "model",
+              "label": "Model",
+              "current": "gpt-5.3-codex",
+              "options": [
+                {
+                  "id": "gpt-5.3-codex",
+                  "label": "GPT-5.3 Codex"
+                },
+                {
+                  "id": "gpt-5.2-codex",
+                  "label": "GPT-5.2 Codex"
+                }
+              ]
+            },
+            {
+              "id": "effort",
+              "label": "Effort",
+              "current": "high",
+              "options": [
+                {
+                  "id": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "id": "high",
+                  "label": "High"
+                }
+              ]
+            }
+          ],
+          "modelEmpty": null,
+          "agent": "Codex",
+          "agentOptions": [
+            {
+              "id": "claude",
+              "label": "Claude Code",
+              "detail": "Anthropic CLI",
+              "available": true,
+              "terminal": true
+            },
+            {
+              "id": "codex-desktop",
+              "label": "Codex",
+              "detail": "OpenAI desktop",
+              "available": false,
+              "terminal": false
+            }
+          ],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-selector-empty": {
+      "stateId": "pill-selector-empty",
+      "input": {
+        "surface": "pill",
+        "openMenu": "model",
+        "state": {
+          "phase": "recording",
+          "kind": "remote",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": "No models available",
+          "agent": "Claude Code",
+          "agentOptions": [
+            {
+              "id": "claude",
+              "label": "Claude Code",
+              "detail": "Anthropic CLI",
+              "available": true,
+              "terminal": true
+            },
+            {
+              "id": "codex-desktop",
+              "label": "Codex",
+              "detail": "OpenAI desktop",
+              "available": false,
+              "terminal": false
+            }
+          ],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-selector-task-addressed": {
+      "stateId": "pill-selector-task-addressed",
+      "input": {
+        "surface": "pill",
+        "openMenu": "model",
+        "state": {
+          "phase": "recording",
+          "kind": "remote",
+          "taskId": "task-42",
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": "Claude Sonnet 4.5",
+          "modelOptions": [
+            {
+              "id": "sonnet",
+              "label": "Claude Sonnet 4.5"
+            },
+            {
+              "id": "opus",
+              "label": "Claude Opus 4.1"
+            }
+          ],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": "Claude Code",
+          "agentOptions": [
+            {
+              "id": "claude",
+              "label": "Claude Code",
+              "detail": "Anthropic CLI",
+              "available": true,
+              "terminal": true
+            },
+            {
+              "id": "codex-desktop",
+              "label": "Codex",
+              "detail": "OpenAI desktop",
+              "available": false,
+              "terminal": false
+            }
+          ],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-agent-disconnected": {
+      "stateId": "pill-agent-disconnected",
+      "input": {
+        "surface": "pill",
+        "openMenu": "model",
+        "state": {
+          "phase": "recording",
+          "kind": "remote",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": "Claude Sonnet 4.5",
+          "modelOptions": [
+            {
+              "id": "sonnet",
+              "label": "Claude Sonnet 4.5"
+            },
+            {
+              "id": "opus",
+              "label": "Claude Opus 4.1"
+            }
+          ],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": "Claude Code",
+          "agentOptions": [
+            {
+              "id": "claude",
+              "label": "Claude Code",
+              "detail": "Anthropic CLI",
+              "available": true,
+              "terminal": true
+            },
+            {
+              "id": "codex-desktop",
+              "label": "Codex",
+              "detail": "OpenAI desktop",
+              "available": false,
+              "terminal": false
+            }
+          ],
+          "agentConnected": false,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-agent-lane-processing": {
+      "stateId": "pill-agent-lane-processing",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "processing",
+          "kind": "remote",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": "Codex",
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "disabled",
+          "agentRim": true
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-provider-terminal": {
+      "stateId": "pill-provider-terminal",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "remote",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [
+            {
+              "id": "sonnet",
+              "label": "Claude Sonnet 4.5"
+            },
+            {
+              "id": "opus",
+              "label": "Claude Opus 4.1"
+            }
+          ],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": "Claude Code",
+          "agentOptions": [
+            {
+              "id": "claude",
+              "label": "Claude Code",
+              "detail": "Anthropic CLI",
+              "available": true,
+              "terminal": true
+            },
+            {
+              "id": "codex-desktop",
+              "label": "Codex",
+              "detail": "OpenAI desktop",
+              "available": false,
+              "terminal": false
+            }
+          ],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "pressed",
+          "agentRim": false,
+          "providerMark": {
+            "backend": "claude",
+            "terminal": true
+          }
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-provider-fallback": {
+      "stateId": "pill-provider-fallback",
+      "input": {
+        "surface": "pill",
+        "openMenu": "model",
+        "state": {
+          "phase": "recording",
+          "kind": "remote",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [
+            {
+              "id": "sonnet",
+              "label": "Claude Sonnet 4.5"
+            },
+            {
+              "id": "opus",
+              "label": "Claude Opus 4.1"
+            }
+          ],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": "Local Agent",
+          "agentOptions": [
+            {
+              "id": "local",
+              "label": "Local Agent",
+              "detail": "Custom backend",
+              "available": true,
+              "terminal": false
+            }
+          ],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false,
+          "providerMark": {
+            "backend": "local",
+            "terminal": false,
+            "fallback": "LA"
+          }
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-mic-iphone": {
+      "stateId": "pill-mic-iphone",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [
+            "mac",
+            "iphone"
+          ],
+          "mic": "iphone",
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-mic-mac": {
+      "stateId": "pill-mic-mac",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [
+            "mac",
+            "iphone"
+          ],
+          "mic": "mac",
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-mic-single-suppressed": {
+      "stateId": "pill-mic-single-suppressed",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [
+            "mac"
+          ],
+          "mic": "mac",
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-raw-enabled": {
+      "stateId": "pill-raw-enabled",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": true,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": false,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-scratchpad-armed": {
+      "stateId": "pill-scratchpad-armed",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "paused",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": true,
+          "armed": true,
+          "visible": true,
+          "pad": {
+            "id": "pad-7",
+            "origin": "dictation",
+            "entries": []
+          }
+        }
+      }
+    },
+    "fixture-pill-scratchpad-unarmed": {
+      "stateId": "pill-scratchpad-unarmed",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "recording",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": null,
+          "canUndo": false
+        },
+        "presentation": {
+          "controlState": "resting",
+          "agentRim": false
+        },
+        "scratchpad": {
+          "enabled": true,
+          "armed": false,
+          "visible": false,
+          "pad": null
+        }
+      }
+    },
+    "fixture-pill-scratchpad-expanded": {
+      "stateId": "pill-scratchpad-expanded",
+      "input": {
+        "surface": "pill",
+        "openMenu": null,
+        "state": {
+          "phase": "paused",
+          "kind": "dictation",
+          "taskId": null,
+          "level": 0,
+          "elapsed": 0,
+          "maxSeconds": 300,
+          "message": null,
+          "draftOffer": false,
+          "engineNotice": false,
+          "showDiscardHint": false,
+          "outputPreview": null,
+          "fallbackMessage": null,
+          "mutedText": null,
+          "model": null,
+          "modelOptions": [],
+          "modelAxes": [],
+          "modelEmpty": null,
+          "agent": null,
+          "agentOptions": [],
+          "agentConnected": true,
+          "micStatus": null,
+          "raw": false,
+          "micOptions": [],
+          "mic": null,
+          "coaching": null,
+          "offline": "cloud_unreachable",
+          "canUndo": false
+        },
+        "presentation": {
+          "padExpanded": true
+        },
+        "scratchpad": {
+          "enabled": true,
+          "armed": true,
+          "visible": true,
+          "pad": {
+            "id": "pad-7",
+            "origin": "dictation",
+            "entries": [
+              {
+                "id": "entry-1",
+                "kind": "text",
+                "text": "Keep this thought"
+              }
+            ]
+          }
         }
       }
     },
@@ -790,12 +3164,249 @@
       ]
     },
     {
-      "id": "pill-recording-remote-warning",
+      "id": "pill-hidden",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": ".hidden",
+      "fixture": "fixture-pill-hidden",
+      "interactions": {
+        "kind": "none",
+        "reason": "The hidden phase deliberately renders no Pill or source-defined control."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:491:1",
+          "contribution": "Defines the hidden Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:26:1",
+          "contribution": "The source enum input PillPhase.hidden selects the concrete pill-hidden fixture."
+        }
+      ]
+    },
+    {
+      "id": "pill-recording-waveform-16",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": "else",
+      "fixture": "fixture-pill-recording-waveform-16",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "discard",
+            "event": "click discard",
+            "result": {
+              "type": "pillCancel"
+            }
+          },
+          {
+            "id": "finish",
+            "event": "click finish",
+            "result": {
+              "type": "pillStop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:540:1",
+          "contribution": "Defines the recording waveform 16 Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:28:1",
+          "contribution": "The source enum input PillPhase.recording selects the concrete pill-recording-waveform-16 fixture."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:52:1",
+          "contribution": "The source enum input PillKind.dictation selects the concrete pill-recording-waveform-16 fixture."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:54:1",
+          "contribution": "The source render condition 'appearance.translucent' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:55:1",
+          "contribution": "The source render condition '#available(macOS 26.0, *)' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:65:1",
+          "contribution": "The source render condition 'else' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:69:1",
+          "contribution": "The source render condition 'let tint' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:73:1",
+          "contribution": "The source render condition 'else' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:102:1",
+          "contribution": "The source render condition 'let tint' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:309:1",
+          "contribution": "The source render condition 'chipsVisible' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:494:1",
+          "contribution": "The source render condition '.recording' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:77:1",
+          "contribution": "The source render condition 'envelope <= 0' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:86:1",
+          "contribution": "The source render condition 'envelope <= 0' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:142:1",
+          "contribution": "The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:144:1",
+          "contribution": "The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:150:1",
+          "contribution": "The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:151:1",
+          "contribution": "The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:152:1",
+          "contribution": "The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:152:2",
+          "contribution": "The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:154:1",
+          "contribution": "The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:155:1",
+          "contribution": "The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+        }
+      ]
+    },
+    {
+      "id": "pill-recording-cancel-hover",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": "Color.white",
+      "fixture": "fixture-pill-recording-cancel-hover",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "discard",
+            "event": "click discard",
+            "result": {
+              "type": "pillCancel"
+            }
+          },
+          {
+            "id": "finish",
+            "event": "click finish",
+            "result": {
+              "type": "pillStop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "token:desktop/native-notch/Sources/unmute-notch/PillView.swift:758:1",
+          "contribution": "Defines the recording cancel hover Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:758:1",
+          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-recording-cancel-hover."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:761:1",
+          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-recording-cancel-hover."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:762:1",
+          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-recording-cancel-hover."
+        }
+      ]
+    },
+    {
+      "id": "pill-recording-countdown-15",
       "family": "pill",
       "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
       "symbol": "pill",
       "condition": "s.maxSeconds - s.elapsed <= 15",
-      "fixture": "fixture-pill-recording-remote-warning",
+      "fixture": "fixture-pill-recording-countdown-15",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "discard",
+            "event": "click discard",
+            "result": {
+              "type": "pillCancel"
+            }
+          },
+          {
+            "id": "finish",
+            "event": "click finish",
+            "result": {
+              "type": "pillStop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:538:1",
+          "contribution": "Switches from waveform to countdown during the final 15 seconds."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:707:1",
+          "contribution": "The source render condition 'near' contributes the visible configuration captured by pill-recording-countdown-15."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:710:1",
+          "contribution": "The source render condition 'near' contributes the visible configuration captured by pill-recording-countdown-15."
+        }
+      ]
+    },
+    {
+      "id": "pill-recording-countdown-zero",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": "s.maxSeconds - s.elapsed <= 15",
+      "fixture": "fixture-pill-recording-countdown-zero",
       "interactions": {
         "kind": "interactive",
         "controls": [
@@ -827,6 +3438,152 @@
       ]
     },
     {
+      "id": "pill-recording-instruction",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pillTint",
+      "condition": ".recording, .processing",
+      "fixture": "fixture-pill-recording-instruction",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "discard",
+            "event": "click discard",
+            "result": {
+              "type": "pillCancel"
+            }
+          },
+          {
+            "id": "finish",
+            "event": "click finish",
+            "result": {
+              "type": "pillStop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:481:1",
+          "contribution": "Defines the recording instruction Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:56:1",
+          "contribution": "The source enum input PillKind.instruction selects the concrete pill-recording-instruction fixture."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:482:1",
+          "contribution": "The source render condition 'instruction' contributes the visible configuration captured by pill-recording-instruction."
+        }
+      ]
+    },
+    {
+      "id": "pill-recording-remote-warning",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "cluster",
+      "condition": "chipsVisible && s.kind == .remote",
+      "fixture": "fixture-pill-recording-remote-warning",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "discard",
+            "event": "click discard",
+            "result": {
+              "type": "pillCancel"
+            }
+          },
+          {
+            "id": "finish",
+            "event": "click finish",
+            "result": {
+              "type": "pillStop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:396:1",
+          "contribution": "Defines the recording remote warning Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:57:1",
+          "contribution": "The source enum input PillKind.remote selects the concrete pill-recording-remote-warning fixture."
+        }
+      ]
+    },
+    {
+      "id": "pill-paused",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": ".paused",
+      "fixture": "fixture-pill-paused",
+      "interactions": {
+        "kind": "none",
+        "reason": "Paused shows only its amber status dot and label; the source defines no phase action."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:562:1",
+          "contribution": "Defines the paused Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:34:1",
+          "contribution": "The source enum input PillPhase.paused selects the concrete pill-paused fixture."
+        }
+      ]
+    },
+    {
+      "id": "pill-processing-default",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": ".processing",
+      "fixture": "fixture-pill-processing-default",
+      "interactions": {
+        "kind": "none",
+        "reason": "Default processing is an animated status with no source-defined control."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:580:1",
+          "contribution": "Defines the processing default Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:36:1",
+          "contribution": "The source enum input PillPhase.processing selects the concrete pill-processing-default fixture."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:675:1",
+          "contribution": "The source render condition 'dim' contributes the visible configuration captured by pill-processing-default."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:690:1",
+          "contribution": "The source render condition 'phase' contributes the visible configuration captured by pill-processing-default."
+        }
+      ]
+    },
+    {
       "id": "pill-processing-draft",
       "family": "pill",
       "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
@@ -852,35 +3609,32 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:594:1",
-          "contribution": "Shows the exact quick-draft action while processing."
+          "contribution": "Defines the processing draft Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:661:1",
+          "contribution": "The source render condition 's.draftOffer' contributes the visible configuration captured by pill-processing-draft."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:782:1",
+          "contribution": "The source render condition 'prominent' contributes the visible configuration captured by pill-processing-draft."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:786:1",
+          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-processing-draft."
         }
       ]
     },
     {
-      "id": "pill-payment-failed",
+      "id": "pill-processing-on-device",
       "family": "pill",
-      "source": "desktop/native-notch/Sources/unmute-notch/PillModel.swift",
-      "symbol": "text",
-      "condition": ".paymentFailed",
-      "fixture": "fixture-pill-payment-failed",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": "s.engineNotice",
+      "fixture": "fixture-pill-processing-on-device",
       "interactions": {
-        "kind": "interactive",
-        "controls": [
-          {
-            "id": "update-card",
-            "event": "click Update card",
-            "result": {
-              "type": "pillOpenBillingPortal"
-            }
-          },
-          {
-            "id": "dismiss",
-            "event": "click dismiss",
-            "result": {
-              "type": "pillDismissOffline"
-            }
-          }
-        ]
+        "kind": "none",
+        "reason": "On-device processing exposes an informational engine notice, not a control."
       },
       "baseline": {
         "status": "pending",
@@ -888,8 +3642,164 @@
       },
       "audit": [
         {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillModel.swift:99:1",
-          "contribution": "Provides exact recoverable payment-failure copy."
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:596:1",
+          "contribution": "Defines the processing on device Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:662:1",
+          "contribution": "The source render condition 's.engineNotice' contributes the visible configuration captured by pill-processing-on-device."
+        }
+      ]
+    },
+    {
+      "id": "pill-processing-discard-hint",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": "s.showDiscardHint",
+      "fixture": "fixture-pill-processing-discard-hint",
+      "interactions": {
+        "kind": "none",
+        "reason": "Esc to discard is keyboard guidance; this Pill phase has no clickable action."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:598:1",
+          "contribution": "Defines the processing discard hint Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-output",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": ".output",
+      "fixture": "fixture-pill-output",
+      "interactions": {
+        "kind": "none",
+        "reason": "Output is a transient success acknowledgment with no source-defined control."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:605:1",
+          "contribution": "Defines the output Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:38:1",
+          "contribution": "The source enum input PillPhase.output selects the concrete pill-output fixture."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:483:1",
+          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-output."
+        }
+      ]
+    },
+    {
+      "id": "pill-output-fallback-default",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": ".outputFallback",
+      "fixture": "fixture-pill-output-fallback-default",
+      "interactions": {
+        "kind": "none",
+        "reason": "Fallback output reports raw paste completion and has no source-defined control."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:613:1",
+          "contribution": "Defines the output fallback default Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:40:1",
+          "contribution": "The source enum input PillPhase.outputFallback selects the concrete pill-output-fallback-default fixture."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:473:1",
+          "contribution": "The source render condition '.outputFallback' contributes the visible configuration captured by pill-output-fallback-default."
+        }
+      ]
+    },
+    {
+      "id": "pill-output-fallback-preview",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "p",
+      "condition": "let p = s.outputPreview, !p.isEmpty",
+      "fixture": "fixture-pill-output-fallback-preview",
+      "interactions": {
+        "kind": "none",
+        "reason": "The preview is output text, not an interactive control."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:619:1",
+          "contribution": "Defines the output fallback preview Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-too-short-default",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": ".tooShort",
+      "fixture": "fixture-pill-too-short-default",
+      "interactions": {
+        "kind": "none",
+        "reason": "The default capture failure acknowledgment has no source-defined control."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:626:1",
+          "contribution": "Defines the too short default Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:42:1",
+          "contribution": "The source enum input PillPhase.tooShort selects the concrete pill-too-short-default fixture."
+        }
+      ]
+    },
+    {
+      "id": "pill-too-short-custom",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": ".tooShort",
+      "fixture": "fixture-pill-too-short-custom",
+      "interactions": {
+        "kind": "none",
+        "reason": "Custom muted text is an acknowledgment with no source-defined control."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:626:1",
+          "contribution": "Defines the too short custom Pill rendering."
         }
       ]
     },
@@ -919,7 +3829,53 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:632:1",
-          "contribution": "Selects the Cancelled phase with its Undo control."
+          "contribution": "Defines the cancelled Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:44:1",
+          "contribution": "The source enum input PillPhase.cancelled selects the concrete pill-cancelled fixture."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:783:1",
+          "contribution": "The source render condition 'prominent' contributes the visible configuration captured by pill-cancelled."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:787:1",
+          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-cancelled."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:788:1",
+          "contribution": "The source render condition 'prominent' contributes the visible configuration captured by pill-cancelled."
+        }
+      ]
+    },
+    {
+      "id": "pill-error-default",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": ".error",
+      "fixture": "fixture-pill-error-default",
+      "interactions": {
+        "kind": "none",
+        "reason": "The default error exposes retry guidance but no clickable Pill control."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:642:1",
+          "contribution": "Defines the error default Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:45:1",
+          "contribution": "The source enum input PillPhase.error selects the concrete pill-error-default fixture."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:472:1",
+          "contribution": "The source render condition '.error' contributes the visible configuration captured by pill-error-default."
         }
       ]
     },
@@ -932,7 +3888,7 @@
       "fixture": "fixture-pill-error",
       "interactions": {
         "kind": "none",
-        "reason": "The source error phase exposes retry guidance but no control on the pill."
+        "reason": "Retry is keyboard guidance; the source defines no clickable Pill control."
       },
       "baseline": {
         "status": "pending",
@@ -941,7 +3897,1082 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:649:1",
-          "contribution": "Shows retry guidance only when error copy is not a limit-reached message."
+          "contribution": "Defines the error Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-error-limit",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "pill",
+      "condition": "!(s.message ?? \"\").contains(\"limit reached\")",
+      "fixture": "fixture-pill-error-limit",
+      "interactions": {
+        "kind": "none",
+        "reason": "Limit-reached errors suppress retry guidance and expose no control."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:649:1",
+          "contribution": "Defines the error limit Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-offline-not-signed-in",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "reason",
+      "condition": "chipsVisible, let reason = s.offline",
+      "fixture": "fixture-pill-offline-not-signed-in",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "dismiss",
+            "event": "click dismiss",
+            "result": {
+              "type": "pillDismissOffline"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:314:1",
+          "contribution": "Defines the offline not signed in Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:85:1",
+          "contribution": "The source enum input PillOfflineReason.notSignedIn selects the concrete pill-offline-not-signed-in fixture."
+        }
+      ]
+    },
+    {
+      "id": "pill-offline-no-subscription",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "reason",
+      "condition": "chipsVisible, let reason = s.offline",
+      "fixture": "fixture-pill-offline-no-subscription",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "dismiss",
+            "event": "click dismiss",
+            "result": {
+              "type": "pillDismissOffline"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:314:1",
+          "contribution": "Defines the offline no subscription Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:86:1",
+          "contribution": "The source enum input PillOfflineReason.noSubscription selects the concrete pill-offline-no-subscription fixture."
+        }
+      ]
+    },
+    {
+      "id": "pill-payment-failed",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": "reason.isRecoverable",
+      "fixture": "fixture-pill-payment-failed",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "update-card",
+            "event": "click Update card",
+            "result": {
+              "type": "pillOpenBillingPortal"
+            }
+          },
+          {
+            "id": "dismiss",
+            "event": "click dismiss",
+            "result": {
+              "type": "pillDismissOffline"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1268:1",
+          "contribution": "Defines the payment failed Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:87:1",
+          "contribution": "The source enum input PillOfflineReason.paymentFailed selects the concrete pill-payment-failed fixture."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:314:1",
+          "contribution": "The source render condition 'chipsVisible, let reason = s.offline' contributes the visible configuration captured by pill-payment-failed."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1263:1",
+          "contribution": "The source render condition 'reason.isRecoverable' contributes the visible configuration captured by pill-payment-failed."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1266:1",
+          "contribution": "The source render condition 'reason.isRecoverable' contributes the visible configuration captured by pill-payment-failed."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1282:1",
+          "contribution": "The source render condition 'reason.isRecoverable' contributes the visible configuration captured by pill-payment-failed."
+        }
+      ]
+    },
+    {
+      "id": "pill-offline-cloud-unreachable",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "reason",
+      "condition": "chipsVisible, let reason = s.offline",
+      "fixture": "fixture-pill-offline-cloud-unreachable",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "dismiss",
+            "event": "click dismiss",
+            "result": {
+              "type": "pillDismissOffline"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:314:1",
+          "contribution": "Defines the offline cloud unreachable Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:88:1",
+          "contribution": "The source enum input PillOfflineReason.cloudUnreachable selects the concrete pill-offline-cloud-unreachable fixture."
+        }
+      ]
+    },
+    {
+      "id": "pill-offline-on-device",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "reason",
+      "condition": "chipsVisible, let reason = s.offline",
+      "fixture": "fixture-pill-offline-on-device",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "dismiss",
+            "event": "click dismiss",
+            "result": {
+              "type": "pillDismissOffline"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:314:1",
+          "contribution": "Defines the offline on device Pill rendering."
+        },
+        {
+          "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:89:1",
+          "contribution": "The source enum input PillOfflineReason.choseOnDevice selects the concrete pill-offline-on-device fixture."
+        }
+      ]
+    },
+    {
+      "id": "pill-hint-mic",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "m",
+      "condition": "let m = s.micStatus, !m.isEmpty",
+      "fixture": "fixture-pill-hint-mic",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "discard",
+            "event": "click discard",
+            "result": {
+              "type": "pillCancel"
+            }
+          },
+          {
+            "id": "finish",
+            "event": "click finish",
+            "result": {
+              "type": "pillStop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:441:1",
+          "contribution": "Defines the hint mic Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-hint-mic-precedence",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "m",
+      "condition": "let m = s.micStatus, !m.isEmpty",
+      "fixture": "fixture-pill-hint-mic-precedence",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "discard",
+            "event": "click discard",
+            "result": {
+              "type": "pillCancel"
+            }
+          },
+          {
+            "id": "finish",
+            "event": "click finish",
+            "result": {
+              "type": "pillStop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:441:1",
+          "contribution": "Defines the hint mic precedence Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-hint-coaching-quiet",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "c",
+      "condition": "let c = s.coaching",
+      "fixture": "fixture-pill-hint-coaching-quiet",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "discard",
+            "event": "click discard",
+            "result": {
+              "type": "pillCancel"
+            }
+          },
+          {
+            "id": "finish",
+            "event": "click finish",
+            "result": {
+              "type": "pillStop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:449:1",
+          "contribution": "Defines the hint coaching quiet Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-hint-coaching-noisy",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "c",
+      "condition": "let c = s.coaching",
+      "fixture": "fixture-pill-hint-coaching-noisy",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "discard",
+            "event": "click discard",
+            "result": {
+              "type": "pillCancel"
+            }
+          },
+          {
+            "id": "finish",
+            "event": "click finish",
+            "result": {
+              "type": "pillStop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:449:1",
+          "contribution": "Defines the hint coaching noisy Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-selector-closed",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": "selectorShowing",
+      "fixture": "fixture-pill-selector-closed",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "selector",
+            "event": "click Agent and model",
+            "result": {
+              "type": "pillSelectorOpen",
+              "menu": "model"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:250:1",
+          "contribution": "Defines the selector closed Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:884:1",
+          "contribution": "The source render condition 'let m = state.model' contributes the visible configuration captured by pill-selector-closed."
+        }
+      ]
+    },
+    {
+      "id": "pill-selector-list",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": ".list",
+      "fixture": "fixture-pill-selector-list",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "model-opus",
+            "event": "click Claude Opus 4.1",
+            "result": {
+              "type": "pillPickModel",
+              "value": "opus"
+            }
+          },
+          {
+            "id": "agent-codex",
+            "event": "click Codex",
+            "result": {
+              "type": "pillPickAgent",
+              "value": "codex-desktop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:983:1",
+          "contribution": "Defines the selector list Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:250:1",
+          "contribution": "The source render condition 'selectorShowing' contributes the visible configuration captured by pill-selector-list."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:310:1",
+          "contribution": "The source render condition 'selectorShowing' contributes the visible configuration captured by pill-selector-list."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:900:1",
+          "contribution": "The source render condition 'open' contributes the visible configuration captured by pill-selector-list."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:985:1",
+          "contribution": "The source render condition 'let o = options.first(where:' contributes the visible configuration captured by pill-selector-list."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1072:1",
+          "contribution": "The source render condition 'on' contributes the visible configuration captured by pill-selector-list."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1083:1",
+          "contribution": "The source render condition 'on' contributes the visible configuration captured by pill-selector-list."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1087:1",
+          "contribution": "The source render condition 'on' contributes the visible configuration captured by pill-selector-list."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1242:1",
+          "contribution": "The source render condition '!detail.isEmpty' contributes the visible configuration captured by pill-selector-list."
+        }
+      ]
+    },
+    {
+      "id": "pill-selector-row-unselected-hover",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": "Color.white",
+      "fixture": "fixture-pill-selector-row-unselected-hover",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "model-opus",
+            "event": "click Claude Opus 4.1",
+            "result": {
+              "type": "pillPickModel",
+              "value": "opus"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "token:desktop/native-notch/Sources/unmute-notch/PillView.swift:1088:1",
+          "contribution": "Defines the selector row unselected hover Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1088:1",
+          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-selector-row-unselected-hover."
+        }
+      ]
+    },
+    {
+      "id": "pill-selector-codex-axes",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": ".axes",
+      "fixture": "fixture-pill-selector-codex-axes",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "axis-model",
+            "event": "click GPT-5.2 Codex",
+            "result": {
+              "type": "pillPickAxis",
+              "axis": "model",
+              "value": "gpt-5.2-codex"
+            }
+          },
+          {
+            "id": "axis-effort",
+            "event": "click Medium",
+            "result": {
+              "type": "pillPickAxis",
+              "axis": "effort",
+              "value": "medium"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:977:1",
+          "contribution": "Defines the selector codex axes Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:957:1",
+          "contribution": "The source render condition 'axes.isEmpty' contributes the visible configuration captured by pill-selector-codex-axes."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:957:2",
+          "contribution": "The source render condition 'options.isEmpty' contributes the visible configuration captured by pill-selector-codex-axes."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1017:1",
+          "contribution": "The source render condition '!vals.isEmpty' contributes the visible configuration captured by pill-selector-codex-axes."
+        }
+      ]
+    },
+    {
+      "id": "pill-selector-empty",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": ".empty",
+      "fixture": "fixture-pill-selector-empty",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "agent-cycle",
+            "event": "click Agent control",
+            "result": {
+              "type": "pillCycleAgent"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:989:1",
+          "contribution": "Defines the selector empty Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-selector-task-addressed",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": "state.taskId == nil",
+      "fixture": "fixture-pill-selector-task-addressed",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "model-opus",
+            "event": "click Claude Opus 4.1",
+            "result": {
+              "type": "pillPickModel",
+              "value": "opus",
+              "taskId": "task-42"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:972:1",
+          "contribution": "Defines the selector task addressed Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-agent-disconnected",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "picked",
+      "condition": "let picked = state.agentOptions?.first(where:",
+      "fixture": "fixture-pill-agent-disconnected",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "agent-claude",
+            "event": "click Claude Code",
+            "result": {
+              "type": "pillPickAgent",
+              "value": "claude"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:865:1",
+          "contribution": "Defines the agent disconnected Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:867:1",
+          "contribution": "The source render condition 'state.agentConnected' contributes the visible configuration captured by pill-agent-disconnected."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:869:1",
+          "contribution": "The source render condition 'state.agentConnected' contributes the visible configuration captured by pill-agent-disconnected."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:882:1",
+          "contribution": "The source render condition 'state.agentConnected' contributes the visible configuration captured by pill-agent-disconnected."
+        }
+      ]
+    },
+    {
+      "id": "pill-agent-lane-processing",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": "!isAgentLane",
+      "fixture": "fixture-pill-agent-lane-processing",
+      "interactions": {
+        "kind": "none",
+        "reason": "Agent lane disables selector hit testing while retaining the full-cluster rim."
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:896:1",
+          "contribution": "Defines the agent lane processing Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:169:1",
+          "contribution": "The source render condition 'nil' contributes the visible configuration captured by pill-agent-lane-processing."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:169:2",
+          "contribution": "The source render condition 'nil' contributes the visible configuration captured by pill-agent-lane-processing."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:466:1",
+          "contribution": "The source render condition 's.isAgentLane' contributes the visible configuration captured by pill-agent-lane-processing."
+        }
+      ]
+    },
+    {
+      "id": "pill-provider-terminal",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": "!isAgentLane",
+      "fixture": "fixture-pill-provider-terminal",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "agent-cycle",
+            "event": "click Agent control",
+            "result": {
+              "type": "pillCycleAgent"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:896:1",
+          "contribution": "Defines the provider terminal Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:21:1",
+          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:51:1",
+          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:63:1",
+          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:67:1",
+          "contribution": "The source render condition 'let art = ProviderMarkArt.image(backend)' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:37:1",
+          "contribution": "The source render condition 'let lightest = inks.min(), ink > 0' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:61:1",
+          "contribution": "The source render condition '\"codex\", \"codex-desktop\"' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:68:1",
+          "contribution": "The source render condition 'isCodex' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:69:1",
+          "contribution": "The source render condition '!b64.isEmpty, let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters), let img = NSImage(data: data)' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:72:1",
+          "contribution": "The source render condition 'isCodex' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:87:1",
+          "contribution": "The source render condition '\"codex\"' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:88:1",
+          "contribution": "The source render condition '\"codex-desktop\"' contributes the visible configuration captured by pill-provider-terminal."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:89:1",
+          "contribution": "The source render condition '\"claude-code-desktop\"' contributes the visible configuration captured by pill-provider-terminal."
+        }
+      ]
+    },
+    {
+      "id": "pill-provider-fallback",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "b",
+      "condition": "let b = backend",
+      "fixture": "fixture-pill-provider-fallback",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "agent-local",
+            "event": "click Local Agent",
+            "result": {
+              "type": "pillPickAgent",
+              "value": "local"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1077:1",
+          "contribution": "Defines the provider fallback Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:62:1",
+          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-fallback."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:79:1",
+          "contribution": "The source render condition 'else' contributes the visible configuration captured by pill-provider-fallback."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:62:1",
+          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-provider-fallback."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:90:1",
+          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-provider-fallback."
+        }
+      ]
+    },
+    {
+      "id": "pill-mic-iphone",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "opts",
+      "condition": "let opts = s.micOptions, opts.count > 1",
+      "fixture": "fixture-pill-mic-iphone",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "mic",
+            "event": "click iPhone mic",
+            "result": {
+              "type": "pillPickMic",
+              "value": "mac"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:414:1",
+          "contribution": "Defines the mic iphone Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:413:1",
+          "contribution": "The source render condition 'chipsVisible' contributes the visible configuration captured by pill-mic-iphone."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1098:1",
+          "contribution": "The source render condition 'isPhone' contributes the visible configuration captured by pill-mic-iphone."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1098:2",
+          "contribution": "The source render condition 'isPhone' contributes the visible configuration captured by pill-mic-iphone."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1098:3",
+          "contribution": "The source render condition 'isPhone' contributes the visible configuration captured by pill-mic-iphone."
+        }
+      ]
+    },
+    {
+      "id": "pill-mic-mac",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": "isPhone",
+      "fixture": "fixture-pill-mic-mac",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "mic",
+            "event": "click Mac mic",
+            "result": {
+              "type": "pillPickMic",
+              "value": "iphone"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1113:1",
+          "contribution": "Defines the mic mac Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-mic-single-suppressed",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "opts",
+      "condition": "let opts = s.micOptions, opts.count > 1",
+      "fixture": "fixture-pill-mic-single-suppressed",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "discard",
+            "event": "click discard",
+            "result": {
+              "type": "pillCancel"
+            }
+          },
+          {
+            "id": "finish",
+            "event": "click finish",
+            "result": {
+              "type": "pillStop"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:414:1",
+          "contribution": "Defines the mic single suppressed Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-raw-enabled",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "cluster",
+      "condition": "scratch.state.enabled && (chipsVisible || padShowing)",
+      "fixture": "fixture-pill-raw-enabled",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "raw",
+            "event": "toggle raw off",
+            "result": {
+              "type": "pillToggleRaw",
+              "value": false
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:431:1",
+          "contribution": "Defines the raw enabled Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-scratchpad-armed",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "cluster",
+      "condition": "scratch.state.enabled && (chipsVisible || padShowing)",
+      "fixture": "fixture-pill-scratchpad-armed",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "scratchpad",
+            "event": "click scratchpad",
+            "result": {
+              "type": "scratchpadArm",
+              "value": false
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:431:1",
+          "contribution": "Defines the scratchpad armed Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:359:1",
+          "contribution": "The source render condition 'padShowing, scratch.state.pad != nil' contributes the visible configuration captured by pill-scratchpad-armed."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:368:1",
+          "contribution": "The source render condition 'padShowing, let padState = scratch.state.pad' contributes the visible configuration captured by pill-scratchpad-armed."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1150:1",
+          "contribution": "The source render condition 'armed' contributes the visible configuration captured by pill-scratchpad-armed."
+        }
+      ]
+    },
+    {
+      "id": "pill-scratchpad-unarmed",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "body",
+      "condition": "armed",
+      "fixture": "fixture-pill-scratchpad-unarmed",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "scratchpad",
+            "event": "click scratchpad",
+            "result": {
+              "type": "scratchpadArm",
+              "value": true
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1154:1",
+          "contribution": "Defines the scratchpad unarmed Pill rendering."
+        }
+      ]
+    },
+    {
+      "id": "pill-scratchpad-expanded",
+      "family": "pill",
+      "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+      "symbol": "padWidth",
+      "condition": "padExpanded",
+      "fixture": "fixture-pill-scratchpad-expanded",
+      "interactions": {
+        "kind": "interactive",
+        "controls": [
+          {
+            "id": "scratchpad-collapse",
+            "event": "click collapse",
+            "result": {
+              "type": "scratchpadCollapse"
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "status": "pending",
+        "reason": "Task 2 creates and verifies the native baseline artifact."
+      },
+      "audit": [
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:348:1",
+          "contribution": "Defines the scratchpad expanded Pill rendering."
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:383:1",
+          "contribution": "The source render condition 'offlineShowing' contributes the visible configuration captured by pill-scratchpad-expanded."
         }
       ]
     },
