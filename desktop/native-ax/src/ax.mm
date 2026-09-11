@@ -383,6 +383,123 @@ static Napi::Value FrontmostApp(const Napi::CallbackInfo &info) {
   }
 }
 
+// ─────────────────── browser URL + quit, without Apple Events ───────────────────
+//
+// Both of these existed already, spelled as `osascript -e 'tell application
+// "X" …'`. That spelling is an Apple Event, so macOS gates it behind
+// kTCCServiceAppleEvents and raises a consent dialog PER TARGET APP the first
+// time we touch each one — a prompt naming Unmute, for work the user already
+// asked for. Neither capability actually needs Apple Events: the Accessibility
+// grant the app already holds reaches both. Rule 2 at the top of this file
+// ("No System Events, no AppleScript") is the reason these belong here.
+
+/// AXURL as a string. Web areas answer with a CFURL; some report a CFString.
+static std::string axURLStr(AXUIElementRef el) {
+  CFTypeRef v = axAttr(el, CFSTR("AXURL"));
+  if (!v) return "";
+  std::string out;
+  if (CFGetTypeID(v) == CFURLGetTypeID()) out = toStd([(__bridge NSURL *)v absoluteString]);
+  else if (CFGetTypeID(v) == CFStringGetTypeID()) out = toStd((__bridge NSString *)v);
+  CFRelease(v);
+  return out;
+}
+
+/// The window AppleScript calls "front window": focused, then main, then first.
+///
+/// axWindow(app, 0) is NOT a substitute and using it is how this returns
+/// nothing at all. Chrome keeps stub windows ahead of the real one — measured
+/// on a live instance, AXWindows[0] held a single offscreen 1440x41 AXWindow
+/// node while the browser window the user was looking at sat at index 2.
+static AXUIElementRef axFrontWindow(AXUIElementRef app) {
+  for (CFStringRef k : { CFSTR("AXFocusedWindow"), CFSTR("AXMainWindow") }) {
+    CFTypeRef w = axAttr(app, k);
+    if (w) return (AXUIElementRef)w; // retained
+  }
+  return axWindow(app, 0);
+}
+
+/// First descendant with `role`, depth- and budget-bounded. Returns retained.
+/// The bounds are not decoration: this runs on the 3s meeting poll, so a
+/// pathological tree must cost a bounded amount rather than stall the tick.
+static AXUIElementRef axFirstByRole(AXUIElementRef el, NSString *role,
+                                    int depth, int maxDepth, int &budget) {
+  if (!el || depth > maxDepth || budget <= 0) return nullptr;
+  budget--;
+  if ([toNS(axStr(el, kAXRoleAttribute)) isEqualToString:role]) { CFRetain(el); return el; }
+  for (id child in axChildren(el)) {
+    AXUIElementRef hit = axFirstByRole((__bridge AXUIElementRef)child, role, depth + 1, maxDepth, budget);
+    if (hit) return hit;
+  }
+  return nullptr;
+}
+
+/// activeTabURL(app) → the front window's page URL, or "" when unavailable.
+///
+/// AXWebArea's AXURL is the COMMITTED url — the same string
+/// `URL of current tab` returns. The omnibox AXTextField is only a fallback,
+/// and deliberately second: its AXValue is whatever is currently TYPED there,
+/// so preferring it would report a half-entered address as the live page.
+static Napi::Value ActiveTabURL(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  std::string app = info[0].As<Napi::String>();
+  @autoreleasepool {
+    ResolvedApp r = resolveApp(app);
+    if (!r.ok) return Napi::String::New(env, ""); // not running — not an error
+    std::string url;
+    if (AXUIElementRef win = axFrontWindow(r.el)) {
+      // ONE IPC, tried first. Safari answers AXURL on the window itself; when a
+      // browser does, the tree walk below is pure waste — and the walk is not
+      // cheap, because every node costs a round trip to a browser that answers
+      // slowly (measured on live Chrome: ~260ms for a 155-node window, against
+      // ~0ms for this attribute read).
+      url = axURLStr(win);
+      if (url.empty()) {
+        int budget = 4000;
+        if (AXUIElementRef web = axFirstByRole(win, @"AXWebArea", 0, 16, budget)) {
+          url = axURLStr(web);
+          CFRelease(web);
+        }
+      }
+      if (url.empty()) {
+        int budget = 4000;
+        if (AXUIElementRef tf = axFirstByRole(win, @"AXTextField", 0, 16, budget)) {
+          url = axStr(tf, kAXValueAttribute);
+          CFRelease(tf);
+        }
+      }
+      CFRelease(win);
+    }
+    CFRelease(r.el);
+    return Napi::String::New(env, url);
+  }
+}
+
+/// quitApp(app) → true if a quit was requested.
+///
+/// NSRunningApplication.terminate() posts the same graceful quit request as
+/// `tell application "X" to quit` and needs no TCC grant. An app that is not
+/// running returns false rather than throwing: the arming lane quits before
+/// every launch, so "not running" is the common case, not a failure.
+///
+/// Unlike resolveApp this does NOT filter on activationPolicy — quitting a
+/// menu-bar-only app is a legitimate ask, and the AppleScript it replaces
+/// could do it.
+static Napi::Value QuitApp(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  std::string query = info[0].As<Napi::String>();
+  @autoreleasepool {
+    NSString *want = [toNS(query) lowercaseString];
+    for (NSRunningApplication *a in [[NSWorkspace sharedWorkspace] runningApplications]) {
+      NSString *name = [(a.localizedName ?: @"") lowercaseString];
+      NSString *bid = [(a.bundleIdentifier ?: @"") lowercaseString];
+      if ([name isEqualToString:want] || [bid isEqualToString:want]) {
+        return Napi::Boolean::New(env, [a terminate] ? true : false);
+      }
+    }
+  }
+  return Napi::Boolean::New(env, false);
+}
+
 /// Shared entry: resolve app + window, walk, then hand nodes to `fn`.
 /// Guarantees cleanup. Returns whatever `fn` returns.
 static Napi::Value withNodes(Napi::Env env, const std::string &app, long winIndex,
@@ -1123,6 +1240,8 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("clickPoint", Napi::Function::New(env, ClickPoint));
   exports.Set("sendKeys", Napi::Function::New(env, SendKeys));
   exports.Set("frontmostApp", Napi::Function::New(env, FrontmostApp));
+  exports.Set("activeTabURL", Napi::Function::New(env, ActiveTabURL));
+  exports.Set("quitApp", Napi::Function::New(env, QuitApp));
   exports.Set("find", Napi::Function::New(env, Find));
   exports.Set("getTree", Napi::Function::New(env, GetTree));
   exports.Set("press", Napi::Function::New(env, Press));

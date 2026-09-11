@@ -57,6 +57,13 @@ export type AxMethod =
   // it opens is invisible to accessibility, so it is driven by a click at its
   // position followed by arrow keys.
   | 'clickPoint' | 'sendKeys'
+  // Apple-Event replacements. Both of these were `osascript -e 'tell
+  // application "X" …'`, which macOS gates behind Automation and prompts for
+  // PER TARGET APP. Routed through the addon they cost no TCC grant beyond the
+  // Accessibility one the app already holds — and they belong on the worker for
+  // the usual reason: activeTabURL walks a browser tree and a Chromium browser
+  // answers slowly (measured: ~260ms on live Chrome).
+  | 'activeTabURL' | 'quitApp'
 
 export interface AxBridge {
   call(method: AxMethod, args: unknown[]): Promise<any>
