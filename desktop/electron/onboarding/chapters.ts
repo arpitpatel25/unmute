@@ -30,67 +30,67 @@ export const PERMISSION_ACTIONS: readonly ActionId[] = [
 export const CHAPTERS: Readonly<Record<ActionId, ChapterDefinition>> = {
   privacy: {
     action: 'privacy', clipId: 'welcome-privacy-v1',
-    caption: 'Your dictation is sent securely for transcription and is not stored by Unmute. Your Claude Code and Codex interactions stay between you and those tools.',
+    caption: 'Welcome to Unmute. Your dictation is sent securely for transcription, and we do not store it. Your Claude Code and Codex work goes directly through the tools you already use, not through Unmute.',
     card: { kind: 'permission', title: 'Your privacy' },
   },
   microphone: {
-    action: 'microphone', clipId: 'permission-microphone-v1', caption: 'Allow microphone access so Unmute can hear your dictation.',
+    action: 'microphone', clipId: 'permission-microphone-v1', caption: 'First, allow microphone access. Unmute only listens when you deliberately activate a recording feature.',
     card: { kind: 'permission', title: 'Microphone' },
   },
   accessibility: {
-    action: 'accessibility', clipId: 'permission-accessibility-v1', caption: 'Allow Accessibility so Unmute can deliver text into the app you are using.',
+    action: 'accessibility', clipId: 'permission-accessibility-v1', caption: 'Next, allow Accessibility. This lets Unmute place the finished text wherever your cursor is.',
     card: { kind: 'permission', title: 'Accessibility' },
   },
   'input-monitoring': {
-    action: 'input-monitoring', clipId: 'permission-input-monitoring-v1', caption: 'Allow Input Monitoring so your global Unmute shortcuts work everywhere.',
+    action: 'input-monitoring', clipId: 'permission-input-monitoring-v1', caption: 'Allow Input Monitoring so Unmute’s keyboard shortcuts work from any application.',
     card: { kind: 'permission', title: 'Input Monitoring' },
   },
   'system-audio': {
-    action: 'system-audio', clipId: 'permission-system-audio-v1', caption: 'Allow system audio so Notetaker can hear the conversation you choose to record.',
+    action: 'system-audio', clipId: 'permission-system-audio-v1', caption: 'Finally, allow System Audio. Unmute uses it only when you deliberately start Notetaker.',
     card: { kind: 'permission', title: 'System Audio' },
   },
   'provider-choice': {
-    action: 'provider-choice', clipId: 'provider-readiness-v1', caption: 'Unmute uses the Claude Code or Codex CLI already configured on your Mac.',
+    action: 'provider-choice', clipId: 'provider-readiness-v1', caption: 'Unmute works with the Claude Code or Codex CLI already configured on your Mac. Choose the agent you would like to use.',
     card: { kind: 'provider', title: 'Choose your agent' },
   },
   'notes-dictation': {
-    action: 'notes-dictation', clipId: 'dictation-explain-v1', caption: 'Put your cursor in Apple Notes, hold Function, speak, then release to paste.',
+    action: 'notes-dictation', clipId: 'dictation-explain-v1', caption: 'We opened Apple Notes for you. Put your cursor in the note, hold Function, say the sentence shown here, and release.',
     card: { kind: 'speak', phrase: 'My first Unmute dictation.' },
   },
   'notes-instruct': {
-    action: 'notes-instruct', clipId: 'instruct-explain-v1', caption: 'Select your sentence and use Instruct to rewrite it.',
+    action: 'notes-instruct', clipId: 'instruct-explain-v1', caption: 'Now select that sentence, press Caps Lock, and say the instruction shown here. Unmute will replace the selected text.',
     card: { kind: 'speak', phrase: 'Make this sound more confident.' },
   },
   'clipboard-capture': {
-    action: 'clipboard-capture', clipId: 'capture-clipboard-v1', caption: 'Copy something while dictating. Unmute will compose it with your words.',
+    action: 'clipboard-capture', clipId: 'capture-clipboard-v1', caption: 'Unmute can combine your voice with captured context. Hold Function, begin speaking, copy the highlighted text, and then release.',
     card: { kind: 'speak', phrase: 'Add this copied detail to my note.' },
   },
   'screenshot-capture': {
-    action: 'screenshot-capture', clipId: 'capture-screenshot-v1', caption: 'Take a normal macOS screenshot while dictating, then let Unmute place both into Notes.',
+    action: 'screenshot-capture', clipId: 'capture-screenshot-v1', caption: 'It works with screenshots too. Hold Function, begin speaking, take a normal macOS screenshot, and then release.',
     card: { kind: 'speak', phrase: 'Include this screenshot in my note.' },
   },
   'orchestrator-task': {
-    action: 'orchestrator-task', clipId: 'orchestrator-explain-v1', caption: 'Press Right Option and ask Orchestrator to do a real, safely isolated task.',
+    action: 'orchestrator-task', clipId: 'orchestrator-explain-v1', caption: 'Orchestrator turns a spoken request into a real task for Claude Code or Codex. Press Right Option and say the request shown here.',
     card: { kind: 'speak', phrase: 'Create hello-unmute.txt containing My first Unmute task.' },
   },
   'agent-task-link': {
-    action: 'agent-task-link', clipId: 'agent-explain-v1', caption: 'The Unmute Agent remembers your work and can create or resume tasks. Ask it to create one, then open its task link.',
+    action: 'agent-task-link', clipId: 'agent-explain-v1', caption: 'The Unmute Agent remembers your work and can create or resume tasks. Double-tap Right Command, say this follow-up, and open the task link it gives you.',
     card: { kind: 'speak', phrase: "Create a follow-up task to add today's date to hello-unmute.txt." },
   },
   'notetaker-save': {
-    action: 'notetaker-save', clipId: 'notetaker-explain-v1', caption: 'Double-tap Left Control to start Notetaker, then save the recording from the real pill.',
+    action: 'notetaker-save', clipId: 'notetaker-explain-v1', caption: 'Notetaker uses the models you already pay for. Double-tap Left Control, say the line shown here, and save the recording from the real pill.',
     card: { kind: 'speak', phrase: 'This is my first Unmute note.' },
   },
   'product-orientation': {
-    action: 'product-orientation', clipId: 'orientation-v1', caption: 'See today’s tasks, automatic workspaces, and saved Notetaker summaries in the Unmute app.',
+    action: 'product-orientation', clipId: 'orientation-v1', caption: 'This is your Unmute home: today’s tasks, automatic workspaces, and your Notetaker recordings and summaries.',
     card: { kind: 'success', title: 'Your workspace is ready' },
   },
   'sign-in': {
-    action: 'sign-in', clipId: 'sign-in-v1', caption: 'Sign in to keep using Unmute after this guided experience.',
+    action: 'sign-in', clipId: 'sign-in-v1', caption: 'You have now used every major part of Unmute. Sign in to keep using it after this guided session.',
     card: { kind: 'success', title: 'One last step' },
   },
   complete: {
-    action: 'complete', clipId: 'complete-v1', caption: 'You are ready to use Unmute everywhere on your Mac.',
+    action: 'complete', clipId: 'complete-v1', caption: 'That’s it. You now know Unmute because you have actually used it. Welcome.',
     card: { kind: 'success', title: 'Welcome to Unmute' },
   },
 }
