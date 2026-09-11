@@ -59,3 +59,17 @@ GREEN: `node --test replica-current/tests/manifest.test.mjs` passes 31/31. Mutat
 
 - AppKit text widths are pinned to measurements from this acceptance Mac, as the source itself uses AppKit. A macOS/system-font revision may change those measurements; that should be treated as baseline drift and deliberately remeasured, not silently approximated.
 - This correction approves only the notch inventory gate. Other incomplete family gates and Task 2 native baselines remain outside this change.
+
+## Scoped rereview correction
+
+The two remaining findings in `notch-gate-rereview.md` were addressed in a second TDD pass.
+
+- `evaluateNotchBranch` now starts from false, explicitly evaluates each cited state case at lines 230, 235, 257, 275, and 285, and records the fixture's actual selected `NotchState` case as an ancestor.
+- State cases and nested idle/resting/hover and active/single-processing branches carry the complete ordered ancestry: toast not selected, Agent activity not selected, routing not selected, Pocket not selected, then the actual state case selected.
+- Independent wrong-state evaluations and a manifest mutation prove a hard-coded true switch outcome or a self-consistent fixture relabel cannot pass.
+- The independent event extractor now scans pinned `AppController.swift` for `model.emit(.userReturned)` at line 1831 and `model.emit(.userLeft(...))` at line 1862.
+- The blanket AppController provenance exception was removed. All five Notch event types are validated against independently extracted type/source/exact-line evidence, with forged-line mutations for both departure events.
+
+Scoped rereview RED: focused tests reported 30 passed and 2 failed for missing state-case ancestry and missing departure emit evidence.
+
+Scoped rereview GREEN: focused tests report 32 passed and 0 failed. Full project verification is recorded in the final commit handoff.

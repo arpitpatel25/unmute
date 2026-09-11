@@ -234,6 +234,33 @@ test("Notch branch records evaluate exact predicates with ordered reachable ance
     }
 });
 
+test("NotchState switch and nested branches are independently case-gated", async () => {
+  const { manifest, evaluateNotchBranch } = await loadInventory();
+  const entry = (id) => manifest.entries.find((candidate) => candidate.id === id);
+  const input = (id) => manifest.fixtures[entry(id).fixture].input;
+  const occurrence = (id, line) => entry(id).audit.find((link) => link.id.startsWith("branch:") && link.id.includes(`:${line}:`));
+  const cases = [
+    ["notch-dormant-hardware", 230, "dormant"], ["notch-idle-wordmark", 235, "idle"],
+    ["notch-active-task-activity", 257, "active"], ["notch-attention-needs-user", 275, "attention"],
+    ["notch-task-expanded", 285, "task"], ["notch-cockpit-expanded", 285, "cockpit"],
+  ];
+  for (const [id, line, selected] of cases) {
+    const link = occurrence(id, line);
+    assert.equal(link.outcome, true);
+    assert.ok(link.ancestors.some(({ predicate }) => predicate === `NotchState case ${selected} selected`));
+    const wrong = structuredClone(input(id));
+    wrong.model.state = selected === "idle" ? "active" : "idle";
+    assert.equal(evaluateNotchBranch({ source: link.id.split(":").slice(1, -2).join(":"), line, value: link.predicate }, wrong).outcome, false);
+  }
+  for (const [id, line, parent] of [["notch-idle-resting-nub", 247, "idle"], ["notch-idle-hover", 247, "idle"], ["notch-active-task-hover-title", 270, "active"]]) {
+    const link = occurrence(id, line);
+    assert.deepEqual(link.ancestors.slice(0, 4).map(({ predicate }) => predicate), ["toast branch not selected", "agent activity branch not selected", "routing branch not selected", "pocket branch not selected"]);
+    assert.equal(link.ancestors[4].predicate, `NotchState case ${parent} selected`);
+    const wrong = structuredClone(input(id)); wrong.model.state = parent === "idle" ? "active" : "idle";
+    assert.equal(evaluateNotchBranch({ source: "desktop/native-notch/Sources/unmute-notch/BarContent.swift", line, value: link.predicate }, wrong).outcome, false);
+  }
+});
+
 test("Notch precedence is proven by fixtures carrying every lower competing signal", async () => {
   const { manifest } = await loadInventory();
   const input = (id) => manifest.fixtures[manifest.entries.find((entry) => entry.id === id).fixture].input;
@@ -270,12 +297,16 @@ test("Notch interactions are independently matched to exact emit sites", async (
     { type: "pocketOpen", source: "desktop/native-notch/Sources/unmute-notch/NotchView.swift", line: 89 },
     { type: "tap", source: "desktop/native-notch/Sources/unmute-notch/NotchView.swift", line: 89 },
     { type: "hover", source: "desktop/native-notch/Sources/unmute-notch/NotchView.swift", line: 100 },
+    { type: "userReturned", source: "desktop/native-notch/Sources/unmute-notch/AppController.swift", line: 1831 },
+    { type: "userLeft", source: "desktop/native-notch/Sources/unmute-notch/AppController.swift", line: 1862 },
   ]);
   const controls = manifest.entries.filter(({ family }) => family === "notch").flatMap(({ interactions }) => interactions.controls ?? []);
   assert.ok(controls.some(({ result }) => result.type === "pocketOpen"));
   assert.ok(controls.some(({ result }) => result.type === "tap"));
   assert.ok(controls.some(({ result }) => result.type === "hover" && result.hovering === true));
   assert.ok(controls.some(({ result }) => result.type === "hover" && result.hovering === false));
+  assert.ok(controls.some(({ result, provenance }) => result.type === "userLeft" && provenance.line === 1862));
+  assert.ok(controls.some(({ result, provenance }) => result.type === "userReturned" && provenance.line === 1831));
   assert.equal(controls.some(({ result }) => ["pointerEntered", "pointerExited"].includes(result.type)), false);
 });
 
@@ -564,6 +595,9 @@ test("validation independently rejects broken schema and coverage relationships"
     ["forged Notch emit line", (m) => { const e = m.entries.find(({ id }) => id === "notch-pocket-waiting-one"); e.interactions.controls[0].provenance.line = 77; }, /control provenance/i],
     ["wrong Notch measured allocation", (m) => { const e = m.entries.find(({ id }) => id === "notch-right-segment-boundary-54"); m.fixtures[e.fixture].input.expectation.geometry.allocatedRightWidth = 53; }, /derived expectation/i],
     ["unreachable off-notch dormant", (m) => { const e = m.entries.find(({ id }) => id === "notch-idle-resting-nub"); m.fixtures[e.fixture].input.model.state = "dormant"; }, /unreachable stable off-notch dormant/i],
+    ["wrong NotchState switch fixture", (m) => { const e = m.entries.find(({ id }) => id === "notch-attention-needs-user"); m.fixtures[e.fixture].input.model.state = "active"; }, /branch outcome/i],
+    ["forged userLeft emit line", (m) => { const e = m.entries.find(({ id }) => id === "notch-departure-expanded-hide"); e.interactions.controls[0].provenance.line = 1800; }, /control provenance/i],
+    ["forged userReturned emit line", (m) => { const e = m.entries.find(({ id }) => id === "notch-departure-return"); e.interactions.controls[0].provenance.line = 1800; }, /control provenance/i],
   ];
 
   for (const [name, mutate, expected] of cases) {

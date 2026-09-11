@@ -29665,6 +29665,16 @@
       "type": "hover",
       "source": "desktop/native-notch/Sources/unmute-notch/NotchView.swift",
       "line": 100
+    },
+    {
+      "type": "userReturned",
+      "source": "desktop/native-notch/Sources/unmute-notch/AppController.swift",
+      "line": 1831
+    },
+    {
+      "type": "userLeft",
+      "source": "desktop/native-notch/Sources/unmute-notch/AppController.swift",
+      "line": 1862
     }
   ],
   "classifications": [

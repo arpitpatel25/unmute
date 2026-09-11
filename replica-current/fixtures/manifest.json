@@ -13721,7 +13721,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:230:1",
           "contribution": "Defines the dormant hardware notch rendering.",
-          "predicate": ".dormant",
+          "predicate": "state == .dormant",
           "outcome": true,
           "ancestors": [
             {
@@ -13741,7 +13741,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case dormant selected",
               "outcome": true
             }
           ]
@@ -13845,7 +13845,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:235:1",
           "contribution": "Defines the idle wordmark notch rendering.",
-          "predicate": ".idle",
+          "predicate": "state == .idle",
           "outcome": true,
           "ancestors": [
             {
@@ -13865,7 +13865,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case idle selected",
               "outcome": true
             }
           ]
@@ -13972,7 +13972,28 @@
           "contribution": "Defines the idle resting nub notch rendering.",
           "predicate": "!hasNotch && !hovering",
           "outcome": true,
-          "ancestors": []
+          "ancestors": [
+            {
+              "predicate": "toast branch not selected",
+              "outcome": true
+            },
+            {
+              "predicate": "agent activity branch not selected",
+              "outcome": true
+            },
+            {
+              "predicate": "routing branch not selected",
+              "outcome": true
+            },
+            {
+              "predicate": "pocket branch not selected",
+              "outcome": true
+            },
+            {
+              "predicate": "NotchState case idle selected",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -14072,7 +14093,28 @@
           "contribution": "Defines the idle hover notch rendering.",
           "predicate": "!hasNotch && !hovering",
           "outcome": false,
-          "ancestors": []
+          "ancestors": [
+            {
+              "predicate": "toast branch not selected",
+              "outcome": true
+            },
+            {
+              "predicate": "agent activity branch not selected",
+              "outcome": true
+            },
+            {
+              "predicate": "routing branch not selected",
+              "outcome": true
+            },
+            {
+              "predicate": "pocket branch not selected",
+              "outcome": true
+            },
+            {
+              "predicate": "NotchState case idle selected",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -14169,7 +14211,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:257:1",
           "contribution": "Defines the active task activity notch rendering.",
-          "predicate": ".active",
+          "predicate": "state == .active",
           "outcome": true,
           "ancestors": [
             {
@@ -14189,7 +14231,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -14313,7 +14355,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -14413,7 +14455,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:257:1",
           "contribution": "Defines the active multiple badge notch rendering.",
-          "predicate": ".active",
+          "predicate": "state == .active",
           "outcome": true,
           "ancestors": [
             {
@@ -14433,7 +14475,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -14533,7 +14575,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:257:1",
           "contribution": "Defines the active live capture notch rendering.",
-          "predicate": ".active",
+          "predicate": "state == .active",
           "outcome": true,
           "ancestors": [
             {
@@ -14553,7 +14595,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -14653,7 +14695,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:275:1",
           "contribution": "Defines the attention processing notch rendering.",
-          "predicate": ".attention",
+          "predicate": "state == .attention",
           "outcome": true,
           "ancestors": [
             {
@@ -14673,7 +14715,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case attention selected",
               "outcome": true
             }
           ]
@@ -14777,7 +14819,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:275:1",
           "contribution": "Defines the attention needs user notch rendering.",
-          "predicate": ".attention",
+          "predicate": "state == .attention",
           "outcome": true,
           "ancestors": [
             {
@@ -14797,7 +14839,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case attention selected",
               "outcome": true
             }
           ]
@@ -14905,7 +14947,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:275:1",
           "contribution": "Defines the attention ready notch rendering.",
-          "predicate": ".attention",
+          "predicate": "state == .attention",
           "outcome": true,
           "ancestors": [
             {
@@ -14925,7 +14967,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case attention selected",
               "outcome": true
             }
           ]
@@ -15029,7 +15071,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:275:1",
           "contribution": "Defines the attention stuck notch rendering.",
-          "predicate": ".attention",
+          "predicate": "state == .attention",
           "outcome": true,
           "ancestors": [
             {
@@ -15049,7 +15091,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case attention selected",
               "outcome": true
             }
           ]
@@ -15153,7 +15195,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:275:1",
           "contribution": "Defines the attention done notch rendering.",
-          "predicate": ".attention",
+          "predicate": "state == .attention",
           "outcome": true,
           "ancestors": [
             {
@@ -15173,7 +15215,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case attention selected",
               "outcome": true
             }
           ]
@@ -15277,7 +15319,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:275:1",
           "contribution": "Defines the attention failed notch rendering.",
-          "predicate": ".attention",
+          "predicate": "state == .attention",
           "outcome": true,
           "ancestors": [
             {
@@ -15297,7 +15339,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case attention selected",
               "outcome": true
             }
           ]
@@ -15389,7 +15431,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:285:1",
           "contribution": "Defines the task expanded notch rendering.",
-          "predicate": ".task, .cockpit",
+          "predicate": "state == .task || state == .cockpit",
           "outcome": true,
           "ancestors": [
             {
@@ -15409,7 +15451,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case task selected",
               "outcome": true
             }
           ]
@@ -15501,7 +15543,7 @@
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:285:1",
           "contribution": "Defines the cockpit expanded notch rendering.",
-          "predicate": ".task, .cockpit",
+          "predicate": "state == .task || state == .cockpit",
           "outcome": true,
           "ancestors": [
             {
@@ -15521,7 +15563,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case cockpit selected",
               "outcome": true
             }
           ]
@@ -17848,7 +17890,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -17968,7 +18010,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -18088,7 +18130,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -18208,7 +18250,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -18328,7 +18370,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -18448,7 +18490,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -18568,7 +18610,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]
@@ -18688,7 +18730,7 @@
               "outcome": true
             },
             {
-              "predicate": "state switch reached",
+              "predicate": "NotchState case active selected",
               "outcome": true
             }
           ]

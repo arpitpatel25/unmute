@@ -115,8 +115,21 @@ export function scanNotchControlEmitSites(text) {
   return sites;
 }
 
+export function scanAppControllerNotchEmitSites(text) {
+  const source = swift("AppController.swift");
+  const sites = [];
+  text.split("\n").forEach((line, index) => {
+    for (const match of line.matchAll(/model\.emit\(\.((?:userLeft|userReturned))\b/g)) sites.push({ type: match[1], source, line: index + 1 });
+  });
+  return sites;
+}
+
 export async function notchControlEmitSites() {
-  return scanNotchControlEmitSites(await git(["show", `${SOURCE_REVISION}:${swift("NotchView.swift")}`]));
+  const [view, controller] = await Promise.all([
+    git(["show", `${SOURCE_REVISION}:${swift("NotchView.swift")}`]),
+    git(["show", `${SOURCE_REVISION}:${swift("AppController.swift")}`]),
+  ]);
+  return [...scanNotchControlEmitSites(view), ...scanAppControllerNotchEmitSites(controller)];
 }
 
 function splitEnumCases(value) {
@@ -558,17 +571,34 @@ function notchPredicateOutcomes(input) {
   };
 }
 
-function notchBranchCoverage(item, input) {
-  const p = notchPredicateOutcomes(input); let predicate = item.value; let outcome = true; const ancestors = [];
+const NOTCH_STATE_CASES = new Map([[230, ["dormant"]], [235, ["idle"]], [257, ["active"]], [275, ["attention"]], [285, ["task", "cockpit"]]]);
+function earlyReturnAncestors(input) {
+  return [
+    { predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" },
+    { predicate: "agent activity branch not selected", outcome: input.expectation.bar.selected !== "agentActivity" },
+    { predicate: "routing branch not selected", outcome: input.expectation.bar.selected !== "routing" },
+    { predicate: "pocket branch not selected", outcome: input.expectation.bar.selected !== "pocket" },
+  ];
+}
+function selectedCaseAncestor(input) {
+  return { predicate: `NotchState case ${input.model.state} selected`, outcome: true };
+}
+export function evaluateNotchBranch(item, input) {
+  const p = notchPredicateOutcomes(input); let predicate = item.value; let outcome = false; const ancestors = [];
   if (item.source.endsWith("/BarContent.swift")) {
     if (item.line === 145) { predicate = "content signature silenced"; outcome = p[predicate]; }
     if (item.line === 158) { predicate = "toast visible while collapsed"; outcome = p[predicate]; }
     if (item.line === 161 || (item.line >= 165 && item.line <= 170)) { predicate = item.line === 161 ? "agent activity visible while collapsed" : item.value; outcome = item.line === 161 ? p["agent activity visible while collapsed"] : input.model.agentActivity?.state === ["listening", "searching", "thinking", "confirming", "complete", "failed"][item.line - 165]; ancestors.push({ predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" }); if (item.line !== 161) ancestors.push({ predicate: "agent activity visible while collapsed", outcome: p["agent activity visible while collapsed"] }); }
     if (item.line === 189) { predicate = "capturePhase == routing while collapsed"; outcome = p[predicate]; ancestors.push({ predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" }, { predicate: "agent activity branch not selected", outcome: input.expectation.bar.selected !== "agentActivity" }); }
     if (item.line === 210 || item.line === 224) { predicate = item.line === 224 ? "hovering && first slot exists" : "pocket waiting while closed and collapsed"; outcome = item.line === 224 ? input.model.hovering && input.model.pocket.slots.length > 0 : p["pocket waiting while closed and collapsed"]; ancestors.push({ predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" }, { predicate: "agent activity branch not selected", outcome: input.expectation.bar.selected !== "agentActivity" }, { predicate: "routing branch not selected", outcome: input.expectation.bar.selected !== "routing" }); if (item.line === 224) ancestors.push({ predicate: "pocket waiting while closed and collapsed", outcome: p["pocket waiting while closed and collapsed"] }); }
-    if (item.line === 247) { predicate = "!hasNotch && !hovering"; outcome = !p.hasNotch && !p.hovering; }
-    if (item.line === 270) { predicate = "single processing task"; outcome = input.model.working === 1 && input.model.task?.status === "processing"; ancestors.push({ predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" }, { predicate: "agent activity branch not selected", outcome: input.expectation.bar.selected !== "agentActivity" }, { predicate: "routing branch not selected", outcome: input.expectation.bar.selected !== "routing" }, { predicate: "pocket branch not selected", outcome: input.expectation.bar.selected !== "pocket" }, { predicate: "state switch reached", outcome: input.expectation.bar.selected === "state" }); }
-    if ([230, 235, 257, 275, 285].includes(item.line)) ancestors.push({ predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" }, { predicate: "agent activity branch not selected", outcome: input.expectation.bar.selected !== "agentActivity" }, { predicate: "routing branch not selected", outcome: input.expectation.bar.selected !== "routing" }, { predicate: "pocket branch not selected", outcome: input.expectation.bar.selected !== "pocket" }, { predicate: "state switch reached", outcome: input.expectation.bar.selected === "state" || input.expectation.bar.selected === "silenced" });
+    if (item.line === 247) { predicate = "!hasNotch && !hovering"; outcome = input.model.state === "idle" && !p.hasNotch && !p.hovering; ancestors.push(...earlyReturnAncestors(input), selectedCaseAncestor(input)); }
+    if (item.line === 270) { predicate = "single processing task"; outcome = input.model.state === "active" && input.model.working === 1 && input.model.task?.status === "processing"; ancestors.push(...earlyReturnAncestors(input), selectedCaseAncestor(input)); }
+    if (NOTCH_STATE_CASES.has(item.line)) {
+      const accepted = NOTCH_STATE_CASES.get(item.line);
+      predicate = accepted.map((state) => `state == .${state}`).join(" || ");
+      outcome = accepted.includes(input.model.state);
+      ancestors.push(...earlyReturnAncestors(input), selectedCaseAncestor(input));
+    }
   } else if (item.source.endsWith("/NotchView.swift")) {
     if (item.line === 224) { predicate = "expanded or open-pocket glass tone"; outcome = (["task", "cockpit"].includes(input.model.state) || input.model.pocket.mode === "open") && input.appearance.tone === "glass"; }
   } else if (item.source.endsWith("/AppController.swift")) {
@@ -578,6 +608,8 @@ function notchBranchCoverage(item, input) {
   }
   return { predicate, outcome, ancestors };
 }
+
+const notchBranchCoverage = evaluateNotchBranch;
 
 export function createInventory(raw) {
   const occurrences = ["enumCases", "branches", "sfSymbols", "metrics", "tokens"].flatMap((category) => raw[category]);
@@ -706,7 +738,7 @@ export function validateManifest(manifest, evidence) {
         const occurrence = occurrenceById.get(link.id); const expected = occurrence && notchBranchCoverage(occurrence, input);
         if (!expected || link.predicate !== expected.predicate || link.outcome !== expected.outcome || JSON.stringify(link.ancestors) !== JSON.stringify(expected.ancestors) || link.ancestors.some(({ outcome }) => !outcome)) errors.push(`Notch branch outcome or ancestor reachability mismatch for ${entry.id}:${link.id}`);
       }
-      for (const item of entry.interactions.controls ?? []) if (!(evidence.notchControlEmitSites ?? []).some((site) => site.type === item.result.type && site.source === item.provenance?.source && site.line === item.provenance?.line) && !(["userLeft", "userReturned"].includes(item.result.type) && item.provenance?.source === swift("AppController.swift"))) errors.push(`Invalid Notch control provenance for ${entry.id}:${item.id}`);
+      for (const item of entry.interactions.controls ?? []) if (!(evidence.notchControlEmitSites ?? []).some((site) => site.type === item.result.type && site.source === item.provenance?.source && site.line === item.provenance?.line)) errors.push(`Invalid Notch control provenance for ${entry.id}:${item.id}`);
     }
   }
   for (const [id, fixture] of Object.entries(fixtures)) if (!entryById.has(fixture.stateId) || entryById.get(fixture.stateId).fixture !== id) errors.push(`Orphan fixture: ${id}`);
