@@ -39751,10 +39751,9 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:431:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-raw-enabled",
         "pill-scratchpad-armed"
       ],
-      "reason": "pill-raw-enabled: Defines the raw enabled Pill rendering. pill-scratchpad-armed: Defines the scratchpad armed Pill rendering."
+      "reason": "pill-scratchpad-armed: Defines the scratchpad armed Pill rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:441:1",
@@ -39851,9 +39850,10 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:540:1",
       "kind": "render-affecting",
       "stateIds": [
+        "pill-recording-waveform-zero",
         "pill-recording-waveform-16"
       ],
-      "reason": "pill-recording-waveform-16: Defines the recording waveform 16 Pill rendering."
+      "reason": "pill-recording-waveform-zero: Defines the recording waveform zero Pill rendering. pill-recording-waveform-16: Defines the recording waveform 16 Pill rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:562:1",
@@ -40069,9 +40069,10 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:865:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-agent-disconnected"
+        "pill-agent-disconnected",
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-agent-disconnected: Defines the agent disconnected Pill rendering."
+      "reason": "pill-agent-disconnected: Defines the agent disconnected Pill rendering. pill-provider-claude-cli: Defines the provider claude cli Pill rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:867:1",
@@ -40109,10 +40110,9 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:896:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-agent-lane-processing",
-        "pill-provider-terminal"
+        "pill-agent-lane-processing"
       ],
-      "reason": "pill-agent-lane-processing: Defines the agent lane processing Pill rendering. pill-provider-terminal: Defines the provider terminal Pill rendering."
+      "reason": "pill-agent-lane-processing: Defines the agent lane processing Pill rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:900:1",
@@ -40198,9 +40198,11 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1077:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-fallback"
+        "pill-provider-claude-desktop",
+        "pill-provider-codex-cli",
+        "pill-provider-codex-desktop"
       ],
-      "reason": "pill-provider-fallback: Defines the provider fallback Pill rendering."
+      "reason": "pill-provider-claude-desktop: Defines the provider claude desktop Pill rendering. pill-provider-codex-cli: Defines the provider codex cli Pill rendering. pill-provider-codex-desktop: Defines the provider codex desktop Pill rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1083:1",
@@ -40568,129 +40570,129 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:21:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition 'terminal' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition 'terminal' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:51:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition 'terminal' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition 'terminal' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:62:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-fallback"
+        "pill-provider-codex-cli"
       ],
-      "reason": "pill-provider-fallback: The source render condition 'terminal' contributes the visible configuration captured by pill-provider-fallback."
+      "reason": "pill-provider-codex-cli: The source render condition 'terminal' contributes the visible configuration captured by pill-provider-codex-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:63:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition 'terminal' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition 'terminal' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:67:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition 'let art = ProviderMarkArt.image(backend)' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition 'let art = ProviderMarkArt.image(backend)' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:79:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-fallback"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-fallback: The source render condition 'else' contributes the visible configuration captured by pill-provider-fallback."
+      "reason": "pill-provider-claude-cli: The source render condition 'else' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:37:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition 'let lightest = inks.min(), ink > 0' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition 'let lightest = inks.min(), ink > 0' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:61:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition '\"codex\", \"codex-desktop\"' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition '\"codex\", \"codex-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:62:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-fallback"
+        "pill-provider-codex-cli"
       ],
-      "reason": "pill-provider-fallback: The source render condition 'default' contributes the visible configuration captured by pill-provider-fallback."
+      "reason": "pill-provider-codex-cli: The source render condition 'default' contributes the visible configuration captured by pill-provider-codex-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:68:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition 'isCodex' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition 'isCodex' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:69:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition '!b64.isEmpty, let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters), let img = NSImage(data: data)' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition '!b64.isEmpty, let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters), let img = NSImage(data: data)' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:72:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition 'isCodex' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition 'isCodex' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:87:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition '\"codex\"' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition '\"codex\"' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:88:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition '\"codex-desktop\"' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition '\"codex-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:89:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-terminal"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-terminal: The source render condition '\"claude-code-desktop\"' contributes the visible configuration captured by pill-provider-terminal."
+      "reason": "pill-provider-claude-cli: The source render condition '\"claude-code-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:90:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-fallback"
+        "pill-provider-codex-cli"
       ],
-      "reason": "pill-provider-fallback: The source render condition 'default' contributes the visible configuration captured by pill-provider-fallback."
+      "reason": "pill-provider-codex-cli: The source render condition 'default' contributes the visible configuration captured by pill-provider-codex-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/RichText.swift:32:1",
@@ -42470,81 +42472,81 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:77:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-recording-waveform-16"
+        "pill-recording-waveform-zero"
       ],
-      "reason": "pill-recording-waveform-16: The source render condition 'envelope <= 0' contributes the visible configuration captured by pill-recording-waveform-16."
+      "reason": "pill-recording-waveform-zero: The source render condition 'envelope <= 0' contributes the visible configuration captured by pill-recording-waveform-zero."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:86:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-recording-waveform-16"
+        "pill-recording-waveform-zero"
       ],
-      "reason": "pill-recording-waveform-16: The source render condition 'envelope <= 0' contributes the visible configuration captured by pill-recording-waveform-16."
+      "reason": "pill-recording-waveform-zero: The source render condition 'envelope <= 0' contributes the visible configuration captured by pill-recording-waveform-zero."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:142:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-recording-waveform-16"
+        "pocket-agent-listening"
       ],
-      "reason": "pill-recording-waveform-16: The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+      "reason": "pocket-agent-listening: The source render condition 'compact' contributes the visible configuration captured by pocket-agent-listening."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:144:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-recording-waveform-16"
+        "pocket-agent-listening"
       ],
-      "reason": "pill-recording-waveform-16: The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+      "reason": "pocket-agent-listening: The source render condition 'compact' contributes the visible configuration captured by pocket-agent-listening."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:150:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-recording-waveform-16"
+        "pocket-agent-listening"
       ],
-      "reason": "pill-recording-waveform-16: The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+      "reason": "pocket-agent-listening: The source render condition 'compact' contributes the visible configuration captured by pocket-agent-listening."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:151:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-recording-waveform-16"
+        "pocket-agent-listening"
       ],
-      "reason": "pill-recording-waveform-16: The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+      "reason": "pocket-agent-listening: The source render condition 'compact' contributes the visible configuration captured by pocket-agent-listening."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:152:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-recording-waveform-16"
+        "pocket-agent-listening"
       ],
-      "reason": "pill-recording-waveform-16: The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+      "reason": "pocket-agent-listening: The source render condition 'compact' contributes the visible configuration captured by pocket-agent-listening."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:152:2",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-recording-waveform-16"
+        "pocket-agent-listening"
       ],
-      "reason": "pill-recording-waveform-16: The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+      "reason": "pocket-agent-listening: The source render condition 'compact' contributes the visible configuration captured by pocket-agent-listening."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:154:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-recording-waveform-16"
+        "pocket-agent-listening"
       ],
-      "reason": "pill-recording-waveform-16: The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+      "reason": "pocket-agent-listening: The source render condition 'compact' contributes the visible configuration captured by pocket-agent-listening."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:155:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-recording-waveform-16"
+        "pocket-agent-listening"
       ],
-      "reason": "pill-recording-waveform-16: The source render condition 'compact' contributes the visible configuration captured by pill-recording-waveform-16."
+      "reason": "pocket-agent-listening: The source render condition 'compact' contributes the visible configuration captured by pocket-agent-listening."
     },
     {
       "occurrenceId": "sf-symbol:desktop/native-notch/Sources/unmute-notch/BlockConversation.swift:287:1",

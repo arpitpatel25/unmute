@@ -97,22 +97,83 @@ test("Pill fixtures pin exact branch values, menus, controls, and transitions", 
   assert.equal(input("pill-output-fallback-preview").state.outputPreview, "Ship the checkout update");
   assert.equal(input("pill-error-limit").state.message, "Daily limit reached");
   assert.equal(input("pill-hint-mic-precedence").state.micStatus, "AirPods — Move closer");
-  assert.equal(input("pill-hint-mic-precedence").state.coaching.kind, "quiet");
-  assert.equal(input("pill-selector-codex-axes").openMenu, "model");
-  assert.deepEqual(input("pill-selector-codex-axes").state.modelAxes.map((axis) => axis.id), ["model", "effort"]);
+  assert.equal(input("pill-hint-mic-precedence").state.coaching.level, "quiet");
+  assert.equal(input("pill-selector-codex-axes").viewState.selectorOpen, true);
+  assert.deepEqual(input("pill-selector-codex-axes").state.modelAxes.map((axis) => axis.axis), ["Model", "Effort"]);
   assert.equal(input("pill-selector-task-addressed").state.taskId, "task-42");
-  assert.equal(input("pill-agent-lane-processing").presentation.agentRim, true);
+  assert.equal(input("pill-agent-lane-processing").viewState.agentRim, true);
   assert.equal(input("pill-mic-iphone").state.mic, "iphone");
   assert.equal(input("pill-scratchpad-armed").scratchpad.armed, true);
   const allResults = manifest.entries.filter(({ family }) => family === "pill").flatMap(({ interactions }) => interactions.controls?.map((c) => c.result.type) ?? []);
-  for (const type of ["pillStop", "pillCancel", "pillUndo", "pillAcceptDraft", "pillPickModel", "pillPickAxis", "pillCycleAgent", "pillPickAgent", "pillPickMic", "pillToggleRaw", "pillOpenBillingPortal", "pillDismissOffline", "scratchpadArm"])
+  for (const type of ["pillStop", "pillCancel", "pillUndo", "pillAcceptDraft", "pillPickModel", "pillPickAxis", "pillPickAgent", "pillPickMic", "pillOpenBillingPortal", "pillDismissOffline", "scratchpadArm", "scratchpadRemove", "scratchpadDeliver", "scratchpadDiscard"])
     assert.ok(allResults.includes(type), `missing Pill transition ${type}`);
 });
 
-test("every Pill render conditional has a manual Pill backlink", async () => {
+test("Pill fixtures use the decodable wire schema and keep SwiftUI state separate", async () => {
+  const { manifest, validateManifest, evidence } = await loadInventory();
+  assert.deepEqual(validateManifest(manifest, evidence), []);
+  for (const entry of manifest.entries.filter(({ family }) => family === "pill")) {
+    const input = manifest.fixtures[entry.fixture].input;
+    assert.ok(input.viewState && typeof input.viewState.selectorOpen === "boolean");
+    assert.equal("openMenu" in input, false);
+    assert.equal("presentation" in input, false);
+    if (input.state.coaching) assert.deepEqual(Object.keys(input.state.coaching).sort(), ["condition", "level", "remedy"]);
+    for (const axis of input.state.modelAxes ?? []) assert.deepEqual(Object.keys(axis).sort(), ["axis", "current", "values"]);
+    for (const option of input.state.micOptions ?? []) assert.equal(typeof option, "object");
+  }
+});
+
+test("Pill controls are visible-source emissions with provenance", async () => {
+  const { manifest } = await loadInventory();
+  const controls = manifest.entries.filter(({ family }) => family === "pill")
+    .flatMap(({ interactions }) => interactions.controls ?? []);
+  assert.ok(controls.length > 0);
+  assert.ok(controls.every(({ provenance }) => provenance?.source.endsWith(".swift") && Number.isInteger(provenance.line)));
+  const types = new Set(controls.map(({ result }) => result.type));
+  assert.equal(types.has("pillCycleAgent"), false);
+  assert.equal(types.has("pillToggleRaw"), false);
+  assert.equal(types.has("scratchpadCollapse"), false);
+  for (const expected of ["pillStop", "pillCancel", "pillUndo", "pillAcceptDraft", "pillPickModel", "pillPickAxis", "pillPickAgent", "pillPickMic", "pillOpenBillingPortal", "pillDismissOffline", "scratchpadArm", "scratchpadRemove", "scratchpadDeliver", "scratchpadDiscard"])
+    assert.ok(types.has(expected), `missing emitted visible control ${expected}`);
+});
+
+test("Pill predicate coverage records verified outcomes against fixture values", async () => {
+  const { manifest, evidence, validateManifest } = await loadInventory();
+  assert.deepEqual(validateManifest(manifest, evidence), []);
+  const coverage = manifest.entries.filter(({ family }) => family === "pill").flatMap(({ predicates = [] }) => predicates);
+  assert.ok(coverage.length > 0);
+  assert.ok(coverage.every(({ predicate, outcome }) => predicate && typeof outcome === "boolean"));
+  const outcomes = (predicate) => new Set(coverage.filter((item) => item.predicate === predicate).map(({ outcome }) => outcome));
+  for (const predicate of ["selectorShowing", "micOptions.count > 1", "!isAgentLane", "taskId == nil", "scratchpad enabled and visible/live", "waveform envelope <= 0"])
+    assert.deepEqual([...outcomes(predicate)].sort(), [false, true], `missing outcomes for ${predicate}`);
+});
+
+test("Pill provider fixtures cover real vendor/name/terminal combinations only", async () => {
+  const { manifest } = await loadInventory();
+  const providers = manifest.entries.filter(({ family }) => family === "pill")
+    .map((entry) => entry.expectations?.providerMark).filter(Boolean);
+  assert.deepEqual(providers.map(({ backend, vendor, name, terminal }) => [backend, vendor, name, terminal]).sort(), [
+    ["claude", "claude", "Claude Code CLI", true],
+    ["claude-code-desktop", "claude", "Claude desktop", false],
+    ["codex", "codex", "Codex CLI", true],
+    ["codex-desktop", "codex", "Codex desktop", false],
+  ].sort());
+  assert.ok(providers.every(({ art }) => art === "embedded"));
+});
+
+test("Pill owns zero and nonzero Waveform states but no AimedChip branches", async () => {
+  const { manifest } = await loadInventory();
+  const pill = manifest.entries.filter(({ family }) => family === "pill");
+  const input = (entry) => manifest.fixtures[entry.fixture].input;
+  assert.ok(pill.some((entry) => input(entry).state.level === 0 && entry.predicates?.some((p) => p.predicate === "waveform envelope <= 0" && p.outcome)));
+  assert.ok(pill.some((entry) => input(entry).state.level > 0 && entry.predicates?.some((p) => p.predicate === "waveform envelope <= 0" && !p.outcome)));
+  assert.equal(pill.some((entry) => entry.audit.some(({ id }) => id.includes("Waveform.swift:14"))), false);
+});
+
+test("every Pill-owned render conditional has a manual Pill backlink", async () => {
   const { evidence } = await loadInventory();
   const renderSources = /\/(?:PillView|Waveform|ProviderMark|ProviderMarkArt)\.swift$/;
-  for (const item of evidence.branches.filter(({ source }) => renderSources.test(source))) {
+  for (const item of evidence.branches.filter(({ source, line }) => renderSources.test(source) && !(source.endsWith("/Waveform.swift") && line >= 142))) {
     const classification = evidence.classifications.find(({ occurrenceId }) => occurrenceId === item.id);
     assert.ok(classification.stateIds.some((id) => id.startsWith("pill-")), `uncovered Pill render branch ${item.source}:${item.line} ${item.value}`);
   }
@@ -254,6 +315,9 @@ test("validation independently rejects broken schema and coverage relationships"
     ["missing classification", (_m, e) => { e.classifications.pop(); }, /unclassified audited occurrence/i],
     ["unknown state backlink", (_m, e) => { e.classifications.find((c) => c.kind !== "non-rendering").stateIds.push("missing-state"); }, /unknown state backlink/i],
     ["missing state backlink", (m) => { m.entries[0].audit = []; }, /audit backlink/i],
+    ["malformed Pill coaching", (m) => { const e = m.entries.find(({ id }) => id === "pill-hint-coaching-quiet"); m.fixtures[e.fixture].input.state.coaching = { kind: "quiet", remedy: "Speak louder" }; }, /coaching schema/i],
+    ["false Pill predicate outcome", (m) => { const e = m.entries.find(({ family }) => family === "pill"); e.predicates[0].outcome = !e.predicates[0].outcome; }, /predicate outcome mismatch/i],
+    ["invented Pill control provenance", (m) => { const e = m.entries.find(({ id }) => id === "pill-cancelled"); e.interactions.controls[0].provenance.line = 999; }, /control provenance/i],
   ];
 
   for (const [name, mutate, expected] of cases) {
