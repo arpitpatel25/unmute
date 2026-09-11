@@ -372,6 +372,7 @@ export function MeetingDetail({
 
   const [meetingAudioUrl, setMeetingAudioUrl] = useState<string | null>(null)
   const [screenshots, setScreenshots] = useState<NotetakerScreenshot[]>([])
+  const [selectedScreenshotIndex, setSelectedScreenshotIndex] = useState<number | null>(null)
   const [title, setTitle] = useState(initialTitle)
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState(initialTitle)
@@ -392,6 +393,7 @@ export function MeetingDetail({
     setNotesRevealPhase('preparing')
     setMeetingAudioUrl(null)
     setScreenshots([])
+    setSelectedScreenshotIndex(null)
     setNotesCopied(false)
     setTranscriptCopied(false)
 
@@ -414,6 +416,24 @@ export function MeetingDetail({
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
+
+  useEffect(() => {
+    if (selectedScreenshotIndex === null || screenshots.length === 0) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setSelectedScreenshotIndex(null)
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        setSelectedScreenshotIndex((current) => current === null ? 0 : (current + 1) % screenshots.length)
+      } else if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        setSelectedScreenshotIndex((current) => current === null ? 0 : (current - 1 + screenshots.length) % screenshots.length)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [selectedScreenshotIndex, screenshots.length])
 
   const notesMarkdown = notes ? legacyNotesAsMarkdown(notes) : ''
   const notesKey = notes ? `${id}\u0000${notes.title}\u0000${notesMarkdown}` : null
@@ -689,20 +709,75 @@ export function MeetingDetail({
       </div>
 
       {screenshots.length > 0 && (
-        <section className="flex flex-col gap-3 rounded-lg bg-ink-07 p-3" aria-label="Screenshot references">
+        <section className="flex flex-col gap-3 rounded-lg bg-ink-07 p-3" aria-label="Screenshot capture during recording">
           <div className="flex items-center justify-between gap-2">
-            <div className="text-[12px] font-semibold text-ink">Screenshot references</div>
+            <div className="text-[12px] font-semibold text-ink">Screenshot capture during recording</div>
             <div className="text-[11px] text-ink-60">{screenshots.length} screenshot{screenshots.length === 1 ? '' : 's'}</div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="flex flex-col gap-3">
             {screenshots.map((screenshot, index) => (
-              <details key={screenshot.url} className="overflow-hidden rounded-md border border-black/10 bg-black/[0.03]">
-                <summary className="cursor-pointer px-2.5 py-2 text-[12px] text-ink-60 hover:text-ink">Screenshot {index + 1}</summary>
-                <img src={screenshot.url} alt={`Screenshot ${index + 1}`} className="block w-full" />
-              </details>
+              <button
+                key={screenshot.url}
+                type="button"
+                onClick={() => setSelectedScreenshotIndex(index)}
+                className="group flex flex-col gap-2 overflow-hidden rounded-md border border-black/10 bg-black/[0.03] text-left hover:border-black/25 transition-colors"
+                aria-label={`Open Screenshot ${index + 1}`}
+              >
+                <span className="px-2.5 pt-2 text-[12px] text-ink-60 group-hover:text-ink">Screenshot {index + 1}</span>
+                <img src={screenshot.url} alt={`Screenshot ${index + 1}`} className="block max-h-72 w-full object-contain object-top" />
+              </button>
             ))}
           </div>
         </section>
+      )}
+
+      {selectedScreenshotIndex !== null && screenshots[selectedScreenshotIndex] && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Screenshot ${selectedScreenshotIndex + 1} of ${screenshots.length}`}
+          onClick={() => setSelectedScreenshotIndex(null)}
+        >
+          <div className="relative flex max-h-full max-w-full items-center justify-center" onClick={(event) => event.stopPropagation()}>
+            <img
+              src={screenshots[selectedScreenshotIndex].url}
+              alt={`Screenshot ${selectedScreenshotIndex + 1}`}
+              className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
+            />
+            <button
+              type="button"
+              onClick={() => setSelectedScreenshotIndex(null)}
+              className="absolute right-2 top-2 rounded-full bg-black/65 px-3 py-1.5 text-sm text-white hover:bg-black/85"
+              aria-label="Close screenshot viewer"
+            >
+              ×
+            </button>
+            {screenshots.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setSelectedScreenshotIndex((selectedScreenshotIndex - 1 + screenshots.length) % screenshots.length)}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/65 px-3 py-2 text-xl text-white hover:bg-black/85"
+                  aria-label="Previous screenshot"
+                >
+                  ‹
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedScreenshotIndex((selectedScreenshotIndex + 1) % screenshots.length)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/65 px-3 py-2 text-xl text-white hover:bg-black/85"
+                  aria-label="Next screenshot"
+                >
+                  ›
+                </button>
+              </>
+            )}
+            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-black/65 px-3 py-1 text-xs text-white">
+              Screenshot {selectedScreenshotIndex + 1} of {screenshots.length}
+            </div>
+          </div>
+        </div>
       )}
 
       <button
