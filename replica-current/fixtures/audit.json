@@ -40702,33 +40702,33 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:87:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-claude-cli"
+        "pill-provider-codex-cli"
       ],
-      "reason": "pill-provider-claude-cli: The source render condition '\"codex\"' contributes the visible configuration captured by pill-provider-claude-cli."
+      "reason": "pill-provider-codex-cli: The source render condition '\"codex\"' contributes the visible configuration captured by pill-provider-codex-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:88:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-claude-cli"
+        "pill-provider-codex-desktop"
       ],
-      "reason": "pill-provider-claude-cli: The source render condition '\"codex-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli."
+      "reason": "pill-provider-codex-desktop: The source render condition '\"codex-desktop\"' contributes the visible configuration captured by pill-provider-codex-desktop."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:89:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-claude-cli"
+        "pill-provider-claude-desktop"
       ],
-      "reason": "pill-provider-claude-cli: The source render condition '\"claude-code-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli."
+      "reason": "pill-provider-claude-desktop: The source render condition '\"claude-code-desktop\"' contributes the visible configuration captured by pill-provider-claude-desktop."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:90:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-provider-codex-cli"
+        "pill-provider-claude-cli"
       ],
-      "reason": "pill-provider-codex-cli: The source render condition 'default' contributes the visible configuration captured by pill-provider-codex-cli."
+      "reason": "pill-provider-claude-cli: The source render condition 'default' contributes the visible configuration captured by pill-provider-claude-cli."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/RichText.swift:32:1",

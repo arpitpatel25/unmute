@@ -219,6 +219,31 @@ test("provider expectations are independently derived from fixture backend and t
   assert.match(validateManifest(candidate, evidence).join("\n"), /provider expectation mismatch/i);
 });
 
+test("ProviderMarkArt name branches map exact backend cases and reject vendor aliases", async () => {
+  const { manifest, evidence, providerNameCaseOutcome } = await loadInventory();
+  const expected = new Map([
+    [87, "pill-provider-codex-cli"],
+    [88, "pill-provider-codex-desktop"],
+    [89, "pill-provider-claude-desktop"],
+    [90, "pill-provider-claude-cli"],
+  ]);
+  for (const [line, stateId] of expected) {
+    const branch = evidence.branches.find(({ source, line: candidate }) => source.endsWith("/ProviderMarkArt.swift") && candidate === line);
+    const classification = evidence.classifications.find(({ occurrenceId }) => occurrenceId === branch.id);
+    assert.deepEqual(classification.stateIds, [stateId]);
+    const link = manifest.entries.find(({ id }) => id === stateId).audit.find(({ id }) => id === branch.id);
+    assert.equal(link.outcome, true);
+  }
+  assert.equal(providerNameCaseOutcome("codex", 87), true);
+  assert.equal(providerNameCaseOutcome("codex-desktop", 87), false);
+  assert.equal(providerNameCaseOutcome("codex-desktop", 88), true);
+  assert.equal(providerNameCaseOutcome("codex", 88), false);
+  assert.equal(providerNameCaseOutcome("claude-code-desktop", 89), true);
+  assert.equal(providerNameCaseOutcome("claude", 89), false);
+  assert.equal(providerNameCaseOutcome("claude", 90), true);
+  assert.equal(providerNameCaseOutcome("claude-code-desktop", 90), false);
+});
+
 test("every retained Pill render backlink has semantic outcome evidence", async () => {
   const { manifest, evidence } = await loadInventory();
   const renderSources = /\/(?:PillView|Waveform|ProviderMark|ProviderMarkArt)\.swift$/;
@@ -377,6 +402,7 @@ test("validation independently rejects broken schema and coverage relationships"
     ["invented Pill local state", (m) => { const e = m.entries.find(({ family }) => family === "pill"); m.fixtures[e.fixture].input.viewState.controlState = "pressed"; }, /local view state/i],
     ["false linked branch outcome", (m) => { const e = m.entries.find(({ family, audit }) => family === "pill" && audit.some(({ id }) => id.startsWith("branch:"))); const link = e.audit.find(({ id }) => id.startsWith("branch:")); link.outcome = !link.outcome; }, /branch outcome/i],
     ["provider fixture mismatch", (m) => { const e = m.entries.find(({ id }) => id === "pill-provider-codex-cli"); m.fixtures[e.fixture].input.state.agentOptions[0].terminal = false; }, /provider expectation mismatch/i],
+    ["provider exact-case alias", (m) => { const e = m.entries.find(({ id }) => id === "pill-provider-codex-cli"); const input = m.fixtures[e.fixture].input; input.state.agentOptions.find(({ label }) => label === input.state.agent).id = "codex-desktop"; e.expectations.providerMark = { backend: "codex-desktop", vendor: "codex", name: "Codex desktop", terminal: true, art: "embedded" }; }, /branch outcome/i],
   ];
 
   for (const [name, mutate, expected] of cases) {

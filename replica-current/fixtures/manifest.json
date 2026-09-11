@@ -6423,7 +6423,7 @@
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:61:1",
           "contribution": "The source render condition '\"codex\", \"codex-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli.",
           "predicate": "\"codex\", \"codex-desktop\"",
-          "outcome": false,
+          "outcome": true,
           "ancestors": []
         },
         {
@@ -6448,23 +6448,9 @@
           "ancestors": []
         },
         {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:87:1",
-          "contribution": "The source render condition '\"codex\"' contributes the visible configuration captured by pill-provider-claude-cli.",
-          "predicate": "\"codex\"",
-          "outcome": false,
-          "ancestors": []
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:88:1",
-          "contribution": "The source render condition '\"codex-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli.",
-          "predicate": "\"codex-desktop\"",
-          "outcome": false,
-          "ancestors": []
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:89:1",
-          "contribution": "The source render condition '\"claude-code-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli.",
-          "predicate": "\"claude-code-desktop\"",
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:90:1",
+          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "default",
           "outcome": true,
           "ancestors": []
         }
@@ -6551,6 +6537,13 @@
               "outcome": true
             }
           ]
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:89:1",
+          "contribution": "The source render condition '\"claude-code-desktop\"' contributes the visible configuration captured by pill-provider-claude-desktop.",
+          "predicate": "\"claude-code-desktop\"",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -6653,14 +6646,14 @@
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:62:1",
           "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-provider-codex-cli.",
           "predicate": "default",
-          "outcome": false,
+          "outcome": true,
           "ancestors": []
         },
         {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:90:1",
-          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-provider-codex-cli.",
-          "predicate": "default",
-          "outcome": false,
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:87:1",
+          "contribution": "The source render condition '\"codex\"' contributes the visible configuration captured by pill-provider-codex-cli.",
+          "predicate": "\"codex\"",
+          "outcome": true,
           "ancestors": []
         }
       ],
@@ -6752,6 +6745,13 @@
               "outcome": true
             }
           ]
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:88:1",
+          "contribution": "The source render condition '\"codex-desktop\"' contributes the visible configuration captured by pill-provider-codex-desktop.",
+          "predicate": "\"codex-desktop\"",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [

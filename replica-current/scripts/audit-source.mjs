@@ -222,7 +222,7 @@ const PILL_VIEW_LINKS = {
   466: "pill-agent-lane-processing", 472: "pill-error-default", 473: "pill-output-fallback-default", 481: "pill-recording-instruction", 482: "pill-recording-instruction", 483: "pill-output", 491: "pill-hidden", 494: "pill-recording-waveform-16", 538: "pill-recording-countdown-15", 540: "pill-recording-waveform-16", 562: "pill-paused", 580: "pill-processing-default", 594: "pill-processing-draft", 596: "pill-processing-on-device", 598: "pill-processing-discard-hint", 605: "pill-output", 613: "pill-output-fallback-default", 619: "pill-output-fallback-preview", 626: "pill-too-short-custom", 632: "pill-cancelled", 642: "pill-error-default", 649: "pill-error-limit", 661: "pill-processing-draft", 662: "pill-processing-on-device", 675: "pill-processing-default", 690: "pill-processing-default", 707: "pill-recording-countdown-15", 710: "pill-recording-countdown-15", 758: "pill-recording-cancel-hover", 761: "pill-recording-cancel-hover", 762: "pill-recording-cancel-hover", 782: "pill-processing-draft", 783: "pill-cancelled", 786: "pill-processing-draft", 787: "pill-cancelled", 788: "pill-cancelled",
   865: "pill-agent-disconnected", 867: "pill-agent-disconnected", 869: "pill-agent-disconnected", 882: "pill-agent-disconnected", 884: "pill-selector-closed", 896: "pill-selector-list", 900: "pill-selector-list", 957: "pill-selector-codex-axes", 972: "pill-selector-list", 977: "pill-selector-codex-axes", 983: "pill-selector-list", 985: "pill-selector-list", 989: "pill-selector-empty", 1017: "pill-selector-codex-axes", 1072: "pill-selector-list", 1077: "pill-provider-claude-desktop", 1083: "pill-selector-list", 1087: "pill-selector-list", 1088: "pill-selector-row-unselected-hover", 1098: "pill-mic-iphone", 1113: "pill-mic-mac", 1150: "pill-scratchpad-armed", 1154: "pill-scratchpad-unarmed", 1242: "pill-selector-list", 1263: "pill-payment-failed", 1266: "pill-payment-failed", 1268: "pill-payment-failed", 1282: "pill-payment-failed",
 };
-const PROVIDER_LINKS = { 21: "pill-provider-claude-cli", 37: "pill-provider-claude-cli", 51: "pill-provider-claude-cli", 61: "pill-provider-claude-cli", 62: "pill-provider-codex-cli", 63: "pill-provider-claude-cli", 67: "pill-provider-claude-cli", 68: "pill-provider-claude-cli", 69: "pill-provider-claude-cli", 72: "pill-provider-claude-cli", 79: "pill-provider-claude-cli", 87: "pill-provider-claude-cli", 88: "pill-provider-claude-cli", 89: "pill-provider-claude-cli", 90: "pill-provider-codex-cli" };
+const PROVIDER_LINKS = { 21: "pill-provider-claude-cli", 37: "pill-provider-claude-cli", 51: "pill-provider-claude-cli", 61: "pill-provider-claude-cli", 62: "pill-provider-codex-cli", 63: "pill-provider-claude-cli", 67: "pill-provider-claude-cli", 68: "pill-provider-claude-cli", 69: "pill-provider-claude-cli", 72: "pill-provider-claude-cli", 79: "pill-provider-claude-cli", 87: "pill-provider-codex-cli", 88: "pill-provider-codex-desktop", 89: "pill-provider-claude-desktop", 90: "pill-provider-claude-cli" };
 const WAVEFORM_LINKS = { 77: "pill-recording-waveform-zero", 86: "pill-recording-waveform-zero", 142: "pocket-agent-listening", 144: "pocket-agent-listening", 150: "pocket-agent-listening", 151: "pocket-agent-listening", 152: "pocket-agent-listening", 154: "pocket-agent-listening", 155: "pocket-agent-listening" };
 const EVALUABLE_PILL_LINES = new Set([250, 309, 310, 314, 348, 359, 368, 383, 396, 414, 431, 441, 449, 466, 472, 473, 481, 482, 483, 491, 494, 538, 540, 562, 580, 594, 596, 598, 605, 613, 619, 626, 632, 642, 649, 661, 662, 865, 867, 869, 882, 884, 896, 900, 957, 972, 977, 983, 989, 1017, 1072, 1077, 1083, 1087, 1088, 1098, 1113, 1150, 1154, 1242, 1263, 1266, 1268, 1282]);
 const pocketSlot = { id: "task-42", title: "Deploy checkout", kind: null, ask: "Which environment should I deploy to?", status: "needs-user", demanding: true, backend: "codex-desktop", terminal: false };
@@ -341,8 +341,7 @@ function branchCoverage(item, input) {
       if (item.line === 51 || item.line === 62 || item.line === 63) outcome = provider?.terminal ?? false;
       else if (item.line === 67) outcome = provider?.art === "embedded";
       else if (item.line === 79) outcome = provider?.art !== "embedded";
-    } else if (item.value.includes('"codex"') || item.value.includes('"codex-desktop"')) outcome = provider?.vendor === "codex";
-    else if (item.kind === "switch-default" || item.value === "default") outcome = provider?.vendor === "claude";
+    } else if ([87, 88, 89, 90].includes(item.line)) outcome = providerNameCaseOutcome(provider?.backend, item.line);
   }
   return { predicate, outcome, ancestors };
 }
@@ -353,6 +352,14 @@ export function providerExpectation(input) {
   const backend = selected.id; const vendor = backend === "codex" || backend === "codex-desktop" ? "codex" : "claude";
   const names = { codex: "Codex CLI", "codex-desktop": "Codex desktop", "claude-code-desktop": "Claude desktop" };
   return { backend, vendor, name: names[backend] ?? "Claude Code CLI", terminal: selected.terminal ?? true, art: "embedded" };
+}
+
+export function providerNameCaseOutcome(backend, line) {
+  if (line === 87) return backend === "codex";
+  if (line === 88) return backend === "codex-desktop";
+  if (line === 89) return backend === "claude-code-desktop";
+  if (line === 90) return !["codex", "codex-desktop", "claude-code-desktop"].includes(backend);
+  throw new Error(`Unknown ProviderMarkArt.name branch line: ${line}`);
 }
 
 export function createInventory(raw) {

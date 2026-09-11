@@ -138,3 +138,19 @@ The three findings in `pill-gate-rereview.md` were addressed in a second TDD pas
 RED: `node --test replica-current/tests/manifest.test.mjs` reported 16 passed and 4 failed. The four failures were missing branch-link outcomes/reachability, permissive local state, absent independent control scanning/selector close, and absent provider recomputation.
 
 GREEN: `node --test replica-current/tests/manifest.test.mjs` reports 20 passed and 0 failed. The full repository test command and final generated-artifact check are recorded in the commit handoff.
+
+## ProviderMarkArt exact-case blocker
+
+The remaining blocker from `pill-gate-rereview-2.md` was corrected with an exact encoding of `ProviderMarkArt.name` switch semantics:
+
+- Line 87, `"codex"`, links only to `pill-provider-codex-cli` and evaluates `backend == "codex"`.
+- Line 88, `"codex-desktop"`, links only to `pill-provider-codex-desktop` and evaluates `backend == "codex-desktop"`.
+- Line 89, `"claude-code-desktop"`, links only to `pill-provider-claude-desktop` and evaluates `backend == "claude-code-desktop"`.
+- Line 90, `default`, links only to `pill-provider-claude-cli` and evaluates true only when the backend is none of the three explicit cases.
+
+The evaluator no longer uses provider vendor groups for these branches. Negative assertions prove `codex` and `codex-desktop` cannot satisfy each other's cases and that `claude` cannot satisfy `claude-code-desktop`. A validator mutation changes the Codex CLI fixture backend to `codex-desktop` while also updating its provider expectation, proving the line-87 branch backlink independently rejects the alias.
+
+TDD evidence for this round:
+
+- RED: focused suite reported 20 passed, 1 failed on the incorrect line-87 state backlink.
+- GREEN: focused suite reports 21 passed, 0 failed.
