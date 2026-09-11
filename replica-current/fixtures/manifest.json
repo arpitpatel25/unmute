@@ -201,8 +201,15 @@
         "viewState": {
           "selectorOpen": false,
           "padExpanded": true,
-          "pillHover": true,
-          "cancelHover": true
+          "hover": {
+            "pillRoundButton": {
+              "value": true,
+              "provenance": {
+                "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+                "line": 746
+              }
+            }
+          }
         },
         "scratchpad": {
           "enabled": false,
@@ -1693,9 +1700,7 @@
         },
         "viewState": {
           "selectorOpen": true,
-          "padExpanded": true,
-          "controlState": "hover",
-          "agentRim": false
+          "padExpanded": true
         },
         "scratchpad": {
           "enabled": false,
@@ -1768,7 +1773,15 @@
         "viewState": {
           "selectorOpen": true,
           "padExpanded": true,
-          "selectorRow": "unselected-hover"
+          "hover": {
+            "selectorRow": {
+              "value": true,
+              "provenance": {
+                "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+                "line": 1065
+              }
+            }
+          }
         },
         "scratchpad": {
           "enabled": false,
@@ -2103,9 +2116,7 @@
         },
         "viewState": {
           "selectorOpen": false,
-          "padExpanded": true,
-          "controlState": "disabled",
-          "agentRim": true
+          "padExpanded": true
         },
         "scratchpad": {
           "enabled": false,
@@ -3460,7 +3471,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:491:1",
-          "contribution": "Defines the hidden Pill rendering."
+          "contribution": "Defines the hidden Pill rendering.",
+          "predicate": ".hidden",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:26:1",
@@ -3475,34 +3489,10 @@
           "line": 229
         },
         {
-          "predicate": "micOptions.count > 1",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -3547,15 +3537,34 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:540:1",
-          "contribution": "Defines the recording waveform zero Pill rendering."
+          "contribution": "Defines the recording waveform zero Pill rendering.",
+          "predicate": "else",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:77:1",
-          "contribution": "The source render condition 'envelope <= 0' contributes the visible configuration captured by pill-recording-waveform-zero."
+          "contribution": "The source render condition 'envelope <= 0' contributes the visible configuration captured by pill-recording-waveform-zero.",
+          "predicate": "waveform envelope <= 0",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "waveform",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/Waveform.swift:86:1",
-          "contribution": "The source render condition 'envelope <= 0' contributes the visible configuration captured by pill-recording-waveform-zero."
+          "contribution": "The source render condition 'envelope <= 0' contributes the visible configuration captured by pill-recording-waveform-zero.",
+          "predicate": "waveform envelope <= 0",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "waveform",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -3570,18 +3579,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -3638,7 +3635,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:540:1",
-          "contribution": "Defines the recording waveform 16 Pill rendering."
+          "contribution": "Defines the recording waveform 16 Pill rendering.",
+          "predicate": "else",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:28:1",
@@ -3649,36 +3649,23 @@
           "contribution": "The source enum input PillKind.dictation selects the concrete pill-recording-waveform-16 fixture."
         },
         {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:54:1",
-          "contribution": "The source render condition 'appearance.translucent' contributes the visible configuration captured by pill-recording-waveform-16."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:55:1",
-          "contribution": "The source render condition '#available(macOS 26.0, *)' contributes the visible configuration captured by pill-recording-waveform-16."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:65:1",
-          "contribution": "The source render condition 'else' contributes the visible configuration captured by pill-recording-waveform-16."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:69:1",
-          "contribution": "The source render condition 'let tint' contributes the visible configuration captured by pill-recording-waveform-16."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:73:1",
-          "contribution": "The source render condition 'else' contributes the visible configuration captured by pill-recording-waveform-16."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:102:1",
-          "contribution": "The source render condition 'let tint' contributes the visible configuration captured by pill-recording-waveform-16."
-        },
-        {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:309:1",
-          "contribution": "The source render condition 'chipsVisible' contributes the visible configuration captured by pill-recording-waveform-16."
+          "contribution": "The source render condition 'chipsVisible' contributes the visible configuration captured by pill-recording-waveform-16.",
+          "predicate": "chipsVisible",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:494:1",
-          "contribution": "The source render condition '.recording' contributes the visible configuration captured by pill-recording-waveform-16."
+          "contribution": "The source render condition '.recording' contributes the visible configuration captured by pill-recording-waveform-16.",
+          "predicate": ".recording",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -3693,18 +3680,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -3762,18 +3737,6 @@
         {
           "id": "token:desktop/native-notch/Sources/unmute-notch/PillView.swift:758:1",
           "contribution": "Defines the recording cancel hover Pill rendering."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:758:1",
-          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-recording-cancel-hover."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:761:1",
-          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-recording-cancel-hover."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:762:1",
-          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-recording-cancel-hover."
         }
       ],
       "predicates": [
@@ -3788,18 +3751,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -3856,15 +3807,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:538:1",
-          "contribution": "Switches from waveform to countdown during the final 15 seconds."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:707:1",
-          "contribution": "The source render condition 'near' contributes the visible configuration captured by pill-recording-countdown-15."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:710:1",
-          "contribution": "The source render condition 'near' contributes the visible configuration captured by pill-recording-countdown-15."
+          "contribution": "Switches from waveform to countdown during the final 15 seconds.",
+          "predicate": "s.maxSeconds - s.elapsed <= 15",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -3881,28 +3827,10 @@
           "line": 414
         },
         {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -3947,7 +3875,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:538:1",
-          "contribution": "Switches from waveform to countdown during the final 15 seconds."
+          "contribution": "Switches from waveform to countdown during the final 15 seconds.",
+          "predicate": "s.maxSeconds - s.elapsed <= 15",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -3964,28 +3895,10 @@
           "line": 414
         },
         {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4030,7 +3943,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:481:1",
-          "contribution": "Defines the recording instruction Pill rendering."
+          "contribution": "Defines the recording instruction Pill rendering.",
+          "predicate": ".recording, .processing",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:56:1",
@@ -4038,7 +3954,10 @@
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:482:1",
-          "contribution": "The source render condition 'instruction' contributes the visible configuration captured by pill-recording-instruction."
+          "contribution": "The source render condition 'instruction' contributes the visible configuration captured by pill-recording-instruction.",
+          "predicate": "instruction",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -4053,18 +3972,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -4121,7 +4028,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:396:1",
-          "contribution": "Defines the recording remote warning Pill rendering."
+          "contribution": "Defines the recording remote warning Pill rendering.",
+          "predicate": "chipsVisible && s.kind == .remote",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:57:1",
@@ -4148,22 +4063,10 @@
           "line": 896
         },
         {
-          "predicate": "taskId == nil",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4185,7 +4088,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:562:1",
-          "contribution": "Defines the paused Pill rendering."
+          "contribution": "Defines the paused Pill rendering.",
+          "predicate": ".paused",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:34:1",
@@ -4206,28 +4112,10 @@
           "line": 414
         },
         {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4249,19 +4137,14 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:580:1",
-          "contribution": "Defines the processing default Pill rendering."
+          "contribution": "Defines the processing default Pill rendering.",
+          "predicate": ".processing",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:36:1",
           "contribution": "The source enum input PillPhase.processing selects the concrete pill-processing-default fixture."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:675:1",
-          "contribution": "The source render condition 'dim' contributes the visible configuration captured by pill-processing-default."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:690:1",
-          "contribution": "The source render condition 'phase' contributes the visible configuration captured by pill-processing-default."
         }
       ],
       "predicates": [
@@ -4278,28 +4161,10 @@
           "line": 414
         },
         {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4333,19 +4198,17 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:594:1",
-          "contribution": "Defines the processing draft Pill rendering."
+          "contribution": "Defines the processing draft Pill rendering.",
+          "predicate": "s.draftOffer",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:661:1",
-          "contribution": "The source render condition 's.draftOffer' contributes the visible configuration captured by pill-processing-draft."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:782:1",
-          "contribution": "The source render condition 'prominent' contributes the visible configuration captured by pill-processing-draft."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:786:1",
-          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-processing-draft."
+          "contribution": "The source render condition 's.draftOffer' contributes the visible configuration captured by pill-processing-draft.",
+          "predicate": "s.draftOffer",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -4362,28 +4225,10 @@
           "line": 414
         },
         {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4405,11 +4250,17 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:596:1",
-          "contribution": "Defines the processing on device Pill rendering."
+          "contribution": "Defines the processing on device Pill rendering.",
+          "predicate": "s.engineNotice",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:662:1",
-          "contribution": "The source render condition 's.engineNotice' contributes the visible configuration captured by pill-processing-on-device."
+          "contribution": "The source render condition 's.engineNotice' contributes the visible configuration captured by pill-processing-on-device.",
+          "predicate": "s.engineNotice",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -4426,28 +4277,10 @@
           "line": 414
         },
         {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4469,7 +4302,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:598:1",
-          "contribution": "Defines the processing discard hint Pill rendering."
+          "contribution": "Defines the processing discard hint Pill rendering.",
+          "predicate": "s.showDiscardHint",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -4486,28 +4322,10 @@
           "line": 414
         },
         {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4529,7 +4347,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:605:1",
-          "contribution": "Defines the output Pill rendering."
+          "contribution": "Defines the output Pill rendering.",
+          "predicate": ".output",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:38:1",
@@ -4537,7 +4358,10 @@
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:483:1",
-          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-output."
+          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-output.",
+          "predicate": "default",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -4548,34 +4372,10 @@
           "line": 229
         },
         {
-          "predicate": "micOptions.count > 1",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4597,7 +4397,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:613:1",
-          "contribution": "Defines the output fallback default Pill rendering."
+          "contribution": "Defines the output fallback default Pill rendering.",
+          "predicate": ".outputFallback",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:40:1",
@@ -4605,7 +4408,10 @@
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:473:1",
-          "contribution": "The source render condition '.outputFallback' contributes the visible configuration captured by pill-output-fallback-default."
+          "contribution": "The source render condition '.outputFallback' contributes the visible configuration captured by pill-output-fallback-default.",
+          "predicate": ".outputFallback",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -4616,34 +4422,10 @@
           "line": 229
         },
         {
-          "predicate": "micOptions.count > 1",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4665,7 +4447,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:619:1",
-          "contribution": "Defines the output fallback preview Pill rendering."
+          "contribution": "Defines the output fallback preview Pill rendering.",
+          "predicate": "let p = s.outputPreview, !p.isEmpty",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -4676,34 +4461,10 @@
           "line": 229
         },
         {
-          "predicate": "micOptions.count > 1",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4725,7 +4486,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:626:1",
-          "contribution": "Defines the too short default Pill rendering."
+          "contribution": "Defines the too short default Pill rendering.",
+          "predicate": ".tooShort",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:42:1",
@@ -4740,34 +4504,10 @@
           "line": 229
         },
         {
-          "predicate": "micOptions.count > 1",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4789,7 +4529,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:626:1",
-          "contribution": "Defines the too short custom Pill rendering."
+          "contribution": "Defines the too short custom Pill rendering.",
+          "predicate": ".tooShort",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -4800,34 +4543,10 @@
           "line": 229
         },
         {
-          "predicate": "micOptions.count > 1",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4861,23 +4580,14 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:632:1",
-          "contribution": "Defines the cancelled Pill rendering."
+          "contribution": "Defines the cancelled Pill rendering.",
+          "predicate": ".cancelled",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:44:1",
           "contribution": "The source enum input PillPhase.cancelled selects the concrete pill-cancelled fixture."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:783:1",
-          "contribution": "The source render condition 'prominent' contributes the visible configuration captured by pill-cancelled."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:787:1",
-          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-cancelled."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:788:1",
-          "contribution": "The source render condition 'prominent' contributes the visible configuration captured by pill-cancelled."
         }
       ],
       "predicates": [
@@ -4888,34 +4598,10 @@
           "line": 229
         },
         {
-          "predicate": "micOptions.count > 1",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -4937,7 +4623,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:642:1",
-          "contribution": "Defines the error default Pill rendering."
+          "contribution": "Defines the error default Pill rendering.",
+          "predicate": ".error",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:45:1",
@@ -4945,7 +4634,10 @@
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:472:1",
-          "contribution": "The source render condition '.error' contributes the visible configuration captured by pill-error-default."
+          "contribution": "The source render condition '.error' contributes the visible configuration captured by pill-error-default.",
+          "predicate": ".error",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -4956,34 +4648,10 @@
           "line": 229
         },
         {
-          "predicate": "micOptions.count > 1",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -5005,7 +4673,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:649:1",
-          "contribution": "Defines the error Pill rendering."
+          "contribution": "Defines the error Pill rendering.",
+          "predicate": "!(s.message ?? \"\").contains(\"limit reached\")",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -5016,34 +4687,10 @@
           "line": 229
         },
         {
-          "predicate": "micOptions.count > 1",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -5065,7 +4712,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:649:1",
-          "contribution": "Defines the error limit Pill rendering."
+          "contribution": "Defines the error limit Pill rendering.",
+          "predicate": "!(s.message ?? \"\").contains(\"limit reached\")",
+          "outcome": false,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -5076,34 +4726,10 @@
           "line": 229
         },
         {
-          "predicate": "micOptions.count > 1",
-          "outcome": false,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -5137,7 +4763,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:314:1",
-          "contribution": "Defines the offline not signed in Pill rendering."
+          "contribution": "Defines the offline not signed in Pill rendering.",
+          "predicate": "chipsVisible, let reason = s.offline",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:85:1",
@@ -5156,18 +4790,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -5213,7 +4835,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:314:1",
-          "contribution": "Defines the offline no subscription Pill rendering."
+          "contribution": "Defines the offline no subscription Pill rendering.",
+          "predicate": "chipsVisible, let reason = s.offline",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:86:1",
@@ -5232,18 +4862,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -5300,7 +4918,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1268:1",
-          "contribution": "Defines the payment failed Pill rendering."
+          "contribution": "Defines the payment failed Pill rendering.",
+          "predicate": "reason.isRecoverable",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "offlineCard",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:87:1",
@@ -5308,19 +4934,51 @@
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:314:1",
-          "contribution": "The source render condition 'chipsVisible, let reason = s.offline' contributes the visible configuration captured by pill-payment-failed."
+          "contribution": "The source render condition 'chipsVisible, let reason = s.offline' contributes the visible configuration captured by pill-payment-failed.",
+          "predicate": "chipsVisible, let reason = s.offline",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1263:1",
-          "contribution": "The source render condition 'reason.isRecoverable' contributes the visible configuration captured by pill-payment-failed."
+          "contribution": "The source render condition 'reason.isRecoverable' contributes the visible configuration captured by pill-payment-failed.",
+          "predicate": "reason.isRecoverable",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "offlineCard",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1266:1",
-          "contribution": "The source render condition 'reason.isRecoverable' contributes the visible configuration captured by pill-payment-failed."
+          "contribution": "The source render condition 'reason.isRecoverable' contributes the visible configuration captured by pill-payment-failed.",
+          "predicate": "reason.isRecoverable",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "offlineCard",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1282:1",
-          "contribution": "The source render condition 'reason.isRecoverable' contributes the visible configuration captured by pill-payment-failed."
+          "contribution": "The source render condition 'reason.isRecoverable' contributes the visible configuration captured by pill-payment-failed.",
+          "predicate": "reason.isRecoverable",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "offlineCard",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -5335,18 +4993,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -5392,7 +5038,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:314:1",
-          "contribution": "Defines the offline cloud unreachable Pill rendering."
+          "contribution": "Defines the offline cloud unreachable Pill rendering.",
+          "predicate": "chipsVisible, let reason = s.offline",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:88:1",
@@ -5411,18 +5065,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -5468,7 +5110,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:314:1",
-          "contribution": "Defines the offline on device Pill rendering."
+          "contribution": "Defines the offline on device Pill rendering.",
+          "predicate": "chipsVisible, let reason = s.offline",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "enum:desktop/native-notch/Sources/unmute-notch/PillModel.swift:89:1",
@@ -5487,18 +5137,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -5555,7 +5193,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:441:1",
-          "contribution": "Defines the hint mic Pill rendering."
+          "contribution": "Defines the hint mic Pill rendering.",
+          "predicate": "let m = s.micStatus, !m.isEmpty",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -5570,18 +5216,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -5638,7 +5272,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:441:1",
-          "contribution": "Defines the hint mic precedence Pill rendering."
+          "contribution": "Defines the hint mic precedence Pill rendering.",
+          "predicate": "let m = s.micStatus, !m.isEmpty",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -5653,18 +5295,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -5721,7 +5351,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:449:1",
-          "contribution": "Defines the hint coaching quiet Pill rendering."
+          "contribution": "Defines the hint coaching quiet Pill rendering.",
+          "predicate": "let c = s.coaching",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -5736,18 +5374,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -5804,7 +5430,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:449:1",
-          "contribution": "Defines the hint coaching noisy Pill rendering."
+          "contribution": "Defines the hint coaching noisy Pill rendering.",
+          "predicate": "let c = s.coaching",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -5819,18 +5453,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -5877,11 +5499,22 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:250:1",
-          "contribution": "Defines the selector closed Pill rendering."
+          "contribution": "Defines the selector closed Pill rendering.",
+          "predicate": "selectorShowing",
+          "outcome": false,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:884:1",
-          "contribution": "The source render condition 'let m = state.model' contributes the visible configuration captured by pill-selector-closed."
+          "contribution": "The source render condition 'let m = state.model' contributes the visible configuration captured by pill-selector-closed.",
+          "predicate": "let m = state.model",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "agentModelControl",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -5902,12 +5535,6 @@
           "outcome": true,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -5956,6 +5583,38 @@
               "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
               "line": 1049
             }
+          },
+          {
+            "id": "selector-toggle-close",
+            "event": "click Agent and model",
+            "result": {
+              "type": "viewSelectorClose",
+              "value": false
+            },
+            "provenance": {
+              "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+              "line": 853
+            },
+            "visibility": {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          },
+          {
+            "id": "selector-outside-close",
+            "event": "click outside selector",
+            "result": {
+              "type": "viewSelectorClose",
+              "value": false
+            },
+            "provenance": {
+              "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
+              "line": 253
+            },
+            "visibility": {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
           }
         ]
       },
@@ -5966,39 +5625,108 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:983:1",
-          "contribution": "Defines the selector list Pill rendering."
+          "contribution": "Defines the selector list Pill rendering.",
+          "predicate": ".list",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:250:1",
-          "contribution": "The source render condition 'selectorShowing' contributes the visible configuration captured by pill-selector-list."
+          "contribution": "The source render condition 'selectorShowing' contributes the visible configuration captured by pill-selector-list.",
+          "predicate": "selectorShowing",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:310:1",
-          "contribution": "The source render condition 'selectorShowing' contributes the visible configuration captured by pill-selector-list."
+          "contribution": "The source render condition 'selectorShowing' contributes the visible configuration captured by pill-selector-list.",
+          "predicate": "selectorShowing",
+          "outcome": true,
+          "ancestors": []
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:896:1",
+          "contribution": "The source render condition '!isAgentLane' contributes the visible configuration captured by pill-selector-list.",
+          "predicate": "!isAgentLane",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "agentModelControl",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:900:1",
-          "contribution": "The source render condition 'open' contributes the visible configuration captured by pill-selector-list."
+          "contribution": "The source render condition 'open' contributes the visible configuration captured by pill-selector-list.",
+          "predicate": "open",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "agentModelControl",
+              "outcome": true
+            }
+          ]
         },
         {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:985:1",
-          "contribution": "The source render condition 'let o = options.first(where:' contributes the visible configuration captured by pill-selector-list."
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:972:1",
+          "contribution": "The source render condition 'state.taskId == nil' contributes the visible configuration captured by pill-selector-list.",
+          "predicate": "taskId == nil",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1072:1",
-          "contribution": "The source render condition 'on' contributes the visible configuration captured by pill-selector-list."
+          "contribution": "The source render condition 'on' contributes the visible configuration captured by pill-selector-list.",
+          "predicate": "on",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1083:1",
-          "contribution": "The source render condition 'on' contributes the visible configuration captured by pill-selector-list."
+          "contribution": "The source render condition 'on' contributes the visible configuration captured by pill-selector-list.",
+          "predicate": "on",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1087:1",
-          "contribution": "The source render condition 'on' contributes the visible configuration captured by pill-selector-list."
+          "contribution": "The source render condition 'on' contributes the visible configuration captured by pill-selector-list.",
+          "predicate": "on",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1242:1",
-          "contribution": "The source render condition '!detail.isEmpty' contributes the visible configuration captured by pill-selector-list."
+          "contribution": "The source render condition '!detail.isEmpty' contributes the visible configuration captured by pill-selector-list.",
+          "predicate": "!detail.isEmpty",
+          "outcome": false,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -6075,7 +5803,15 @@
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1088:1",
-          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-selector-row-unselected-hover."
+          "contribution": "The source render condition 'hovering' contributes the visible configuration captured by pill-selector-row-unselected-hover.",
+          "predicate": "hovering",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -6162,19 +5898,51 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:977:1",
-          "contribution": "Defines the selector codex axes Pill rendering."
+          "contribution": "Defines the selector codex axes Pill rendering.",
+          "predicate": ".axes",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:957:1",
-          "contribution": "The source render condition 'axes.isEmpty' contributes the visible configuration captured by pill-selector-codex-axes."
+          "contribution": "The source render condition 'axes.isEmpty' contributes the visible configuration captured by pill-selector-codex-axes.",
+          "predicate": "axes.isEmpty",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:957:2",
-          "contribution": "The source render condition 'options.isEmpty' contributes the visible configuration captured by pill-selector-codex-axes."
+          "contribution": "The source render condition 'options.isEmpty' contributes the visible configuration captured by pill-selector-codex-axes.",
+          "predicate": "options.isEmpty",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1017:1",
-          "contribution": "The source render condition '!vals.isEmpty' contributes the visible configuration captured by pill-selector-codex-axes."
+          "contribution": "The source render condition '!vals.isEmpty' contributes the visible configuration captured by pill-selector-codex-axes.",
+          "predicate": "!vals.isEmpty",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -6247,7 +6015,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:989:1",
-          "contribution": "Defines the selector empty Pill rendering."
+          "contribution": "Defines the selector empty Pill rendering.",
+          "predicate": ".empty",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -6321,7 +6097,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:972:1",
-          "contribution": "Defines the selector task addressed Pill rendering."
+          "contribution": "Defines the selector task addressed Pill rendering.",
+          "predicate": "taskId == nil",
+          "outcome": false,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -6394,19 +6178,51 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:865:1",
-          "contribution": "Defines the agent disconnected Pill rendering."
+          "contribution": "Defines the agent disconnected Pill rendering.",
+          "predicate": "let picked = state.agentOptions?.first(where:",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "agentModelControl",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:867:1",
-          "contribution": "The source render condition 'state.agentConnected' contributes the visible configuration captured by pill-agent-disconnected."
+          "contribution": "The source render condition 'state.agentConnected' contributes the visible configuration captured by pill-agent-disconnected.",
+          "predicate": "state.agentConnected",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "agentModelControl",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:869:1",
-          "contribution": "The source render condition 'state.agentConnected' contributes the visible configuration captured by pill-agent-disconnected."
+          "contribution": "The source render condition 'state.agentConnected' contributes the visible configuration captured by pill-agent-disconnected.",
+          "predicate": "state.agentConnected",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "agentModelControl",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:882:1",
-          "contribution": "The source render condition 'state.agentConnected' contributes the visible configuration captured by pill-agent-disconnected."
+          "contribution": "The source render condition 'state.agentConnected' contributes the visible configuration captured by pill-agent-disconnected.",
+          "predicate": "state.agentConnected",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "agentModelControl",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -6457,7 +6273,7 @@
       "fixture": "fixture-pill-agent-lane-processing",
       "interactions": {
         "kind": "none",
-        "reason": "Agent lane disables selector hit testing while retaining the full-cluster rim."
+        "reason": "Agent lane disables selector hit testing while PillState.isAgentLane derives the full-cluster rim."
       },
       "baseline": {
         "status": "pending",
@@ -6466,19 +6282,22 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:896:1",
-          "contribution": "Defines the agent lane processing Pill rendering."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:169:1",
-          "contribution": "The source render condition 'nil' contributes the visible configuration captured by pill-agent-lane-processing."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:169:2",
-          "contribution": "The source render condition 'nil' contributes the visible configuration captured by pill-agent-lane-processing."
+          "contribution": "Defines the agent lane processing Pill rendering.",
+          "predicate": "!isAgentLane",
+          "outcome": false,
+          "ancestors": [
+            {
+              "predicate": "agentModelControl",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:466:1",
-          "contribution": "The source render condition 's.isAgentLane' contributes the visible configuration captured by pill-agent-lane-processing."
+          "contribution": "The source render condition 's.isAgentLane' contributes the visible configuration captured by pill-agent-lane-processing.",
+          "predicate": "s.isAgentLane",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -6501,22 +6320,10 @@
           "line": 896
         },
         {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -6560,59 +6367,106 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:865:1",
-          "contribution": "Defines the provider claude cli Pill rendering."
+          "contribution": "Defines the provider claude cli Pill rendering.",
+          "predicate": "let picked = state.agentOptions?.first(where:",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "agentModelControl",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:21:1",
-          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "terminal",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:51:1",
-          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "terminal",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:63:1",
-          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "terminal",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:67:1",
-          "contribution": "The source render condition 'let art = ProviderMarkArt.image(backend)' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition 'let art = ProviderMarkArt.image(backend)' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "let art = ProviderMarkArt.image(backend)",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:79:1",
-          "contribution": "The source render condition 'else' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition 'else' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "else",
+          "outcome": false,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:37:1",
-          "contribution": "The source render condition 'let lightest = inks.min(), ink > 0' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition 'let lightest = inks.min(), ink > 0' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "let lightest = inks.min(), ink > 0",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:61:1",
-          "contribution": "The source render condition '\"codex\", \"codex-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition '\"codex\", \"codex-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "\"codex\", \"codex-desktop\"",
+          "outcome": false,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:68:1",
-          "contribution": "The source render condition 'isCodex' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition 'isCodex' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "isCodex",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:69:1",
-          "contribution": "The source render condition '!b64.isEmpty, let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters), let img = NSImage(data: data)' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition '!b64.isEmpty, let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters), let img = NSImage(data: data)' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "!b64.isEmpty, let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters), let img = NSImage(data: data)",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:72:1",
-          "contribution": "The source render condition 'isCodex' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition 'isCodex' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "isCodex",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:87:1",
-          "contribution": "The source render condition '\"codex\"' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition '\"codex\"' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "\"codex\"",
+          "outcome": false,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:88:1",
-          "contribution": "The source render condition '\"codex-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition '\"codex-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "\"codex-desktop\"",
+          "outcome": false,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:89:1",
-          "contribution": "The source render condition '\"claude-code-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli."
+          "contribution": "The source render condition '\"claude-code-desktop\"' contributes the visible configuration captured by pill-provider-claude-cli.",
+          "predicate": "\"claude-code-desktop\"",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -6633,12 +6487,6 @@
           "outcome": true,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -6694,7 +6542,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1077:1",
-          "contribution": "Defines the provider claude desktop Pill rendering."
+          "contribution": "Defines the provider claude desktop Pill rendering.",
+          "predicate": "let b = backend",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -6776,19 +6632,36 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1077:1",
-          "contribution": "Defines the provider codex cli Pill rendering."
+          "contribution": "Defines the provider codex cli Pill rendering.",
+          "predicate": "let b = backend",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMark.swift:62:1",
-          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-codex-cli."
+          "contribution": "The source render condition 'terminal' contributes the visible configuration captured by pill-provider-codex-cli.",
+          "predicate": "terminal",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:62:1",
-          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-provider-codex-cli."
+          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-provider-codex-cli.",
+          "predicate": "default",
+          "outcome": false,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/ProviderMarkArt.swift:90:1",
-          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-provider-codex-cli."
+          "contribution": "The source render condition 'default' contributes the visible configuration captured by pill-provider-codex-cli.",
+          "predicate": "default",
+          "outcome": false,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -6870,7 +6743,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1077:1",
-          "contribution": "Defines the provider codex desktop Pill rendering."
+          "contribution": "Defines the provider codex desktop Pill rendering.",
+          "predicate": "let b = backend",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "selectorShowing",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -6943,23 +6824,51 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:414:1",
-          "contribution": "Defines the mic iphone Pill rendering."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:413:1",
-          "contribution": "The source render condition 'chipsVisible' contributes the visible configuration captured by pill-mic-iphone."
+          "contribution": "Defines the mic iphone Pill rendering.",
+          "predicate": "micOptions.count > 1",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1098:1",
-          "contribution": "The source render condition 'isPhone' contributes the visible configuration captured by pill-mic-iphone."
+          "contribution": "The source render condition 'isPhone' contributes the visible configuration captured by pill-mic-iphone.",
+          "predicate": "isPhone",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "micChip",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1098:2",
-          "contribution": "The source render condition 'isPhone' contributes the visible configuration captured by pill-mic-iphone."
+          "contribution": "The source render condition 'isPhone' contributes the visible configuration captured by pill-mic-iphone.",
+          "predicate": "isPhone",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "micChip",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1098:3",
-          "contribution": "The source render condition 'isPhone' contributes the visible configuration captured by pill-mic-iphone."
+          "contribution": "The source render condition 'isPhone' contributes the visible configuration captured by pill-mic-iphone.",
+          "predicate": "isPhone",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "micChip",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -6974,18 +6883,6 @@
           "outcome": true,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -7032,7 +6929,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1113:1",
-          "contribution": "Defines the mic mac Pill rendering."
+          "contribution": "Defines the mic mac Pill rendering.",
+          "predicate": "isPhone",
+          "outcome": false,
+          "ancestors": [
+            {
+              "predicate": "micChip",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -7047,18 +6952,6 @@
           "outcome": true,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -7115,7 +7008,15 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:414:1",
-          "contribution": "Defines the mic single suppressed Pill rendering."
+          "contribution": "Defines the mic single suppressed Pill rendering.",
+          "predicate": "micOptions.count > 1",
+          "outcome": false,
+          "ancestors": [
+            {
+              "predicate": "chipsVisible",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -7130,18 +7031,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -7188,19 +7077,17 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:431:1",
-          "contribution": "Defines the scratchpad armed Pill rendering."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:359:1",
-          "contribution": "The source render condition 'padShowing, scratch.state.pad != nil' contributes the visible configuration captured by pill-scratchpad-armed."
-        },
-        {
-          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:368:1",
-          "contribution": "The source render condition 'padShowing, let padState = scratch.state.pad' contributes the visible configuration captured by pill-scratchpad-armed."
+          "contribution": "Defines the scratchpad armed Pill rendering.",
+          "predicate": "scratchpad enabled and visible/live",
+          "outcome": true,
+          "ancestors": []
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1150:1",
-          "contribution": "The source render condition 'armed' contributes the visible configuration captured by pill-scratchpad-armed."
+          "contribution": "The source render condition 'armed' contributes the visible configuration captured by pill-scratchpad-armed.",
+          "predicate": "armed",
+          "outcome": true,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -7217,28 +7104,10 @@
           "line": 414
         },
         {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": true,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },
@@ -7273,7 +7142,10 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:1154:1",
-          "contribution": "Defines the scratchpad unarmed Pill rendering."
+          "contribution": "Defines the scratchpad unarmed Pill rendering.",
+          "predicate": "armed",
+          "outcome": false,
+          "ancestors": []
         }
       ],
       "predicates": [
@@ -7288,18 +7160,6 @@
           "outcome": false,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 414
-        },
-        {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
         },
         {
           "predicate": "scratchpad enabled and visible/live",
@@ -7369,11 +7229,46 @@
       "audit": [
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:348:1",
-          "contribution": "Defines the scratchpad expanded Pill rendering."
+          "contribution": "Defines the scratchpad expanded Pill rendering.",
+          "predicate": "padExpanded",
+          "outcome": true,
+          "ancestors": []
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:359:1",
+          "contribution": "The source render condition 'padShowing, scratch.state.pad != nil' contributes the visible configuration captured by pill-scratchpad-expanded.",
+          "predicate": "padShowing, scratch.state.pad != nil",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "pad",
+              "outcome": true
+            }
+          ]
+        },
+        {
+          "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:368:1",
+          "contribution": "The source render condition 'padShowing, let padState = scratch.state.pad' contributes the visible configuration captured by pill-scratchpad-expanded.",
+          "predicate": "padShowing, let padState = scratch.state.pad",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "pad",
+              "outcome": true
+            }
+          ]
         },
         {
           "id": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:383:1",
-          "contribution": "The source render condition 'offlineShowing' contributes the visible configuration captured by pill-scratchpad-expanded."
+          "contribution": "The source render condition 'offlineShowing' contributes the visible configuration captured by pill-scratchpad-expanded.",
+          "predicate": "offlineShowing",
+          "outcome": true,
+          "ancestors": [
+            {
+              "predicate": "pad",
+              "outcome": true
+            }
+          ]
         }
       ],
       "predicates": [
@@ -7390,28 +7285,10 @@
           "line": 414
         },
         {
-          "predicate": "!isAgentLane",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 896
-        },
-        {
-          "predicate": "taskId == nil",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
-          "line": 972
-        },
-        {
           "predicate": "scratchpad enabled and visible/live",
           "outcome": true,
           "source": "desktop/native-notch/Sources/unmute-notch/PillView.swift",
           "line": 431
-        },
-        {
-          "predicate": "waveform envelope <= 0",
-          "outcome": true,
-          "source": "desktop/native-notch/Sources/unmute-notch/Waveform.swift",
-          "line": 77
         }
       ]
     },

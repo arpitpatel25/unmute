@@ -101,7 +101,9 @@ test("Pill fixtures pin exact branch values, menus, controls, and transitions", 
   assert.equal(input("pill-selector-codex-axes").viewState.selectorOpen, true);
   assert.deepEqual(input("pill-selector-codex-axes").state.modelAxes.map((axis) => axis.axis), ["Model", "Effort"]);
   assert.equal(input("pill-selector-task-addressed").state.taskId, "task-42");
-  assert.equal(input("pill-agent-lane-processing").viewState.agentRim, true);
+  assert.equal(input("pill-agent-lane-processing").state.kind, "remote");
+  assert.deepEqual(input("pill-agent-lane-processing").state.agentOptions, []);
+  assert.deepEqual(input("pill-agent-lane-processing").state.modelOptions, []);
   assert.equal(input("pill-mic-iphone").state.mic, "iphone");
   assert.equal(input("pill-scratchpad-armed").scratchpad.armed, true);
   const allResults = manifest.entries.filter(({ family }) => family === "pill").flatMap(({ interactions }) => interactions.controls?.map((c) => c.result.type) ?? []);
@@ -170,12 +172,66 @@ test("Pill owns zero and nonzero Waveform states but no AimedChip branches", asy
   assert.equal(pill.some((entry) => entry.audit.some(({ id }) => id.includes("Waveform.swift:14"))), false);
 });
 
-test("every Pill-owned render conditional has a manual Pill backlink", async () => {
-  const { evidence } = await loadInventory();
+test("each Pill render backlink carries a reachable verified branch outcome", async () => {
+  const { manifest, evidence, validateManifest } = await loadInventory();
+  assert.deepEqual(validateManifest(manifest, evidence), []);
+  for (const entry of manifest.entries.filter(({ family }) => family === "pill")) {
+    for (const link of entry.audit.filter(({ id }) => id.startsWith("branch:"))) {
+      assert.equal(typeof link.outcome, "boolean", `${entry.id} ${link.id}`);
+      assert.ok(Array.isArray(link.ancestors), `${entry.id} ${link.id}`);
+      assert.ok(link.ancestors.every(({ predicate, outcome }) => predicate && outcome === true));
+    }
+  }
+});
+
+test("Pill local view state is allowlisted and source-provenanced", async () => {
+  const { manifest } = await loadInventory();
+  for (const entry of manifest.entries.filter(({ family }) => family === "pill")) {
+    const viewState = manifest.fixtures[entry.fixture].input.viewState;
+    assert.deepEqual(Object.keys(viewState).sort(), ["padExpanded", "selectorOpen", ...(viewState.hover ? ["hover"] : [])].sort());
+    for (const hover of Object.values(viewState.hover ?? {})) {
+      assert.equal(typeof hover.value, "boolean");
+      assert.equal(hover.provenance.source.endsWith("PillView.swift"), true);
+      assert.equal(Number.isInteger(hover.provenance.line), true);
+    }
+    assert.equal("agentRim" in viewState, false);
+    assert.equal("controlState" in viewState, false);
+    assert.equal("pillHover" in viewState, false);
+  }
+});
+
+test("control provenance is independently extracted and selector dismissal is complete", async () => {
+  const { manifest, controlEmitSites } = await loadInventory();
+  const sites = await controlEmitSites();
+  const controls = manifest.entries.filter(({ family }) => family === "pill").flatMap(({ interactions }) => interactions.controls ?? []);
+  for (const control of controls) assert.ok(sites.some((site) => site.type === control.result.type && site.line === control.provenance.line), `${control.result.type}:${control.provenance.line}`);
+  const close = controls.filter(({ result }) => result.type === "viewSelectorClose");
+  assert.deepEqual(new Set(close.map(({ provenance }) => provenance.line)), new Set([253, 853]));
+  assert.ok(close.every(({ visibility }) => visibility?.predicate === "selectorShowing" && visibility.outcome === true));
+});
+
+test("provider expectations are independently derived from fixture backend and terminal", async () => {
+  const { manifest, validateManifest, evidence } = await loadInventory();
+  assert.deepEqual(validateManifest(manifest, evidence), []);
+  const candidate = structuredClone(manifest);
+  const provider = candidate.entries.find((entry) => entry.expectations?.providerMark);
+  provider.expectations.providerMark.name = "Wrong provider";
+  assert.match(validateManifest(candidate, evidence).join("\n"), /provider expectation mismatch/i);
+});
+
+test("every retained Pill render backlink has semantic outcome evidence", async () => {
+  const { manifest, evidence } = await loadInventory();
   const renderSources = /\/(?:PillView|Waveform|ProviderMark|ProviderMarkArt)\.swift$/;
   for (const item of evidence.branches.filter(({ source, line }) => renderSources.test(source) && !(source.endsWith("/Waveform.swift") && line >= 142))) {
     const classification = evidence.classifications.find(({ occurrenceId }) => occurrenceId === item.id);
-    assert.ok(classification.stateIds.some((id) => id.startsWith("pill-")), `uncovered Pill render branch ${item.source}:${item.line} ${item.value}`);
+    if (classification.stateIds.some((id) => id.startsWith("pill-"))) {
+      for (const stateId of classification.stateIds.filter((id) => id.startsWith("pill-"))) {
+        const link = manifest.entries.find(({ id }) => id === stateId).audit.find(({ id }) => id === item.id);
+        assert.equal(typeof link.outcome, "boolean");
+        assert.ok(Array.isArray(link.ancestors));
+      }
+    }
+    else assert.equal(classification.kind, "render-input");
   }
 });
 
@@ -318,6 +374,9 @@ test("validation independently rejects broken schema and coverage relationships"
     ["malformed Pill coaching", (m) => { const e = m.entries.find(({ id }) => id === "pill-hint-coaching-quiet"); m.fixtures[e.fixture].input.state.coaching = { kind: "quiet", remedy: "Speak louder" }; }, /coaching schema/i],
     ["false Pill predicate outcome", (m) => { const e = m.entries.find(({ family }) => family === "pill"); e.predicates[0].outcome = !e.predicates[0].outcome; }, /predicate outcome mismatch/i],
     ["invented Pill control provenance", (m) => { const e = m.entries.find(({ id }) => id === "pill-cancelled"); e.interactions.controls[0].provenance.line = 999; }, /control provenance/i],
+    ["invented Pill local state", (m) => { const e = m.entries.find(({ family }) => family === "pill"); m.fixtures[e.fixture].input.viewState.controlState = "pressed"; }, /local view state/i],
+    ["false linked branch outcome", (m) => { const e = m.entries.find(({ family, audit }) => family === "pill" && audit.some(({ id }) => id.startsWith("branch:"))); const link = e.audit.find(({ id }) => id.startsWith("branch:")); link.outcome = !link.outcome; }, /branch outcome/i],
+    ["provider fixture mismatch", (m) => { const e = m.entries.find(({ id }) => id === "pill-provider-codex-cli"); m.fixtures[e.fixture].input.state.agentOptions[0].terminal = false; }, /provider expectation mismatch/i],
   ];
 
   for (const [name, mutate, expected] of cases) {

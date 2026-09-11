@@ -25,7 +25,7 @@ The source repository remained read-only. The audit still records current produc
 - Coaching now uses exactly `condition`, `remedy`, and `level`.
 - Codex axes now use exactly `axis`, `values`, and `current`.
 - Microphone choices are complete `PillOption` objects rather than strings.
-- SwiftUI-owned `selectorOpen`, `padExpanded`, hover, rim, and control presentation values live under `viewState`, separate from `PillState`.
+- SwiftUI-owned `selectorOpen`, `padExpanded`, and source-provenanced component hover values live under `viewState`, separate from `PillState`.
 - Removed model-like `openMenu` and `presentation` fixture fields.
 - Scratchpad payloads now use source fields and derive visibility from non-empty pad content.
 - Provider rendering expectations are entry metadata, not renderer input.
@@ -104,3 +104,37 @@ Additional verification:
 ## Concerns
 
 The waveform fixture uses pushed `PillState.level` as the deterministic fixture value corresponding to the private `Waveform.envelope` outcome. Native capture in Task 2 must allow SwiftUI's `onChange`/envelope update to settle before capturing the nonzero specimen; the zero specimen is the initial resting state and requires no settling.
+
+## Pill fix rereview round
+
+The three findings in `pill-gate-rereview.md` were addressed in a second TDD pass.
+
+### Reachability-bound branch evidence
+
+- Every retained Pill render-branch backlink now stores the evaluated predicate, Boolean outcome, and all required ancestor-view predicates.
+- Validation recomputes the branch outcome and ancestor chain from the linked fixture and rejects mismatches or an unreachable ancestor.
+- Child predicates are recorded only when their containing view is reachable: mic predicates require live chips, Agent predicates require `AgentModelControl`, task-addressing predicates require the selector, and waveform predicates require the recording waveform rather than countdown.
+- Contradictory mappings were corrected: mic count links to a multi-mic fixture, `!isAgentLane` links to a non-Agent-lane fixture, and `taskId == nil` links to the unaddressed open selector.
+- Legacy cosmetic/environment backlinks that cannot be evaluated from a Pill fixture are no longer claimed as fixture branch coverage; they remain explicitly classified render inputs.
+
+### Strict local state
+
+- `viewState` is allowlisted to `selectorOpen`, `padExpanded`, and optional source-backed `hover` records.
+- Hover records carry the actual `@State` declaration location and Boolean value.
+- Removed invented `controlState` and `pillHover` inputs.
+- Removed `agentRim` from local state; it is derived only from the exact `PillState.isAgentLane` inputs (`kind`, `agentOptions`, and `modelOptions`).
+- Mutation coverage rejects any unknown local-state key.
+
+### Independent controls and providers
+
+- A separate source scanner extracts `model.emit`, `scratch.emit`, selector toggle, and outside-click selector-close sites directly from pinned `PillView.swift`.
+- Manifest control provenance is validated against those extracted sites rather than against the table that constructs controls.
+- Selector dismissal now includes toggle-close at line 853 and outside-click close at line 253. Both require a true `selectorShowing` visibility predicate.
+- Provider expectations are independently recomputed from the fixture's selected `PillOption`: backend-to-vendor mapping, backend-to-accessible-name mapping, terminal capability, and embedded-art outcome.
+- Mutation tests reject expectation text drift and fixture terminal/backend drift.
+
+### Second TDD evidence
+
+RED: `node --test replica-current/tests/manifest.test.mjs` reported 16 passed and 4 failed. The four failures were missing branch-link outcomes/reachability, permissive local state, absent independent control scanning/selector close, and absent provider recomputation.
+
+GREEN: `node --test replica-current/tests/manifest.test.mjs` reports 20 passed and 0 failed. The full repository test command and final generated-artifact check are recorded in the commit handoff.

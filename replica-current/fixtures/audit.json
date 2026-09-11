@@ -29572,6 +29572,84 @@
       "value": "Color.clear"
     }
   ],
+  "pillControlEmitSites": [
+    {
+      "type": "viewSelectorClose",
+      "line": 202
+    },
+    {
+      "type": "viewSelectorClose",
+      "line": 253
+    },
+    {
+      "type": "pillOpenBillingPortal",
+      "line": 316
+    },
+    {
+      "type": "pillDismissOffline",
+      "line": 317
+    },
+    {
+      "type": "viewSelectorClose",
+      "line": 335
+    },
+    {
+      "type": "scratchpadRemove",
+      "line": 375
+    },
+    {
+      "type": "scratchpadDeliver",
+      "line": 376
+    },
+    {
+      "type": "scratchpadDiscard",
+      "line": 377
+    },
+    {
+      "type": "pillPickMic",
+      "line": 415
+    },
+    {
+      "type": "scratchpadArm",
+      "line": 433
+    },
+    {
+      "type": "pillCancel",
+      "line": 537
+    },
+    {
+      "type": "pillStop",
+      "line": 553
+    },
+    {
+      "type": "pillAcceptDraft",
+      "line": 595
+    },
+    {
+      "type": "pillUndo",
+      "line": 637
+    },
+    {
+      "type": "viewSelectorOpen",
+      "line": 853
+    },
+    {
+      "type": "viewSelectorClose",
+      "line": 853
+    },
+    {
+      "type": "pillPickAxis",
+      "line": 980
+    },
+    {
+      "type": "pillPickModel",
+      "line": 986
+    },
+    {
+      "type": "pillPickAgent",
+      "line": 1049
+    }
+  ],
   "classifications": [
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/ComposerSupport/ComposerAvailability.swift:36:1",
@@ -39591,67 +39669,51 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:54:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-waveform-16"
-      ],
-      "reason": "pill-recording-waveform-16: The source render condition 'appearance.translucent' contributes the visible configuration captured by pill-recording-waveform-16."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional if 'appearance.translucent' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:54 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:55:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-waveform-16"
-      ],
-      "reason": "pill-recording-waveform-16: The source render condition '#available(macOS 26.0, *)' contributes the visible configuration captured by pill-recording-waveform-16."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional if '#available(macOS 26.0, *)' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:55 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:65:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-waveform-16"
-      ],
-      "reason": "pill-recording-waveform-16: The source render condition 'else' contributes the visible configuration captured by pill-recording-waveform-16."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional else 'else' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:65 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:69:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-waveform-16"
-      ],
-      "reason": "pill-recording-waveform-16: The source render condition 'let tint' contributes the visible configuration captured by pill-recording-waveform-16."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional if 'let tint' in tint at desktop/native-notch/Sources/unmute-notch/PillView.swift:69 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:73:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-waveform-16"
-      ],
-      "reason": "pill-recording-waveform-16: The source render condition 'else' contributes the visible configuration captured by pill-recording-waveform-16."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional else 'else' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:73 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:102:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-waveform-16"
-      ],
-      "reason": "pill-recording-waveform-16: The source render condition 'let tint' contributes the visible configuration captured by pill-recording-waveform-16."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional if 'let tint' in tint at desktop/native-notch/Sources/unmute-notch/PillView.swift:102 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:169:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-agent-lane-processing"
-      ],
-      "reason": "pill-agent-lane-processing: The source render condition 'nil' contributes the visible configuration captured by pill-agent-lane-processing."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'nil' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:169 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:169:2",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-agent-lane-processing"
-      ],
-      "reason": "pill-agent-lane-processing: The source render condition 'nil' contributes the visible configuration captured by pill-agent-lane-processing."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'nil' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:169 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:250:1",
@@ -39702,17 +39764,17 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:359:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-scratchpad-armed"
+        "pill-scratchpad-expanded"
       ],
-      "reason": "pill-scratchpad-armed: The source render condition 'padShowing, scratch.state.pad != nil' contributes the visible configuration captured by pill-scratchpad-armed."
+      "reason": "pill-scratchpad-expanded: The source render condition 'padShowing, scratch.state.pad != nil' contributes the visible configuration captured by pill-scratchpad-expanded."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:368:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-scratchpad-armed"
+        "pill-scratchpad-expanded"
       ],
-      "reason": "pill-scratchpad-armed: The source render condition 'padShowing, let padState = scratch.state.pad' contributes the visible configuration captured by pill-scratchpad-armed."
+      "reason": "pill-scratchpad-expanded: The source render condition 'padShowing, let padState = scratch.state.pad' contributes the visible configuration captured by pill-scratchpad-expanded."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:383:1",
@@ -39732,11 +39794,9 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:413:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-mic-iphone"
-      ],
-      "reason": "pill-mic-iphone: The source render condition 'chipsVisible' contributes the visible configuration captured by pill-mic-iphone."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional if 'chipsVisible' in cluster at desktop/native-notch/Sources/unmute-notch/PillView.swift:413 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:414:1",
@@ -39971,99 +40031,75 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:675:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-processing-default"
-      ],
-      "reason": "pill-processing-default: The source render condition 'dim' contributes the visible configuration captured by pill-processing-default."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'dim' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:675 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:690:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-processing-default"
-      ],
-      "reason": "pill-processing-default: The source render condition 'phase' contributes the visible configuration captured by pill-processing-default."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'phase' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:690 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:707:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-countdown-15"
-      ],
-      "reason": "pill-recording-countdown-15: The source render condition 'near' contributes the visible configuration captured by pill-recording-countdown-15."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'near' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:707 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:710:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-countdown-15"
-      ],
-      "reason": "pill-recording-countdown-15: The source render condition 'near' contributes the visible configuration captured by pill-recording-countdown-15."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'near' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:710 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:758:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-cancel-hover"
-      ],
-      "reason": "pill-recording-cancel-hover: The source render condition 'hovering' contributes the visible configuration captured by pill-recording-cancel-hover."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'hovering' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:758 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:761:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-cancel-hover"
-      ],
-      "reason": "pill-recording-cancel-hover: The source render condition 'hovering' contributes the visible configuration captured by pill-recording-cancel-hover."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'hovering' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:761 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:762:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-recording-cancel-hover"
-      ],
-      "reason": "pill-recording-cancel-hover: The source render condition 'hovering' contributes the visible configuration captured by pill-recording-cancel-hover."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'hovering' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:762 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:782:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-processing-draft"
-      ],
-      "reason": "pill-processing-draft: The source render condition 'prominent' contributes the visible configuration captured by pill-processing-draft."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'prominent' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:782 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:783:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-cancelled"
-      ],
-      "reason": "pill-cancelled: The source render condition 'prominent' contributes the visible configuration captured by pill-cancelled."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'prominent' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:783 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:786:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-processing-draft"
-      ],
-      "reason": "pill-processing-draft: The source render condition 'hovering' contributes the visible configuration captured by pill-processing-draft."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'hovering' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:786 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:787:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-cancelled"
-      ],
-      "reason": "pill-cancelled: The source render condition 'hovering' contributes the visible configuration captured by pill-cancelled."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'hovering' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:787 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:788:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-cancelled"
-      ],
-      "reason": "pill-cancelled: The source render condition 'prominent' contributes the visible configuration captured by pill-cancelled."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional ternary 'prominent' in body at desktop/native-notch/Sources/unmute-notch/PillView.swift:788 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:865:1",
@@ -40110,9 +40146,10 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:896:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-agent-lane-processing"
+        "pill-agent-lane-processing",
+        "pill-selector-list"
       ],
-      "reason": "pill-agent-lane-processing: Defines the agent lane processing Pill rendering."
+      "reason": "pill-agent-lane-processing: Defines the agent lane processing Pill rendering. pill-selector-list: The source render condition '!isAgentLane' contributes the visible configuration captured by pill-selector-list."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:900:1",
@@ -40142,9 +40179,10 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:972:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pill-selector-task-addressed"
+        "pill-selector-task-addressed",
+        "pill-selector-list"
       ],
-      "reason": "pill-selector-task-addressed: Defines the selector task addressed Pill rendering."
+      "reason": "pill-selector-task-addressed: Defines the selector task addressed Pill rendering. pill-selector-list: The source render condition 'state.taskId == nil' contributes the visible configuration captured by pill-selector-list."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:977:1",
@@ -40164,11 +40202,9 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:985:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pill-selector-list"
-      ],
-      "reason": "pill-selector-list: The source render condition 'let o = options.first(where:' contributes the visible configuration captured by pill-selector-list."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional if 'let o = options.first(where:' in o at desktop/native-notch/Sources/unmute-notch/PillView.swift:985 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PillView.swift:989:1",
