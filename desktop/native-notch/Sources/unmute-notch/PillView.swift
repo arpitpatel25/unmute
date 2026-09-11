@@ -404,16 +404,16 @@ struct PillView: View {
                 // tightens the INNER sides — 15/12 and 12/14 — which is why it
                 // reads evenly. And there are no icons on either half: the dot
                 // is the connection indicator, the chevron belongs to the model.
-                AgentModelControl(state: s, model: model, open: $selectorOpen, rim: agentRim)
+                AgentModelControl(state: s, model: model, open: $selectorOpen, rim: captureRim, tint: captureTint)
             }
 
             pill
-                .pillGlass(Capsule(), tint: pillTint, rim: agentRim)
+                .pillGlass(Capsule(), tint: pillTint, rim: captureRim)
 
             if chipsVisible {
                 if let opts = s.micOptions, opts.count > 1 {
                     MicChip(current: s.mic, options: opts) { model.emit(.pickMic($0)) }
-                        .pillGlass(Capsule(), rim: agentRim)
+                        .pillGlass(Capsule(), tint: captureTint, rim: captureRim)
                 }
             }
             // THE SCRATCHPAD CONTROL. It ARMS AND DISARMS ONLY — it never
@@ -432,7 +432,7 @@ struct PillView: View {
                 ScratchpadChip(armed: scratch.state.armed) {
                     scratch.emit(.scratchpadArm(!scratch.state.armed))
                 }
-                .pillGlass(Capsule(), rim: agentRim)
+                .pillGlass(Capsule(), tint: captureTint, rim: captureRim)
             }
         }
     }
@@ -464,6 +464,15 @@ struct PillView: View {
     /// appeared only while recording would read as a status light.
     private var agentRim: AnyShapeStyle? {
         s.isAgentLane ? AnyShapeStyle(Theme.agentRim) : nil
+    }
+
+    private var captureTint: Color? {
+        model.captureFlash ? Theme.cReady : nil
+    }
+
+    private var captureRim: AnyShapeStyle? {
+        if model.captureFlash { return AnyShapeStyle(Theme.cReady) }
+        return agentRim
     }
 
     /// Only the two states that are telling you something wrong carry a wash.
@@ -849,6 +858,7 @@ private struct AgentModelControl: View {
     /// Passed in rather than derived here: the whole cluster has to agree on
     /// the lane, and `PillState.isAgentLane` is the one place that decides it.
     var rim: AnyShapeStyle? = nil
+    var tint: Color? = nil
 
     var body: some View {
         Button(action: { open.toggle() }) {
@@ -910,7 +920,7 @@ private struct AgentModelControl: View {
         // The Agent has one provider, set once in Settings. Nothing here is a
         // control, so it does not accept a tap at all.
         .allowsHitTesting(!isAgentLane)
-        .pillGlass(Capsule(), rim: rim)
+        .pillGlass(Capsule(), tint: tint, rim: rim)
         .animation(Theme.hover, value: open)
     }
 

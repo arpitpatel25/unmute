@@ -232,7 +232,9 @@ async function captureGestureScreenshot(kind: 'fullscreen' | 'region'): Promise<
 }
 
 function playScreenshotFeedback(): void {
-  execFile('/usr/bin/afplay', ['/System/Library/Sounds/Tink.aiff', '-v', '0.65'], { timeout: 3000 }, () => {})
+  execFile('/usr/bin/afplay', ['-v', '0.65', '/System/Library/Sounds/Tink.aiff'], { timeout: 3000 }, (error) => {
+    if (error) log.warn('screenshot feedback sound failed', { error: error.message })
+  })
   pillController?.push({ captureFlashToken: Date.now() })
 }
 import { CaptureHistoryStore, clipboardPayload, type CaptureHistoryKind } from './capture/history-store'
