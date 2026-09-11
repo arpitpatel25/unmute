@@ -22,6 +22,8 @@
 //                                //        | 'right-command-down' | 'right-command-up'
 //                                //        | 'right-command-chord'
 //                                //        | 'left-control-down' | 'left-control-up'
+//                                //        | 'left-command-down' | 'left-command-up'
+//                                //        | 'left-command-chord-spoil'
 //                                //        | 'notes-chord-spoil'
 //   fn.stop()
 
@@ -72,6 +74,10 @@ static bool g_optionChorded = false;
  *  is holding this key" is a weak signal on its own; "holding it and pressing
  *  nothing else" is the signal the trigger actually needs. */
 static bool g_leftControlDown = false;
+// Left Command is reserved for the screenshot gesture only when pressed by
+// itself. Any key/modifier joining it spoils the gesture, preserving every
+// normal macOS Command shortcut.
+static bool g_leftCommandDown = false;
 static Napi::ThreadSafeFunction g_tsfn;
 static bool g_started = false;
 
@@ -121,6 +127,7 @@ static void handle_flags_changed(NSEvent* event) {
   const NSEventModifierFlags kRightOption  = 0x00000040;  // NX_DEVICERALTKEYMASK
   const NSEventModifierFlags kLeftControl  = 0x00000001;  // NX_DEVICELCTLKEYMASK
   const NSEventModifierFlags kRightControl = 0x00002000;  // NX_DEVICERCTLKEYMASK
+  const NSEventModifierFlags kLeftCommand = 0x00000008;   // NX_DEVICELCMDKEYMASK
 
   // Right Option specifically (keyCode 61). This matches the OSS
   // globe-listener behavior.
@@ -171,6 +178,19 @@ static void handle_flags_changed(NSEvent* event) {
     if (!hadSpoiler && hasSpoiler) emit_event("notes-chord-spoil");
   }
   g_leftControlDown = leftControlDown;
+
+  // Left Command is intentionally separate from the Agent's right Command.
+  // It is a gesture key only while held alone; keyboard shortcuts always win.
+  {
+    bool hadLeft = (g_previousRawFlags & kLeftCommand) != 0;
+    bool hasLeft = (event.modifierFlags & kLeftCommand) != 0;
+    if (!hadLeft && hasLeft) emit_event("left-command-down");
+    if (hadLeft && !hasLeft) emit_event("left-command-up");
+    const NSEventModifierFlags kOther = NSEventModifierFlagShift | NSEventModifierFlagControl |
+      NSEventModifierFlagOption | NSEventModifierFlagFunction | kRightControl | 0x10;
+    if (hasLeft && (event.modifierFlags & kOther) != 0) emit_event("left-command-chord-spoil");
+    g_leftCommandDown = hasLeft;
+  }
 
   // Right Command specifically (keyCode 54) — the Unmute Agent key. Left
   // Command (55) is ignored because it is where every system shortcut
@@ -272,6 +292,9 @@ static void handle_key_down(NSEvent* event) {
   if (g_leftControlDown) {
     emit_event("notes-chord-spoil");
   }
+  if (g_leftCommandDown) {
+    emit_event("left-command-chord-spoil");
+  }
 }
 
 // ─── start(callback) — install global + local NSEvent monitors ─────
@@ -304,6 +327,7 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
   g_previousRawFlags = 0;
   g_rightCommandDown = false;
   g_leftControlDown = false;
+  g_leftCommandDown = false;
 
   // Global monitor — fires for events from OTHER apps (when our app
   // isn't focused). Standard Cocoa pattern.

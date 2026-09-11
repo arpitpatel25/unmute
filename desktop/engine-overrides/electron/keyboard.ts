@@ -64,6 +64,8 @@ export type KeyboardEvent =
   // this is a chord and has withheld the Remote key's own down/up, so this
   // arrives as one event with no lifecycle to pair it with.
   | { type: 'pocket-chord' }
+  | { type: 'screenshot-fullscreen' }
+  | { type: 'screenshot-region' }
 
 export type DictationKey = 'fn' | 'right-option'
 export type ActivationMode = 'tap-toggle' | 'push-to-talk' | 'double-tap-push'
@@ -87,6 +89,9 @@ type NotesChordKeyEvent =
   /** Some OTHER key (or modifier) arrived while left-Control was held — see
    *  the notes-chord-spoil block in listener.mm. */
   | 'notes-chord-spoil'
+  | 'left-command-down'
+  | 'left-command-up'
+  | 'left-command-chord-spoil'
 
 // Module-level, not per-instance: every KeyboardManager in a test file gets
 // its own instance, but they should all still log to the same run's file
@@ -182,6 +187,12 @@ export class KeyboardManager extends EventEmitter {
   /** When the first tap of a pending start-pair landed. 0 = none. */
   private lastNotesTapAt = 0
   private lastNotesToggleTime = 0
+  private leftCommandHeldAt = 0
+  private leftCommandSpoiled = false
+  private leftCommandTapAt = 0
+  private leftCommandHoldTimer: NodeJS.Timeout | null = null
+  private readonly SCREENSHOT_HOLD_MS = 600
+  private readonly SCREENSHOT_DOUBLE_TAP_MS = 400
 
   start(): void {
     keyListener.on('key', (event: KeyEvent) => this.handleKey(event))
@@ -197,6 +208,7 @@ export class KeyboardManager extends EventEmitter {
     this.clearChainTimer()
     this.clearDualTimers()
     keyListener.stop()
+    this.clearScreenshotGesture()
   }
 
   /**
@@ -422,9 +434,49 @@ export class KeyboardManager extends EventEmitter {
       case 'notes-chord-spoil':
         this.feedNotesGesture('other')
         break
+      case 'left-command-down':
+        this.leftCommandHeldAt = Date.now()
+        this.leftCommandSpoiled = false
+        if (this.leftCommandHoldTimer) clearTimeout(this.leftCommandHoldTimer)
+        this.leftCommandHoldTimer = setTimeout(() => {
+          this.leftCommandHoldTimer = null
+          if (this.leftCommandHeldAt && !this.leftCommandSpoiled) {
+            this.leftCommandSpoiled = true
+            this.emit('keyboard', { type: 'screenshot-region' } as KeyboardEvent)
+          }
+        }, this.SCREENSHOT_HOLD_MS)
+        break
+      case 'left-command-chord-spoil':
+        this.leftCommandSpoiled = true
+        break
+      case 'left-command-up': {
+        const heldAt = this.leftCommandHeldAt
+        this.leftCommandHeldAt = 0
+        if (this.leftCommandHoldTimer) { clearTimeout(this.leftCommandHoldTimer); this.leftCommandHoldTimer = null }
+        if (!heldAt || this.leftCommandSpoiled) break
+        const now = Date.now()
+        if (this.leftCommandTapAt && now - this.leftCommandTapAt <= this.SCREENSHOT_DOUBLE_TAP_MS) {
+          this.leftCommandTapAt = 0
+          this.emit('keyboard', { type: 'screenshot-fullscreen' } as KeyboardEvent)
+        } else {
+          this.leftCommandTapAt = now
+          setTimeout(() => {
+            if (this.leftCommandTapAt === now) this.leftCommandTapAt = 0
+          }, this.SCREENSHOT_DOUBLE_TAP_MS)
+        }
+        break
+      }
     }
     // AFTER the handlers have run: exactly what the NEXT key will see.
     this.emitKeyState(event)
+  }
+
+  private clearScreenshotGesture(): void {
+    if (this.leftCommandHoldTimer) clearTimeout(this.leftCommandHoldTimer)
+    this.leftCommandHoldTimer = null
+    this.leftCommandHeldAt = 0
+    this.leftCommandTapAt = 0
+    this.leftCommandSpoiled = false
   }
 
   // ─── Unmute Remote (task creation) key dispatchers (ADDITIVE, PRD §2.4.4 / §5) ───

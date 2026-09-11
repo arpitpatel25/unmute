@@ -187,6 +187,7 @@ import { destinationAtSubmit } from './capture/captureLane'
 import {
   adoptPersistedPad, armScratchpad, beginOwnClipboardSequence, claimShared, deliveryInFlight, discard as discardPad,
   copyHistoryToClipboard, gateDelivery, heldForSurface, initWatchers, padDirOf, pasteAtCursor, recordInsert,
+  segmentOpen,
   registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot,
   registerComposerImageSink, endOwnClipboardSequence,
   type DeliveryTarget,
@@ -213,6 +214,20 @@ import type { Destination, Entry, InsertKind } from './capture/types'
  * be mapped.
  */
 type CaptureRoute = Destination
+
+async function captureGestureScreenshot(kind: 'fullscreen' | 'region'): Promise<void> {
+  if (!segmentOpen()) return
+  const dir = join(homedir(), 'Desktop', 'Screenshots')
+  const target = join(dir, `Unmute-${Date.now()}-${randomUUID()}.png`)
+  try {
+    mkdirSync(dir, { recursive: true })
+    const args = kind === 'region' ? ['-x', '-i', target] : ['-x', '-m', target]
+    await new Promise<void>((resolve, reject) => execFile('/usr/sbin/screencapture', args, { timeout: 120_000 }, (error) => error ? reject(error) : resolve()))
+    log.event('gesture-screenshot-captured', { kind, target, route: 'active-dictation' })
+  } catch (error) {
+    log.warn('gesture-screenshot-failed', { kind, error: error instanceof Error ? error.message : String(error) })
+  }
+}
 import { CaptureHistoryStore, clipboardPayload, type CaptureHistoryKind } from './capture/history-store'
 import { screenCaptureVisibility } from './screen-capture-visibility'
 import type { ScratchpadEntryP, ScratchpadPayloadP, ChatConfigP } from './notch/notch-client'
@@ -6079,6 +6094,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // route them to the sessionManager's Remote capture (which reuses the STT
   // pipeline then calls dispatchFromCapture).
   deps.keyboardManager.on('keyboard', (e) => {
+    if (e.type === 'screenshot-fullscreen' || e.type === 'screenshot-region') {
+      void captureGestureScreenshot(e.type === 'screenshot-region' ? 'region' : 'fullscreen')
+      return
+    }
     if (e.type === 'pocket-chord') {
       // ONE GESTURE, TWO RUNGS — the controller decides which, because it is
       // the only thing that knows whether the pocket is already open. Deciding

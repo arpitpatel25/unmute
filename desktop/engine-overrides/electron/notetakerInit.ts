@@ -49,6 +49,7 @@
 // Per docs/superpowers/specs/2026-08-23-meeting-notetaker-detection-capture.md.
 
 import { Notification, dialog, ipcMain, app } from 'electron'
+import { execFile } from 'node:child_process'
 import path from 'path'
 import fs from 'fs'
 import { keyboardManager } from './keyboard'
@@ -75,6 +76,8 @@ import { generateNotes, DEFAULT_SUMMARY_INSTRUCTIONS, type MeetingNotes, type No
 import { cleanupTranscript } from './notetaker/transcriptCleanup'
 
 const log = createNotetakerLogger('init')
+
+type GestureScreenshot = { path: string; capturedAt: number; mode: 'fullscreen' | 'region' }
 // The repository's deliberately small Electron test declaration omits the
 // protocol surface, while production Electron provides it. Keep the local
 // shape narrow instead of weakening the rest of this module to `any`.
@@ -778,6 +781,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // moment capture begins (see below), so the id has to exist that early and
   // the final insert must reuse it rather than mint a second one.
   let sessionMeetingId = ''
+  let gestureScreenshots: GestureScreenshot[] = []
   // Log-only heartbeat counter, reset in start() — see the mic-chunk IPC
   // handler below.
   let micChunksReceived = 0
@@ -792,6 +796,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     start(pid: number): AudioTapStartResult | undefined {
       sessionStartedAt = Date.now()
       sessionMeetingId = newMeetingId()
+      gestureScreenshots = []
       micChunksReceived = 0
       systemChunksReceived = 0
       const mlog = log.child({ meetingId: sessionMeetingId })
@@ -1175,6 +1180,35 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         })
       }
       systemEmitter.feed(chunk.samples, chunk.sampleRate, chunk.channels, chunk.timestampMs)
+    }
+  })
+
+  // Screenshot gestures are routed here only when no ordinary dictation
+  // segment is open. The resulting manifest is durable meeting data and is
+  // appended to the generated note as a collapsible reference section.
+  keyboardManager.on('keyboard', (e) => {
+    if (e.type !== 'screenshot-fullscreen' && e.type !== 'screenshot-region') return
+    if (!session.isActive || !sessionMeetingId || otherCaptureActive) return
+    const mode = e.type === 'screenshot-region' ? 'region' : 'fullscreen'
+    const meetingDir = path.join(app.getPath('userData'), 'meetings', sessionMeetingId)
+    const target = path.join(meetingDir, `screenshot-${Date.now()}-${Math.random().toString(36).slice(2)}.png`)
+    try {
+      fs.mkdirSync(meetingDir, { recursive: true })
+      const args = mode === 'region' ? ['-x', '-i', target] : ['-x', '-m', target]
+      execFile('/usr/sbin/screencapture', args, { timeout: 120_000 }, (error) => {
+        if (error) {
+          log.child({ meetingId: sessionMeetingId }).warn('gesture screenshot failed', { mode, error: error.message })
+          return
+        }
+        const shot: GestureScreenshot = { path: path.basename(target), capturedAt: Date.now(), mode }
+        gestureScreenshots.push(shot)
+        try { writeMeetingJsonFile(sessionMeetingId, 'screenshots.json', gestureScreenshots) } catch (writeError) {
+          log.child({ meetingId: sessionMeetingId }).warn('gesture screenshot manifest write failed', { error: String(writeError) })
+        }
+        log.child({ meetingId: sessionMeetingId }).event('gesture-screenshot-captured', { mode, path: shot.path })
+      })
+    } catch (error) {
+      log.child({ meetingId: sessionMeetingId }).warn('gesture screenshot setup failed', { mode, error: String(error) })
     }
   })
 
@@ -1607,6 +1641,8 @@ async function runSummaryStage(meetingId: string, segments: TranscriptSegment[],
       updateMeetingPipelineStatus(meetingId, { summary_status: 'failed' })
       return
     }
+    const screenshotSection = readScreenshotSection(meetingId)
+    if (screenshotSection) result.notes.summary = `${result.notes.summary.trim()}\n\n${screenshotSection}`
     writeMeetingJsonFile(meetingId, NOTES_FILENAME, result.notes)
     updateMeetingPipelineStatus(meetingId, { summary_status: 'success', notes_path: NOTES_FILENAME })
     let finalTitle: string
@@ -1627,6 +1663,20 @@ async function runSummaryStage(meetingId: string, segments: TranscriptSegment[],
   } catch (error) {
     mlog.error('pipeline-summary-threw', { error: error instanceof Error ? error.message : String(error) })
     updateMeetingPipelineStatus(meetingId, { summary_status: 'failed' })
+  }
+}
+
+function readScreenshotSection(meetingId: string): string | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'meetings', meetingId, 'screenshots.json'), 'utf8'))
+    if (!Array.isArray(raw) || raw.length === 0) return null
+    const lines = raw.map((shot: { path?: unknown; capturedAt?: unknown }, i: number) => {
+      const name = typeof shot.path === 'string' ? shot.path : `screenshot-${i + 1}.png`
+      return `<details><summary>Screenshot ${i + 1}</summary>\n\n![Screenshot ${i + 1}](./${name})\n\n</details>`
+    })
+    return `## Screenshot references\n\n<details>\n<summary>${raw.length} screenshot${raw.length === 1 ? '' : 's'}</summary>\n\n${lines.join('\n\n')}\n\n</details>`
+  } catch {
+    return null
   }
 }
 
