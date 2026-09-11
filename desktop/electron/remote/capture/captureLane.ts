@@ -16,6 +16,10 @@
  */
 export type Lane = 'dictation' | 'orchestrator' | 'agent'
 
+export type SubmittedDestination =
+  | { readonly route: 'agent'; readonly targetTaskId: null }
+  | { readonly route: 'task'; readonly targetTaskId: string | null }
+
 export interface LiveCapture {
   lane: Lane
   startedAt: number
@@ -32,4 +36,18 @@ export function admitCapture(current: LiveCapture | null, wanted: Lane, at: numb
     return { admitted: false, reason: 'capture-already-live', blockedBy: current.lane }
   }
   return { admitted: true, capture: { lane: wanted, startedAt: at } }
+}
+
+/**
+ * Freeze where a right-Option utterance is going at the only moment that
+ * matters: the final press that submits it. The card visible when recording
+ * began is irrelevant, and later UI movement must not mutate this answer.
+ */
+export function destinationAtSubmit(
+  agentAddressed: boolean,
+  focusedTaskId: string | null,
+): SubmittedDestination {
+  return agentAddressed
+    ? { route: 'agent', targetTaskId: null }
+    : { route: 'task', targetTaskId: focusedTaskId }
 }

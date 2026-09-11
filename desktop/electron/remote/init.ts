@@ -183,6 +183,7 @@ import {
 } from './task-reply-trace'
 import { createClipboardWatch } from './capture/clipboardWatch'
 import { createScreenshotWatch } from './capture/screenshotWatch'
+import { destinationAtSubmit } from './capture/captureLane'
 import {
   adoptPersistedPad, armScratchpad, beginOwnClipboardSequence, claimShared, deliveryInFlight, discard as discardPad,
   copyHistoryToClipboard, gateDelivery, heldForSurface, initWatchers, padDirOf, pasteAtCursor, recordInsert,
@@ -227,6 +228,8 @@ interface SessionManagerLike {
   /** Move the LIVE capture to another lane. Returns false when there is
    *  nothing hot to move — the mic is the only window in which this is legal. */
   setCaptureRoute?(route: CaptureRoute): boolean
+  /** Freeze the final destination while the mic is still live. */
+  settleRemoteDestination?(route: Extract<CaptureRoute, 'task' | 'agent'>, targetTaskId: string | null): boolean
   /** The live capture's lane, or null when nothing is recording. */
   readonly captureRoute?: CaptureRoute | null
   /** Announced when the live capture changes lanes, so the surfaces this file
@@ -4194,8 +4197,16 @@ async function dispatchFromCaptureInner(
   // rule every task already follows — you address what you can see.
   const addressedToAgent = options.route === 'agent'
     || options.destination === 'unmute-agent'
-    || orchestrateAgentAddressed
-  const addressedTaskId = addressedToAgent ? null : (targetTaskId ?? orchestrateFocusId)
+    || (options.route == null && orchestrateAgentAddressed)
+  // A supplied route means the keyboard handler already froze the destination
+  // at submit. In particular, task + null deliberately means "use the router";
+  // it must not be rebound to whichever card happens to be visible later while
+  // this delivery waits in a queue.
+  const addressedTaskId = addressedToAgent
+    ? null
+    : options.route === 'task'
+      ? targetTaskId
+      : (targetTaskId ?? orchestrateFocusId)
   if (addressedTaskId && manager.list().some((t) => t.id === addressedTaskId)) {
     const fid = addressedTaskId
     // WHAT THEY SAID IS WHAT IS DELIVERED.
@@ -6090,11 +6101,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // the one that happened to be on screen when you started. People move
       // the pocket mid-sentence precisely BECAUSE they are choosing.
       //
-      // Passing null lets dispatchFromCaptureInner fall through to the live
-      // `orchestrateFocusId`, which applyVoiceTarget() already keeps exactly
-      // in step with the surface — pocket open aims at the slot under the
-      // index, pocket closed means the router and a new task. No new state,
-      // and no second copy of a rule that already exists.
+      // The session begins unaddressed. The matching remote-stop handler below
+      // snapshots the card selected at that final press and writes it onto the
+      // live session before audio processing begins.
       deps.sessionManager.startRemoteCapture(null)
       broadcastCapturePhase('listening', liveVoiceTarget()) // ADDITIVE observer — the capture itself is untouched
     } else if (e.type === 'agent-start') {
@@ -6155,12 +6164,24 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // that vanished can be told apart from one that was parked on purpose.
       let padArmed = false
       try { padArmed = snapshot().armed } catch { padArmed = false }
-      log.event('agent-key', { phase: 'stop', armed: padArmed, meaning: padArmed ? 'pause' : 'submit' })
+      const settled = deps.sessionManager.settleRemoteDestination?.('agent', null) ?? false
+      log.event('agent-key', {
+        phase: 'stop', armed: padArmed, meaning: padArmed ? 'pause' : 'submit',
+        route: 'agent', targetTaskId: null, destinationSettled: settled,
+      })
       resumeOverlayEscape()
       void deps.sessionManager.stopRemoteCapture()
       broadcastCapturePhase('transcribing')
     } else if (e.type === 'remote-stop') {
-      log.event('remote-key', { phase: 'stop' })
+      const destination = destinationAtSubmit(orchestrateAgentAddressed, liveVoiceTarget())
+      const settled = deps.sessionManager.settleRemoteDestination?.(
+        destination.route,
+        destination.targetTaskId,
+      ) ?? false
+      log.event('remote-key', {
+        phase: 'stop', route: destination.route,
+        targetTaskId: destination.targetTaskId, destinationSettled: settled,
+      })
       resumeOverlayEscape() // give Escape back to a still-visible overlay
       void deps.sessionManager.stopRemoteCapture()
       broadcastCapturePhase('transcribing')

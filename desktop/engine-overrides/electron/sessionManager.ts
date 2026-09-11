@@ -27,6 +27,7 @@ import {
   registerFormat, registerHistoryCopy, registerPaste, removeFromPad, setPadOrigin,
 } from './paywall/remote/capture/index'
 import type { CaptureRoute } from './captureRoute'
+import { KeyedRemoteDispatchQueue, remoteDispatchQueueKey } from './remoteDispatchQueue'
 import { registerTaskImagePaste } from './paywall/remote/task-attachment-paste'
 import { registerDesktopTaskImagePaste } from './paywall/remote/desktop-task-attachment-paste'
 import { canObserve } from './paywall/remote/capture/captureGate'
@@ -169,10 +170,8 @@ interface SessionState {
    * Agent for a whole session on 18 August.
    */
   route: CaptureRoute
-  /** The task this capture is addressed at, when the user aimed it explicitly.
-   *  Normally null: the target is resolved from what the user is looking at AT
-   *  SUBMIT, not snapshotted at key-down, so moving the pocket mid-utterance
-   *  changes where it lands. */
+  /** The task this capture is addressed at. It starts null and is frozen from
+   *  the selected card by settleRemoteDestination() at the submit press. */
   remoteTargetId: string | null
   /** Task-composer destination captured at mic start. It must survive the
    * detached remote queue, which outlives currentSession teardown. */
@@ -226,15 +225,14 @@ function sendToWidget(channel: string, ...args: unknown[]): void {
 }
 
 /**
- * Remote dispatches run one at a time, in the order they were spoken.
+ * Remote dispatches to the same destination run in spoken order.
  *
  * Detaching them from the pill means a second utterance can arrive while the
  * first is still being delivered — previously impossible, because the pill held
- * the session open. The router is a single resident REPL, so overlapping calls
- * would interleave; chaining preserves the old ordering guarantee without
- * putting it back on the user's screen.
+ * the session open. Agent work must not hold up an unrelated task, while two
+ * messages to the same task must not overtake each other.
  */
-let remoteDispatchQueue: Promise<void> = Promise.resolve()
+const remoteDispatchQueue = new KeyedRemoteDispatchQueue()
 
 // The capture façade's delivery handler cannot import injectOutput without
 // closing the cycle clipboard.ts's header exists to prevent (a lazy require of
@@ -1165,6 +1163,37 @@ export class SessionManager {
     return true
   }
 
+  /**
+   * Freeze the destination chosen by the final submit press. This is the only
+   * point where UI focus becomes delivery state; queued work never reads live
+   * focus after this method returns.
+   */
+  settleRemoteDestination(route: Extract<CaptureRoute, 'task' | 'agent'>, targetTaskId: string | null): boolean {
+    const session = this.currentSession
+    if (!session || this.isProcessing || session.status !== 'recording' || session.kind !== 'remote') {
+      console.warn('[session] ⛔ destination settlement ignored', {
+        hasSession: Boolean(session),
+        status: session?.status ?? null,
+        processing: this.isProcessing,
+        kind: session?.kind ?? null,
+      })
+      return false
+    }
+    if (!this.setCaptureRoute(route)) return false
+    session.remoteTargetId = route === 'task' ? targetTaskId : null
+    console.log('[session] 📍 remote destination settled:', {
+      sessionId: session.sessionId,
+      route,
+      targetTaskId: session.remoteTargetId,
+    })
+    logTelemetry('remote-destination-settled', {
+      sessionId: session.sessionId,
+      route,
+      targetTaskId: session.remoteTargetId,
+    })
+    return true
+  }
+
   /** What the LIVE capture is addressed at, or null when nothing is recording. */
   get captureRoute(): CaptureRoute | null {
     return this.currentSession?.status === 'recording' ? this.currentSession.route : null
@@ -1379,19 +1408,30 @@ export class SessionManager {
       // and a pill reporting someone else's latency is just noise the user
       // cannot act on. The task's own card carries the rest of the story.
       //
-      // Nothing about the dispatch itself changes: same work, same order (see
-      // the queue below), only the UI stops blocking on it.
-      remoteDispatchQueue = remoteDispatchQueue
+      // Freeze these before endSession clears the live capture. No queued
+      // delivery is allowed to consult mutable UI/session state later.
+      const dispatchRoute = session.route
+      const dispatchTargetId = session.remoteTargetId
+      const composerToken = session.composerDictation?.token
+      const queueKey = remoteDispatchQueueKey(dispatchRoute, dispatchTargetId, composerToken)
+      console.log('[session] 🛰  REMOTE queued:', {
+        sessionId: session.sessionId,
+        queueKey,
+        route: dispatchRoute,
+        targetTaskId: dispatchTargetId,
+      })
+      void remoteDispatchQueue.enqueue(queueKey, () =>
         // THE ROUTE TRAVELS WITH THE UTTERANCE. It used to be read from a
         // module-level variable in init.ts at dispatch time, which is how a
         // cancelled Agent capture came to speak for every Remote press that
         // followed it. Passed explicitly, a dispatch can only ever be told the
         // address of the capture that produced it — and this queue is drained
         // AFTER currentSession is nulled, so there is nothing left to ask.
-        .then(() => dispatchFromCapture(cmd, session.captureAttachments, session.remoteTargetId, {
-          route: session.route,
+        dispatchFromCapture(cmd, session.captureAttachments, dispatchTargetId, {
+          route: dispatchRoute,
           ...(session.composerDictation ? { composerDictation: session.composerDictation } : {}),
-        }))
+        })
+      )
         .catch((e) => {
           console.error('[session] 🛰  REMOTE dispatch failed:', e instanceof Error ? e.message : e)
         })

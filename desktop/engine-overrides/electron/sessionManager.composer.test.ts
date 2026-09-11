@@ -52,6 +52,7 @@ test('a cancelled capture late grace waiter cannot clear or deliver into its pro
       }
       if (request === './errorUtils') return { simplifyError: (error: string) => error }
       if (request === './quietGuard') return { isSuspectQuietCapture: () => false }
+      if (request === './remoteDispatchQueue') return originalLoad.call(this, request, parent, isMain)
       if (request.startsWith('./')) return moduleStub
     }
     return originalLoad.call(this, request, parent, isMain)

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { admitCapture, type Lane, type LiveCapture } from './captureLane'
+import { admitCapture, destinationAtSubmit, type Lane, type LiveCapture } from './captureLane'
 
 const idle: LiveCapture | null = null
 function live(lane: Lane): LiveCapture { return { lane, startedAt: 1_000 } }
@@ -46,4 +46,25 @@ test('a refusal carries what blocked it, so the log can say why', () => {
 
 test('once the live capture ends the next lane is admitted', () => {
   assert.equal(admitCapture(null, 'orchestrator', 3_000).admitted, true)
+})
+
+test('right-Option snapshots the task visible at submit, not at capture start', () => {
+  assert.deepEqual(destinationAtSubmit(false, 'task-at-submit'), {
+    route: 'task',
+    targetTaskId: 'task-at-submit',
+  })
+})
+
+test('right-Option snapshots the selected Unmute Agent card as the Agent route', () => {
+  assert.deepEqual(destinationAtSubmit(true, 'stale-task-behind-agent'), {
+    route: 'agent',
+    targetTaskId: null,
+  })
+})
+
+test('right-Option with no selected card remains an unaddressed task request', () => {
+  assert.deepEqual(destinationAtSubmit(false, null), {
+    route: 'task',
+    targetTaskId: null,
+  })
 })
