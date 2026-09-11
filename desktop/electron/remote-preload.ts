@@ -206,6 +206,12 @@ export interface NotetakerMeetingNotes {
   openQuestions: string[]
 }
 
+export interface NotetakerScreenshot {
+  url: string
+  capturedAt: number
+  mode: 'fullscreen' | 'region'
+}
+
 export const remotePreloadExtensions = {
   // ── Unmute Agent ──
   remoteGetAgentSettings: (): Promise<UnmuteAgentSettingsSnapshot> =>
@@ -749,6 +755,8 @@ export const remotePreloadExtensions = {
    *  channel for compatibility), null after 24h audio retention. */
   notetakerGetAudioUrl: (id: string, channel: 'mic' | 'system' | 'mixed'): Promise<string | null> =>
     ipcRenderer.invoke('notetaker:get-audio-url', id, channel),
+  notetakerGetScreenshots: (id: string): Promise<NotetakerScreenshot[]> =>
+    ipcRenderer.invoke('notetaker:get-screenshots', id),
   /** Relays a widget-renderer diagnostic (getUserMedia result, device label,
    *  AudioWorklet-vs-ScriptProcessor fallback, tap teardown, etc.) into
    *  main's one durable notetaker log file — see notetakerInit.ts's

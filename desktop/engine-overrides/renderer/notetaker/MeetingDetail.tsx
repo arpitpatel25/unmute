@@ -55,10 +55,17 @@ type NotetakerMeetingNotes = {
   openQuestions: string[]
 }
 
+type NotetakerScreenshot = {
+  url: string
+  capturedAt: number
+  mode: 'fullscreen' | 'region'
+}
+
 type API = {
   notetakerGetTranscript?: (id: string) => Promise<NotetakerTranscriptSegment[]>
   notetakerGetNotes?: (id: string) => Promise<NotetakerMeetingNotes | null>
   notetakerGetAudioUrl?: (id: string, channel: 'mic' | 'system' | 'mixed') => Promise<string | null>
+  notetakerGetScreenshots?: (id: string) => Promise<NotetakerScreenshot[]>
   notetakerRenameMeeting?: (id: string, title: string) => Promise<void>
   notetakerDeleteMeeting?: (id: string) => Promise<void>
   notetakerRetryPipeline?: (id: string) => Promise<void>
@@ -364,6 +371,7 @@ export function MeetingDetail({
   const [retranscribing, setRetranscribing] = useState(false)
 
   const [meetingAudioUrl, setMeetingAudioUrl] = useState<string | null>(null)
+  const [screenshots, setScreenshots] = useState<NotetakerScreenshot[]>([])
   const [title, setTitle] = useState(initialTitle)
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState(initialTitle)
@@ -383,6 +391,7 @@ export function MeetingDetail({
     setDraftTitle(initialTitle)
     setNotesRevealPhase('preparing')
     setMeetingAudioUrl(null)
+    setScreenshots([])
     setNotesCopied(false)
     setTranscriptCopied(false)
 
@@ -397,6 +406,10 @@ export function MeetingDetail({
     api().notetakerGetAudioUrl?.(id, 'mixed')
       .then((url) => { if (!cancelled) setMeetingAudioUrl(url) })
       .catch(() => { if (!cancelled) setMeetingAudioUrl(null) })
+
+    api().notetakerGetScreenshots?.(id)
+      .then((data) => { if (!cancelled) setScreenshots(data ?? []) })
+      .catch(() => { if (!cancelled) setScreenshots([]) })
 
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -674,6 +687,23 @@ export function MeetingDetail({
           </div>
         ) : <p className="text-[11px] text-ink-60">The recording is unavailable. Audio is retained for 24 hours.</p>}
       </div>
+
+      {screenshots.length > 0 && (
+        <section className="flex flex-col gap-3 rounded-lg bg-ink-07 p-3" aria-label="Screenshot references">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[12px] font-semibold text-ink">Screenshot references</div>
+            <div className="text-[11px] text-ink-60">{screenshots.length} screenshot{screenshots.length === 1 ? '' : 's'}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {screenshots.map((screenshot, index) => (
+              <details key={screenshot.url} className="overflow-hidden rounded-md border border-black/10 bg-black/[0.03]">
+                <summary className="cursor-pointer px-2.5 py-2 text-[12px] text-ink-60 hover:text-ink">Screenshot {index + 1}</summary>
+                <img src={screenshot.url} alt={`Screenshot ${index + 1}`} className="block w-full" />
+              </details>
+            ))}
+          </div>
+        </section>
+      )}
 
       <button
         onClick={() => void handleDelete()}

@@ -348,6 +348,28 @@ function installNotetakerAudioProtocol(): void {
       return new Response('Not found', { status: 404 })
     }
   })
+  electronProtocol.handle('unmute-image', async (request) => {
+    try {
+      const url = new URL(request.url)
+      const [, meetingId, encodedFilename] = url.pathname.split('/')
+      const filename = encodedFilename ? decodeURIComponent(encodedFilename) : ''
+      if (url.hostname !== 'meeting' || !/^[0-9a-f-]{36}$/i.test(meetingId) || !filename || path.basename(filename) !== filename) {
+        return new Response('Not found', { status: 404 })
+      }
+      const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
+      const manifest = JSON.parse(await fs.promises.readFile(path.join(meetingDir, 'screenshots.json'), 'utf8'))
+      if (!Array.isArray(manifest) || !manifest.some((shot: { path?: unknown }) => shot?.path === filename)) {
+        return new Response('Not found', { status: 404 })
+      }
+      const filePath = path.join(meetingDir, filename)
+      const bytes = await fs.promises.readFile(filePath)
+      return new Response(bytes, {
+        headers: { 'Content-Type': 'image/png', 'Content-Length': String(bytes.byteLength), 'Cache-Control': 'no-store' },
+      })
+    } catch {
+      return new Response('Not found', { status: 404 })
+    }
+  })
   audioProtocolInstalled = true
 }
 /** Set from NotetakerInitHooks.onOpenMeeting when initNotetaker() runs — see
@@ -442,6 +464,25 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     return `unmute-audio://meeting/${id}/${channel}`
   })
 
+  ipcMain.handle('notetaker:get-screenshots', async (_event, id: string) => {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return []
+    try {
+      const meetingDir = path.join(app.getPath('userData'), 'meetings', id)
+      const raw = JSON.parse(await fs.promises.readFile(path.join(meetingDir, 'screenshots.json'), 'utf8'))
+      if (!Array.isArray(raw)) return []
+      return raw
+        .filter((shot): shot is { path: string; capturedAt: number; mode: 'fullscreen' | 'region' } =>
+          Boolean(shot && typeof shot.path === 'string' && path.basename(shot.path) === shot.path))
+        .map((shot) => ({
+          url: `unmute-image://meeting/${id}/${encodeURIComponent(shot.path)}`,
+          capturedAt: Number(shot.capturedAt) || 0,
+          mode: shot.mode === 'region' ? 'region' : 'fullscreen',
+        }))
+    } catch {
+      return []
+    }
+  })
+
   // ── Transcript cleanup + auto-summarization (2026-08-25 spec) ──
   // Same "before the native-module guard" reasoning as the five handlers
   // above: none of these touch the audio tap, so browsing/configuring
@@ -464,7 +505,9 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       // no error boundary anywhere above it, so an old file missing a
       // newer field crashed the ENTIRE window blank rather than just that
       // one section. Same reasoning as parseSummaryOutput's own defaults.
-      return { title: '', summary: '', keyPoints: [], decisions: [], actionItems: [], openQuestions: [], ...raw } as MeetingNotes
+      const result = { title: '', summary: '', keyPoints: [], decisions: [], actionItems: [], openQuestions: [], ...raw } as MeetingNotes
+      result.summary = stripLegacyScreenshotSection(result.summary)
+      return result
     } catch (e) {
       log.child({ meetingId: id }).warn('get-notes: failed to read/parse notes file', { error: (e as Error).message })
       return null
@@ -1185,7 +1228,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
   // Screenshot gestures are routed here only when no ordinary dictation
   // segment is open. The resulting manifest is durable meeting data and is
-  // appended to the generated note as a collapsible reference section.
+  // rendered by the Notetaker UI as a separate reference section.
   keyboardManager.on('keyboard', (e) => {
     if (e.type !== 'screenshot-fullscreen' && e.type !== 'screenshot-region') return
     if (!session.isActive || !sessionMeetingId || otherCaptureActive) return
@@ -1642,8 +1685,6 @@ async function runSummaryStage(meetingId: string, segments: TranscriptSegment[],
       updateMeetingPipelineStatus(meetingId, { summary_status: 'failed' })
       return
     }
-    const screenshotSection = readScreenshotSection(meetingId)
-    if (screenshotSection) result.notes.summary = `${result.notes.summary.trim()}\n\n${screenshotSection}`
     writeMeetingJsonFile(meetingId, NOTES_FILENAME, result.notes)
     updateMeetingPipelineStatus(meetingId, { summary_status: 'success', notes_path: NOTES_FILENAME })
     let finalTitle: string
@@ -1667,18 +1708,10 @@ async function runSummaryStage(meetingId: string, segments: TranscriptSegment[],
   }
 }
 
-function readScreenshotSection(meetingId: string): string | null {
-  try {
-    const raw = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'meetings', meetingId, 'screenshots.json'), 'utf8'))
-    if (!Array.isArray(raw) || raw.length === 0) return null
-    const lines = raw.map((shot: { path?: unknown; capturedAt?: unknown }, i: number) => {
-      const name = typeof shot.path === 'string' ? shot.path : `screenshot-${i + 1}.png`
-      return `<details><summary>Screenshot ${i + 1}</summary>\n\n![Screenshot ${i + 1}](./${name})\n\n</details>`
-    })
-    return `## Screenshot references\n\n<details>\n<summary>${raw.length} screenshot${raw.length === 1 ? '' : 's'}</summary>\n\n${lines.join('\n\n')}\n\n</details>`
-  } catch {
-    return null
-  }
+function stripLegacyScreenshotSection(summary: string): string {
+  if (typeof summary !== 'string') return ''
+  const marker = summary.indexOf('## Screenshot references')
+  return marker >= 0 ? summary.slice(0, marker).trim() : summary
 }
 
 /** Keep automatic processing on a provider that is actually connected. A
