@@ -187,6 +187,8 @@ struct PillState: Codable, Equatable {
     var offline: PillOfflineReason? = nil
     /// Undo is offered for a short window after a paste.
     var canUndo: Bool = false
+    /// Monotonic token; main increments it after a screenshot is saved.
+    var captureFlashToken: Int? = nil
 
     /// THE UNMUTE AGENT'S OWN LANE — a double-tap of the right command key,
     /// not an ordinary remote capture.
@@ -250,6 +252,7 @@ struct PillState: Codable, Equatable {
         coaching     = try? c.decodeIfPresent(PillCoaching.self, forKey: .coaching)
         offline      = try? c.decodeIfPresent(PillOfflineReason.self, forKey: .offline)
         canUndo      = v(.canUndo, false)
+        captureFlashToken = try? c.decodeIfPresent(Int.self, forKey: .captureFlashToken)
     }
 }
 
@@ -294,8 +297,16 @@ final class PillModel: ObservableObject {
     @Published var state: PillState = .hidden
     /// Which chip menu is open, if any ("model" | "agent" | "mic").
     @Published var openMenu: String? = nil
+    @Published var captureFlash = false
 
     var emit: (PillEvent) -> Void = { _ in }
 
     var visible: Bool { state.phase != .hidden }
+
+    func flashCapture() {
+        captureFlash = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            self?.captureFlash = false
+        }
+    }
 }

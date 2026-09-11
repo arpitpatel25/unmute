@@ -89,6 +89,8 @@ export interface PillStateP {
   coaching?: PillCoachingP | null
   offline?: PillOfflineReason | null
   canUndo?: boolean
+  /** Monotonic token used for a brief screenshot-success flash. */
+  captureFlashToken?: number
 }
 
 /** Gestures the surface sends back. Each maps 1:1 onto an existing handler. */

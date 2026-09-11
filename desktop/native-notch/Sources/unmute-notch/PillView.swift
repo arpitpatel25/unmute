@@ -468,6 +468,7 @@ struct PillView: View {
 
     /// Only the two states that are telling you something wrong carry a wash.
     private var pillTint: Color? {
+        if model.captureFlash { return Theme.cReady }
         switch s.phase {
         case .error:          return Theme.cError
         case .outputFallback: return Theme.cNeeds

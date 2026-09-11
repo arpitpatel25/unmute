@@ -66,6 +66,7 @@ export type KeyboardEvent =
   | { type: 'pocket-chord' }
   | { type: 'screenshot-fullscreen' }
   | { type: 'screenshot-region' }
+  | { type: 'screenshot-feedback' }
 
 export type DictationKey = 'fn' | 'right-option'
 export type ActivationMode = 'tap-toggle' | 'push-to-talk' | 'double-tap-push'

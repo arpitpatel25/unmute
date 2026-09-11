@@ -634,7 +634,12 @@ final class AppController: NSObject, NotchResizing {
             if state.phase != pillModel.state.phase {
                 NotchLog.log("CMD pill phase=\(state.phase.rawValue) kind=\(state.kind.rawValue)")
             }
+            let priorFlashToken = pillModel.state.captureFlashToken
             pillModel.state = state
+            if let token = state.captureFlashToken, token != priorFlashToken {
+                NotchLog.log("CMD pill screenshot flash token=\(token)")
+                pillModel.flashCapture()
+            }
             // THE POCKET NEEDS THE SAME SIGNAL. Both surfaces live in this
             // process but in different models, and the capture level only ever
             // reached the pill's. The pocket card shows where your voice is

@@ -1205,6 +1205,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         try { writeMeetingJsonFile(sessionMeetingId, 'screenshots.json', gestureScreenshots) } catch (writeError) {
           log.child({ meetingId: sessionMeetingId }).warn('gesture screenshot manifest write failed', { error: String(writeError) })
         }
+        keyboardManager.emit('keyboard', { type: 'screenshot-feedback' })
         log.child({ meetingId: sessionMeetingId }).event('gesture-screenshot-captured', { mode, path: shot.path })
       })
     } catch (error) {

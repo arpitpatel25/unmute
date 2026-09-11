@@ -215,8 +215,8 @@ import type { Destination, Entry, InsertKind } from './capture/types'
  */
 type CaptureRoute = Destination
 
-async function captureGestureScreenshot(kind: 'fullscreen' | 'region'): Promise<void> {
-  if (!segmentOpen()) return
+async function captureGestureScreenshot(kind: 'fullscreen' | 'region'): Promise<boolean> {
+  if (!segmentOpen()) return false
   const dir = join(homedir(), 'Desktop', 'Screenshots')
   const target = join(dir, `Unmute-${Date.now()}-${randomUUID()}.png`)
   try {
@@ -224,9 +224,16 @@ async function captureGestureScreenshot(kind: 'fullscreen' | 'region'): Promise<
     const args = kind === 'region' ? ['-x', '-i', target] : ['-x', '-m', target]
     await new Promise<void>((resolve, reject) => execFile('/usr/sbin/screencapture', args, { timeout: 120_000 }, (error) => error ? reject(error) : resolve()))
     log.event('gesture-screenshot-captured', { kind, target, route: 'active-dictation' })
+    return true
   } catch (error) {
     log.warn('gesture-screenshot-failed', { kind, error: error instanceof Error ? error.message : String(error) })
+    return false
   }
+}
+
+function playScreenshotFeedback(): void {
+  execFile('/usr/bin/afplay', ['/System/Library/Sounds/Tink.aiff', '-v', '0.65'], { timeout: 3000 }, () => {})
+  pillController?.push({ captureFlashToken: Date.now() })
 }
 import { CaptureHistoryStore, clipboardPayload, type CaptureHistoryKind } from './capture/history-store'
 import { screenCaptureVisibility } from './screen-capture-visibility'
@@ -257,6 +264,7 @@ interface SessionManagerLike {
 }
 interface KeyboardManagerLike {
   on(event: 'keyboard', cb: (e: { type: string }) => void): unknown
+  emit?(event: string, payload: unknown): boolean
   /** Clears the Orchestrator and Agent locks. Never dictation's — that lane is
    *  the user's way out when something else is wedged.
    *
@@ -6095,7 +6103,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // pipeline then calls dispatchFromCapture).
   deps.keyboardManager.on('keyboard', (e) => {
     if (e.type === 'screenshot-fullscreen' || e.type === 'screenshot-region') {
-      void captureGestureScreenshot(e.type === 'screenshot-region' ? 'region' : 'fullscreen')
+      void captureGestureScreenshot(e.type === 'screenshot-region' ? 'region' : 'fullscreen').then((captured) => {
+        if (captured) playScreenshotFeedback()
+      })
+      return
+    }
+    if (e.type === 'screenshot-feedback') {
+      playScreenshotFeedback()
       return
     }
     if (e.type === 'pocket-chord') {
