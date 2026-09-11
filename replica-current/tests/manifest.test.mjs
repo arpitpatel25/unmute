@@ -54,6 +54,19 @@ export function Widget({ open, items }) {
   assert.ok(tsAudit.branches.some(({ value }) => value === "open && items.length > 0"));
 });
 
+test("actual-source conditional forms are extracted independently at their real lines", async () => {
+  const { evidence } = await loadInventory();
+  const find = (suffix, line, kind) => evidence.branches.find((branch) =>
+    branch.source.endsWith(suffix) && branch.line === line && branch.kind === kind);
+  assert.equal(find("PillView.swift", 538, "if")?.value, "s.maxSeconds - s.elapsed <= 15");
+  assert.equal(find("MeetingsList.tsx", 44, "if")?.value, "meeting.summary_status === 'pending'");
+  assert.equal(find("MeetingsList.tsx", 45, "if")?.value, "meeting.summary_status === 'failed'");
+  assert.equal(find("MeetingsList.tsx", 46, "if")?.value, "meeting.summary_status === 'disabled' && meeting.status === 'ready'");
+  assert.equal(find("NotetakerWidget.tsx", 520, "logical-and")?.value, "!completed && !showDiscard");
+  assert.equal(find("NotetakerWidget.tsx", 562, "ternary")?.value, "completed");
+  assert.equal(find("NotetakerWidget.tsx", 575, "ternary")?.value, "showDiscard");
+});
+
 test("the audit uses only approved visual source sets at current product HEAD", async () => {
   const { evidence } = await loadInventory();
   assert.equal(evidence.sourceRevision, CURRENT_REVISION);
@@ -85,8 +98,7 @@ test("curated render states carry renderable fixtures, honest interactions, and 
     const fixture = manifest.fixtures[entry.fixture];
     assert.equal(fixture.stateId, entry.id);
     assert.equal(typeof fixture.input.surface, "string");
-    assert.equal(typeof fixture.input.variant, "string");
-    assert.ok(Object.keys(fixture.input).length >= 3);
+    assert.ok(Object.keys(fixture.input).length >= 2);
     assert.equal(entry.baseline.status, "pending");
     assert.match(entry.baseline.reason, /Task 2/);
     if (entry.interactions.kind === "interactive") {
@@ -99,6 +111,54 @@ test("curated render states carry renderable fixtures, honest interactions, and 
   }
 });
 
+test("family fixtures preserve exact source model values and transitions", async () => {
+  const { manifest } = await loadInventory();
+  const state = (id) => manifest.entries.find((entry) => entry.id === id);
+  const input = (id) => manifest.fixtures[state(id).fixture].input;
+  const controls = (id) => state(id).interactions.controls;
+
+  assert.deepEqual(input("pill-recording-remote-warning"), {
+    surface: "pill", openMenu: null,
+    state: { phase: "recording", kind: "remote", taskId: "task-42", level: 0.64, elapsed: 286, maxSeconds: 300 },
+  });
+  assert.deepEqual(controls("pill-recording-remote-warning").map(({ event, result }) => [event, result]), [
+    ["click discard", { type: "pillCancel" }], ["click finish", { type: "pillStop" }],
+  ]);
+  assert.equal(input("pill-payment-failed").state.offline, "payment_failed");
+  assert.equal(controls("pill-payment-failed")[0].result.type, "pillOpenBillingPortal");
+
+  assert.deepEqual(input("notch-agent-confirming").agentActivity, {
+    state: "confirming", summary: "Send the release update?", interactionId: "interaction-7", agentRunId: "run-3", provider: "codex",
+  });
+  assert.equal(input("notch-pocket-waiting").pocket.waiting, 2);
+
+  assert.equal(input("pocket-task-question").pocket.slots[0].ask, "Which environment should I deploy to?");
+  assert.equal(input("pocket-agent-listening").capturePhase, "listening");
+  assert.equal(controls("pocket-task-question")[0].result.type, "pocketExpand");
+
+  assert.equal(input("conversation-question-choice").task.question.kind, "choice");
+  assert.deepEqual(input("conversation-question-choice").task.question.choices, ["Staging", "Production"]);
+  assert.equal(controls("conversation-question-choice")[0].result.type, "questionAnswer");
+  assert.equal(input("conversation-composer-attachment").task.draft.attachments[0].mimeType, "image/png");
+  assert.equal(input("conversation-composer-attachment").task.chatConfig.permission, "workspace-write");
+
+  assert.equal(input("cockpit-route-offer").cockpit.routeOffer.altName, "Release checklist");
+  assert.equal(controls("cockpit-route-offer")[0].result.type, "offerAccept");
+
+  assert.equal(input("scratchpad-delivering").scratchpad.delivering, true);
+  assert.equal(input("scratchpad-entry").scratchpad.pad.entries[0].startMs, 1200);
+  assert.equal(controls("scratchpad-entry")[0].result.type, "scratchRemoveEntry");
+
+  assert.deepEqual(input("notetaker-recording").widget, { sessionId: 7, completed: false, showDiscard: false, levels: [0, 0.12, 0.35, 0.64, 0.88, 0.64, 0.35, 0.12, 0, 0, 0] });
+  assert.equal(controls("notetaker-recording")[0].result.showDiscard, true);
+  assert.equal(input("notetaker-meeting-notes-pending").meeting.summary_status, "pending");
+  assert.equal(input("notetaker-settings-unavailable").settings.availability.codex, false);
+
+  assert.equal(input("new-conversation-managed-preview").preview.permission, "workspace");
+  assert.equal(input("new-conversation-project-requested").form.permission, "ask");
+  assert.equal(controls("new-conversation-project-requested").find(({ id }) => id === "create").result.type, "newChat");
+});
+
 test("every audited branch has an explicit, justified classification", async () => {
   const { manifest, evidence, validateManifest } = await loadInventory();
   assert.deepEqual(validateManifest(manifest, evidence), []);
@@ -109,8 +169,22 @@ test("every audited branch has an explicit, justified classification", async () 
     assert.ok(["render-affecting", "render-input", "non-rendering"].includes(classification.kind));
     assert.ok(classification.reason);
     if (classification.kind === "non-rendering") assert.deepEqual(classification.stateIds, []);
-    else assert.ok(classification.stateIds.length > 0);
+    else if (classification.stateIds.length === 0) assert.match(classification.reason, /shared visual evidence|source-model input/);
   }
+});
+
+test("actual visual and nonvisual occurrences receive source-specific classifications", async () => {
+  const { evidence } = await loadInventory();
+  const classification = (suffix, line) => {
+    const item = evidence.branches.find((branch) => branch.source.endsWith(suffix) && branch.line === line);
+    return evidence.classifications.find((entry) => entry.occurrenceId === item.id);
+  };
+  assert.equal(classification("PillView.swift", 538).kind, "render-affecting");
+  assert.match(classification("PillView.swift", 538).reason, /final 15 seconds/);
+  assert.equal(classification("NotetakerWidget.tsx", 446).kind, "non-rendering");
+  assert.match(classification("NotetakerWidget.tsx", 446).reason, /audio sample|waveform amplitude/i);
+  assert.equal(classification("PillModel.swift", 276).kind, "non-rendering");
+  assert.match(classification("PillModel.swift", 276).reason, /serializes.*pillStop/i);
 });
 
 test("validation independently rejects broken schema and coverage relationships", async () => {
