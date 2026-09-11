@@ -216,13 +216,100 @@ test("Notch gate covers every source state, task status, and Agent activity case
       assert.ok(evidence.classifications.find(({ occurrenceId }) => occurrenceId === item.id).stateIds.some((id) => id.startsWith("notch-")), `uncovered ${symbol}.${item.value}`);
 });
 
+test("Notch branch records evaluate exact predicates with ordered reachable ancestors", async () => {
+  const { manifest, validateManifest, evidence } = await loadInventory();
+  assert.deepEqual(validateManifest(manifest, evidence), []);
+  const entry = (id) => manifest.entries.find((candidate) => candidate.id === id);
+  const branch = (id, line) => entry(id).audit.find((link) => link.id.startsWith("branch:") && link.id.includes(`:${line}:`));
+  assert.equal(branch("notch-silenced-hover-exempt", 145).outcome, false);
+  assert.equal(branch("notch-silenced-hardware-empty", 145).outcome, true);
+  assert.equal(branch("notch-routing", 189).ancestors.length, 2);
+  assert.equal(branch("notch-pocket-waiting-one", 210).ancestors.length, 3);
+  assert.equal(branch("notch-attention-needs-user", 275).ancestors.length, 5);
+  for (const candidate of manifest.entries.filter(({ family }) => family === "notch"))
+    for (const link of candidate.audit.filter(({ id }) => id.startsWith("branch:"))) {
+      assert.equal(typeof link.outcome, "boolean", `${candidate.id}:${link.id}`);
+      assert.ok(Array.isArray(link.ancestors), `${candidate.id}:${link.id}`);
+      assert.ok(link.ancestors.every(({ outcome }) => outcome === true), `${candidate.id}:${link.id}`);
+    }
+});
+
+test("Notch precedence is proven by fixtures carrying every lower competing signal", async () => {
+  const { manifest } = await loadInventory();
+  const input = (id) => manifest.fixtures[manifest.entries.find((entry) => entry.id === id).fixture].input;
+  assert.equal(input("notch-precedence-toast").expectation.bar.selected, "toast");
+  assert.equal(input("notch-precedence-activity").expectation.bar.selected, "agentActivity");
+  assert.equal(input("notch-precedence-routing").expectation.bar.selected, "routing");
+  assert.equal(input("notch-precedence-pocket").expectation.bar.selected, "pocket");
+  for (const id of ["notch-precedence-toast", "notch-precedence-activity", "notch-precedence-routing", "notch-precedence-pocket"])
+    assert.equal(input(id).model.pocket.waiting, 1);
+  assert.ok(input("notch-precedence-toast").model.agentActivity);
+  assert.equal(input("notch-precedence-toast").model.capturePhase, "routing");
+  assert.equal(input("notch-precedence-activity").model.capturePhase, "routing");
+});
+
+test("Notch geometry stores source-equivalent numeric allocations and frames", async () => {
+  const { manifest } = await loadInventory();
+  const inputs = manifest.entries.filter(({ family }) => family === "notch").map((entry) => manifest.fixtures[entry.fixture].input);
+  assert.equal(inputs.some(({ geometry }) => "rightAllocation" in geometry), false);
+  const byPath = (path) => inputs.filter(({ expectation }) => expectation.geometry?.path === path).map(({ expectation }) => expectation.geometry);
+  for (const path of ["notched", "no-notch"]) {
+    const values = byPath(path);
+    assert.ok(values.some(({ wantedRightWidth, allocatedRightWidth }) => wantedRightWidth === allocatedRightWidth && allocatedRightWidth >= 54));
+    assert.ok(values.some(({ wantedRightWidth, allocatedRightWidth }) => wantedRightWidth > allocatedRightWidth && allocatedRightWidth >= 54));
+    assert.ok(values.some(({ roomRight, allocatedRightWidth }) => roomRight === 54 && allocatedRightWidth === 54));
+    assert.ok(values.some(({ roomRight, allocatedRightWidth }) => roomRight < 54 && allocatedRightWidth === 0));
+    assert.ok(values.every(({ roomRight, fillet, middle, wantedRightWidth, allocatedRightWidth, frame }) =>
+      [roomRight, fillet, middle, wantedRightWidth, allocatedRightWidth, frame.x, frame.y, frame.width, frame.height].every(Number.isFinite)));
+  }
+});
+
+test("Notch interactions are independently matched to exact emit sites", async () => {
+  const { manifest, evidence } = await loadInventory();
+  assert.deepEqual(evidence.notchControlEmitSites, [
+    { type: "pocketOpen", source: "desktop/native-notch/Sources/unmute-notch/NotchView.swift", line: 89 },
+    { type: "tap", source: "desktop/native-notch/Sources/unmute-notch/NotchView.swift", line: 89 },
+    { type: "hover", source: "desktop/native-notch/Sources/unmute-notch/NotchView.swift", line: 100 },
+  ]);
+  const controls = manifest.entries.filter(({ family }) => family === "notch").flatMap(({ interactions }) => interactions.controls ?? []);
+  assert.ok(controls.some(({ result }) => result.type === "pocketOpen"));
+  assert.ok(controls.some(({ result }) => result.type === "tap"));
+  assert.ok(controls.some(({ result }) => result.type === "hover" && result.hovering === true));
+  assert.ok(controls.some(({ result }) => result.type === "hover" && result.hovering === false));
+  assert.equal(controls.some(({ result }) => ["pointerEntered", "pointerExited"].includes(result.type)), false);
+});
+
+test("Notch status, appearance, and controller expectations are source-shaped or recomputed", async () => {
+  const { manifest } = await loadInventory();
+  const entry = (id) => manifest.entries.find((candidate) => candidate.id === id);
+  const input = (id) => manifest.fixtures[entry(id).fixture].input;
+  assert.equal(entry("notch-dormant-no-notch"), undefined);
+  const expected = {
+    processing: [false, "Working", "systemGreen"], "needs-user": [true, "Needs you", "systemOrange"],
+    ready: [true, "Ready", "systemTeal"], stuck: [true, "Stuck", "systemRed"],
+    done: [false, "Done", "systemGray"], failed: [true, "Errored", "systemRed"],
+  };
+  for (const [status, values] of Object.entries(expected)) {
+    const behavior = input(`notch-attention-${status}`).expectation.taskStatus;
+    assert.deepEqual([behavior.isYourMove, behavior.label, behavior.color], values);
+    assert.equal(input(`notch-attention-${status}`).expectation.bar.alarm, status);
+  }
+  assert.deepEqual(input("notch-agent-complete").expectation.agentTiming, { terminal: true, clearAfterSeconds: 2.2 });
+  assert.deepEqual(input("notch-agent-thinking").expectation.agentTiming, { terminal: false, clearAfterSeconds: null });
+  assert.equal(input("notch-auto-present-explicit-gesture").controller.lastGestureAgeSeconds, 5.999);
+  assert.equal("recentExplicitGesture" in input("notch-auto-present-explicit-gesture").controller, false);
+  assert.equal("departure" in input("notch-departure-expanded-hide").controller, false);
+  assert.equal("reduceTransparency" in input("notch-expanded-glass-tone").appearance, false);
+  assert.deepEqual(input("notch-expanded-solid-space-gray-fill").expectation.expandedFrame, { x: 227, y: 295, width: 1058, height: 687 });
+});
+
 test("Notch fixtures keep wire model, local view, geometry, appearance, and controller state exact", async () => {
   const { manifest } = await loadInventory();
   const notch = manifest.entries.filter(({ family }) => family === "notch");
   for (const entry of notch) {
     const input = manifest.fixtures[entry.fixture].input;
     assert.equal(input.surface, "notch");
-    assert.deepEqual(Object.keys(input).sort(), ["appearance", "controller", "geometry", "model", "surface", "viewState"].sort());
+    assert.deepEqual(Object.keys(input).sort(), ["appearance", "controller", "expectation", "geometry", "model", "surface", "viewState"].sort());
     assert.equal(typeof input.model.state, "string");
     assert.equal(typeof input.model.hovering, "boolean");
     assert.ok(Array.isArray(input.model.silenced));
@@ -259,7 +346,7 @@ test("Notch interactions are concrete source transitions, never synthetic expand
   const controls = manifest.entries.filter(({ family }) => family === "notch").flatMap(({ interactions }) => interactions.controls ?? []);
   const types = new Set(controls.map(({ result }) => result.type));
   assert.equal(types.has("expanded"), false);
-  for (const expected of ["tap", "pointerEntered", "pointerExited", "userLeft", "userReturned"])
+  for (const expected of ["tap", "pocketOpen", "hover", "userLeft", "userReturned"])
     assert.ok(types.has(expected), `missing notch transition ${expected}`);
   assert.ok(controls.every(({ provenance }) => provenance?.source.endsWith(".swift") && Number.isInteger(provenance.line)));
   for (const entry of manifest.entries.filter(({ family }) => family === "notch")) {
@@ -472,6 +559,11 @@ test("validation independently rejects broken schema and coverage relationships"
     ["false linked branch outcome", (m) => { const e = m.entries.find(({ family, audit }) => family === "pill" && audit.some(({ id }) => id.startsWith("branch:"))); const link = e.audit.find(({ id }) => id.startsWith("branch:")); link.outcome = !link.outcome; }, /branch outcome/i],
     ["provider fixture mismatch", (m) => { const e = m.entries.find(({ id }) => id === "pill-provider-codex-cli"); m.fixtures[e.fixture].input.state.agentOptions[0].terminal = false; }, /provider expectation mismatch/i],
     ["provider exact-case alias", (m) => { const e = m.entries.find(({ id }) => id === "pill-provider-codex-cli"); const input = m.fixtures[e.fixture].input; input.state.agentOptions.find(({ label }) => label === input.state.agent).id = "codex-desktop"; e.expectations.providerMark = { backend: "codex-desktop", vendor: "codex", name: "Codex desktop", terminal: true, art: "embedded" }; }, /branch outcome/i],
+    ["wrong Notch signature", (m) => { const e = m.entries.find(({ id }) => id === "notch-silenced-hardware-empty"); m.fixtures[e.fixture].input.model.silenced[0] = "needs-user|Needs you|Which environment should I deploy to?|0"; }, /derived expectation|branch outcome/i],
+    ["invented Notch geometry label", (m) => { const e = m.entries.find(({ id }) => id === "notch-right-segment-fit"); m.fixtures[e.fixture].input.geometry.rightAllocation = "fit"; }, /invented Notch projection/i],
+    ["forged Notch emit line", (m) => { const e = m.entries.find(({ id }) => id === "notch-pocket-waiting-one"); e.interactions.controls[0].provenance.line = 77; }, /control provenance/i],
+    ["wrong Notch measured allocation", (m) => { const e = m.entries.find(({ id }) => id === "notch-right-segment-boundary-54"); m.fixtures[e.fixture].input.expectation.geometry.allocatedRightWidth = 53; }, /derived expectation/i],
+    ["unreachable off-notch dormant", (m) => { const e = m.entries.find(({ id }) => id === "notch-idle-resting-nub"); m.fixtures[e.fixture].input.model.state = "dormant"; }, /unreachable stable off-notch dormant/i],
   ];
 
   for (const [name, mutate, expected] of cases) {

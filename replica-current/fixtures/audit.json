@@ -29650,6 +29650,23 @@
       "line": 1049
     }
   ],
+  "notchControlEmitSites": [
+    {
+      "type": "pocketOpen",
+      "source": "desktop/native-notch/Sources/unmute-notch/NotchView.swift",
+      "line": 89
+    },
+    {
+      "type": "tap",
+      "source": "desktop/native-notch/Sources/unmute-notch/NotchView.swift",
+      "line": 89
+    },
+    {
+      "type": "hover",
+      "source": "desktop/native-notch/Sources/unmute-notch/NotchView.swift",
+      "line": 100
+    }
+  ],
   "classifications": [
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/ComposerSupport/ComposerAvailability.swift:36:1",
@@ -35713,17 +35730,19 @@
       "kind": "render-affecting",
       "stateIds": [
         "notch-toast-collapsed",
+        "notch-precedence-toast",
         "notch-toast-expanded-suppressed"
       ],
-      "reason": "notch-toast-collapsed: Defines the toast collapsed notch rendering. notch-toast-expanded-suppressed: Defines the toast expanded suppressed notch rendering."
+      "reason": "notch-toast-collapsed: Defines the toast collapsed notch rendering. notch-precedence-toast: Defines the precedence toast notch rendering. notch-toast-expanded-suppressed: Defines the toast expanded suppressed notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:161:1",
       "kind": "render-affecting",
       "stateIds": [
+        "notch-precedence-activity",
         "notch-agent-expanded-suppressed"
       ],
-      "reason": "notch-agent-expanded-suppressed: Defines the agent expanded suppressed notch rendering."
+      "reason": "notch-precedence-activity: Defines the precedence activity notch rendering. notch-agent-expanded-suppressed: Defines the agent expanded suppressed notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:165:1",
@@ -35784,18 +35803,20 @@
       "kind": "render-affecting",
       "stateIds": [
         "notch-routing",
+        "notch-precedence-routing",
         "notch-routing-expanded-suppressed"
       ],
-      "reason": "notch-routing: Defines the routing notch rendering. notch-routing-expanded-suppressed: Defines the routing expanded suppressed notch rendering."
+      "reason": "notch-routing: Defines the routing notch rendering. notch-precedence-routing: Defines the precedence routing notch rendering. notch-routing-expanded-suppressed: Defines the routing expanded suppressed notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:210:1",
       "kind": "render-affecting",
       "stateIds": [
         "notch-pocket-waiting-one",
+        "notch-precedence-pocket",
         "notch-pocket-open-does-not-announce"
       ],
-      "reason": "notch-pocket-waiting-one: Defines the pocket waiting one notch rendering. notch-pocket-open-does-not-announce: Defines the pocket open does not announce notch rendering."
+      "reason": "notch-pocket-waiting-one: Defines the pocket waiting one notch rendering. notch-precedence-pocket: Defines the precedence pocket notch rendering. notch-pocket-open-does-not-announce: Defines the pocket open does not announce notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:224:1",
@@ -35847,9 +35868,14 @@
         "notch-active-task-hover-title",
         "notch-right-segment-fit",
         "notch-right-segment-truncated",
-        "notch-right-segment-dropped"
+        "notch-right-segment-boundary-54",
+        "notch-right-segment-dropped",
+        "notch-right-segment-fit-no-notch",
+        "notch-right-segment-truncated-no-notch",
+        "notch-right-segment-boundary-54-no-notch",
+        "notch-right-segment-dropped-no-notch"
       ],
-      "reason": "notch-active-task-hover-title: Defines the active task hover title notch rendering. notch-right-segment-fit: Defines the right segment fit notch rendering. notch-right-segment-truncated: Defines the right segment truncated notch rendering. notch-right-segment-dropped: Defines the right segment dropped notch rendering."
+      "reason": "notch-active-task-hover-title: Defines the active task hover title notch rendering. notch-right-segment-fit: Defines the right segment fit notch rendering. notch-right-segment-truncated: Defines the right segment truncated notch rendering. notch-right-segment-boundary-54: Defines the right segment boundary 54 notch rendering. notch-right-segment-dropped: Defines the right segment dropped notch rendering. notch-right-segment-fit-no-notch: Defines the right segment fit no notch notch rendering. notch-right-segment-truncated-no-notch: Defines the right segment truncated no notch notch rendering. notch-right-segment-boundary-54-no-notch: Defines the right segment boundary 54 no notch notch rendering. notch-right-segment-dropped-no-notch: Defines the right segment dropped no notch notch rendering."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/BarContent.swift:271:1",
@@ -39375,11 +39401,9 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:138:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "notch-dormant-no-notch"
-      ],
-      "reason": "notch-dormant-no-notch: Defines the dormant no notch notch rendering."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional else-if 'model.state == .dormant' in surface at desktop/native-notch/Sources/unmute-notch/NotchView.swift:138 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:153:1",

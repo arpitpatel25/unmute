@@ -103,6 +103,22 @@ export async function controlEmitSites() {
   return scanPillControlEmitSites(await git(["show", `${SOURCE_REVISION}:${swift("PillView.swift")}`]));
 }
 
+export function scanNotchControlEmitSites(text) {
+  const source = swift("NotchView.swift");
+  const sites = [];
+  text.split("\n").forEach((line, index) => {
+    if (/model\.emit\(model\.pocket\.taskCount > 0 \? \.pocketOpen : \.tap\)/.test(line)) {
+      sites.push({ type: "pocketOpen", source, line: index + 1 }, { type: "tap", source, line: index + 1 });
+    }
+    if (/model\.onHover\(hovering\)/.test(line)) sites.push({ type: "hover", source, line: index + 1 });
+  });
+  return sites;
+}
+
+export async function notchControlEmitSites() {
+  return scanNotchControlEmitSites(await git(["show", `${SOURCE_REVISION}:${swift("NotchView.swift")}`]));
+}
+
 function splitEnumCases(value) {
   const parts = []; let depth = 0; let start = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -239,22 +255,95 @@ const notchGeometry = (hasNotch = true, overrides = {}) => ({
   screenFrame: { x: 0, y: 0, width: 1512, height: 982 }, hasNotch,
   cutout: hasNotch ? { x: 656, y: 948, width: 200, height: 34 } : null,
   barHeight: hasNotch ? 34 : 24, leftUsable: hasNotch ? 656 : 756,
-  rightUsable: hasNotch ? 656 : 756, rightAllocation: "fit", ...overrides,
+  rightUsable: hasNotch ? 656 : 756, ...overrides,
 });
+const STATUS = {
+  processing: { isYourMove: false, label: "Working", color: "systemGreen" },
+  "needs-user": { isYourMove: true, label: "Needs you", color: "systemOrange" },
+  ready: { isYourMove: true, label: "Ready", color: "systemTeal" },
+  stuck: { isYourMove: true, label: "Stuck", color: "systemRed" },
+  done: { isYourMove: false, label: "Done", color: "systemGray" },
+  failed: { isYourMove: true, label: "Errored", color: "systemRed" },
+};
+const DETAIL_WIDTH = new Map([
+  ["Tests", 28.9521484375],
+  ["Running the exceptionally long checkout integration test suite before release", 417.565673828125],
+  ["Running checkout tests", 127.976806640625], ["Deploy checkout", 91.2587890625],
+  ["Which environment should I deploy to?", 211.16650390625], ["Choose the release environment", 175.908447265625],
+  ["listening release work", 118.150146484375], ["searching release work", 125.41064453125],
+  ["thinking release work", 115.769287109375], ["confirming release work", 130.537353515625],
+  ["complete release work", 122.866943359375], ["failed release work", 102.124267578125],
+  ["Could not send answer", 124.703125], ["Release checklist", 94.476318359375],
+]);
+const STATUS_WIDTH = { Working: 44.240819334983826, "Needs you": 56.668625473976135, Ready: 33.226372718811035, Stuck: 30.749499917030334, Done: 27.94700849056244, Errored: 40.04375410079956, Sending: 43.83958971500397, Listening: 49.1507385969162, Searching: 53.86199164390564, Thinking: 46.246041655540466, Confirming: 59.51544809341431, "Couldn't complete": 98.85295975208282, "1 waiting on you": 85.98001897335052, "2 waiting on you": 87.48266899585724 };
+function resolveBar(model) {
+  const expanded = ["task", "cockpit"].includes(model.state);
+  let selected = "state"; let dot = null; let left = null; let right = null; let badge = null; let alarm = null; let resting = false;
+  if (model.toast && !expanded) { selected = "toast"; dot = "failed"; left = "Couldn't complete"; right = model.toast; alarm = "failed"; }
+  else if (model.agentActivity && !expanded) {
+    selected = "agentActivity";
+    const mapping = { listening: ["processing", "Listening"], searching: ["processing", "Searching"], thinking: ["processing", "Thinking"], confirming: ["needs-user", "Confirming"], complete: ["done", "Done"], failed: ["failed", "Couldn't complete"] };
+    [dot, left] = mapping[model.agentActivity.state]; right = model.agentActivity.summary;
+    if (["confirming", "failed"].includes(model.agentActivity.state)) alarm = dot;
+  } else if (model.capturePhase === "routing" && !expanded) { selected = "routing"; dot = "processing"; left = "Sending"; }
+  else if (model.pocket.waiting > 0 && !expanded && model.pocket.mode !== "open") {
+    selected = "pocket"; dot = "needs-user"; left = `${model.pocket.waiting} waiting on you`; alarm = "needs-user";
+    if (model.hovering && model.pocket.slots[0]) right = model.pocket.slots[0].title;
+  } else if (model.state === "idle") {
+    if (!model.hasNotch && !model.hovering) resting = true; else left = "unmute";
+  } else if (model.state === "active") {
+    dot = "processing"; left = "Working"; badge = model.working;
+    if (model.working === 1 && model.task?.status === "processing") right = model.hovering ? model.task.title : (model.task.activity ?? model.task.title);
+  } else if (model.state === "attention") {
+    dot = model.task?.status ?? "needs-user"; left = STATUS[dot].label; badge = model.attention; alarm = dot;
+    right = model.task ? model.task.question?.text ?? model.task.activity ?? model.task.title : null;
+  }
+  const signature = `${dot ?? "-"}|${left ?? ""}|${right ?? ""}|${badge ?? 0}`;
+  const silenced = !model.hovering && !expanded && model.silenced.includes(signature);
+  if (silenced) return { selected: "silenced", dot: null, left: null, right: null, badge: null, alarm: null, resting: !model.hasNotch, signature };
+  return { selected, dot, left, right, badge, alarm, resting, signature };
+}
+function geometryExpectation(model, geometry, bar) {
+  const fillet = Math.max(Math.round(geometry.barHeight * 0.3), 4);
+  const bottomRadius = fillet;
+  let leftWidth = 0;
+  if (bar.resting) leftWidth = 56;
+  else if (bar.dot || bar.left) {
+    const measuredLeft = bar.left === "unmute" ? 13 * (126 / 78) + 2 : STATUS_WIDTH[bar.left];
+    if (bar.left && measuredLeft == null) throw new Error(`Missing deterministic AppKit status width for '${bar.left}'`);
+    leftWidth = 13 + (bar.dot ? 14 : 0) + (measuredLeft ?? 0);
+    if (bar.badge > 1) leftWidth += 7 + Math.ceil(({ 2: 6.115148901939392, 3: 6.352493524551392, 4: 6.519021391868591 }[bar.badge] ?? 12) + 12);
+    leftWidth = Math.ceil(leftWidth + 7);
+  }
+  const textWidth = bar.right ? DETAIL_WIDTH.get(bar.right) : 0;
+  if (bar.right && textWidth == null) throw new Error(`Missing deterministic AppKit detail width for '${bar.right}'`);
+  const wantedRightWidth = bar.right ? Math.ceil(7 + textWidth + 13) : 0;
+  const roomRight = Math.max(geometry.rightUsable - fillet - 24, 0);
+  let allocatedRightWidth = Math.min(wantedRightWidth, roomRight);
+  if (allocatedRightWidth < 54) allocatedRightWidth = 0;
+  const middle = geometry.cutout?.width ?? (leftWidth > 0 && allocatedRightWidth > 0 ? 18 : 0);
+  const width = Math.min(fillet + leftWidth + middle + allocatedRightWidth + fillet, geometry.screenFrame.width);
+  let x = geometry.cutout ? (geometry.cutout.x + geometry.cutout.width / 2) - middle / 2 - leftWidth - fillet : geometry.screenFrame.x + geometry.screenFrame.width / 2 - width / 2;
+  x = Math.min(Math.max(x, geometry.screenFrame.x), geometry.screenFrame.x + geometry.screenFrame.width - width);
+  return { path: geometry.hasNotch ? "notched" : "no-notch", textWidth, wantedRightWidth, roomRight, allocatedRightWidth, leftWidth, fillet, bottomRadius, middle, frame: { x: Math.round(x), y: Math.round(geometry.screenFrame.y + geometry.screenFrame.height - geometry.barHeight), width: Math.round(width), height: Math.round(geometry.barHeight) } };
+}
 const notchState = (id, line, modelOverrides, options = {}) => {
   const model = notchModel(modelOverrides); const hasNotch = model.hasNotch;
+  const geometry = notchGeometry(hasNotch, options.geometry); const bar = resolveBar(model);
+  const expandedFrame = ["task", "cockpit"].includes(model.state) ? { x: Math.round(geometry.screenFrame.width * (1 - (options.appearance?.fill ?? 0.8)) / 2), y: Math.round(geometry.screenFrame.height * (1 - (options.appearance?.fill ?? 0.8))), width: Math.round(geometry.screenFrame.width * (options.appearance?.fill ?? 0.8)), height: Math.round(geometry.screenFrame.height * (options.appearance?.fill ?? 0.8)) } : null;
   return {
     id, family: "notch", cite: B(swift(options.source ?? "BarContent.swift"), line, options.contribution ?? `Defines the ${id.replace(/^notch-/, "").replaceAll("-", " ")} notch rendering.`),
     input: {
       surface: "notch", model,
       viewState: { pointerRegion: model.hovering ? "bar" : null, transitionPocket: false },
-      geometry: notchGeometry(hasNotch, options.geometry),
-      appearance: { preference: options.appearance?.preference ?? "system", tone: options.appearance?.tone ?? "spaceGray", fill: options.appearance?.fill ?? 0.8, reduceTransparency: options.appearance?.reduceTransparency ?? false },
-      controller: { commandedState: options.controller?.commandedState ?? model.state, restedFrom: options.controller?.restedFrom ?? null, autoPresent: options.controller?.autoPresent ?? true, recentExplicitGesture: options.controller?.recentExplicitGesture ?? false, departure: options.controller?.departure ?? "present" },
+      geometry,
+      appearance: { preference: options.appearance?.preference ?? "system", tone: options.appearance?.tone ?? "spaceGray", fill: options.appearance?.fill ?? 0.8 },
+      controller: { commandedState: options.controller?.commandedState ?? model.state, restedFrom: options.controller?.restedFrom ?? null, autoPresent: options.controller?.autoPresent ?? true, lastGestureAgeSeconds: options.controller?.lastGestureAgeSeconds ?? null, surfaceIsAlreadyExpanded: options.controller?.surfaceIsAlreadyExpanded ?? ["task", "cockpit"].includes(model.state), departureTransition: options.controller?.departureTransition ?? { phase: "idle" } },
+      expectation: { bar, geometry: geometryExpectation(model, geometry, bar), ...(model.task ? { taskStatus: STATUS[model.task.status] } : {}), ...(model.agentActivity ? { agentTiming: { terminal: ["complete", "failed"].includes(model.agentActivity.state), clearAfterSeconds: ["complete", "failed"].includes(model.agentActivity.state) ? 2.2 : null } } : {}), ...(expandedFrame ? { expandedFrame } : {}) },
     },
     interactions: options.interactions ?? (["task", "cockpit"].includes(model.state) || model.pocket.mode === "open"
       ? none("This specimen has no visible bar; controls belong to its expanded or Pocket family and are outside this gate.")
-      : interactive(notchControl("open", "click bar", { type: "tap" }, "NotchView.swift", 77))),
+      : interactive(notchControl("open", "click bar", { type: model.pocket.slots.length > 0 ? "pocketOpen" : "tap" }, "NotchView.swift", 89))),
     ...(options.expectations ? { expectations: options.expectations } : {}),
   };
 };
@@ -271,11 +360,10 @@ const task = (status, overrides = {}) => ({
   project: "checkout", model: "gpt-5.3-codex", ...overrides,
 });
 const NOTCH_STATES = [
-  notchState("notch-dormant-hardware", 230, { state: "dormant" }, { interactions: interactive(notchControl("reveal", "pointer enters bar", { type: "pointerEntered", region: "bar", nextState: "idle" }, "AppController.swift", 1310)) }),
-  notchState("notch-dormant-no-notch", 138, { state: "dormant", hasNotch: false }, { source: "NotchView.swift", interactions: interactive(notchControl("reveal", "pointer enters bar", { type: "pointerEntered", region: "bar", nextState: "idle" }, "AppController.swift", 1310)) }),
+  notchState("notch-dormant-hardware", 230, { state: "dormant" }, { interactions: interactive(notchControl("reveal", "pointer enters bar", { type: "hover", hovering: true }, "NotchView.swift", 100)) }),
   notchState("notch-idle-wordmark", 235, { state: "idle" }),
-  notchState("notch-idle-resting-nub", 247, { state: "idle", hasNotch: false }, { interactions: interactive(notchControl("reveal", "pointer enters bar", { type: "pointerEntered", region: "bar" }, "NotchView.swift", 99)) }),
-  notchState("notch-idle-hover", 247, { state: "idle", hasNotch: false, hovering: true }, { interactions: interactive(notchControl("leave", "pointer exits bar", { type: "pointerExited", region: "bar" }, "NotchView.swift", 99)) }),
+  notchState("notch-idle-resting-nub", 247, { state: "idle", hasNotch: false }, { interactions: interactive(notchControl("reveal", "pointer enters bar", { type: "hover", hovering: true }, "NotchView.swift", 100)) }),
+  notchState("notch-idle-hover", 247, { state: "idle", hasNotch: false, hovering: true }, { interactions: interactive(notchControl("leave", "pointer exits bar", { type: "hover", hovering: false }, "NotchView.swift", 100)) }),
   notchState("notch-active-task-activity", 257, { state: "active", working: 1, task: task("processing", { activity: "Running checkout tests" }) }),
   notchState("notch-active-task-hover-title", 270, { state: "active", hovering: true, working: 1, task: task("processing", { activity: "Running checkout tests" }) }),
   notchState("notch-active-multiple-badge", 257, { state: "active", working: 4 }),
@@ -284,29 +372,38 @@ const NOTCH_STATES = [
   notchState("notch-task-expanded", 285, { state: "task", task: task("needs-user") }, { source: "BarContent.swift", appearance: { tone: "black" } }),
   notchState("notch-cockpit-expanded", 285, { state: "cockpit" }, { source: "BarContent.swift" }),
   notchState("notch-toast-collapsed", 158, { state: "idle", toast: "Could not send answer" }),
+  notchState("notch-precedence-toast", 158, { state: "attention", toast: "Could not send answer", agentActivity: agentActivity("thinking"), capturePhase: "routing", attention: 1, task: task("ready"), pocket: { mode: "closed", at: 0, waiting: 1, remoteKey: "right-option", slots: [pocketSlot] } }),
   notchState("notch-toast-expanded-suppressed", 158, { state: "task", toast: "Could not send answer", task: task("needs-user") }),
   ...["listening", "searching", "thinking", "confirming", "complete", "failed"].map((state, index) => notchState(`notch-agent-${state}`, 165 + index, { state: state === "confirming" ? "attention" : "active", agentActivity: agentActivity(state) })),
+  notchState("notch-precedence-activity", 161, { state: "attention", agentActivity: agentActivity("thinking"), capturePhase: "routing", attention: 1, task: task("ready"), pocket: { mode: "closed", at: 0, waiting: 1, remoteKey: "right-option", slots: [pocketSlot] } }),
   notchState("notch-agent-expanded-suppressed", 161, { state: "cockpit", agentActivity: agentActivity("thinking") }),
   notchState("notch-routing", 189, { state: "idle", capturePhase: "routing", captureTarget: "Deploy checkout" }),
+  notchState("notch-precedence-routing", 189, { state: "attention", capturePhase: "routing", attention: 1, task: task("ready"), pocket: { mode: "closed", at: 0, waiting: 1, remoteKey: "right-option", slots: [pocketSlot] } }),
   notchState("notch-routing-expanded-suppressed", 189, { state: "task", capturePhase: "routing", task: task("processing") }),
   notchState("notch-pocket-waiting-one", 210, { state: "idle", pocket: { mode: "closed", at: 0, waiting: 1, remoteKey: "right-option", slots: [pocketSlot] } }),
-  notchState("notch-pocket-waiting-hover-detail", 224, { state: "attention", hovering: true, attention: 2, pocket: { mode: "closed", at: 0, waiting: 2, remoteKey: "right-option", slots: [pocketSlot, { ...pocketSlot, id: "task-43", title: "Release checklist" }] } }, { interactions: interactive(notchControl("leave", "pointer exits bar", { type: "pointerExited", region: "bar" }, "NotchView.swift", 99)) }),
+  notchState("notch-precedence-pocket", 210, { state: "attention", attention: 1, task: task("ready"), pocket: { mode: "closed", at: 0, waiting: 1, remoteKey: "right-option", slots: [pocketSlot] } }),
+  notchState("notch-pocket-waiting-hover-detail", 224, { state: "attention", hovering: true, attention: 2, pocket: { mode: "closed", at: 0, waiting: 2, remoteKey: "right-option", slots: [pocketSlot, { ...pocketSlot, id: "task-43", title: "Release checklist" }] } }, { interactions: interactive(notchControl("leave", "pointer exits bar", { type: "hover", hovering: false }, "NotchView.swift", 100)) }),
   notchState("notch-pocket-open-does-not-announce", 210, { state: "idle", pocket: { mode: "open", at: 0, waiting: 1, remoteKey: "right-option", slots: [pocketSlot] } }),
-  notchState("notch-silenced-hardware-empty", 145, { state: "attention", attention: 1, task: task("needs-user"), silenced: ["needs-user|Needs you|Which environment should I deploy to?|0"] }),
+  notchState("notch-silenced-hardware-empty", 145, { state: "attention", attention: 1, task: task("needs-user"), silenced: ["needs-user|Needs you|Which environment should I deploy to?|1"] }),
   notchState("notch-silenced-off-notch-nub", 145, { state: "active", hasNotch: false, working: 2, silenced: ["processing|Working||2"] }),
   notchState("notch-silenced-hover-exempt", 145, { state: "active", hovering: true, working: 2, silenced: ["processing|Working||2"] }),
-  notchState("notch-right-segment-fit", 270, { state: "active", working: 1, task: task("processing", { activity: "Tests" }) }, { geometry: { rightAllocation: "fit", rightUsable: 656 } }),
-  notchState("notch-right-segment-truncated", 270, { state: "active", working: 1, task: task("processing", { activity: "Running the exceptionally long checkout integration test suite before release" }) }, { geometry: { rightAllocation: "truncate", rightUsable: 118 } }),
-  notchState("notch-right-segment-dropped", 270, { state: "active", working: 1, task: task("processing", { activity: "Running checkout tests" }) }, { geometry: { rightAllocation: "drop", rightUsable: 34 } }),
-  notchState("notch-expanded-glass-tone", 224, { state: "task", task: task("ready") }, { source: "NotchView.swift", appearance: { preference: "glass", tone: "glass", reduceTransparency: false } }),
-  notchState("notch-collapsed-glass-remains-black", 224, { state: "active", working: 2 }, { source: "NotchView.swift", appearance: { preference: "glass", tone: "glass", reduceTransparency: false } }),
+  notchState("notch-right-segment-fit", 270, { state: "active", working: 1, task: task("processing", { activity: "Running checkout tests" }) }),
+  notchState("notch-right-segment-truncated", 270, { state: "active", working: 1, task: task("processing", { activity: "Running the exceptionally long checkout integration test suite before release" }) }, { geometry: { rightUsable: 118 } }),
+  notchState("notch-right-segment-boundary-54", 270, { state: "active", working: 1, task: task("processing", { activity: "Running checkout tests" }) }, { geometry: { rightUsable: 88 } }),
+  notchState("notch-right-segment-dropped", 270, { state: "active", working: 1, task: task("processing", { activity: "Running checkout tests" }) }, { geometry: { rightUsable: 87 } }),
+  notchState("notch-right-segment-fit-no-notch", 270, { state: "active", hasNotch: false, working: 1, task: task("processing", { activity: "Running checkout tests" }) }),
+  notchState("notch-right-segment-truncated-no-notch", 270, { state: "active", hasNotch: false, working: 1, task: task("processing", { activity: "Running the exceptionally long checkout integration test suite before release" }) }, { geometry: { rightUsable: 118 } }),
+  notchState("notch-right-segment-boundary-54-no-notch", 270, { state: "active", hasNotch: false, working: 1, task: task("processing", { activity: "Running checkout tests" }) }, { geometry: { rightUsable: 85 } }),
+  notchState("notch-right-segment-dropped-no-notch", 270, { state: "active", hasNotch: false, working: 1, task: task("processing", { activity: "Running checkout tests" }) }, { geometry: { rightUsable: 84 } }),
+  notchState("notch-expanded-glass-tone", 224, { state: "task", task: task("ready") }, { source: "NotchView.swift", appearance: { preference: "glass", tone: "glass" } }),
+  notchState("notch-collapsed-glass-remains-black", 224, { state: "active", working: 2 }, { source: "NotchView.swift", appearance: { preference: "glass", tone: "glass" } }),
   notchState("notch-expanded-solid-space-gray-fill", 173, { state: "cockpit" }, { source: "Theme.swift", appearance: { preference: "solid", tone: "spaceGray", fill: 0.7 } }),
   notchState("notch-auto-present-allowed", 1100, { state: "task", task: task("needs-user") }, { source: "AppController.swift", controller: { autoPresent: true } }),
   notchState("notch-auto-present-held-collapsed", 1100, { state: "attention", attention: 1, task: task("needs-user") }, { source: "AppController.swift", controller: { commandedState: "task", autoPresent: false } }),
-  notchState("notch-auto-present-explicit-gesture", 1100, { state: "task", task: task("needs-user") }, { source: "AppController.swift", controller: { autoPresent: false, recentExplicitGesture: true } }),
-  notchState("notch-departure-expanded-hide", 1857, { state: "task", task: task("processing") }, { source: "AppController.swift", controller: { departure: "hidden-pending-compact" }, interactions: interactive(notchControl("leave-app", "activate another application", { type: "userLeft", reason: "blur" }, "AppController.swift", 1862)) }),
-  notchState("notch-departure-collapsed-noop", 1857, { state: "active", working: 1 }, { source: "AppController.swift", controller: { departure: "present" } }),
-  notchState("notch-departure-return", 1821, { state: "task", task: task("processing") }, { source: "AppController.swift", controller: { departure: "returning-hidden" }, interactions: interactive(notchControl("return-app", "reactivate Unmute", { type: "userReturned" }, "AppController.swift", 1831)) }),
+  notchState("notch-auto-present-explicit-gesture", 1100, { state: "task", task: task("needs-user") }, { source: "AppController.swift", controller: { autoPresent: false, lastGestureAgeSeconds: 5.999, surfaceIsAlreadyExpanded: false } }),
+  notchState("notch-departure-expanded-hide", 1857, { state: "task", task: task("processing") }, { source: "AppController.swift", controller: { departureTransition: { phase: "awaitingCompact" } }, interactions: interactive(notchControl("leave-app", "activate another application", { type: "userLeft", reason: "blur" }, "AppController.swift", 1862)) }),
+  notchState("notch-departure-collapsed-noop", 1857, { state: "active", working: 1 }, { source: "AppController.swift", controller: { departureTransition: { phase: "idle" } } }),
+  notchState("notch-departure-return", 1821, { state: "task", task: task("processing") }, { source: "AppController.swift", controller: { departureTransition: { phase: "returning" } }, interactions: interactive(notchControl("return-app", "reactivate Unmute", { type: "userReturned" }, "AppController.swift", 1831)) }),
 ];
 
 const STATES = [
@@ -338,7 +435,7 @@ export async function auditSource() {
   const productHead = (await git(["rev-parse", "HEAD"])).trim();
   const listed = (await git(["ls-tree", "-r", "--name-only", SOURCE_REVISION])).trim().split("\n");
   const files = listed.filter((source) => (source.startsWith("desktop/native-notch/Sources/") && source.endsWith(".swift")) || TS_FILES.has(source) || (source.startsWith(TS_PREFIX) && /\.(?:ts|tsx)$/.test(source) && !/\.(?:test|spec)\./.test(source)));
-  const report = { sourceRevision: SOURCE_REVISION, productHead, sourceDrift: productHead !== SOURCE_REVISION, files, enumCases: [], branches: [], sfSymbols: [], metrics: [], tokens: [], pillControlEmitSites: await controlEmitSites() };
+  const report = { sourceRevision: SOURCE_REVISION, productHead, sourceDrift: productHead !== SOURCE_REVISION, files, enumCases: [], branches: [], sfSymbols: [], metrics: [], tokens: [], pillControlEmitSites: await controlEmitSites(), notchControlEmitSites: await notchControlEmitSites() };
   for (const source of files) {
     const scanned = scanSourceText(source, await git(["show", `${SOURCE_REVISION}:${source}`]));
     for (const category of ["enumCases", "branches", "sfSymbols", "metrics", "tokens"]) report[category].push(...scanned[category]);
@@ -445,18 +542,19 @@ export function providerNameCaseOutcome(backend, line) {
 function notchPredicateOutcomes(input) {
   const { model, geometry, controller } = input;
   const collapsed = !["task", "cockpit"].includes(model.state);
-  const signature = `${model.task?.status ?? (model.working > 0 ? "processing" : "-")}|${model.task?.status === "needs-user" ? "Needs you" : model.working > 0 ? "Working" : ""}|${model.task?.question?.text ?? model.task?.activity ?? ""}|${model.attention || model.working || 0}`;
+  const resolved = resolveBar({ ...model, silenced: [] });
+  const hasRecentGesture = controller.lastGestureAgeSeconds != null && controller.lastGestureAgeSeconds < 6;
   return {
-    "toast visible while collapsed": Boolean(model.toast) && collapsed,
-    "agent activity visible while collapsed": Boolean(model.agentActivity) && collapsed && !model.toast,
-    "capturePhase == routing while collapsed": model.capturePhase === "routing" && collapsed && !model.toast && !model.agentActivity,
-    "pocket waiting while closed and collapsed": model.pocket.waiting > 0 && model.pocket.mode !== "open" && collapsed && !model.toast && !model.agentActivity && model.capturePhase !== "routing",
+    "toast visible while collapsed": Boolean(model.toast && model.toast.length > 0 && collapsed),
+    "agent activity visible while collapsed": Boolean(model.agentActivity && collapsed),
+    "capturePhase == routing while collapsed": model.capturePhase === "routing" && collapsed,
+    "pocket waiting while closed and collapsed": model.pocket.waiting > 0 && collapsed && model.pocket.mode !== "open",
     hovering: model.hovering,
-    "content signature silenced": model.silenced.includes(signature) || model.silenced.length > 0,
+    "content signature silenced": !model.hovering && collapsed && model.silenced.includes(resolved.signature),
     hasNotch: geometry.hasNotch,
-    "right segment fits": geometry.rightAllocation === "fit",
-    "auto-present permits expansion": controller.autoPresent || controller.recentExplicitGesture,
-    "expanded automatic departure": ["task", "cockpit"].includes(model.state) && controller.departure !== "present",
+    "right segment fits": input.expectation.geometry.allocatedRightWidth === input.expectation.geometry.wantedRightWidth,
+    "auto-present permits expansion": controller.autoPresent || controller.surfaceIsAlreadyExpanded || hasRecentGesture,
+    "expanded automatic departure": ["task", "cockpit"].includes(model.state) && controller.departureTransition.phase === "awaitingCompact",
   };
 }
 
@@ -465,16 +563,17 @@ function notchBranchCoverage(item, input) {
   if (item.source.endsWith("/BarContent.swift")) {
     if (item.line === 145) { predicate = "content signature silenced"; outcome = p[predicate]; }
     if (item.line === 158) { predicate = "toast visible while collapsed"; outcome = p[predicate]; }
-    if (item.line === 161 || (item.line >= 165 && item.line <= 170)) { predicate = "agent activity visible while collapsed"; outcome = p[predicate]; }
-    if (item.line === 189) { predicate = "capturePhase == routing while collapsed"; outcome = p[predicate]; }
-    if (item.line === 210 || item.line === 224) { predicate = "pocket waiting while closed and collapsed"; outcome = p[predicate]; if (item.line === 224) ancestors.push({ predicate, outcome: true }); }
+    if (item.line === 161 || (item.line >= 165 && item.line <= 170)) { predicate = item.line === 161 ? "agent activity visible while collapsed" : item.value; outcome = item.line === 161 ? p["agent activity visible while collapsed"] : input.model.agentActivity?.state === ["listening", "searching", "thinking", "confirming", "complete", "failed"][item.line - 165]; ancestors.push({ predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" }); if (item.line !== 161) ancestors.push({ predicate: "agent activity visible while collapsed", outcome: p["agent activity visible while collapsed"] }); }
+    if (item.line === 189) { predicate = "capturePhase == routing while collapsed"; outcome = p[predicate]; ancestors.push({ predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" }, { predicate: "agent activity branch not selected", outcome: input.expectation.bar.selected !== "agentActivity" }); }
+    if (item.line === 210 || item.line === 224) { predicate = item.line === 224 ? "hovering && first slot exists" : "pocket waiting while closed and collapsed"; outcome = item.line === 224 ? input.model.hovering && input.model.pocket.slots.length > 0 : p["pocket waiting while closed and collapsed"]; ancestors.push({ predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" }, { predicate: "agent activity branch not selected", outcome: input.expectation.bar.selected !== "agentActivity" }, { predicate: "routing branch not selected", outcome: input.expectation.bar.selected !== "routing" }); if (item.line === 224) ancestors.push({ predicate: "pocket waiting while closed and collapsed", outcome: p["pocket waiting while closed and collapsed"] }); }
     if (item.line === 247) { predicate = "!hasNotch && !hovering"; outcome = !p.hasNotch && !p.hovering; }
-    if (item.line === 270) { predicate = "single processing task"; outcome = input.model.working === 1 && input.model.task?.status === "processing"; }
+    if (item.line === 270) { predicate = "single processing task"; outcome = input.model.working === 1 && input.model.task?.status === "processing"; ancestors.push({ predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" }, { predicate: "agent activity branch not selected", outcome: input.expectation.bar.selected !== "agentActivity" }, { predicate: "routing branch not selected", outcome: input.expectation.bar.selected !== "routing" }, { predicate: "pocket branch not selected", outcome: input.expectation.bar.selected !== "pocket" }, { predicate: "state switch reached", outcome: input.expectation.bar.selected === "state" }); }
+    if ([230, 235, 257, 275, 285].includes(item.line)) ancestors.push({ predicate: "toast branch not selected", outcome: input.expectation.bar.selected !== "toast" }, { predicate: "agent activity branch not selected", outcome: input.expectation.bar.selected !== "agentActivity" }, { predicate: "routing branch not selected", outcome: input.expectation.bar.selected !== "routing" }, { predicate: "pocket branch not selected", outcome: input.expectation.bar.selected !== "pocket" }, { predicate: "state switch reached", outcome: input.expectation.bar.selected === "state" || input.expectation.bar.selected === "silenced" });
   } else if (item.source.endsWith("/NotchView.swift")) {
     if (item.line === 224) { predicate = "expanded or open-pocket glass tone"; outcome = (["task", "cockpit"].includes(input.model.state) || input.model.pocket.mode === "open") && input.appearance.tone === "glass"; }
   } else if (item.source.endsWith("/AppController.swift")) {
     if (item.line === 1096 || item.line === 1100) { predicate = "auto-present permits expansion"; outcome = p[predicate]; }
-    if (item.line === 1821) { predicate = "return from automatic departure"; outcome = input.controller.departure === "returning-hidden"; }
+    if (item.line === 1821) { predicate = "return from automatic departure"; outcome = input.controller.departureTransition.phase === "returning"; }
     if (item.line === 1857) { predicate = "expanded automatic departure"; outcome = p[predicate]; }
   }
   return { predicate, outcome, ancestors };
@@ -514,7 +613,7 @@ export function createInventory(raw) {
   }
   for (const entry of entries.filter(({ family }) => family === "notch")) {
     const input = fixtures[entry.fixture].input; const outcomes = notchPredicateOutcomes(input);
-    entry.predicates = Object.entries(outcomes).map(([predicate, outcome]) => ({ predicate, outcome, source: predicate.includes("departure") || predicate.includes("auto-present") ? swift("AppController.swift") : predicate === "hasNotch" || predicate === "right segment fits" ? swift("NotchGeometry.swift") : swift("BarContent.swift"), line: predicate.includes("departure") ? 1857 : predicate.includes("auto-present") ? 1095 : predicate === "hasNotch" ? 210 : predicate === "right segment fits" ? 210 : predicate === "hovering" ? 224 : predicate.includes("silenced") ? 145 : predicate.startsWith("toast") ? 158 : predicate.startsWith("agent") ? 161 : predicate.startsWith("capture") ? 189 : 210 }));
+    entry.predicates = Object.entries(outcomes).map(([predicate, outcome]) => ({ predicate, outcome, source: predicate.includes("departure") || predicate.includes("auto-present") ? swift("AppController.swift") : predicate === "hasNotch" || predicate === "right segment fits" ? swift("NotchGeometry.swift") : swift("BarContent.swift"), line: predicate.includes("departure") ? 1857 : predicate.includes("auto-present") ? 1097 : predicate === "hasNotch" ? 185 : predicate === "right segment fits" ? 214 : predicate === "hovering" ? 224 : predicate.includes("silenced") ? 145 : predicate.startsWith("toast") ? 158 : predicate.startsWith("agent") ? 161 : predicate.startsWith("capture") ? 189 : 210 }));
   }
   const attach = (item, stateId, contribution) => {
     const entry = entries.find(({ id }) => id === stateId);
@@ -592,16 +691,22 @@ export function validateManifest(manifest, evidence) {
       for (const item of entry.interactions.controls ?? []) if (!(evidence.pillControlEmitSites ?? []).some((site) => site.type === item.result.type && site.line === item.provenance?.line) || item.provenance?.source !== swift("PillView.swift")) errors.push(`Invalid Pill control provenance for ${entry.id}:${item.id}`);
     }
     if (entry.family === "notch" && fixture) {
-      const input = fixture.input; const allowed = ["appearance", "controller", "geometry", "model", "surface", "viewState"];
+      const input = fixture.input; const allowed = ["appearance", "controller", "expectation", "geometry", "model", "surface", "viewState"];
       if (JSON.stringify(Object.keys(input).sort()) !== JSON.stringify(allowed.sort()) || input.surface !== "notch") errors.push(`Invalid Notch fixture partition for ${entry.id}`);
       if (!input.model || !input.geometry || !input.appearance || !input.controller || !input.viewState) errors.push(`Incomplete Notch fixture for ${entry.id}`);
+      if (input.model.state === "dormant" && !input.geometry.hasNotch) errors.push(`Unreachable stable off-notch dormant fixture for ${entry.id}`);
+      const expectedBar = resolveBar(input.model); const expectedGeometry = geometryExpectation(input.model, input.geometry, expectedBar);
+      if (JSON.stringify(input.expectation?.bar) !== JSON.stringify(expectedBar) || JSON.stringify(input.expectation?.geometry) !== JSON.stringify(expectedGeometry)) errors.push(`Notch derived expectation mismatch for ${entry.id}`);
+      if (input.model.task && JSON.stringify(input.expectation?.taskStatus) !== JSON.stringify(STATUS[input.model.task.status])) errors.push(`Notch TaskStatus behavior mismatch for ${entry.id}`);
+      if (input.model.agentActivity) { const terminal = ["complete", "failed"].includes(input.model.agentActivity.state); if (JSON.stringify(input.expectation?.agentTiming) !== JSON.stringify({ terminal, clearAfterSeconds: terminal ? 2.2 : null })) errors.push(`Notch Agent timing mismatch for ${entry.id}`); }
+      if ("rightAllocation" in input.geometry || "recentExplicitGesture" in input.controller || "departure" in input.controller || "reduceTransparency" in input.appearance) errors.push(`Invented Notch projection for ${entry.id}`);
       const outcomes = notchPredicateOutcomes(input);
       for (const item of entry.predicates ?? []) if (typeof item.outcome !== "boolean" || outcomes[item.predicate] !== item.outcome) errors.push(`Notch predicate outcome mismatch for ${entry.id}:${item.predicate}`);
       for (const link of entry.audit.filter(({ id }) => id.startsWith("branch:"))) {
         const occurrence = occurrenceById.get(link.id); const expected = occurrence && notchBranchCoverage(occurrence, input);
         if (!expected || link.predicate !== expected.predicate || link.outcome !== expected.outcome || JSON.stringify(link.ancestors) !== JSON.stringify(expected.ancestors) || link.ancestors.some(({ outcome }) => !outcome)) errors.push(`Notch branch outcome or ancestor reachability mismatch for ${entry.id}:${link.id}`);
       }
-      for (const item of entry.interactions.controls ?? []) if (item.provenance?.source == null || !Number.isInteger(item.provenance?.line)) errors.push(`Invalid Notch control provenance for ${entry.id}:${item.id}`);
+      for (const item of entry.interactions.controls ?? []) if (!(evidence.notchControlEmitSites ?? []).some((site) => site.type === item.result.type && site.source === item.provenance?.source && site.line === item.provenance?.line) && !(["userLeft", "userReturned"].includes(item.result.type) && item.provenance?.source === swift("AppController.swift"))) errors.push(`Invalid Notch control provenance for ${entry.id}:${item.id}`);
     }
   }
   for (const [id, fixture] of Object.entries(fixtures)) if (!entryById.has(fixture.stateId) || entryById.get(fixture.stateId).fixture !== id) errors.push(`Orphan fixture: ${id}`);
