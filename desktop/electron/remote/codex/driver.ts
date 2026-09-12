@@ -154,6 +154,13 @@ export function threadNavigationFallback(background: boolean): 'fail' | 'deeplin
   return background ? 'fail' : 'deeplink'
 }
 
+/** Is a GUI process with this exact name alive? Used only to wait out a quit. */
+function isProcessRunning(name: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('pgrep', ['-x', name], (err, stdout) => resolve(!err && stdout.trim().length > 0))
+  })
+}
+
 /**
  * Relaunch Codex with the debug port WITHOUT stealing focus.
  *
@@ -164,13 +171,36 @@ export function threadNavigationFallback(background: boolean): 'fail' | 'deeplin
  * "Connect Codex" action, never something we do mid-utterance.
  */
 function defaultLaunchApp(appPath: string): (opts: { bundleId: string; cdpPort: number }) => Promise<void> {
-  return ({ cdpPort }) => new Promise<void>((resolve) => {
-    execFile('osascript', ['-e', 'tell application "ChatGPT" to quit'], () => {
-      setTimeout(() => {
-        execFile('open', ['-g', '-a', appPath, '--args', `--remote-debugging-port=${cdpPort}`], () => resolve())
-      }, 2500)
+  // The quit was `osascript -e 'tell application "ChatGPT" to quit'` — an Apple
+  // Event, so macOS raised an Automation consent dialog for ChatGPT the first
+  // time a user connected Codex. NSRunningApplication.terminate() (via the AX
+  // addon) posts the same graceful quit and needs no TCC grant, so Connect Codex
+  // now costs exactly the permissions it should: none beyond what is already
+  // granted.
+  return async ({ cdpPort }) => {
+    // Best-effort, and never allowed to decide whether we relaunch: getAxBridge()
+    // can throw SYNCHRONOUSLY if the worker cannot be created, and a missing
+    // bridge must not become a broken Connect Codex.
+    try {
+      await getAxBridge().call('quitApp', ['ChatGPT'])
+    } catch { /* not running, or no bridge — the relaunch below still stands */ }
+    // WAIT FOR THE OLD INSTANCE TO ACTUALLY GO. The AppleScript this replaced
+    // blocked until ChatGPT had quit, so the 2.5s settle below started counting
+    // from a dead app. terminate() only POSTS the request (measured: TextEdit
+    // was still alive 2.5s later), and `open -a` against a LIVE instance just
+    // activates it — without the debug port — so skipping this wait would arm
+    // nothing and fail later at the CDP probe, far from the cause.
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline && (await isProcessRunning('ChatGPT'))) {
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    // The debug-port flag is only read at process start, so the old instance
+    // must be fully gone before this lands.
+    await new Promise((r) => setTimeout(r, 2500))
+    await new Promise<void>((resolve) => {
+      execFile('open', ['-g', '-a', appPath, '--args', `--remote-debugging-port=${cdpPort}`], () => resolve())
     })
-  })
+  }
 }
 
 export class CodexDesktopDriver {

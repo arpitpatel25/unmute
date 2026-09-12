@@ -17,6 +17,7 @@
 // persist anything.
 import { spawn } from 'node:child_process'
 import { createLogger } from '../../log'
+import { getAxBridge } from '../../ax/ax-bridge'
 
 const log = createLogger('cua-arming')
 
@@ -57,12 +58,45 @@ function defaultLaunch(app: string, port: number): void {
   }).unref()
 }
 
+// WAS `osascript -e 'tell application "X" to quit'`, WHICH PROMPTED.
+//
+// That is an Apple Event, so macOS gates it behind Automation
+// (kTCCServiceAppleEvents) and raises a consent dialog naming the TARGET APP
+// the first time we arm each one — "unmute wants to control Notion" for a
+// relaunch the user just asked for by pressing Connect.
+// NSRunningApplication.terminate() posts the same graceful quit request and
+// needs no TCC grant at all, so the arming flow is unchanged apart from losing
+// a dialog. An app that is not running answers false, which is the same no-op
+// the AppleScript was (arming quits before every launch, so that is the common
+// case, not a failure).
+/** How long to wait for a quit to actually land before calling the app stuck.
+ *  arm() turns "still running" into ARM_QUIT_FAILED, so this is the budget for
+ *  a slow-but-honest quit, not a hang. */
+const QUIT_SETTLE_TIMEOUT_MS = 10_000
+
 async function defaultQuit(app: string): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const child = spawn('osascript', ['-e', `tell application "${app}" to quit`], { stdio: 'ignore' })
-    child.on('error', () => resolve()) // app may not be running — not fatal
-    child.on('exit', () => resolve())
-  })
+  try {
+    await getAxBridge().call('quitApp', [app])
+  } catch (e) {
+    // The bridge being unavailable must not strand arming: the relaunch below
+    // still runs, and a stale instance surfaces as a failed CDP probe with a
+    // real error, not as a silent hang here.
+    log.warn('quit via accessibility failed', { app, error: (e as Error).message })
+  }
+  // WAIT FOR IT TO ACTUALLY BE GONE — the AppleScript gave us this for free.
+  //
+  // `osascript -e 'tell application "X" to quit'` BLOCKED until the app had
+  // quit, so the flat 1s settle below was ample. terminate() only POSTS the
+  // request and returns immediately: measured on TextEdit, the process was
+  // still alive 2.5s after terminate() answered true. arm() calls isRunning()
+  // the instant this resolves and throws ARM_QUIT_FAILED when it answers true,
+  // so dropping this poll would turn "quits a little slowly" into a hard arming
+  // failure for exactly the Electron apps this lane exists to drive.
+  const deadline = Date.now() + QUIT_SETTLE_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    if (!(await defaultIsRunning(app))) break
+    await sleep(250)
+  }
   // Give the app a moment to actually tear down before we relaunch it with
   // the new flag — otherwise `open -na` can race the old instance's exit.
   await sleep(1000)

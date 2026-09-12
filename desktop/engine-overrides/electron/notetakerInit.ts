@@ -57,7 +57,7 @@ import { MeetingWatcher } from './meetingWatcher'
 import { NotetakerSession, type NativeAudioTap, type AudioTapStartResult } from './notetakerSession'
 import { NotetakerController } from './notetakerController'
 import { readNowPlaying } from './mediaController'
-import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowser } from './browserTabWatcher'
+import { getActiveTabUrl, SUPPORTED_TAB_URL_BROWSERS, type TabUrlBrowser } from './browserTabWatcher'
 import { PeriodicChunkEmitter, type FinalizedSegment } from './notetaker/periodicChunkEmitter'
 import { encodeChunk, transcribeEncodedChunk, persistSession, newMeetingId } from './notetaker/transcribeSession'
 import { cleanChunkText } from './notetaker/chunkStitcher'
@@ -1429,7 +1429,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
   // Poll loop: readNowPlaying() (native app / bundle-ID signal, spec §2)
   // combined with the AppleScript tab-URL watcher (Task 2, spec §3) for
-  // whichever SUPPORTED_APPLESCRIPT_BROWSERS browser is currently
+  // whichever SUPPORTED_TAB_URL_BROWSERS browser is currently
   // frontmost.
   //
   // NOT WIRED: Chrome tab-URL detection. The plan (task-2-brief.md)
@@ -1478,7 +1478,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
     // The notetaker's OWN capture is a hot capture too: this tick spawns a
     // `perl` child process (readNowPlaying), makes a synchronous native-ax
-    // frontmostApp() call, and may spawn `osascript` for the browser tab URL —
+    // frontmostApp() call, and may ask the AX worker for the browser tab URL —
     // every 3 seconds, right through the user's meeting. That was harmless
     // while the captured audio was being discarded; now that the recording is
     // transcribed and saved (and the widget is holding a live mic), it is not.
@@ -1499,7 +1499,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       const np = await readNowPlaying()
       let activeTabUrl: string | undefined
       const frontName = ax.frontmostApp()
-      const browserName = SUPPORTED_APPLESCRIPT_BROWSERS.find((b: AppleScriptBrowser) => b === frontName)
+      const browserName = SUPPORTED_TAB_URL_BROWSERS.find((b: TabUrlBrowser) => b === frontName)
       if (browserName) activeTabUrl = await getActiveTabUrl(browserName)
 
       let tabHost: string | undefined
