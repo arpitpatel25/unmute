@@ -421,6 +421,68 @@ private struct RunningDot: View {
     }
 }
 
+// MARK: - Waiting for the first word back
+
+/// One dot of the typing indicator. `delay` staggers it against its siblings,
+/// which is what makes three dots read as a wave rather than a blink.
+private struct TypingDot: View {
+    let delay: Double
+    /// The view-level answer, per the note on Theme.resize: SwiftUI tracks the
+    /// preference here and re-renders when it flips.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var up = false
+
+    var body: some View {
+        Circle()
+            .fill(Theme.textDim)
+            .frame(width: 5, height: 5)
+            // REDUCE MOTION KEEPS THE DOTS, LOSES THE WAVE. The indicator is
+            // the only thing on screen saying the message was received, so
+            // suppressing it entirely would hand that person back the silence
+            // this exists to remove. A static mid-opacity row still reads as
+            // "pending" — it just does not move.
+            .opacity(reduceMotion ? 0.55 : (up ? 1 : 0.28))
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true).delay(delay)) {
+                    up = true
+                }
+            }
+    }
+}
+
+/// Three dots, shown under the newest message from the moment it is sent until
+/// the turn produces anything of its own.
+///
+/// WHY THIS EXISTS. The transcript had no tail: `ChatStatusView` carries
+/// "Working…" but is mounted OUTSIDE the transcript (see its own header), and
+/// the only in-transcript status hung off the JumpToLatest pill as
+/// `meta.summary` — which is nil until a turn has at least one step or one
+/// changed file. So between sending and the first work block there was nothing
+/// under your message at all, and no way to tell a received message from a
+/// dropped one.
+///
+/// DELIBERATELY NOT A BUBBLE. Answers in this view are plain leading-aligned
+/// text (BlockAnswer), not chrome, so a bubble here would announce a shape the
+/// agent never uses. A low-contrast pill is enough to mark the spot the reply
+/// is about to occupy.
+struct TypingIndicator: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            TypingDot(delay: 0)
+            TypingDot(delay: 0.18)
+            TypingDot(delay: 0.36)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.raised))
+        // One element with one label: three separately-announced dots is noise
+        // to anyone listening, and the row means a single thing.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Waiting for a reply")
+    }
+}
+
 // MARK: - LEVEL 3, one call
 
 /// ONE CALL, NAMED AS A SENTENCE, with its payload one more click away.

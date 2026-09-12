@@ -50,6 +50,11 @@ struct BlockConversation: View {
     var olderMessages: Int = 0
     var loadOlder: () -> Void = {}
     var canEditLatestMessage: Bool = false
+    /// Whether the TASK is still working. Taken from the task manager rather
+    /// than inferred from the blocks, for the reason BlockPresentation.build
+    /// documents: a transcript carries no turn markers, so the blocks alone
+    /// cannot tell "finished" from "still thinking".
+    var running: Bool = false
     @State private var loadingOlder = false
     @State private var olderAnchor: BlockTurn?
 
@@ -127,6 +132,16 @@ struct BlockConversation: View {
                                     .frame(maxWidth: proseMeasure(panelWidth: width), alignment: .leading)
                                     .frame(maxWidth: .infinity, alignment: .center)
                             }
+                            // THE TAIL. Sits under the newest message, in the
+                            // same column as the turns, so the acknowledgement
+                            // belongs to what you just sent rather than to the
+                            // surface around it.
+                            if awaitingReply {
+                                TypingIndicator()
+                                    .frame(maxWidth: proseMeasure(panelWidth: width), alignment: .leading)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .transition(.opacity)
+                            }
                             Color.clear
                                 .frame(height: 1)
                                 .id(BLOCK_BOTTOM)
@@ -139,6 +154,11 @@ struct BlockConversation: View {
                                 })
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        // Cross-fade the tail rather than letting it pop: it
+                        // appears and disappears on someone else's schedule
+                        // (the first block back), and an unannounced jump in
+                        // transcript height reads as a glitch.
+                        .animation(.easeInOut(duration: 0.18), value: awaitingReply)
                         // Room for the control to float over, so the last line
                         // of the newest message is never underneath it.
                         .padding(.bottom, jumpControlHeight)
@@ -223,6 +243,22 @@ struct BlockConversation: View {
                 .onChange(of: geo.size.width) { w in width = w }
         })
         .environment(\.codeMeasure, codeMeasure(panelWidth: width))
+    }
+
+    /// Sent, and nothing has come back yet.
+    ///
+    /// THE TEARDOWN KEYS ON WORK OR REPLY, NEVER ON THE PROMPT. Your own
+    /// message is not drawn optimistically — NotchModel.prepareTaskConversation
+    /// rebuilds the transcript from the task payload, so the prompt bubble
+    /// ARRIVES FROM THE BACKEND. Hiding the dots when the blocks change would
+    /// therefore hide them at the exact moment your message appeared, which is
+    /// the silence this was added to remove, one step later.
+    ///
+    /// An empty transcript is not this case: ConversationPanel already shows
+    /// "Starting…" when there is nothing to lay out at all.
+    private var awaitingReply: Bool {
+        guard running, let last = turns.last else { return false }
+        return last.work.isEmpty && last.reply == nil
     }
 
     /// What the pill says while something is running. Nil when everything has
