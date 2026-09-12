@@ -21,6 +21,16 @@ import SwiftUI
 //     the cutout's own bottom corners. Only the outer two: the middle, where
 //     the mass crosses the housing, is dead straight.
 //
+//     These are TRUE CIRCULAR ARCS, and that is load-bearing. They were quad
+//     curves with the control point parked on the corner, which is a parabola,
+//     not an arc — and a parabola hugs the corner tighter than the radius it
+//     was given. At 45° it sits 0.354 × r out from the corner where an arc sits
+//     at 0.414 × r, so an 11pt corner rendered like a 9pt one. That is a 15%
+//     error in the one dimension the shape exists to get right, and it showed:
+//     against a hardware cutout curving away on a genuine radius, our corner
+//     read as square. `addArc(tangent1End:tangent2End:)` takes the radius
+//     literally, so the number in `bottomRadius` is now the number on screen.
+//
 //   * TOP OUTER — CONCAVE, `topFillet`. Where the mass meets the menu bar the
 //     black flares OUTWARD in a quarter circle instead of stopping at a right
 //     angle. This inverted curve is what separates a surface that belongs to
@@ -68,14 +78,18 @@ struct NotchShape: Shape {
         p.move(to: CGPoint(x: rect.minX, y: rect.minY))
         p.addQuadCurve(to: CGPoint(x: body.minX, y: rect.minY + f),
                        control: CGPoint(x: body.minX, y: rect.minY))
-        // Down the left wall to the bottom-left convex corner.
+        // Down the left wall to the bottom-left convex corner, which is swept
+        // as an arc tangent to the wall and the floor — see the note above on
+        // why this may not go back to being a quad curve.
         p.addLine(to: CGPoint(x: body.minX, y: rect.maxY - br))
-        p.addQuadCurve(to: CGPoint(x: body.minX + br, y: rect.maxY),
-                       control: CGPoint(x: body.minX, y: rect.maxY))
+        p.addArc(tangent1End: CGPoint(x: body.minX, y: rect.maxY),
+                 tangent2End: CGPoint(x: body.minX + br, y: rect.maxY),
+                 radius: br)
         // The bottom edge — DEAD STRAIGHT across the cutout region.
         p.addLine(to: CGPoint(x: body.maxX - br, y: rect.maxY))
-        p.addQuadCurve(to: CGPoint(x: body.maxX, y: rect.maxY - br),
-                       control: CGPoint(x: body.maxX, y: rect.maxY))
+        p.addArc(tangent1End: CGPoint(x: body.maxX, y: rect.maxY),
+                 tangent2End: CGPoint(x: body.maxX, y: rect.maxY - br),
+                 radius: br)
         // Up the right wall and out through the second flare.
         p.addLine(to: CGPoint(x: body.maxX, y: rect.minY + f))
         p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY),
