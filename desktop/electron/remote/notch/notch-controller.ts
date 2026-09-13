@@ -2188,6 +2188,10 @@ export class NotchController {
     // place captured images go. leave() routes through here with null, so
     // pocketing and collapsing are covered by this one line too.
     this.applyComposerFocus({ kind: 'surface-changed', taskId: id })
+    // A task taking focus is the voice leaving the Agent. Not every route here
+    // passes through applyVoiceTarget, and at submit a raised Agent flag
+    // outranks the focused task — so a stale one sent your words to the Agent.
+    if (id) this.deps.addressAgent?.(false)
     this.deps.focus(id) // focus IS the voice address (consent model)
     // Every route onto the expanded task surface — dashboard selection,
     // pocket expansion, Prev/Next, and programmatic open — has already set the
