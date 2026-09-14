@@ -172,6 +172,10 @@ final class NotchModel: ObservableObject {
     @Published var proposalLoadingId: String? = nil
     @Published var convLog: String = ""            // streamed review-conversation output
 
+    /// The Agent's routines sheet. On the model rather than view state so
+    /// Escape (AppController.stepDown) can close it before the card.
+    @Published var routinesSheetOpen: Bool = false
+
     /// THE POCKET. What you set aside: still alive, still in the crank, still
     /// reachable by voice — and costing you nothing but the notch until you
     /// either speak or tap it open.

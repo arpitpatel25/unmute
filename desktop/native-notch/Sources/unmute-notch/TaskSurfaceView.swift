@@ -57,6 +57,11 @@ struct TaskSurfaceView: View {
                                       running: t.status == .processing, history: t.history, canEditLatestMessage: t.canEditLatestMessage ?? false, olderMessages: t.olderMessages ?? 0,
                                       loadOlder: { model.emit(.loadOlderMessages(id: t.id)) })
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // THE AGENT'S ROUTINE SHEETS sit over the chat, never
+                        // beside it — one chat, no second panel (routines spec
+                        // §2). The run sheet is on top: it can be opened from
+                        // inside the routines sheet's chat underneath.
+                        .overlay { routineSheets(t) }
                         .padding(.top, 10)
                     if t.status == .needsUser, let q = t.question {
                         QuestionBlock(model: model, taskId: t.id, question: q,
@@ -195,6 +200,9 @@ struct TaskSurfaceView: View {
             StatusLabel(status: t.status)
             if let e = t.elapsed { NumText(text: e) }
             Spacer(minLength: 8)
+            if t.id == "unmute-agent", let routines = t.routines {
+                RoutinesHeaderButton(routines: routines, show: { model.routinesSheetOpen = true })
+            }
             if model.attention > 0 {
                 Text("1 of \(model.attention)").font(Theme.fSub).foregroundColor(Theme.textDim)
             }
@@ -239,6 +247,19 @@ struct TaskSurfaceView: View {
 
 
 
+    @ViewBuilder
+    private func routineSheets(_ t: TaskDetail) -> some View {
+        if t.id == "unmute-agent", let routines = t.routines {
+            ZStack {
+                if model.routinesSheetOpen {
+                    RoutinesSheet(routines: routines, close: { model.routinesSheetOpen = false }, emit: model.emit)
+                }
+                if let run = routines.run {
+                    RoutineRunSheet(detail: run, close: { model.emit(.routineCloseRun) }, emit: model.emit)
+                }
+            }
+        }
+    }
 
     private var taskTerminalBinding: Binding<Bool> {
         Binding(get: { model.taskTerminalOpen },

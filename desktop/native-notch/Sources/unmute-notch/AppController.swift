@@ -1893,6 +1893,13 @@ final class AppController: NSObject, NotchResizing {
             model.proposal = nil; model.proposalLoadingId = nil; model.convLog = ""
             return
         }
+        // THE AGENT'S ROUTINE SHEETS are popups too: the run sheet sits on top
+        // of the routines sheet, so it goes first. The run sheet is host state
+        // (TaskDetail.routines.run), so closing it is a request, not a flag.
+        if isExpanded(model.state), model.task?.id == "unmute-agent" {
+            if model.task?.routines?.run != nil { model.emit(.routineCloseRun); return }
+            if model.routinesSheetOpen { model.routinesSheetOpen = false; return }
+        }
         // CLOSING THE POCKET IS THE AIM CONTROL, and Escape is how you close
         // things. Open means your voice goes to the task on the card; Escape
         // shuts it and the aim goes with it — mid-sentence or not, because that

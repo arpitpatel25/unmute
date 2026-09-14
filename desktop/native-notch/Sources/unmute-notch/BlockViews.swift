@@ -35,6 +35,23 @@ struct BlockTurnView: View {
     @State private var canvasWidth: CGFloat = 0
 
     var body: some View {
+        // A ROUTINE TURN IS STANDALONE — BlockPresentation gives it exactly one
+        // side — so it short-circuits before anything a normal turn draws.
+        if let run = turn.prompt, run.kind == "routineRun" {
+            RoutineRunChip(block: run, open: { openRun(run) })
+        } else if let result = turn.reply, result.kind == "routineResult" {
+            RoutineResultView(block: result, taskId: taskId, open: { openRun(result) })
+        } else {
+            standardBody
+        }
+    }
+
+    private func openRun(_ block: Block) {
+        guard let runId = block.what, !runId.isEmpty else { return }
+        IPC.emit(.routineOpenRun(runId: runId))
+    }
+
+    private var standardBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let prompt = turn.prompt, let text = prompt.text {
                 VStack(alignment: .trailing, spacing: 5) {
@@ -174,7 +191,7 @@ struct BlockTurnView: View {
 }
 
 /// A consequence the user must see without opening anything.
-private struct NoticeRow: View {
+struct NoticeRow: View {
     enum Tone { case warn, error, quiet }
     let text: String
     let tone: Tone
@@ -806,7 +823,7 @@ private struct BlockUserBubble: View {
     }
 }
 
-private struct BlockAnswer: View {
+struct BlockAnswer: View {
     let text: String
     var body: some View {
         // Every native conversation surface uses the same cmark-gfm-backed
