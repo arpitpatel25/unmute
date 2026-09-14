@@ -22,6 +22,8 @@ export interface RoutineServiceOptions {
   enabled: boolean
   now?: () => number
   indexDir?: string
+  /** fs.watch the routines directory for hand edits (default true). */
+  watch?: boolean
 }
 
 /** §4 facade for RPC, the Agent capability and view events. `root` is the Agent root R. */
@@ -39,7 +41,7 @@ export class RoutineService {
     this.now = opts.now ?? Date.now
     this.routinesDir = join(opts.root, 'routines')
     this.runsDir = join(this.routinesDir, 'runs')
-    this.store = new RoutineStore({ root: this.routinesDir, now: this.now })
+    this.store = new RoutineStore({ root: this.routinesDir, now: this.now, watch: opts.watch ?? true })
     this.log = new RoutineRunLog({ path: join(this.routinesDir, 'runs.json') })
     this.runner = new RoutineRunner({
       store: this.store, log: this.log, executor: opts.executor, runsDir: this.runsDir,

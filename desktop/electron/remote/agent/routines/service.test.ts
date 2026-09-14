@@ -30,7 +30,7 @@ async function setup(enabled = true) {
   const { executor, finishes } = fakeExecutor()
   const views: RoutinesView[] = []
   const service = new RoutineService({
-    root, executor, agentProvider: () => 'claude', emit: v => views.push(v), enabled, now: () => now, indexDir: join(root, 'index'),
+    root, executor, agentProvider: () => 'claude', emit: v => views.push(v), enabled, now: () => now, indexDir: join(root, 'index'), watch: false,
   })
   await service.initialize()
   return { root, now, service, views, finishes }
@@ -101,4 +101,21 @@ test('disabled: view is unavailable and mutations throw', async t => {
   await assert.rejects(s.service.create({ name: 'Recap', schedule: 'daily 09:00', prompt: 'p' }), /turned off in Settings/)
   await assert.rejects(s.service.runNow('recap'), /turned off in Settings/)
   assert.deepEqual(s.service.list(), [])
+})
+
+test('fix: run writes inside the routines dir do not reload the store', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'routines-'))
+  const { executor, finishes } = fakeExecutor()
+  let emits = 0
+  const service = new RoutineService({ root, executor, agentProvider: () => 'claude', emit: () => { emits++ }, enabled: true, indexDir: join(root, 'index') })
+  t.after(() => service.close())
+  await service.initialize()
+  await service.create({ name: 'Recap', schedule: 'daily 09:00', window: 'none', prompt: 'p' })
+  await new Promise(r => setTimeout(r, 400))
+  const run = await service.runNow('recap')
+  finishes[0]!({ outcome: 'completed', text: 'ok' })
+  for (let i = 0; i < 200 && service.run(run.id)?.status !== 'done'; i++) await new Promise(r => setTimeout(r, 5))
+  const settled = emits
+  await new Promise(r => setTimeout(r, 400))
+  assert.equal(emits, settled)
 })

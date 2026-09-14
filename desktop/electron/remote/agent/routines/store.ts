@@ -11,6 +11,8 @@ import type { RoutineEntry, RoutineState } from './types'
 
 const STATE_FILE = 'state.json'
 const TRASH_DIR = '.trash'
+/** Siblings the routines service keeps in this directory; none of them is a definition. */
+const NOT_DEFINITIONS = ['runs.json', 'runs', 'agent-journal']
 const DEBOUNCE_MS = 200
 const INVALID_NAME_ERROR = 'File name must be lowercase letters, numbers and dashes'
 
@@ -36,6 +38,7 @@ export class RoutineStore {
   private watcher: FSWatcher | null = null
   private debounceTimer: NodeJS.Timeout | null = null
   private listeners = new Set<() => void>()
+  private chain: Promise<unknown> = Promise.resolve()
 
   constructor(opts: { root: string; now?: () => number; watch?: boolean; onError?: (error: unknown) => void }) {
     this.routinesDir = opts.root
@@ -50,7 +53,16 @@ export class RoutineStore {
     mkdirSync(this.trashDir, { recursive: true })
   }
 
-  async load(): Promise<RoutineEntry[]> {
+  /** Every read-then-write of state.json runs on one chain, so a watcher reload can never read
+   *  state.json before an in-flight write lands and then overwrite the newer in-memory state. */
+  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.chain.then(fn)
+    this.chain = next.catch(() => {})
+    return next
+  }
+
+  load(): Promise<RoutineEntry[]> { return this.exclusive(() => this.loadNow()) }
+  private async loadNow(): Promise<RoutineEntry[]> {
     const state = await this.readState()
     const names = (await fs.readdir(this.routinesDir)).filter(f => f.endsWith('.md')).sort()
     const entries = new Map<string, RoutineEntry>()
@@ -108,7 +120,8 @@ export class RoutineStore {
     return this.entries.get(id)
   }
 
-  async create(fields: RoutineFields): Promise<RoutineEntry> {
+  create(fields: RoutineFields): Promise<RoutineEntry> { return this.exclusive(() => this.createNow(fields)) }
+  private async createNow(fields: RoutineFields): Promise<RoutineEntry> {
     const id = slugify(fields.name ?? '', new Set(this.entries.keys()))
     const definition = definitionFromFields(id, fields)
     const path = join(this.routinesDir, `${id}.md`)
@@ -124,7 +137,8 @@ export class RoutineStore {
     return entry
   }
 
-  async update(id: string, fields: Partial<RoutineFields>): Promise<RoutineEntry> {
+  update(id: string, fields: Partial<RoutineFields>): Promise<RoutineEntry> { return this.exclusive(() => this.updateNow(id, fields)) }
+  private async updateNow(id: string, fields: Partial<RoutineFields>): Promise<RoutineEntry> {
     const entry = this.entries.get(id)
     if (!entry?.definition) throw new Error(`Routine "${id}" was not found`)
 
@@ -144,7 +158,8 @@ export class RoutineStore {
     return updated
   }
 
-  async remove(id: string): Promise<void> {
+  remove(id: string): Promise<void> { return this.exclusive(() => this.removeNow(id)) }
+  private async removeNow(id: string): Promise<void> {
     const entry = this.entries.get(id)
     if (!entry) throw new Error(`Routine "${id}" was not found`)
     await fs.rename(entry.path, join(this.trashDir, `${id}-${this.now()}.md`))
@@ -153,7 +168,8 @@ export class RoutineStore {
     this.entries.delete(id)
   }
 
-  async setEnabled(id: string, enabled: boolean): Promise<void> {
+  setEnabled(id: string, enabled: boolean): Promise<void> { return this.exclusive(() => this.setEnabledNow(id, enabled)) }
+  private async setEnabledNow(id: string, enabled: boolean): Promise<void> {
     const entry = this.entries.get(id)
     if (!entry) throw new Error(`Routine "${id}" was not found`)
 
@@ -170,7 +186,8 @@ export class RoutineStore {
     this.entries.set(id, { ...entry, state: { enabled, nextFireAt: fireAt } })
   }
 
-  async setNextFireAt(id: string, at: number | null): Promise<void> {
+  setNextFireAt(id: string, at: number | null): Promise<void> { return this.exclusive(() => this.setNextFireAtNow(id, at)) }
+  private async setNextFireAtNow(id: string, at: number | null): Promise<void> {
     const entry = this.entries.get(id)
     if (!entry) throw new Error(`Routine "${id}" was not found`)
 
@@ -200,6 +217,7 @@ export class RoutineStore {
 
   private ignoreChange(filename: string): boolean {
     if (filename === STATE_FILE) return true
+    if (NOT_DEFINITIONS.some(name => filename === name || filename.startsWith(`${name}${sep}`))) return true
     if (filename === TRASH_DIR || filename.startsWith(`${TRASH_DIR}${sep}`)) return true
     if (filename.includes('.tmp')) return true
     return false

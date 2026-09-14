@@ -161,3 +161,34 @@ test('onChange fires after a file changes on disk, and close stops the watcher',
   await changed
   store.close()
 })
+
+test('writes to runs.json, runs/ and agent-journal/ do not reload the store', async () => {
+  const root = await tempRoot()
+  const store = new RoutineStore({ root, watch: true })
+  await store.load()
+  await store.create({ name: 'Morning recap', schedule: 'daily 09:00', prompt: 'p' })
+  await new Promise(r => setTimeout(r, 400)) // let the create's own events drain
+  let changes = 0
+  store.onChange(() => { changes++ })
+  const { mkdir } = await import('node:fs/promises')
+  await writeFile(join(root, 'runs.json'), '[]')
+  await mkdir(join(root, 'runs', 'run-1'), { recursive: true })
+  await writeFile(join(root, 'runs', 'run-1', 'result.md'), 'r')
+  await mkdir(join(root, 'agent-journal'), { recursive: true })
+  await writeFile(join(root, 'agent-journal', 'j.json'), '{}')
+  await new Promise(r => setTimeout(r, 400))
+  assert.equal(changes, 0)
+  store.close()
+})
+
+test('a reload racing a state write never restores the older state', async () => {
+  const root = await tempRoot()
+  const store = new RoutineStore({ root, watch: false })
+  const entry = await store.create({ name: 'Morning recap', schedule: 'daily 09:00', prompt: 'p' })
+  const later = entry.state.nextFireAt! + 86_400_000
+  await Promise.all([store.setNextFireAt(entry.id, later), store.load()])
+  assert.equal(store.get(entry.id)!.state.nextFireAt, later)
+  const reopened = new RoutineStore({ root, watch: false })
+  await reopened.load()
+  assert.equal(reopened.get(entry.id)!.state.nextFireAt, later)
+})

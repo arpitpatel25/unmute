@@ -33,13 +33,17 @@ const ACTIVITY_PERSIST_MS = 1000
 interface ActiveRun {
   run: RoutineRun
   handle?: RoutineExecutorHandle
-  /** Why the executor was told to stop: a timeout settles failed, anything else cancelled. */
-  stopReason?: 'user' | 'timeout'
+  /** Why the executor was told to stop. `timeout` settles failed, `user` cancelled; `shutdown`
+   *  runs are settled by dispose() itself and their later completion is ignored. */
+  stopReason?: 'user' | 'timeout' | 'shutdown'
   budgetTimer?: unknown
   activityTimer?: unknown
   lastActivityPersistAt: number
 }
 
+const INTERRUPTED: Partial<RoutineRun> = {
+  status: 'failed', reason: 'interrupted', resultPreview: 'Interrupted when Unmute restarted.', posted: true, unread: true,
+}
 const TERMINAL = new Set(['done', 'failed', 'cancelled', 'skipped'])
 const clone = (run: RoutineRun): RoutineRun => ({
   ...run, activity: [...run.activity], ...(run.proposals ? { proposals: run.proposals.map(p => ({ ...p })) } : {}),
@@ -61,6 +65,8 @@ export class RoutineRunner {
   private ticking: Promise<void> = Promise.resolve()
   private tickTimer: unknown = null
   private disposed = false
+  /** `${runId}:${proposalId}` decisions whose write has not landed yet; the log still reads `open`. */
+  private readonly deciding = new Set<string>()
 
   constructor(private readonly deps: RunnerDeps) {
     this.now = deps.now ?? Date.now
@@ -75,10 +81,7 @@ export class RoutineRunner {
   async start(): Promise<void> {
     for (const stale of this.deps.log.all().filter(r => r.status === 'running' || r.status === 'queued')) {
       const run = clone(stale)
-      Object.assign(run, {
-        status: 'failed', reason: 'interrupted', endedAt: this.now(), resultPreview: 'Interrupted when Unmute restarted.',
-        posted: true, unread: true,
-      })
+      Object.assign(run, INTERRUPTED, { endedAt: this.now() })
       await this.save(run)
       await this.settleParentProposal(run)
     }
@@ -136,7 +139,17 @@ export class RoutineRunner {
     const stored = this.deps.log.get(runId)
     const proposal = stored?.proposals?.find(p => p.id === proposalId)
     if (!stored || !proposal) return null
-    if (proposal.state !== 'open') return stored
+    const decisionKey = `${runId}:${proposalId}`
+    if (proposal.state !== 'open' || this.deciding.has(decisionKey)) return stored
+    this.deciding.add(decisionKey)
+    try {
+      return await this.decide(stored, proposalId, decision)
+    } finally {
+      this.deciding.delete(decisionKey)
+    }
+  }
+
+  private async decide(stored: RoutineRun, proposalId: string, decision: 'approve' | 'dismiss'): Promise<RoutineRun> {
     const parent = clone(stored)
     const target = parent.proposals!.find(p => p.id === proposalId)!
     if (decision === 'dismiss') {
@@ -160,23 +173,26 @@ export class RoutineRunner {
     this.deps.onChange()
   }
 
+  /** §4 Restart: a run cut off by shutdown surfaces as failed/interrupted, the same as one found
+   *  on the next start. It is settled (and awaited) here, before the handles are cancelled, so the
+   *  cancel's own completion can never land first and record it as a user cancel. */
   async dispose(): Promise<void> {
     this.disposed = true
     if (this.tickTimer !== null) { this.clearTimer(this.tickTimer); this.tickTimer = null }
-    const cancels: Promise<void>[] = []
-    for (const active of this.active.values()) {
-      this.clearRunTimers(active)
-      active.stopReason = 'user'
-      if (active.handle) cancels.push(active.handle.cancel().catch(() => {}))
-    }
-    await Promise.all(cancels)
+    const actives = [...this.active.values()]
+    const queued = this.queue.splice(0)
+    for (const active of actives) active.stopReason = 'shutdown'
+    for (const run of [...actives.map(a => a.run), ...queued]) await this.settle(run, INTERRUPTED)
+    await Promise.all(actives.map(a => a.handle?.cancel().catch(error => diagnostic('routines-cancel-failed', diagnosticError(error)))))
   }
 
   private scheduleTick(): void {
     if (this.disposed) return
     this.tickTimer = this.setTimer(() => {
       this.tickTimer = null
-      void this.tick().catch(() => {}).finally(() => this.scheduleTick())
+      void this.tick()
+        .catch(error => diagnostic('routines-tick-failed', diagnosticError(error)))
+        .finally(() => this.scheduleTick())
     }, this.tickMs)
   }
 
@@ -257,6 +273,7 @@ export class RoutineRunner {
       if (run.window && d.inputs.includes('sessions')) {
         const manifest = await buildManifest({ indexDir: this.deps.indexDir, window: run.window, excludeCwdPart: this.deps.excludeCwdPart })
         manifestPath = (await writeManifest(runDir, manifest)).mdPath
+        if (this.active.get(run.id) !== active) return
         run.manifestTotals = manifest.totals
         if (d.inputs.length === 1 && manifest.totals.turns === 0) {
           const note = d.whenEmpty === 'note'
@@ -272,6 +289,7 @@ export class RoutineRunner {
         ...(manifestPath ? { manifestPath, manifestTotals: run.manifestTotals } : {}),
         ...(run.trigger.type === 'approval' ? { approval: await this.approvalContext(run.trigger) } : {}),
       })
+      if (this.active.get(run.id) !== active) return
       if (active.stopReason) { await this.settle(run, { status: 'cancelled', posted: false, unread: false }); return }
       const provider = d.kind === 'takes-actions' ? 'claude' : d.provider === 'agent' ? this.deps.agentProvider() : d.provider
       Object.assign(run, { status: 'running', startedAt: this.now(), provider })
@@ -280,19 +298,22 @@ export class RoutineRunner {
       })
       active.handle = handle
       run.agentRunId = handle.agentRunId
-      await this.save(run)
-      active.budgetTimer = this.setTimer(() => {
-        active.stopReason = 'timeout'
-        void handle.cancel().catch(() => {})
-      }, d.maxMinutes * 60_000)
       handle.completion
         .then(outcome => this.complete(active, d, runDir, outcome))
-        .catch(error => this.settle(run, this.failure('provider', error instanceof Error ? error.message : String(error))))
-        .catch(() => {})
+        .catch(async error => {
+          diagnostic('routines-complete-failed', { runId: run.id, ...diagnosticError(error) })
+          if (this.active.get(run.id) === active) await this.settle(run, this.failure('provider', errorMessage(error)))
+        })
+      await this.save(run)
+      if (this.active.get(run.id) !== active) return
+      active.budgetTimer = this.setTimer(() => {
+        if (active.stopReason) return
+        active.stopReason = 'timeout'
+        void handle.cancel().catch(error => diagnostic('routines-cancel-failed', diagnosticError(error)))
+      }, d.maxMinutes * 60_000)
     } catch (error) {
-      if (this.active.get(run.id) === active) {
-        await this.settle(run, this.failure('provider', error instanceof Error ? error.message : String(error))).catch(() => {})
-      }
+      diagnostic('routines-start-failed', { runId: run.id, ...diagnosticError(error) })
+      if (this.active.get(run.id) === active) await this.settle(run, this.failure('provider', errorMessage(error)))
     }
   }
 
@@ -316,14 +337,23 @@ export class RoutineRunner {
 
   private async complete(active: ActiveRun, d: RoutineDefinition, runDir: string, outcome: ExecuteOutcome): Promise<void> {
     const run = active.run
+    // Settled elsewhere already (shutdown): the executor's late answer changes nothing.
+    if (this.active.get(run.id) !== active) return
     if (outcome.providerSessionId) run.providerSessionId = outcome.providerSessionId
     if (outcome.outcome === 'completed') {
       const lifted = liftProposals(outcome.text ?? '', this.randomId)
-      const resultPath = join(runDir, 'result.md')
-      await fs.mkdir(runDir, { recursive: true })
-      await writeFileAtomic(resultPath, lifted.text)
+      let resultPath: string | undefined = join(runDir, 'result.md')
+      try {
+        await fs.mkdir(runDir, { recursive: true })
+        await writeFileAtomic(resultPath, lifted.text)
+      } catch (error) {
+        // A disk error never turns a finished run into a failure; the preview still carries the result.
+        diagnostic('routines-result-write-failed', { runId: run.id, ...diagnosticError(error) })
+        resultPath = undefined
+      }
+      if (this.active.get(run.id) !== active) return
       await this.settle(run, {
-        status: 'done', resultPath, resultPreview: lifted.text.slice(0, PREVIEW_CHARS), posted: true, unread: true,
+        status: 'done', ...(resultPath ? { resultPath } : {}), resultPreview: lifted.text.slice(0, PREVIEW_CHARS), posted: true, unread: true,
         ...(lifted.proposals.length ? { proposals: lifted.proposals } : {}),
       })
     } else if (outcome.outcome === 'failed') {
@@ -346,7 +376,7 @@ export class RoutineRunner {
       active.activityTimer = undefined
       if (this.active.get(run.id) !== active) return
       active.lastActivityPersistAt = this.now()
-      void this.save(run).catch(() => {})
+      void this.save(run).catch(error => diagnostic('routines-activity-save-failed', { runId: run.id, ...diagnosticError(error) }))
     }
     if (elapsed >= ACTIVITY_PERSIST_MS) persist()
     else active.activityTimer = this.setTimer(persist, ACTIVITY_PERSIST_MS - elapsed)
@@ -361,12 +391,16 @@ export class RoutineRunner {
     const active = this.active.get(run.id)
     if (active) { this.clearRunTimers(active); this.active.delete(run.id) }
     Object.assign(run, patch, { endedAt: this.now() })
+    // Settling never throws: a failed write is retried once and then logged, so an outcome is
+    // never replaced by a second, disk-caused one.
     try {
       await this.save(run)
-      await this.settleParentProposal(run)
-    } finally {
-      await this.pump()
+    } catch (error) {
+      diagnostic('routines-settle-save-failed', { runId: run.id, retry: true, ...diagnosticError(error) })
+      await this.save(run).catch(retryError => diagnostic('routines-settle-save-failed', { runId: run.id, ...diagnosticError(retryError) }))
     }
+    await this.settleParentProposal(run).catch(error => diagnostic('routines-proposal-save-failed', { runId: run.id, ...diagnosticError(error) }))
+    await this.pump()
   }
 
   private async settleParentProposal(child: RoutineRun): Promise<void> {
@@ -376,8 +410,16 @@ export class RoutineRunner {
     if (!stored?.proposals?.some(p => p.id === proposalId)) return
     const parent = clone(stored)
     const proposal = parent.proposals!.find(p => p.id === proposalId)!
-    proposal.state = child.status === 'done' ? 'done' : 'failed'
-    proposal.runId = child.id
+    // A user cancel makes the proposal approvable again. A failure, timeout or shutdown may have
+    // partly done the action, so it must not be one tap away from repeating.
+    if (child.status === 'cancelled') {
+      if (proposal.runId !== child.id) return
+      proposal.state = 'open'
+      delete proposal.runId
+    } else {
+      proposal.state = child.status === 'done' ? 'done' : 'failed'
+      proposal.runId = child.id
+    }
     await this.save(parent)
   }
 
@@ -387,3 +429,5 @@ export class RoutineRunner {
     this.deps.onChange()
   }
 }
+
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)

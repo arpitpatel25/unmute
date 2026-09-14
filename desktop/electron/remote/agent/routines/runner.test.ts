@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { writeFileAtomic } from './atomic'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RoutineRunner } from './runner'
@@ -50,11 +51,11 @@ async function until(check: () => boolean, label = 'condition'): Promise<void> {
   assert.fail(`timed out waiting for ${label}`)
 }
 
-async function setup(opts: { now?: number; agentProvider?: 'claude' | 'codex'; maxConcurrent?: number } = {}) {
+async function setup(opts: { now?: number; agentProvider?: 'claude' | 'codex'; maxConcurrent?: number; persist?: (path: string, content: string) => Promise<void> } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'routines-'))
   const clock = { now: opts.now ?? MON_0800 }
   const store = new RoutineStore({ root: join(dir, 'routines'), now: () => clock.now, watch: false })
-  const log = new RoutineRunLog({ path: join(dir, 'routines', 'runs.json') })
+  const log = new RoutineRunLog({ path: join(dir, 'routines', 'runs.json'), ...(opts.persist ? { persist: opts.persist } : {}) })
   const { executor, starts } = fakeExecutor()
   const timers = fakeTimers()
   let ids = 0
@@ -403,4 +404,107 @@ test('15. every state change upserts before onChange fires; markRead clears unre
   assert.equal(seen.length, 1)
   assert.ok(log.all().every(r => !r.unread))
   await runner.dispose()
+})
+
+test('fix: dispose settles running and queued runs as interrupted and ignores late completions', async () => {
+  const s = await setup({ maxConcurrent: 1 })
+  await s.create({ name: 'A' }); await s.create({ name: 'B' })
+  const running = await s.runner.runNow('a')
+  const queued = await s.runner.runNow('b')
+  await s.runner.dispose()
+  for (const id of [running.id, queued.id]) {
+    const run = s.log.get(id)!
+    assert.equal(run.status, 'failed')
+    assert.equal(run.reason, 'interrupted')
+    assert.equal(run.resultPreview, 'Interrupted when Unmute restarted.')
+    assert.equal(run.posted, true)
+    assert.equal(run.unread, true)
+  }
+  assert.equal(s.starts[0]!.cancels, 1)
+  s.starts[0]!.finish({ outcome: 'interrupted' })
+  await new Promise(r => setTimeout(r, 30))
+  assert.equal(s.log.get(running.id)!.status, 'failed')
+  assert.equal(s.starts.length, 1)
+})
+
+test('fix: dispose during the manifest phase still records interrupted', async () => {
+  const s = await setup()
+  await writeIndex(s.indexDir, [{ s: 'sess-1', t: MON_0800 - 60_000 }])
+  await s.create({ name: 'Recap', window: 'today' })
+  const pending = s.runner.runNow('recap')
+  await new Promise(r => setImmediate(r))
+  await s.runner.dispose()
+  await pending
+  await new Promise(r => setTimeout(r, 30))
+  const [run] = runsOf(s.log, 'recap')
+  assert.equal(run!.status, 'failed')
+  assert.equal(run!.reason, 'interrupted')
+  assert.equal(s.starts.length, 0)
+})
+
+test('fix: a budget timer after a user cancel keeps the run cancelled', async () => {
+  const s = await setup()
+  await s.create({ name: 'Recap', maxMinutes: 2 })
+  const run = await s.runner.runNow('recap')
+  await s.runner.cancel(run.id)
+  s.timers.live(2 * 60_000)[0]!.fn()
+  s.starts[0]!.finish({ outcome: 'interrupted' })
+  await until(() => s.log.get(run.id)?.status === 'cancelled', 'cancelled')
+})
+
+test('fix: a failed save of a finished run is retried, never turned into a failure', async () => {
+  let failNext = false
+  const s = await setup({ persist: async (path, content) => { if (failNext) { failNext = false; throw new Error('disk full') } return writeFileAtomic(path, content) } })
+  await s.create({ name: 'Recap' })
+  const run = await s.runner.runNow('recap')
+  failNext = true
+  s.starts[0]!.finish({ outcome: 'completed', text: 'All good.' })
+  await until(() => s.log.get(run.id)?.status === 'done', 'done')
+  assert.equal(s.log.get(run.id)!.resultPreview, 'All good.')
+})
+
+async function approvedChild(s: Awaited<ReturnType<typeof setup>>) {
+  await s.create({ name: 'Acts', kind: 'takes-actions', maxMinutes: 4 })
+  const run = await s.runner.runNow('acts')
+  s.starts[0]!.finish({ outcome: 'completed', text: 'Body\n```unmute-proposals\n[{"title":"A","detail":"do a"}]\n```' })
+  await until(() => s.log.get(run.id)?.status === 'done', 'done')
+  const proposal = s.log.get(run.id)!.proposals![0]!
+  return { run, proposal }
+}
+const proposalState = (s: Awaited<ReturnType<typeof setup>>, runId: string) => s.log.get(runId)!.proposals![0]!
+
+test('fix: two concurrent approves start exactly one child run', async () => {
+  const s = await setup()
+  const { run, proposal } = await approvedChild(s)
+  await Promise.all([s.runner.decideProposal(run.id, proposal.id, 'approve'), s.runner.decideProposal(run.id, proposal.id, 'approve')])
+  assert.equal(s.log.all().filter(r => r.trigger.type === 'approval').length, 1)
+  assert.equal(s.starts.length, 2)
+})
+
+test('fix: a user-cancelled approval run reopens its proposal', async () => {
+  const s = await setup()
+  const { run, proposal } = await approvedChild(s)
+  await s.runner.decideProposal(run.id, proposal.id, 'approve')
+  const child = s.log.all().find(r => r.trigger.type === 'approval')!
+  await s.runner.cancel(child.id)
+  s.starts[1]!.finish({ outcome: 'interrupted' })
+  await until(() => proposalState(s, run.id).state === 'open', 'proposal open')
+  assert.equal(proposalState(s, run.id).runId, undefined)
+  await s.runner.decideProposal(run.id, proposal.id, 'approve')
+  assert.equal(s.log.all().filter(r => r.trigger.type === 'approval').length, 2)
+})
+
+test('fix: a timed-out or shut-down approval run fails its proposal', async () => {
+  const s = await setup()
+  const { run, proposal } = await approvedChild(s)
+  await s.runner.decideProposal(run.id, proposal.id, 'approve')
+  s.timers.live(4 * 60_000).at(-1)!.fn()
+  s.starts[1]!.finish({ outcome: 'interrupted' })
+  await until(() => proposalState(s, run.id).state === 'failed', 'proposal failed after timeout')
+
+  const t = await setup()
+  const second = await approvedChild(t)
+  await t.runner.decideProposal(second.run.id, second.proposal.id, 'approve')
+  await t.runner.dispose()
+  assert.equal(proposalState(t, second.run.id).state, 'failed')
 })
