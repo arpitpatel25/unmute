@@ -2032,6 +2032,21 @@ test('the voice aims at the Agent when its card is the one in front', () => {
   assert.equal(h.controller.agentAddressed(), true)
 })
 
+test('opening a task after aiming at the Agent hands the voice to the task', () => {
+  // Field log 2026-09-13: the pocket rested on the Agent, a session was then
+  // opened, and right Option still submitted to the Agent — the Agent flag was
+  // never lowered, and at submit it outranks the focused task.
+  let addressed = false
+  const h = setup({ deps: { addressAgent: (on) => { addressed = on } } })
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketMove', delta: 1 })   // onto the Agent
+  assert.equal(addressed, true)
+  h.client.fire({ type: 'focusTask', id: 'a' })
+  h.flush()
+  assert.equal(addressed, false, 'the task you opened is what you are talking to')
+})
+
 test('escaping the chat returns to the pocket and releases the voice', () => {
   // Without this the controller goes on believing the Agent is the expanded
   // surface: the voice stays pointed at it after you have left, and a later
