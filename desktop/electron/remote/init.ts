@@ -1059,6 +1059,7 @@ let unmuteAgentRegistry: CapabilityRegistry = new CapabilityRegistry([])
  *  it builds the registry below. */
 type NotesReadySource = { onNotesReady?(listener: (e: { meetingId: string; title: string; notesPath: string }) => void): () => void }
 let notetakerAdapters: (NotetakerAdapters & NotesReadySource) | null = null
+let unsubscribeNotesReady: (() => void) | undefined
 let runHeadlessSummary: RemoteInitDeps['runHeadless'] | null = null
 
 /**
@@ -5394,8 +5395,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.warn('draft persistence failed', { error: (error as Error).message })
   })
   notetakerAdapters = deps.notetaker ?? null
-  notetakerAdapters?.onNotesReady?.(e => {
-    if (!(unmuteAgentLifecycle instanceof AgentRuntimeClient)) return
+  // initRemote can run again with the same adapters; replace, never stack, the subscription.
+  unsubscribeNotesReady?.()
+  unsubscribeNotesReady = notetakerAdapters?.onNotesReady?.(e => {
+    if (settings.get('unmuteRoutinesEnabled') === false || !(unmuteAgentLifecycle instanceof AgentRuntimeClient)) return
     void unmuteAgentLifecycle.routines.event({ type: 'meeting-notes-ready', ...e })
       .catch(error => log.warn('routine event failed', { error: (error as Error).message }))
   })
@@ -5811,8 +5814,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   powerMonitor.on('resume', () => {
     manager?.reconcileNow()
     // Timers do not fire during sleep; the runtime catches up on missed routines.
-    if (unmuteAgentLifecycle instanceof AgentRuntimeClient) {
-      void unmuteAgentLifecycle.routines.wake().catch(() => {})
+    if (settings.get('unmuteRoutinesEnabled') !== false && unmuteAgentLifecycle instanceof AgentRuntimeClient) {
+      void unmuteAgentLifecycle.routines.wake()
+        .catch(error => log.warn('routine wake failed', { error: (error as Error).message }))
     }
   })
   app.on('activate', () => manager?.reconcileNow())
