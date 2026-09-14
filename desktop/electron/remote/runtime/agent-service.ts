@@ -36,7 +36,7 @@ import { agentConstitution } from '../agent/constitution'
 import { SESSION_PREAMBLE } from '../session-policy'
 import { startMcpServer, MCP_PATH, type McpServer } from '../mcp-server'
 import { createLogger } from '../log'
-import { diagnostic } from '../diagnostics'
+import { diagnostic, diagnosticError } from '../diagnostics'
 import { RoutineService } from '../agent/routines/service'
 import { RoutineAgentExecutor, ACTOR_ALLOWED_TOOLS, type RoutineRunPair } from '../agent/routines/executor'
 import type { RoutinesView } from '../agent/routines/types'
@@ -52,6 +52,23 @@ export type AgentRuntimeConfig = { masterKey: string; selectedProvider: AgentPro
 export type AgentRuntimeEvent = { kind: 'view'; view: AgentConversationView } | { kind: 'activity'; activity: AgentInteractionActivity }
   | { kind: 'completion'; submissionId: string; result: AgentInteractionResult } | { kind: 'routines'; view: RoutinesView }
 export type RoutineProviders = { reader: Map<AgentProviderId, AgentProvider>; actor?: Map<AgentProviderId, AgentProvider> }
+type Routines = Pick<RoutineService, 'view' | 'list' | 'create' | 'update' | 'remove' | 'setEnabled' | 'runNow' | 'event' | 'wake'
+  | 'cancel' | 'markRead' | 'decideProposal' | 'run' | 'runs' | 'result' | 'definitionPath' | 'close'>
+/** Stands in for a routines service that could not start, so the Agent itself still runs and the UI can say why. */
+class UnavailableRoutines implements Routines {
+  constructor(private reason: string, private dir: string) {}
+  view(): RoutinesView { return { available: false, reason: this.reason, items: [], runs: [] } }
+  list() { return [] }
+  runs() { return [] }
+  run() { return undefined }
+  async result() { return null }
+  definitionPath(id: string) { return join(this.dir, `${id}.md`) }
+  async close() {}
+  private async refuse(): Promise<never> { throw new Error(this.reason) }
+  create = () => this.refuse(); update = () => this.refuse(); remove = () => this.refuse(); setEnabled = () => this.refuse()
+  runNow = () => this.refuse(); event = () => this.refuse(); wake = () => this.refuse(); cancel = () => this.refuse()
+  markRead = () => this.refuse(); decideProposal = () => this.refuse()
+}
 export type AgentHostCall = (method: string, args: unknown[]) => Promise<any>
 export class AgentRuntimeService {
   private key?: Buffer
@@ -68,7 +85,9 @@ export class AgentRuntimeService {
   private activity?: AgentInteractionActivity
   private records?: EncryptedRecordStore
   private memory?: MemoryService
-  private routines?: RoutineService
+  private routines?: Routines
+  private routineGeneration = 0
+  private routinesChain: Promise<unknown> = Promise.resolve()
   private routineSupervisors: AgentRunSupervisor[] = []
   private routineControllers: UnmuteAgentController[] = []
   private routineDeps?: { registry: CapabilityRegistry; tokens: AgentTokenStore; handles: InteractionAttachmentHandles }
@@ -193,7 +212,7 @@ export class AgentRuntimeService {
       }, 0, registry)
       await this.supervisor.initialize()
       this.routineDeps = { registry, tokens, handles }
-      await this.startRoutines(this.routinesEnabled())
+      await this.startRoutines(this.routinesEnabled(config.routines))
       this.lifecycle = new AgentConversationLifecycle({ journal, store: new AgentConversationStore({ root: join(this.root, 'runtime', 'conversations'), crypto }),
         attachmentsDir: join(this.root, 'runtime', 'chat-attachments'),
         controller: this.controller, selectedProvider, ceiling: () => this.config?.conversationCeiling ?? 20, prepareFresh,
@@ -209,12 +228,12 @@ export class AgentRuntimeService {
       return this.snapshot()
     } catch (error) { await this.close(); throw error }
   }
-  private routinesEnabled(): boolean { return this.config?.routines !== false && process.env.UNMUTE_ROUTINES !== '0' }
+  private routinesEnabled(value: boolean | undefined): boolean { return value !== false && process.env.UNMUTE_ROUTINES !== '0' }
   private mcpContext(): AgentRunMcpContext {
     const endpoint = `http://127.0.0.1:${this.mcp!.port}${MCP_PATH}`
     return { endpoint, config: JSON.stringify({ mcpServers: { unmute: { type: 'http', url: endpoint, headers: { Authorization: 'Bearer ${UNMUTE_MCP_TOKEN}' } } } }) }
   }
-  private routineService(): RoutineService {
+  private routineService(): Routines {
     if (!this.routines) throw new Error('Routines are not ready yet')
     return this.routines
   }
@@ -227,48 +246,70 @@ export class AgentRuntimeService {
       runs: opts => service().runs(opts), result: runId => service().result(runId),
     }
   }
-  private async startRoutines(enabled: boolean): Promise<void> {
-    const { registry, tokens, handles } = this.routineDeps!
-    const selectedProvider = () => this.config!.selectedProvider
-    let executor: RoutineAgentExecutor | undefined
-    const pair = (name: 'reader' | 'actor', providers: Map<AgentProviderId, AgentProvider>): RoutineRunPair => {
-      const journal = new AgentJournal({ root: join(this.root, 'routines', 'agent-journal', name) })
-      const supervisor = new AgentRunSupervisor({ providers, tokenStore: tokens, journal, maxActiveProcesses: 2, selectedProvider,
-        log: (event, data) => createLogger('agent-routines').event(event, { pair: name, ...data }) })
-      const controller = new UnmuteAgentController({ supervisor, tokens, attachmentHandles: handles, journal, capabilities: registry, selectedProvider,
-        runtime: () => { throw new Error('routine runs pass their runtime') }, onActivity: activity => executor?.routeActivity(activity) })
-      this.routineSupervisors.push(supervisor); this.routineControllers.push(controller)
-      return { controller, supervisor }
+  /** Never throws: a failure is logged, half-built supervisors are disposed, and an unavailable stand-in is published. */
+  private async startRoutines(enabled: boolean): Promise<boolean> {
+    const generation = ++this.routineGeneration
+    try {
+      const { registry, tokens, handles } = this.routineDeps!
+      const selectedProvider = () => this.config!.selectedProvider
+      let executor: RoutineAgentExecutor | undefined
+      const pair = (name: 'reader' | 'actor', providers: Map<AgentProviderId, AgentProvider>): RoutineRunPair => {
+        const journal = new AgentJournal({ root: join(this.root, 'routines', 'agent-journal', name) })
+        const supervisor = new AgentRunSupervisor({ providers, tokenStore: tokens, journal, maxActiveProcesses: 2, selectedProvider,
+          log: (event, data) => createLogger('agent-routines').event(event, { pair: name, ...data }) })
+        const controller = new UnmuteAgentController({ supervisor, tokens, attachmentHandles: handles, journal, capabilities: registry, selectedProvider,
+          runtime: () => { throw new Error('routine runs pass their runtime') }, onActivity: activity => executor?.routeActivity(activity) })
+        this.routineSupervisors.push(supervisor); this.routineControllers.push(controller)
+        return { controller, supervisor }
+      }
+      if (enabled) {
+        const reader = pair('reader', this.routineProviders.reader)
+        const actor = this.routineProviders.actor ? pair('actor', this.routineProviders.actor) : undefined
+        await Promise.all(this.routineSupervisors.map(supervisor => supervisor.initialize()))
+        executor = new RoutineAgentExecutor({ reader, actor,
+          baseConstitution: async () => agentConstitution(SESSION_PREAMBLE, (await loadPersona(join(this.root, 'agent'))).text),
+          readTools: () => registry.tools({ kind: 'unmute-agent', runId: 'routine', interactionId: 'routine', expiresAt: Number.MAX_SAFE_INTEGER })
+            .filter(tool => tool.consequence === 'read'),
+          mcp: () => this.mcpContext(), environment: process.env })
+      }
+      const routines = new RoutineService({ root: this.root, enabled, agentProvider: selectedProvider,
+        executor: executor ?? { start: () => { throw new Error('Routines are turned off in Settings') }, dispose: async () => {} },
+        emit: view => { if (this.routineGeneration === generation) this.emit({ kind: 'routines', view }) } })
+      try { await routines.initialize() } catch (error) { await routines.close().catch(() => {}); throw error }
+      this.routines = routines
+      return true
+    } catch (error) {
+      diagnostic('routines-start-failed', diagnosticError(error))
+      await this.disposeRoutinePairs()
+      const unavailable = new UnavailableRoutines(`Routines couldn't start: ${error instanceof Error ? error.message : String(error)}`, join(this.root, 'routines'))
+      this.routines = unavailable
+      if (this.routineGeneration === generation) this.emit({ kind: 'routines', view: unavailable.view() })
+      return false
     }
-    if (enabled) {
-      const reader = pair('reader', this.routineProviders.reader)
-      const actor = this.routineProviders.actor ? pair('actor', this.routineProviders.actor) : undefined
-      await Promise.all(this.routineSupervisors.map(supervisor => supervisor.initialize()))
-      executor = new RoutineAgentExecutor({ reader, actor,
-        baseConstitution: async () => agentConstitution(SESSION_PREAMBLE, (await loadPersona(join(this.root, 'agent'))).text),
-        readTools: () => registry.tools({ kind: 'unmute-agent', runId: 'routine', interactionId: 'routine', expiresAt: Number.MAX_SAFE_INTEGER })
-          .filter(tool => tool.consequence === 'read'),
-        mcp: () => this.mcpContext(), environment: process.env })
-    }
-    const routines = new RoutineService({ root: this.root, enabled, agentProvider: selectedProvider,
-      executor: executor ?? { start: () => { throw new Error('Routines are turned off in Settings') }, dispose: async () => {} },
-      emit: view => { if (this.routines === routines) this.emit({ kind: 'routines', view }) } })
-    this.routines = routines
-    await routines.initialize()
   }
-  /** A Settings toggle rebuilds the service (and its supervisors) with the new flag; the new service emits its view. */
-  private async applyRoutines(value: boolean | undefined): Promise<void> {
-    if (value === undefined || (value !== false) === (this.config!.routines !== false)) return
-    this.config!.routines = value
-    await this.stopRoutines()
-    await this.startRoutines(this.routinesEnabled())
+  /** Serialized, so concurrent toggles can never leave an orphaned live service firing alongside the current one.
+   * The flag is committed only after a successful start; a service that failed to start is retried even when the flag matches. */
+  private applyRoutines(value: boolean | undefined): Promise<void> {
+    const applied = this.routinesChain.then(async () => {
+      if (!this.config || !this.routineDeps) return
+      const want = value ?? this.config.routines
+      if (this.routines instanceof RoutineService && (want !== false) === (this.config.routines !== false)) return
+      await this.stopRoutines()
+      if (await this.startRoutines(this.routinesEnabled(want))) this.config.routines = want
+    })
+    this.routinesChain = applied.catch(() => {})
+    return applied
   }
   private async stopRoutines(): Promise<void> {
+    this.routineGeneration++
     const routines = this.routines; this.routines = undefined
-    await routines?.close()
-    for (const controller of this.routineControllers) controller.dispose()
-    await Promise.all(this.routineSupervisors.map(supervisor => supervisor.dispose()))
+    try { await routines?.close() } finally { await this.disposeRoutinePairs() }
+  }
+  private async disposeRoutinePairs(): Promise<void> {
+    const controllers = this.routineControllers, supervisors = this.routineSupervisors
     this.routineControllers = []; this.routineSupervisors = []
+    for (const controller of controllers) controller.dispose()
+    await Promise.allSettled(supervisors.map(supervisor => supervisor.dispose()))
   }
   private async transcriptPath(runId: string): Promise<string | null> {
     try {
@@ -302,6 +343,9 @@ export class AgentRuntimeService {
       return this.snapshot()
     }
     if (method === 'snapshot' || method === 'availability') return this.snapshot()
+    // Answerable before the Agent is configured: the notch asks for these on attach.
+    if (method === 'routines.view') return this.routines?.view() ?? { available: false, reason: 'The Agent is not running', items: [], runs: [] }
+    if (method === 'routines.transcriptPath') return this.transcriptPath(args[0] as string)
     if (!this.lifecycle) throw new Error('Agent runtime is not configured')
     const a = args as any[]
     switch (method) {
@@ -332,7 +376,6 @@ export class AgentRuntimeService {
       case 'memory.get': return this.memory!.get(a[0], a[1], a[2])
       case 'memory.forget': return this.memory!.forget(a[0], a[1])
       case 'memory.restore': return this.memory!.restore(a[0], a[1])
-      case 'routines.view': return this.routineService().view()
       case 'routines.create': return this.routineService().create(a[0])
       case 'routines.update': return this.routineService().update(a[0], a[1])
       case 'routines.remove': return this.routineService().remove(a[0])
@@ -348,13 +391,13 @@ export class AgentRuntimeService {
         return run ? { run, result: await routines.result(run.id) } : null
       }
       case 'routines.path': return this.routineService().definitionPath(a[0])
-      case 'routines.transcriptPath': return this.transcriptPath(a[0])
       default: throw new Error('Unknown Agent runtime command')
     }
   }
   async close(): Promise<void> {
-    await this.stopRoutines().catch(error => createLogger('agent-runtime').event('routines-close-failed', { message: error instanceof Error ? error.message : String(error) }))
-    this.routineDeps = undefined
+    const stopping = this.routinesChain.then(() => { this.routineDeps = undefined; return this.stopRoutines() })
+    this.routinesChain = stopping.catch(() => {})
+    await stopping.catch(error => diagnostic('routines-close-failed', diagnosticError(error)))
     this.lifecycle?.dispose(); this.lifecycle = undefined
     this.controller?.dispose(); this.controller = undefined
     await this.supervisor?.dispose(); this.supervisor = undefined
