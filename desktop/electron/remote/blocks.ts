@@ -23,6 +23,8 @@
  * surface, being taught about it first.
  */
 
+import type { RunStatus } from './agent/routines/types'
+
 export interface Source {
   title: string
   domain: string
@@ -111,6 +113,26 @@ export type Block =
   | { kind: 'canvas'; format: 'mermaid' | 'svg' | 'html'; source: string }
   | { kind: 'turnStart'; startedAt: number }
   | { kind: 'turnEnd'; durationMs?: number; outcome?: TurnOutcome }
+  /**
+   * A routine (scheduled/event-triggered unattended run) firing. Stands alone
+   * as its own turn in the Agent chat — see notch/routine-blocks.ts for the
+   * merge that places it among the Agent's own blocks by time.
+   */
+  | { kind: 'routineRun'; at: number; name: string; status: RunStatus; trigger: string; what: string; reason?: string }
+  | {
+      kind: 'routineResult'
+      at: number
+      /** The run's firedAt, so the result can show how long it took. */
+      startedAt: number
+      name: string
+      status: 'done' | 'failed' | 'skipped'
+      text: string
+      what: string
+      /** The routine id — reuses Swift Block.path. */
+      path: string
+      reason?: string
+      proposals?: Array<{ id: string; title: string; detail: string; state: string }>
+    }
   | { kind: 'unknown'; raw: string }
 
 export type BlockKind = Block['kind']
@@ -119,7 +141,7 @@ const KNOWN: ReadonlySet<string> = new Set<BlockKind>([
   'attachment',
   'message', 'reasoning', 'command', 'fileChange', 'mcpCall', 'fileRead',
   'search', 'plan', 'subAgent', 'denied', 'error', 'compaction', 'sessionBoundary', 'canvas',
-  'turnStart', 'turnEnd', 'unknown',
+  'turnStart', 'turnEnd', 'routineRun', 'routineResult', 'unknown',
 ])
 
 /**
