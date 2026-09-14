@@ -65,6 +65,21 @@ interface RawIndexedTurn {
   text?: unknown
 }
 
+/**
+ * Truncate by CODE POINT, not by UTF-16 index: `String.prototype.slice` counts
+ * `\uD800`-`\uDBFF`/`\uDC00`-`\uDFFF` surrogate halves separately, so a plain
+ * `.slice(0, n)` can land exactly between the two halves of an emoji or other
+ * astral character and leave a lone, invalid surrogate in the output. The
+ * `text.length <= maxCodePoints` fast path is safe without spreading: a
+ * string's UTF-16 length is always >= its code point count, so if the former
+ * is already within budget the latter is too.
+ */
+function truncateText(text: string, maxCodePoints: number): string {
+  if (text.length <= maxCodePoints) return text
+  const codePoints = Array.from(text)
+  return codePoints.length <= maxCodePoints ? text : codePoints.slice(0, maxCodePoints).join('')
+}
+
 /** Line-by-line over a stream so a huge index file is never held whole in
  *  memory; a missing file is simply nothing to read, never an error. */
 async function forEachLine(path: string, onLine: (line: string) => void): Promise<void> {
@@ -130,7 +145,7 @@ export async function buildManifest(opts: {
     const session = eligible.get(record.s)
     if (!session) return
     session.turnsInWindow += 1
-    const text = typeof record.text === 'string' ? record.text.slice(0, MAX_TEXT_CHARS) : undefined
+    const text = typeof record.text === 'string' ? truncateText(record.text, MAX_TEXT_CHARS) : undefined
     session.turns.push({ t: record.t, o: record.o, ...(text !== undefined ? { text } : {}) })
   })
 
@@ -140,7 +155,10 @@ export async function buildManifest(opts: {
 
   const totals = { sessions: sessions.length, turns: sessions.reduce((sum, s) => sum + s.turnsInWindow, 0) }
   const manifest: RoutineManifest = { window, sessions, totals, truncated: false }
-  if (JSON.stringify(manifest).length <= maxBytes) return manifest
+  // UTF-8 bytes, not `.length` (UTF-16 code units): non-ASCII turn text — CJK,
+  // emoji — undercounts by up to ~3x under `.length`, which let a manifest
+  // past the real 256 KB budget report `truncated: false`.
+  if (Buffer.byteLength(JSON.stringify(manifest), 'utf8') <= maxBytes) return manifest
 
   // Over the cap: drop text, keep offsets. The transcript is still reachable
   // by `o`, so nothing here is lost — only what the model would have read

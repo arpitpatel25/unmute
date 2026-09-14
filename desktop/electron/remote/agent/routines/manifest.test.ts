@@ -105,6 +105,51 @@ test('over the byte cap, turn text is dropped and truncated is set', async () =>
   for (const turn of manifest.sessions[0]!.turns) assert.equal('text' in turn, false)
 })
 
+test('the byte cap is measured in UTF-8 bytes, not UTF-16 code units, so wide characters are not undercounted', async () => {
+  const dir = await indexDir()
+  await fs.writeFile(join(dir, 'sessions.jsonl'),
+    sessionLine({ id: 's1', provider: 'claude', cwd: '/repo', provenance: 'main', firstAt: 1_000, lastAt: 2_000 }))
+  // Each character here is ONE UTF-16 code unit (so `.length` counts it as 1)
+  // but THREE UTF-8 bytes — exactly the gap a `.length`-based cap misses.
+  const text = '日本語'.repeat(200)
+  await fs.writeFile(join(dir, 'turns.jsonl'), turnLine({ s: 's1', t: 2_000, o: 10, text }))
+
+  const uncapped = await buildManifest({ indexDir: dir, window: WINDOW, excludeCwdPart: EXCLUDE, maxBytes: Number.MAX_SAFE_INTEGER })
+  const serialized = JSON.stringify(uncapped)
+  const charLength = serialized.length
+  const byteLength = Buffer.byteLength(serialized, 'utf8')
+  // Confirms the fixture actually exercises the gap this test is about;
+  // if this fails the fixture stopped being wide enough to prove anything.
+  assert.ok(byteLength > charLength, 'fixture must actually exercise the UTF-16 vs UTF-8 gap')
+
+  // A cap set to the (UTF-16) char length: a `.length`-based check would call
+  // this "at or under budget" even though the real UTF-8 size is bigger.
+  const manifest = await buildManifest({ indexDir: dir, window: WINDOW, excludeCwdPart: EXCLUDE, maxBytes: charLength })
+
+  assert.equal(manifest.truncated, true)
+  assert.equal('text' in manifest.sessions[0]!.turns[0]!, false)
+})
+
+test('turn text is truncated at a code point boundary, never splitting a surrogate pair', async () => {
+  const dir = await indexDir()
+  await fs.writeFile(join(dir, 'sessions.jsonl'),
+    sessionLine({ id: 's1', provider: 'claude', cwd: '/repo', provenance: 'main', firstAt: 1_000, lastAt: 2_000 }))
+  // An emoji is one code point but two UTF-16 code units (a surrogate pair).
+  // Placed so the 400-code-point cut lands exactly on it: a raw
+  // `.slice(0, 400)` would keep only its high surrogate.
+  const prefix = 'a'.repeat(399)
+  const text = prefix + '\u{1F600}' + 'b'.repeat(50)
+  await fs.writeFile(join(dir, 'turns.jsonl'), turnLine({ s: 's1', t: 2_000, o: 10, text }))
+
+  const manifest = await buildManifest({ indexDir: dir, window: WINDOW, excludeCwdPart: EXCLUDE })
+
+  const stored = manifest.sessions[0]!.turns[0]!.text!
+  assert.equal(stored, prefix + '\u{1F600}')
+  assert.equal([...stored].length, 400)
+  // A split pair would leave a lone surrogate half with no partner.
+  assert.doesNotMatch(stored, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/, 'a high surrogate must not be left unpaired')
+})
+
 test('a missing index dir returns an empty manifest rather than throwing', async () => {
   const dir = join(await indexDir(), 'does-not-exist')
 
