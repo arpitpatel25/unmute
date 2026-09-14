@@ -14,6 +14,7 @@ import ConversationSupport
 enum RoutineClock {
     private static let formatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "HH:mm"
         return f
     }()
@@ -146,15 +147,18 @@ struct RoutineResultView: View {
     @ViewBuilder private var content: some View {
         switch status {
         case "failed":
-            NoticeRow(text: block.reason ?? nonEmpty(block.text) ?? "The routine failed.", tone: .error)
+            // `reason` is a code (timeout, missed, …); `text` is the sentence
+            // written for people, so only `text` is ever shown.
+            NoticeRow(text: nonEmpty(block.text) ?? "The routine failed.", tone: .error)
             runAgain("Run again")
         case "skipped":
-            Text(block.reason.map { "Skipped: \($0)" } ?? nonEmpty(block.text) ?? "Skipped")
+            Text(nonEmpty(block.text) ?? "Skipped")
                 .font(.system(size: 12))
                 .foregroundColor(Theme.textFaint)
                 .lineLimit(1)
-            // Spec §2.5: a skipped run's result offers Run now.
-            runAgain("Run now")
+            // Spec §2.5: a missed clock fire offers Run now. Other skips (e.g.
+            // nothing in the window) would only skip again.
+            if block.reason == "missed" { runAgain("Run now") }
         default:
             BlockAnswer(text: block.text ?? "")
         }

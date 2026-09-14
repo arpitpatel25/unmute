@@ -445,6 +445,8 @@ final class AppController: NSObject, NotchResizing {
             let fillChanged = model.task?.hasTerminal != task.hasTerminal
             model.prepareTaskConversation(task)
             model.restoreQuestionAcknowledgment(task)
+            // The routines sheet belongs to the Agent's card only.
+            if task.id != "unmute-agent" { model.routinesSheetOpen = false }
             model.task = task
             // A PREFERENCE IS A DEFAULT, NOT A CORRECTION.
             //
@@ -826,6 +828,8 @@ final class AppController: NSObject, NotchResizing {
             NotchLog.log("proposal cleared — the surface left the expanded state")
             model.proposal = nil; model.proposalLoadingId = nil; model.convLog = ""
         }
+        // The routines sheet is a popup on the expanded surface too.
+        if !isExpanded(state) { model.routinesSheetOpen = false }
         // One surface transition: resolve the final visual state first, update
         // SwiftUI in one transaction, then ask AppKit to move the panel frame.
         // NotchWindow suppresses repeated in-flight frame targets, so follow-up
@@ -1896,9 +1900,14 @@ final class AppController: NSObject, NotchResizing {
         // THE AGENT'S ROUTINE SHEETS are popups too: the run sheet sits on top
         // of the routines sheet, so it goes first. The run sheet is host state
         // (TaskDetail.routines.run), so closing it is a request, not a flag.
-        if isExpanded(model.state), model.task?.id == "unmute-agent" {
-            if model.task?.routines?.run != nil { model.emit(.routineCloseRun); return }
+        // Only when the sheets are actually drawn: the Agent's task surface
+        // with a routines payload. Anything else is a stale flag, cleared
+        // silently so it cannot eat a later Escape.
+        if model.state == .task, model.task?.id == "unmute-agent", let routines = model.task?.routines {
+            if routines.run != nil { model.emit(.routineCloseRun); return }
             if model.routinesSheetOpen { model.routinesSheetOpen = false; return }
+        } else {
+            model.routinesSheetOpen = false
         }
         // CLOSING THE POCKET IS THE AIM CONTROL, and Escape is how you close
         // things. Open means your voice goes to the task on the card; Escape

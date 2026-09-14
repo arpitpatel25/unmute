@@ -32,6 +32,7 @@ struct BlockTurnView: View {
     let turn: BlockTurn
     let taskId: String
     var canEdit: Bool = false
+    var emit: (Event) -> Void = IPC.emit
     @State private var canvasWidth: CGFloat = 0
 
     var body: some View {
@@ -40,7 +41,7 @@ struct BlockTurnView: View {
         if let run = turn.prompt, run.kind == "routineRun" {
             RoutineRunChip(block: run, open: { openRun(run) })
         } else if let result = turn.reply, result.kind == "routineResult" {
-            RoutineResultView(block: result, taskId: taskId, open: { openRun(result) })
+            RoutineResultView(block: result, taskId: taskId, open: { openRun(result) }, emit: emit)
         } else {
             standardBody
         }
@@ -48,7 +49,7 @@ struct BlockTurnView: View {
 
     private func openRun(_ block: Block) {
         guard let runId = block.what, !runId.isEmpty else { return }
-        IPC.emit(.routineOpenRun(runId: runId))
+        emit(.routineOpenRun(runId: runId))
     }
 
     private var standardBody: some View {
