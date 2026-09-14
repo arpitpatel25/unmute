@@ -1,6 +1,6 @@
 # Agent routines — design
 
-> Status: approved by voice 2026-09-14 (exploration: `2026-09-14-agent-routines-exploration.html`).
+> Status: built on arpit/agent-routines (2026-09-14); not yet run in a signed build. Exploration: `2026-09-14-agent-routines-exploration.html`.
 > Branch `arpit/agent-routines`. Working name "routines"; the user-facing word may change.
 
 ## 1. What it is
