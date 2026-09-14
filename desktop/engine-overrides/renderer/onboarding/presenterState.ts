@@ -1,8 +1,11 @@
+export type ProviderUiState = 'checking' | 'ready' | 'missing' | 'auth-required' | 'installing' | 'timed-out' | 'failed'
+
 export type PresenterCard = null | {
   kind: 'permission' | 'speak' | 'provider' | 'repair' | 'success'
   title?: string
   phrase?: string
   detail?: string
+  providers?: Record<'claude' | 'codex', { state: ProviderUiState; detail?: string }>
 }
 
 export type PresenterState = {

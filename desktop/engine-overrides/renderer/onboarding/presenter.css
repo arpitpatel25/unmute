@@ -132,6 +132,8 @@ body:has(.ob-presenter),
   cursor: pointer;
 }
 .ob-presenter button:hover { color: var(--ob-white); background: rgba(255,255,255,.08); }
+.ob-presenter button:disabled { cursor: default; opacity: .5; }
+.ob-presenter button:disabled:hover { background: transparent; color: var(--ob-muted); }
 .ob-presenter button:focus-visible { outline: 2px solid var(--ob-light); outline-offset: 2px; }
 .ob-presenter__status { margin-left: auto; padding: 7px 7px 2px; color: rgba(255,255,255,.4); font-size: 10px; }
 
@@ -148,7 +150,7 @@ body:has(.ob-presenter),
 .ob-presenter__card blockquote::before { content: "“"; color: var(--ob-light); }
 .ob-presenter__card blockquote::after { content: "”"; color: var(--ob-light); }
 .ob-presenter__primary { float: right; margin-top: 10px; background: rgba(255,255,255,.92) !important; color: #09090b !important; }
-.ob-presenter__choices { display: flex; gap: 7px; }
+.ob-presenter__choices { display: flex; gap: 7px; margin-top: 12px; }
 .ob-presenter__choices button { flex: 1; min-height: 36px; background: rgba(255,255,255,.09); color: var(--ob-white); }
 
 @media (prefers-reduced-transparency: reduce) {

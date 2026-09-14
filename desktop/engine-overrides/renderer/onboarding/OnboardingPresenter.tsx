@@ -6,7 +6,7 @@ import './presenter.css'
 
 type PresenterAction =
   | { type: 'continue' | 'retry' | 'open-settings' | 'replay-clip' | 'complete-orientation' | 'open-sign-in' }
-  | { type: 'choose-provider'; provider: 'claude' | 'codex' }
+  | { type: 'choose-provider' | 'install-provider' | 'authenticate-provider' | 'retry-provider'; provider: 'claude' | 'codex' }
 
 type PresenterApi = {
   onboardingOnPresenterCommand?(callback: (message: PresenterMessage) => void): () => void
@@ -21,6 +21,18 @@ function UnmuteGlyph() {
   return <span className="ob-presenter__glyph" aria-hidden="true">un</span>
 }
 
+function ProviderButton({ provider, card }: { provider: 'claude' | 'codex'; card: NonNullable<PresenterCard> }) {
+  const label = provider === 'claude' ? 'Claude Code' : 'Codex'
+  const status = card.providers?.[provider] ?? { state: 'checking' as const }
+  const send = (action: PresenterAction) => api().onboardingPresenterAction?.(action)
+  if (status.state === 'checking') return <button type="button" disabled>Checking {label}…</button>
+  if (status.state === 'installing') return <button type="button" disabled>Setting up {label}…</button>
+  if (status.state === 'ready') return <button type="button" onClick={() => send({ type: 'choose-provider', provider })}>Use {label}</button>
+  if (status.state === 'missing') return <button type="button" onClick={() => send({ type: 'install-provider', provider })}>Set up {label}</button>
+  if (status.state === 'auth-required') return <button type="button" onClick={() => send({ type: 'authenticate-provider', provider })}>Sign in to {label}</button>
+  return <button type="button" onClick={() => send({ type: 'retry-provider', provider })}>Check {label} again</button>
+}
+
 function CompanionCard({ card }: { card: NonNullable<PresenterCard> }) {
   const send = (action: PresenterAction) => api().onboardingPresenterAction?.(action)
   return <section className={`ob-presenter__card ob-presenter__card--${card.kind}`} aria-label={card.title ?? 'Next action'}>
@@ -28,8 +40,8 @@ function CompanionCard({ card }: { card: NonNullable<PresenterCard> }) {
     {card.phrase && <blockquote>{card.phrase}</blockquote>}
     {card.detail && <p>{card.detail}</p>}
     {card.kind === 'provider' && <div className="ob-presenter__choices">
-      <button type="button" onClick={() => send({ type: 'choose-provider', provider: 'claude' })}>Claude Code</button>
-      <button type="button" onClick={() => send({ type: 'choose-provider', provider: 'codex' })}>Codex</button>
+      <ProviderButton provider="claude" card={card} />
+      <ProviderButton provider="codex" card={card} />
     </div>}
     {(card.kind === 'permission' || card.kind === 'repair') &&
       <button className="ob-presenter__primary" type="button" onClick={() => send({ type: card.kind === 'repair' ? 'retry' : 'continue' })}>

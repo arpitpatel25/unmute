@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 
@@ -45,15 +45,25 @@ function defaultWhich(binary: string): Promise<string | null> {
 
 const CODEX_BUNDLED_CLI = '/Applications/ChatGPT.app/Contents/Resources/codex'
 
+export async function resolveKnownProviderBinary(provider: ProviderId, deps: {
+  which(binary: string): Promise<string | null>
+  home: string
+  exists(path: string): Promise<boolean>
+}): Promise<string | null> {
+  const pathBinary = await deps.which(provider)
+  if (pathBinary) return pathBinary
+  const userLocalBinary = join(deps.home, '.local', 'bin', provider)
+  if (await deps.exists(userLocalBinary)) return userLocalBinary
+  if (provider === 'codex' && await deps.exists(CODEX_BUNDLED_CLI)) return CODEX_BUNDLED_CLI
+  return null
+}
+
 export const defaultProviderProbeDeps: ProviderProbeDeps = {
-  async resolveBinary(provider) {
-    const pathBinary = await defaultWhich(provider)
-    if (pathBinary) return pathBinary
-    if (provider === 'codex') {
-      try { await stat(CODEX_BUNDLED_CLI); return CODEX_BUNDLED_CLI } catch { /* absent */ }
-    }
-    return null
-  },
+  resolveBinary: provider => resolveKnownProviderBinary(provider, {
+    which: defaultWhich,
+    home: homedir(),
+    exists: async path => { try { await stat(path); return true } catch { return false } },
+  }),
   makeWorkspace: (provider) => mkdtemp(join(tmpdir(), `unmute-${provider}-readiness-`)),
   removeWorkspace: (path) => rm(path, { recursive: true, force: true }),
   spawn: (command, args, options) => nodeSpawn(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] }),

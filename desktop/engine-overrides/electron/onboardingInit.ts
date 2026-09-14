@@ -9,11 +9,12 @@ import { OnboardingCoordinator } from './paywall/onboarding/coordinator'
 import { openNotesPractice, notesEventFromReceipt } from './paywall/onboarding/notes-practice'
 import { prepareOnboardingWorkspace, verifyHelloTask } from './paywall/onboarding/orchestrator-exercise'
 import { PresenterWindow } from './paywall/onboarding/presenter-window'
-import { probeProviders, type ProviderProbeResult } from './paywall/onboarding/provider-probe'
+import { defaultProviderProbeDeps, probeProvider, probeProviders, type ProviderProbeResult } from './paywall/onboarding/provider-probe'
+import { installProvider, launchProviderLogin } from './paywall/onboarding/provider-setup'
 import { ProgressStore } from './paywall/onboarding/progress-store'
 import { OnboardingRuntime } from './paywall/onboarding/register'
 import { onOnboardingReceipt } from './paywall/onboarding/receipts'
-import type { ActionId, OnboardingEvent, PresenterCommand, ProviderId } from './paywall/onboarding/types'
+import type { ActionId, OnboardingEvent, PresenterCommand, ProviderId, ProviderUiStatus } from './paywall/onboarding/types'
 import { isGlobalKeyMonitoringReady, requestGlobalKeyMonitoring } from './keyListener'
 import { preflightNotetakerSystemAudio } from './notetakerInit'
 import { setOnboardingTaskWorkspace } from './paywall/remote/init'
@@ -112,7 +113,36 @@ export async function initOnboarding(
   await runtime.accept({ type: 'boot-revalidated', satisfied: satisfiedPermissions(coordinator.currentProgress().completed) })
 
   let providers: Record<ProviderId, ProviderProbeResult> | null = null
-  void probeProviders().then(value => { providers = value }).catch(() => undefined)
+  const installingProviders = new Set<ProviderId>()
+  const ensureProviders = async (): Promise<Record<ProviderId, ProviderProbeResult>> => {
+    if (!providers) providers = await probeProviders()
+    return providers
+  }
+
+  const presentProviderChoice = (): void => {
+    const command = runtime.snapshot()
+    if (command.action !== 'provider-choice') return
+    const status = (provider: ProviderId): ProviderUiStatus => {
+      if (installingProviders.has(provider)) return { state: 'installing' }
+      const result = providers?.[provider]
+      return result ? { state: result.state, ...('detail' in result ? { detail: result.detail } : {}) } : { state: 'checking' }
+    }
+    const bothMissing = providers?.claude.state === 'missing' && providers.codex.state === 'missing'
+    const actionableDetail = (['claude', 'codex'] as const)
+      .map(provider => providers?.[provider])
+      .find(result => result?.state === 'failed' || result?.state === 'timed-out' || result?.state === 'auth-required')
+    presenter.send({
+      ...command,
+      card: {
+        kind: 'provider',
+        title: bothMissing ? 'Set up an agent' : 'Connect your agent',
+        detail: actionableDetail && 'detail' in actionableDetail ? actionableDetail.detail : bothMissing
+          ? 'We could not find Claude Code or Codex. Set up either one below—Unmute needs one of them to run agent tasks.'
+          : 'Choose a ready agent, or let Unmute set up one that is missing.',
+        providers: { claude: status('claude'), codex: status('codex') },
+      },
+    })
+  }
 
   const configureAction = async (command: PresenterCommand): Promise<void> => {
     const usesWorkspace = command.action === 'orchestrator-task' || command.action === 'agent-task-link'
@@ -120,9 +150,14 @@ export async function initOnboarding(
     if (command.action === 'notes-dictation') {
       await openNotesPractice({ launch: async () => launchFreshNotesNote(), frontmostBundleId, sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) })
     }
+    if (command.action === 'provider-choice') presentProviderChoice()
   }
   afterReceipt = () => configureAction(runtime.snapshot())
   await configureAction(runtime.snapshot())
+  void probeProviders().then(value => {
+    if (!providers) providers = value
+    presentProviderChoice()
+  }).catch(() => undefined)
 
   sessionManager.onOnboardingDelivery = async receipt => {
     const target = await frontmostBundleId()
@@ -169,11 +204,39 @@ export async function initOnboarding(
     }
     if (action.type === 'open-sign-in' && runtime.snapshot().action === 'sign-in') navigate('account')
     if (action.type === 'choose-provider' && (action.provider === 'claude' || action.provider === 'codex')) {
-      providers ??= await probeProviders()
-      const result = providers[action.provider]
+      const currentProviders = await ensureProviders()
+      const result = currentProviders[action.provider]
       if (result.state === 'ready') await runtime.accept({ type: 'provider-selected', provider: action.provider })
-      else presenter.send({ ...runtime.snapshot(), card: { kind: 'repair', title: `${action.provider === 'claude' ? 'Claude Code' : 'Codex'} needs setup`, detail: result.detail } })
+      else presentProviderChoice()
       await configureAction(runtime.snapshot())
+    }
+    if (action.type === 'install-provider' && (action.provider === 'claude' || action.provider === 'codex') && runtime.snapshot().action === 'provider-choice') {
+      if (installingProviders.has(action.provider)) return
+      installingProviders.add(action.provider)
+      presentProviderChoice()
+      const installed = await installProvider(action.provider)
+      installingProviders.delete(action.provider)
+      const currentProviders = await ensureProviders()
+      currentProviders[action.provider] = installed.state === 'installed'
+        ? await probeProvider(action.provider)
+        : { provider: action.provider, state: 'failed', detail: installed.detail }
+      presentProviderChoice()
+    }
+    if (action.type === 'authenticate-provider' && (action.provider === 'claude' || action.provider === 'codex') && runtime.snapshot().action === 'provider-choice') {
+      const binary = await defaultProviderProbeDeps.resolveBinary(action.provider)
+      const currentProviders = await ensureProviders()
+      if (!binary) {
+        currentProviders[action.provider] = { provider: action.provider, state: 'missing', detail: 'The CLI could not be found. Set it up and try again.' }
+      } else {
+        launchProviderLogin(action.provider, binary)
+        currentProviders[action.provider] = { provider: action.provider, state: 'failed', detail: 'Finish signing in with the provider, then check again.' }
+      }
+      presentProviderChoice()
+    }
+    if (action.type === 'retry-provider' && (action.provider === 'claude' || action.provider === 'codex') && runtime.snapshot().action === 'provider-choice') {
+      const currentProviders = await ensureProviders()
+      currentProviders[action.provider] = await probeProvider(action.provider)
+      presentProviderChoice()
     }
   })
   return runtime

@@ -1,4 +1,6 @@
 export type ProviderId = 'claude' | 'codex'
+export type ProviderUiState = 'checking' | 'ready' | 'missing' | 'auth-required' | 'installing' | 'timed-out' | 'failed'
+export type ProviderUiStatus = { state: ProviderUiState; detail?: string }
 
 export type ActionId =
   | 'privacy'
@@ -56,6 +58,7 @@ export type PresenterCard = null | {
   title?: string
   phrase?: string
   detail?: string
+  providers?: Record<ProviderId, ProviderUiStatus>
 }
 
 export type PresenterCommand = {

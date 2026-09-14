@@ -23,6 +23,19 @@ test('a missing binary is reported without spawning', async () => {
   assert.equal(harness.workspaceRemoved, true)
 })
 
+test('the default resolver finds a CLI installed in the user-local bin directory', async () => {
+  const { resolveKnownProviderBinary } = await import('./provider-probe')
+  const checked: string[] = []
+  const resolved = await resolveKnownProviderBinary('claude', {
+    which: async () => null,
+    home: '/Users/tester',
+    exists: async path => { checked.push(path); return path === '/Users/tester/.local/bin/claude' },
+  })
+
+  assert.equal(resolved, '/Users/tester/.local/bin/claude')
+  assert.deepEqual(checked, ['/Users/tester/.local/bin/claude'])
+})
+
 test('a CLI login failure is distinguished from an execution failure', async () => {
   const harness = probeHarness({ stderr: 'Please login to continue', exitCode: 1 })
 

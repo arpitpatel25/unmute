@@ -50,8 +50,8 @@ export const CHAPTERS: Readonly<Record<ActionId, ChapterDefinition>> = {
     card: { kind: 'permission', title: 'System Audio' },
   },
   'provider-choice': {
-    action: 'provider-choice', clipId: 'provider-readiness-v1', caption: 'Unmute works with the Claude Code or Codex CLI already configured on your Mac. Choose the agent you would like to use.',
-    card: { kind: 'provider', title: 'Choose your agent' },
+    action: 'provider-choice', clipId: 'provider-readiness-v1', caption: 'Unmute runs agent tasks through Claude Code or Codex on your Mac. We will check what is ready and help you set up either one if it is missing.',
+    card: { kind: 'provider', title: 'Connect your agent', detail: 'Unmute needs at least one of these tools to run agent tasks.' },
   },
   'notes-dictation': {
     action: 'notes-dictation', clipId: 'dictation-explain-v1', caption: 'We opened Apple Notes for you. Put your cursor in the note, hold Function, say the sentence shown here, and release.',
