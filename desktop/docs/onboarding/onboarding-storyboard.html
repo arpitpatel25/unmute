@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Unmute onboarding — implemented storyboard</title>
+  <title>Unmute onboarding — current coded experience</title>
   <style>
     :root {
       color-scheme: dark;
@@ -27,6 +27,8 @@
     .brand strong { display: block; font-size: 15px; letter-spacing: -.02em; }
     .brand span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
     .chapter-label { margin: 18px 9px 8px; color: var(--faint); font-size: 10px; font-weight: 650; }
+    .audit { margin: 16px 4px 0; padding: 12px; border: 1px solid rgba(242,198,109,.28); border-radius: 13px; background: rgba(242,198,109,.07); color: rgba(255,236,196,.78); font-size: 11px; line-height: 1.45; }
+    .audit strong { display: block; margin-bottom: 4px; color: #ffe2a3; font-size: 11px; }
     .steps { display: grid; gap: 3px; }
     .step { width: 100%; display: grid; grid-template-columns: 24px 1fr; gap: 8px; align-items: center; padding: 8px; border: 0; border-radius: 11px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
     .step:hover { color: var(--ink); background: rgba(255,255,255,.05); }
@@ -69,7 +71,10 @@
     .phrase { margin: 0; color: #fff; font-size: 15px; line-height: 1.35; }
     .phrase::before, .phrase::after { color: var(--blue); }.phrase::before { content: "“"; }.phrase::after { content: "”"; }
     .primary { float: right; margin-top: 10px; border: 0; border-radius: 10px; padding: 8px 12px; background: rgba(255,255,255,.93); color: #09090b; font-size: 11px; font-weight: 650; }
-    .choices { display: flex; gap: 7px; }.choices button { flex: 1; min-height: 36px; border: 0; border-radius: 10px; color: white; background: rgba(255,255,255,.09); font-size: 11px; }
+    .choices { display: flex; gap: 7px; margin-top: 12px; }.choices button { flex: 1; min-height: 36px; border: 0; border-radius: 10px; color: white; background: rgba(255,255,255,.09); font-size: 11px; }
+    .state-switch { display: flex; gap: 5px; margin-top: 9px; }
+    .state-switch button { border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; color: var(--muted); background: transparent; font-size: 9px; cursor: pointer; }
+    .state-switch button.active { color: #09090b; background: rgba(255,255,255,.92); }
     .meta { max-width: 1180px; margin: 18px auto 0; display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 10px; }
     .meta-card { min-height: 112px; padding: 16px; border: 1px solid var(--line); border-radius: 15px; background: rgba(255,255,255,.035); }
     .meta-card h3 { margin: 0 0 9px; color: var(--faint); font-size: 10px; font-weight: 650; }
@@ -87,7 +92,8 @@
 <body>
   <main class="shell">
     <aside class="rail">
-      <div class="brand"><span class="glyph">un</span><div><strong>Onboarding storyboard</strong><span>Implemented flow · review mode</span></div></div>
+      <div class="brand"><span class="glyph">un</span><div><strong>Current onboarding</strong><span>What the coded build shows today</span></div></div>
+      <div class="audit"><strong>Not fully final</strong>Instruct is still present despite being removed from the product. The opening also needs the agreed one-line product introduction. Founder footage remains a placeholder.</div>
       <div class="chapter-label">16 event-gated frames</div>
       <nav class="steps" id="steps" aria-label="Onboarding steps"></nav>
     </aside>
@@ -120,7 +126,7 @@
       ['accessibility','Accessibility','permission-accessibility-v1','Next, allow Accessibility. This lets Unmute place the finished text wherever your cursor is.','Next, allow Accessibility. This lets Unmute place the finished text wherever your cursor is.','permission','', 'Microphone granted','Signed app is Accessibility-trusted'],
       ['input-monitoring','Input Monitoring','permission-input-monitoring-v1','Allow Input Monitoring so Unmute’s keyboard shortcuts work from any application.','Allow Input Monitoring so Unmute’s keyboard shortcuts work from any application.','permission','', 'Accessibility granted','Native modifier listener reports trusted'],
       ['system-audio','System Audio','permission-system-audio-v1','Finally, allow System Audio. Unmute uses it only when you deliberately start Notetaker.','Finally, allow System Audio. Unmute uses it only when you deliberately start Notetaker.','permission','', 'Input Monitoring granted','Real system-audio tap starts'],
-      ['provider-choice','Choose your agent','provider-readiness-v1','Unmute works with the Claude Code or Codex CLI already configured on your Mac. Choose the agent you would like to use.','Unmute works with the Claude Code or Codex CLI already configured on your Mac. Choose the agent you would like to use.','provider','', 'Permission preflight complete','Isolated CLI replies READY'],
+      ['provider-choice','Connect your agent','provider-readiness-v1','Unmute runs agent tasks through Claude Code or Codex on your Mac. We will check what is ready and help you set up either one if it is missing.','Unmute runs agent tasks through Claude Code or Codex on your Mac. We will check what is ready and help you set up either one if it is missing.','provider','', 'Permission preflight complete','Selected CLI is installed, signed in, and replies READY'],
       ['notes-dictation','Dictate in Notes','dictation-explain-v1','We opened Apple Notes for you. Put your cursor in the note, hold Function, say the sentence shown here, and release.','We opened Apple Notes for you. Put your cursor in the note, hold Function, say the sentence shown here, and release.','speak','My first Unmute dictation.', 'Apple Notes is frontmost','Real paste receipt targets Apple Notes'],
       ['notes-instruct','Rewrite with Instruct','instruct-explain-v1','Now select that sentence, press Caps Lock, and say the instruction shown here. Unmute will replace the selected text.','Now select that sentence, press Caps Lock, and say the instruction shown here. Unmute will replace the selected text.','speak','Make this sound more confident.', 'Dictation was delivered','Selected text is replaced in Apple Notes'],
       ['clipboard-capture','Capture copied context','capture-clipboard-v1','Unmute can combine your voice with captured context. Hold Function, begin speaking, copy the highlighted text, and then release.','Unmute can combine your voice with captured context. Hold Function, begin speaking, copy the highlighted text, and then release.','speak','Add this copied detail to my note.', 'Clipboard observer is armed','Observed copy ID appears in final composition'],
@@ -133,10 +139,21 @@
       ['complete','Welcome to Unmute','complete-v1','That’s it. You now know Unmute because you have actually used it. Welcome.','That’s it. You now know Unmute because you have actually used it. Welcome.','success','', 'Sign-in confirmed','Terminal onboarding state']
     ];
     let index = 0;
+    let providerState = 'missing';
     const $ = id => document.getElementById(id);
     function card(frame) {
       const [,title,,, ,kind,phrase] = frame;
-      if (kind === 'provider') return `<h2>${title}</h2><div class="choices"><button>Claude Code</button><button>Codex</button></div>`;
+      if (kind === 'provider') {
+        const states = {
+          checking: ['Checking installed tools…','Checking Claude Code…','Checking Codex…'],
+          missing: ['We could not find Claude Code or Codex. Set up either one below—Unmute needs one of them to run agent tasks.','Set up Claude Code','Set up Codex'],
+          installing: ['The official installer runs quietly in the background. No Terminal or administrator password.','Setting up Claude Code…','Setting up Codex…'],
+          signin: ['The CLI is installed. Finish signing in with the provider, then Unmute checks it again.','Sign in to Claude Code','Sign in to Codex'],
+          ready: ['Your agent is ready. Choose which one Unmute should use for the exercises.','Use Claude Code','Use Codex']
+        };
+        const s = states[providerState];
+        return `<h2>${title}</h2><p>${s[0]}</p><div class="choices"><button>${s[1]}</button><button>${s[2]}</button></div><div class="state-switch">${Object.keys(states).map(key => `<button data-provider-state="${key}" class="${key === providerState ? 'active' : ''}">${key}</button>`).join('')}</div>`;
+      }
       if (kind === 'speak') return `<p class="phrase">${phrase}</p>`;
       const label = title === 'One last step' ? 'Sign in' : title === 'Welcome to Unmute' ? 'Done' : title === 'Your workspace is ready' ? 'Explore Unmute' : 'Continue';
       return `<h2>${title}</h2><button class="primary">${label}</button>`;
@@ -145,6 +162,7 @@
       const f = frames[index];
       window.scrollTo({top: 0, behavior: 'instant'});
       $('frameTitle').textContent = f[1]; $('clipId').textContent = f[2]; $('caption').textContent = f[3]; $('spoken').textContent = f[4]; $('card').innerHTML = card(f); $('armed').textContent = f[7]; $('proof').textContent = f[8]; $('counter').textContent = `${String(index+1).padStart(2,'0')} / ${frames.length}`;
+      document.querySelectorAll('[data-provider-state]').forEach(button => button.onclick = () => { providerState = button.dataset.providerState; render(); });
       $('prev').disabled = index === 0; $('next').disabled = index === frames.length-1; $('next').textContent = index === frames.length-1 ? 'End of flow' : 'Next frame';
       [...document.querySelectorAll('.step')].forEach((el,i) => el.setAttribute('aria-current', i === index ? 'step' : 'false'));
       history.replaceState(null,'',`#${f[0]}`);
