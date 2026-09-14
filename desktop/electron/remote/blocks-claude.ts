@@ -122,6 +122,11 @@ export function blocksFromClaudeTranscript(text: string): ClaudeBlocks {
     // sub-agent still appears — as one subAgent block, from the Agent tool call
     // that started it.
     if (e.isSidechain === true) continue
+    // THE LIVE STREAM SAYS THE SAME THING DIFFERENTLY. SDK stream-json frames
+    // carry no isSidechain; a sub-agent's frames name the Agent call that owns
+    // them in parent_tool_use_id instead. Without this, the brief Claude wrote
+    // for each sub-agent rendered as a message the user had sent.
+    if (typeof e.parent_tool_use_id === 'string' && e.parent_tool_use_id) continue
 
     if (type === 'ai-title') { title = str(e.aiTitle) ?? title; continue }
 
