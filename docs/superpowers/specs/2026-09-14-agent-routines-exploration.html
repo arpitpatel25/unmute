@@ -87,8 +87,24 @@
   .rchip .when { color: var(--faint); }
   .rchip.done > div { color: var(--dim); border-color: var(--line2); background: transparent; }
   .rchip.done a { color: var(--routine); text-decoration: none; }
-  .rres { border: 1px solid var(--routine-line); background: var(--routine-bg); border-radius: 14px; padding: 10px 12px; }
-  .rres .h { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--routine); font-weight: 600; margin-bottom: 6px; }
+  .rchip.cancelled > div { color: var(--faint); border-color: var(--line2); background: transparent; text-decoration: line-through; }
+  .rchip > div, .rres { cursor: pointer; }
+  .rres { border-left: 2px solid var(--routine); padding: 2px 0 2px 11px; margin-right: 26px; }
+  .rres .h { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--routine); font-weight: 600; margin-bottom: 4px; }
+  .agentcard { position: relative; }
+  .rosterbtn { font-size: 11.5px; font-weight: 500; color: var(--routine); background: var(--routine-bg); border: 1px solid var(--routine-line); padding: 2px 9px; border-radius: 999px; }
+  .sheet { position: absolute; inset: 44px 10px 10px; background: rgba(12,12,14,.97); border: 1px solid #26262c; border-radius: 14px; padding: 12px 14px; display: none; overflow-y: auto; z-index: 3; }
+  .sheet.on { display: block; animation: in .2s ease; }
+  .sheet .top { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+  .sheet .top button { margin-left: auto; padding: 2px 9px; font-size: 12px; }
+  .ritem { border-top: 1px solid #202025; padding: 9px 0; font-size: 12.5px; }
+  .ritem .n { display: flex; gap: 6px; align-items: center; font-weight: 600; font-size: 13px; }
+  .ritem .n .pill { font-weight: 400; font-size: 10.5px; padding: 0 6px; }
+  .ritem .m { color: var(--dim); margin-top: 2px; }
+  .ritem .a { display: flex; gap: 6px; margin-top: 6px; }
+  .ritem .a button, .runv button { font-size: 11.5px; padding: 2px 9px; }
+  .runv .ln { font-family: var(--mono); font-size: 11.5px; color: var(--dim); padding: 3px 0; border-bottom: 1px dashed #1e1e23; }
+  .runv .ln b { color: #cfcfd6; font-weight: 500; }
   .rres .h .t { color: var(--faint); font-weight: 400; margin-left: auto; }
   .rres .body { font-size: 13px; color: #e8e8ec; }
   .rres .body b { color: #fff; font-weight: 600; }
@@ -163,7 +179,7 @@
   <a href="#verdict">Verdict</a><a href="#feel">How it feels</a><a href="#anatomy">Anatomy of a routine</a>
   <a href="#determinism">Deterministic</a><a href="#arch">Architecture</a><a href="#approaches">Approaches</a>
   <a href="#actors">Actions &amp; browser</a><a href="#risks">Risks</a><a href="#phases">Phasing</a>
-  <a href="#questions">Your calls</a><a href="#anchors">Code anchors</a>
+  <a href="#questions">Decisions</a><a href="#anchors">Code anchors</a>
 </div></nav>
 <main>
 
@@ -179,29 +195,35 @@
       <p class="sub" style="margin:6px 0 0">The Agent controller can already start a fresh run with its own token against the
         same tool server. We already have a sleep-aware scheduler and a background process that survives quitting the app. The notetaker already has a clear
         “notes ready” moment.</p></div>
-    <div class="card"><b>Is it worth it?</b><div class="big">Yes, if results stay quiet</div>
+    <div class="card"><b>Is it worth it?</b><div class="big">Yes</div>
       <p class="sub" style="margin:6px 0 0">Right now the Agent card only answers when you ask, so nothing gives you a reason to open it on your own. A
-        morning recap waiting in the pocket gives you one. The failure mode is noise: daily posts nobody reads,
-        billed to the user’s plan.</p></div>
+        morning recap waiting in the pocket gives you one. It makes the Agent the one place where work comes to you,
+        alongside the sessions you started.</p></div>
     <div class="card"><b>The hard parts</b><div class="big">Trust, cost, actions</div>
       <p class="sub" style="margin:6px 0 0">Making it feel like automation (code decides when, what window, what input;
         the model only writes the result). Keeping spend bounded (the deleted summary sweep hit 17k launches/day). And
         acting on untrusted content like email, safely.</p></div>
   </div>
 
-  <h3 style="margin-top:26px">Where I agree, and where I’d push back a little</h3>
+  <h3 style="margin-top:26px">Settled so far (after the first review, 2026-09-14)</h3>
   <ul class="tight">
-    <li><b>Agree:</b> separate sessions, not messages in the Agent’s queue. The Agent processes one turn at a time
+    <li><b>Separate sessions</b>, not messages in the Agent’s queue. The Agent processes one turn at a time
       (<code>lifecycle.ts</code> <code>drain()</code>), so a routine in that queue <i>would</i> block you.</li>
-    <li><b>Agree:</b> rules and tools are inherited, chat history isn’t. That’s also what makes routines repeatable: every run
+    <li><b>Rules and tools are inherited, chat history isn’t.</b> That’s also what makes routines repeatable: every run
       starts from the same frozen prompt instead of whatever the conversation had drifted into.</li>
-    <li><b>Push back:</b> the start chip and the result shouldn’t be one widget. If the chip sits where the routine
-      started and fills in later, the result ends up 15 messages above where you’re looking. I’d keep a small
-      <i>started</i> chip in place and post the <i>result</i> at the bottom when it arrives. Try it below.</li>
-    <li><b>Push back:</b> “routines take actions” is right, but split it into two kinds. Most routines you described
-      (recap, forgotten ideas, meeting action items) only <b>read</b>. Only email-style routines <b>act</b>, and
-      those have real constraints on main today (Computer Use is off entirely, and Codex has no browser), plus a
-      prompt-injection problem. Keep readers and actors apart.</li>
+    <li><b>One chat, no second panel.</b> A routine shows up in the Agent’s chat at two moments: a small widget
+      <i>where it started</i>, and its result <i>later, at the bottom</i>, after everything you did in between. The result is written like
+      an Agent reply with a thin routine accent, so it reads as the same Agent reporting back, not a foreign card.</li>
+    <li><b>The run is reachable, not prominent.</b> Tapping the widget or the result opens that run’s own session: what it
+      did, and Cancel while it’s running. It’s there for the worst case (stuck, wrong, curious), not as a
+      destination.</li>
+    <li><b>You can always see your routines,</b> even when none are running: a quiet “◆ 4 routines” in the Agent card header
+      opens a sheet over the chat with each routine, when it runs next, how the last run went, and Run now / Pause.
+      It’s a sheet on the same card, not a second panel. Asking “what routines do I have?” gives the same list.</li>
+    <li><b>Two kinds:</b> <b>readers</b> (recap, ideas going cold, meeting action items) and <b>actors</b> (email digest). Actors
+      have real constraints on main today (Computer Use is off, Codex has no browser) and a prompt-injection problem, so they ship second.</li>
+    <li><b>My picks stand for the rest:</b> the window rule, catching up once on wake, a pointer rather than a copy of results, actors
+      propose instead of acting, silent by default. The name is still open.</li>
   </ul>
 </section>
 
@@ -210,7 +232,8 @@
   <h2>How it feels: two routines while you keep chatting</h2>
   <p class="sub">Press play. A morning recap starts at 09:00 while you keep talking to the Agent, a meeting ends
     partway through, and its action items arrive later. Watch the lanes on the right: the Agent’s own session never
-    waits on a routine, and a routine never waits on the Agent.</p>
+    waits on a routine, and a routine never waits on the Agent. <b>Tap</b> “◆ 4 routines” in the card header to see every
+    routine, or tap a routine widget or result to open that run (Cancel is in there while it runs).</p>
 
   <div class="ctrl">
     <button class="primary" id="play">▶ Play scenario</button>
@@ -226,7 +249,8 @@
     <div class="notch">
       <div class="bar"><i></i></div>
       <div class="agentcard">
-        <div class="ach"><span class="dot"></span>Unmute Agent <span class="st" id="agentState">idle</span></div>
+        <div class="ach"><span class="dot"></span>Unmute Agent <button class="rosterbtn" id="rosterBtn">◆ 4 routines</button><span class="st" id="agentState">idle</span></div>
+        <div class="sheet" id="sheet"></div>
         <div class="chat" id="chat"></div>
         <div class="composer"><input id="say" placeholder="Talk to the Agent… (type + Enter)"></div>
       </div>
@@ -411,9 +435,6 @@
     <p>Tasks and the Agent already run <code>claude -p</code>, but <code>pty-session.ts</code> still asserts “interactive REPL only
       (never -p)”, and I found nothing on main that settles which billing pool <code>-p</code> uses. Unattended runs on a schedule are exactly
       the case to confirm against the provider’s current terms before shipping. Not a blocker for design work.</p></details>
-  <details><summary>Noise: daily posts nobody reads <span class="pill mid">medium</span></summary>
-    <p>If a routine gets ignored, it starts costing you attention instead of saving it. <b>Guards:</b> results post quietly (unread dot only). After
-      N unread results in a row, the Agent offers once to pause that routine. Skip-when-empty keeps “nothing happened” days quiet.</p></details>
   <details><summary>Mac asleep or app quit at fire time <span class="pill mid">medium</span></summary>
     <p>Node timers pause while the Mac sleeps. The runtime process outlives quitting the app, but it exits when idle, and nothing respawns it on a clock.
       <b>v1:</b> the runner lives in the runtime process, is reconciled on start and wake, catches up once within a grace window (e.g. 6h),
@@ -435,36 +456,34 @@
       <li>Routine file format, <code>routine_create / list / pause / run_now</code> Agent tools, Save + Run now preview</li>
       <li>RoutineRunner in the runtime process: clock triggers, window rules, manifest, skip-empty, budget, journal, own pool</li>
       <li>One event trigger: <code>meeting.notes-ready</code> (hook in <code>notetakerInit.ts</code> after the summary succeeds, sent to the runtime over its socket)</li>
-      <li><code>routineRun</code> block kind (TS + Swift), merged by time, unread goes to the front of the pocket</li>
+      <li><code>routineRun</code> block kind (TS + Swift), shown at two moments (a widget where it started, the result at the bottom), merged by time; unread goes to the front of the pocket</li>
+      <li>Routines sheet from the Agent card header: every routine, when it runs next, how the last run went, Run now / Pause</li>
+      <li>Tap a routine widget or result to open that run’s session read-only, with Cancel while it runs</li>
       <li>Routine sessions excluded from the turn index</li>
       <li>Built-in examples: Morning recap · Ideas going cold · Meeting action items</li>
     </ul></div>
   <div class="phase"><h3>Phase 2 · Actor routines</h3>
     <ul class="tight"><li>Probe first: unattended Claude + <code>--chrome</code> with Chrome in the background</li><li>Actor launch profile, declared permission levels, proposals with Send/Edit/Skip</li><li>Email digest as the first actor</li></ul></div>
   <div class="phase"><h3>Phase 3 · Later, if it earns it</h3>
-    <ul class="tight"><li>launchd wake so runs happen with the app quit · more events (task done, session idle) · Settings list screen · Codex actors once a browser path exists · overlap with the unmerged Bots design (a bot’s “head” is the same kind of event-driven headless turn)</li></ul></div>
+    <ul class="tight"><li>launchd wake so runs happen with the app quit · more events (task done, session idle) · Codex actors once a browser path exists · overlap with the unmerged Bots design (a bot’s “head” is the same kind of event-driven headless turn)</li></ul></div>
 </section>
 
 <section id="questions">
-  <div class="kicker">Your calls</div>
-  <h2>Decisions I need from you (my pick is highlighted)</h2>
-  <div class="q">
-    <div class="card"><b>1 · What does “since yesterday” mean by default?</b>
-      <div class="opts"><span class="me">yesterday-or-last-run (never less than since yesterday 00:00, extends back after days off, max 7 days)</span><span>calendar yesterday → now</span><span>rolling 24h</span></div></div>
-    <div class="card"><b>2 · Mac asleep or app quit at fire time?</b>
-      <div class="opts"><span class="me">catch up once on wake within 6h, else post “skipped · Run now?”</span><span>always catch up</span><span>silently skip</span></div></div>
-    <div class="card"><b>3 · Does the Agent “know” routine results?</b>
-      <div class="opts"><span class="me">pointer: it can read result files; replying to a result attaches it</span><span>inject results into its history</span><span>no link at all</span></div></div>
-    <div class="card"><b>4 · Can actor routines take consequential actions on their own?</b>
-      <div class="opts"><span class="me">no: they post proposals you tap</span><span>yes, if the routine file allows it</span></div></div>
-    <div class="card"><b>5 · Where does the result appear?</b>
-      <div class="opts"><span class="me">started chip in place + result at the bottom when done</span><span>one widget that fills in where it started</span></div></div>
-    <div class="card"><b>6 · Does a routine ever speak?</b>
-      <div class="opts"><span class="me">silent by default, per-routine opt-in to one spoken headline</span><span>always speak</span><span>never</span></div></div>
-    <div class="card"><b>7 · The word</b>
-      <div class="opts"><span>Routines</span><span>Standing asks</span><span>Check-ins</span><span>Rituals</span><span>Daily prompts</span></div>
-      <p class="sub" style="margin:8px 0 0;font-size:13px">No strong pick. “Routine” is also used in <code>desktop/docs/skill-curator/</code> for the parked recipe engine; worth knowing before it lands in code.</p></div>
-  </div>
+  <div class="kicker">Decisions</div>
+  <h2>Settled on 2026-09-14, and the one still open</h2>
+  <table>
+    <tr><th style="width:32%">Question</th><th>Decision</th></tr>
+    <tr><td>Where does a routine show up?</td><td>In the one Agent chat, no second panel: a widget where it started, the result later at the bottom, written like an Agent reply.</td></tr>
+    <tr><td>Can you see the run itself?</td><td>Yes, but not prominently: tap the widget or result to open that run’s session, with Cancel while it runs.</td></tr>
+    <tr><td>Can you see routines that aren’t running?</td><td>Yes: “◆ N routines” in the Agent card header opens a sheet over the chat with next run, last run, Run now and Pause. Voice gives the same list.</td></tr>
+    <tr><td>Kinds</td><td><b>Read-only</b> first, <b>takes actions</b> second.</td></tr>
+    <tr><td>What “since yesterday” means</td><td>yesterday-or-last-run: never less than since midnight yesterday, reaches back after days off, max 7 days.</td></tr>
+    <tr><td>Mac asleep at run time</td><td>Catch up once on wake within 6h, otherwise post “skipped · Run now?”.</td></tr>
+    <tr><td>Does the Agent know results?</td><td>By pointer: it can read the result files; results aren’t added to its history.</td></tr>
+    <tr><td>Consequential actions</td><td>Never unattended: actor routines post proposals you tap.</td></tr>
+    <tr><td>Speaking</td><td>Silent by default, per-routine opt-in.</td></tr>
+    <tr><td><b>Still open:</b> the word</td><td>Routines · Standing asks · Check-ins · Rituals · Daily prompts. “Routine” is also used in <code>desktop/docs/skill-curator/</code> for the parked recipe engine.</td></tr>
+  </table>
 </section>
 
 <section id="anchors">
@@ -531,16 +550,66 @@ function fireRoutine(k, why) {
   const r = ROUTINES[k], id = `${k}-${++seq}`;
   items.push({ type: 'chip', id, name: r.name, started: t, why, done: false });
   laneStart(id, r.name + ' · run', 'routine');
+  lastRun[k] = { at: t, status: 'running' };
   log('routine', `${r.name} fired (${why}), window + manifest by code, child process started`);
-  pending.push({ at: t + r.secs, fn: () => {
+  pending.push({ id, at: t + r.secs, fn: () => {
     const chip = items.find((i) => i.id === id); if (chip) chip.done = true;
+    lastRun[k] = { at: chip.started, status: 'done' };
     items.push({ type: 'result', id, name: r.name, started: chip.started, html: r.html });
     laneEnd(id);
     log('routine', `${r.name} done → result posted, process exited, Agent card marked unread`);
   } });
 }
 
-let pending = [];
+let pending = [], lastRun = {}, sheetMode = null;
+const ROSTER = [
+  { k: 'recap', name: 'Morning recap', kind: 'reader', when: 'Weekdays at 09:00', next: 'Tomorrow 09:00' },
+  { k: 'ideas', name: 'Ideas going cold', kind: 'reader', when: 'Fridays at 16:00', next: 'Fri 16:00' },
+  { k: 'meeting', name: 'Meeting → action items', kind: 'reader', when: 'When meeting notes are ready', next: 'After your next meeting' },
+  { k: 'email', name: 'Email digest', kind: 'actor', when: 'Daily at 08:30', next: 'Paused', paused: true },
+];
+function cancelRun(id) {
+  const p = pending.find((x) => x.id === id); if (p) pending.splice(pending.indexOf(p), 1);
+  const chip = items.find((i) => i.id === id); if (!chip || chip.done) return;
+  chip.done = true; chip.cancelled = true; laneEnd(id);
+  const k = id.split('-')[0]; lastRun[k] = { at: chip.started, status: 'cancelled' };
+  log('routine', `${chip.name} cancelled by you → process killed, nothing posted`);
+}
+function openSheet(mode) { sheetMode = mode; renderSheet(); }
+function renderSheet() {
+  const el = $('sheet');
+  if (!sheetMode) { el.classList.remove('on'); el.dataset.h = ''; return; }
+  el.classList.add('on');
+  let html;
+  if (sheetMode === 'roster') {
+    html = `<div class="top">◆ Your routines<button data-close>Done</button></div>` + ROSTER.map((r) => {
+      const lr = lastRun[r.k], running = lr && lr.status === 'running';
+      const last = running ? `<span style="color:var(--routine)">running now</span>` : lr ? `last run ${hm(lr.at)} · ${lr.status}` : 'last run yesterday 09:00 · done';
+      return `<div class="ritem"><div class="n">${r.name}<span class="pill ${r.kind === 'actor' ? 'mid' : ''}">${r.kind === 'actor' ? 'takes actions' : 'read-only'}</span>${r.paused ? '<span class="pill">paused</span>' : ''}</div>
+        <div class="m">${r.when} · next: ${r.next}</div><div class="m">${last}</div>
+        <div class="a">${ROUTINES[r.k] ? `<button data-run="${r.k}" ${running ? 'disabled' : ''}>Run now</button>` : ''}<button>${r.paused ? 'Resume' : 'Pause'}</button><button>Edit</button></div></div>`;
+    }).join('') + `<div class="m" style="color:var(--faint);font-size:12px;margin-top:8px">Or just say “every Monday at 10, …” to add one.</div>`;
+  } else {
+    const chip = items.find((i) => i.id === sheetMode); if (!chip) { sheetMode = null; return renderSheet(); }
+    const st = chip.cancelled ? 'cancelled' : chip.done ? 'done' : 'running';
+    html = `<div class="top">◆ ${chip.name} · run at ${hm(chip.started)} <span class="pill ${st === 'running' ? 'mid' : st === 'done' ? 'yes' : ''}">${st}</span><button data-close>Close</button></div>
+      <div class="runv">
+        <div class="m" style="color:var(--dim);font-size:12px;margin-bottom:6px">This run’s own session. Behind the Agent, kept here for when you need to check or stop it.</div>
+        <div class="ln"><b>window</b> Sun 00:00 → ${hm(chip.started)} (by code)</div>
+        <div class="ln"><b>manifest</b> 6 sessions · 41 turns</div>
+        <div class="ln"><b>Read</b> turns.jsonl @ offsets</div>
+        <div class="ln"><b>Read</b> notch-pill-fix transcript</div>
+        ${chip.done ? `<div class="ln"><b>result</b> ${chip.cancelled ? 'none: cancelled' : 'posted to the Agent chat'}</div>` : `<div class="ln"><b>…</b> working</div>`}
+        <div class="a" style="display:flex;gap:6px;margin-top:10px">${!chip.done ? `<button data-cancel="${chip.id}">Cancel run</button>` : ''}<button>Open full transcript</button></div>
+      </div>`;
+  }
+  if (el.dataset.h === html) return;   // rebuild only on change, so a click is never lost to a re-render
+  el.dataset.h = html; el.innerHTML = html;
+  el.querySelectorAll('[data-close]').forEach((b) => b.onclick = () => { sheetMode = null; renderSheet(); });
+  el.querySelectorAll('[data-run]').forEach((b) => b.onclick = () => { if (t < SPAN[0]) t = SPAN[0]; fireRoutine(b.dataset.run, 'Run now'); sheetMode = null; renderSheet(); start(); render(); });
+  el.querySelectorAll('[data-cancel]').forEach((b) => b.onclick = () => { cancelRun(b.dataset.cancel); render(); renderSheet(); });
+}
+$('rosterBtn').onclick = () => openSheet('roster');
 const SCRIPT = [
   { at: 9 * 3600, fn: () => fireRoutine('recap', '09:00 schedule') },
   { at: 9 * 3600 + 20, fn: () => userSays('open the notch pill bug session', 'Continuing <a>Notch pill fix</a>: it was waiting on your reply about the dot spacing.', 9) },
@@ -552,7 +621,7 @@ const SCRIPT = [
 ];
 
 function reset() {
-  clearInterval(timer); timer = null; t = T0; items = []; lanes = {}; logLines = []; agentBusy = 0; pending = [];
+  clearInterval(timer); timer = null; t = T0; items = []; lanes = {}; logLines = []; agentBusy = 0; pending = []; lastRun = {}; sheetMode = null; renderSheet();
   $('play').disabled = false; $('pause').disabled = true; render();
 }
 function tick() {
@@ -584,14 +653,17 @@ function render() {
     if (i.type === 'user') return `<div class="msg user"><span>${i.text}</span></div>`;
     if (i.type === 'agent') return `<div class="msg agent">${i.html}</div>`;
     if (i.type === 'typing') return `<div class="msg agent"><span class="typing"><i></i><i></i><i></i></span></div>`;
-    if (i.type === 'chip') return `<div class="msg rchip ${i.done ? 'done' : ''}"><div>${i.done ? '✓' : '<span class="spin"></span>'} ${i.name} <span class="when">${i.done ? '· done, <a href="#" data-j="' + i.id + '">result below ↓</a>' : '· running · ' + i.why + ' · ' + hm(i.started)}</span></div></div>`;
-    if (i.type === 'result') return `<div class="msg"><div class="rres" id="res-${i.id}"><div class="h">◆ ${i.name}<span class="t">${hm(i.started)} → ${hm(t)}</span></div><div class="body">${i.html}</div><div class="f"><span>Open run</span><span>Reply about this</span><span>Pause routine</span></div></div></div>`;
+    if (i.type === 'chip' && i.cancelled) return `<div class="msg rchip cancelled"><div data-open="${i.id}">✕ ${i.name} <span class="when">· cancelled</span></div></div>`;
+    if (i.type === 'chip') return `<div class="msg rchip ${i.done ? 'done' : ''}"><div data-open="${i.id}">${i.done ? '✓' : '<span class="spin"></span>'} ${i.name} <span class="when">${i.done ? '· done, <a href="#" data-j="' + i.id + '">result below ↓</a>' : '· working on it · ' + i.why + ' · ' + hm(i.started)}</span></div></div>`;
+    if (i.type === 'result') return `<div class="msg agent"><div class="rres" id="res-${i.id}" data-open="${i.id}"><div class="h">◆ ${i.name}<span class="t">${hm(i.started)} → ${hm(t)}</span></div><div class="body">${i.html}</div></div></div>`;
     return '';
   }).join('');
   // freeze result end time once rendered
   items.forEach((i) => { if (i.type === 'result' && !i.endFixed) { i.endFixed = true; i.html = i.html; i.end = t; } });
   chat.querySelectorAll('.rres .t').forEach((el, n) => { const r = items.filter((i) => i.type === 'result')[n]; if (r) el.textContent = `${hm(r.started)} → ${hm(r.end)}`; });
-  chat.querySelectorAll('a[data-j]').forEach((a) => a.onclick = (e) => { e.preventDefault(); const el = $('res-' + a.dataset.j); if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 900); } });
+  chat.querySelectorAll('[data-open]').forEach((el) => el.onclick = () => openSheet(el.dataset.open));
+  chat.querySelectorAll('a[data-j]').forEach((a) => a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); const el = $('res-' + a.dataset.j); if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 900); } });
+  if (sheetMode) renderSheet();
   chat.scrollTop = chat.scrollHeight;
 
   const span = SPAN[1] - SPAN[0], pct = (s) => Math.max(0, Math.min(100, (s - SPAN[0]) / span * 100));
@@ -736,7 +808,7 @@ const EX = {
   mcp: ['Agent tool server', 'exists', 'One MCP HTTP server in the runtime process on port 0, backed by <code>CapabilityRegistry</code>. Each run gets its own bearer token (<code>tokens.ts</code>), so a routine doesn\'t need a server of its own. Add a <code>routine</code> principal role so policy can tell a routine run from your conversation.'],
   agent: ['Agent conversation', 'unchanged', 'The one conversation, its queue and its warm process are left alone. That\'s the point. It only gains a few tools (<code>routine_create/list/pause/run_now</code>) and permission to read <code>routines/runs/*</code>, so “tell me more about the recap” works.'],
   journal: ['Run journal + result files', 'new', '<code>routines/journal.jsonl</code>: <code>{runId, routineId, scheduledFor, trigger, window, status, sessionId, resultPath, durationMs, reason}</code>. The result is a Markdown file per run. Kept apart from the Agent snapshot, which rotates, gets discarded and is <code>user|agent</code>-only.'],
-  merge: ['Merge at render', 'new', '<code>NotchController.restoreAgentConversation</code> already rebuilds the Agent\'s blocks on every view. It merges runs by timestamp: a <i>started</i> chip at <code>firedAt</code> and a result at <code>endedAt</code>. When a result is posted, <code>agentUnread</code> is set, so the Agent comes to the front of the pocket.'],
+  merge: ['Merge at render', 'new', '<code>NotchController.restoreAgentConversation</code> already rebuilds the Agent\'s blocks on every view. It merges runs by timestamp: a <i>started</i> widget at <code>firedAt</code> and a result at <code>endedAt</code>. Tapping either opens the run. When a result is posted, <code>agentUnread</code> is set, so the Agent comes to the front of the pocket.'],
   notch: ['Notch Agent card', 'extend', 'A new <code>routineRun</code> block kind: <code>blocks.ts</code> union + <code>KNOWN</code> → IPC (no change) → <code>Blocks.swift</code> decode + <code>drawable</code> → a case in <code>BlockViews.swift</code>. <code>BlockPresentation</code> needs a boundary rule so a routine row isn\'t folded into the surrounding user turn. <code>subAgent</code> is the closest existing view.'],
   index: ['Turn index', 'change', '<code>agent/sessions/turn-index.ts</code> already records <code>provenance</code> (main/subagent/unknown). Add <code>routine</code>, detected from the run cwd, and leave those sessions out of manifests by default. This guards against the self-feeding loop behind the deleted summary sweep.'],
 };
