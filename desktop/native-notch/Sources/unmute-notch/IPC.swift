@@ -173,6 +173,72 @@ struct ChatConfigP: Codable {
     let dictation: String?; let dictationError: String?
 }
 
+/// One routine as listed in the Agent's routines sheet — see
+/// routine-blocks.ts `RoutineItemP`. Every field but `id`/`name` is optional
+/// so a field TS adds or drops never breaks decoding here (R5).
+struct RoutineItemP: Codable {
+    let id: String
+    let name: String
+    let scheduleLabel: String?
+    let kind: String?           // "read-only" | "takes-actions"
+    let enabled: Bool?
+    let nextRunLabel: String?
+    let lastRunLabel: String?
+    let running: Bool?
+    let error: String?
+}
+
+/// One activity line in an open run's transcript — see
+/// routine-blocks.ts `RoutineRunDetailP.activity`.
+struct RoutineActivityP: Codable {
+    let at: Int
+    let text: String
+}
+
+/// The open run sheet — see routine-blocks.ts `RoutineRunDetailP`. Every
+/// field but `runId`/`name`/`status` is optional, for the same reason as
+/// `RoutineItemP` above.
+struct RoutineRunDetailP: Codable {
+    let runId: String
+    let routineId: String?
+    let name: String
+    let status: String
+    let trigger: String?
+    let firedAt: Int?
+    let endedAt: Int?
+    let windowLabel: String?
+    let totals: String?
+    let provider: String?
+    let activity: [RoutineActivityP]?
+    let result: String?
+    let error: String?
+    let canCancel: Bool?
+    let hasTranscript: Bool?
+}
+
+/// The Agent `TaskDetailP.routines` payload — see routine-blocks.ts
+/// `RoutinesP`. `items` defaults to `[]` when absent, which covers the
+/// `available: false` shape (no engine has ever sent `items` there) and any
+/// older engine that predates this field.
+struct RoutinesPayload: Codable {
+    let available: Bool
+    let reason: String?
+    let items: [RoutineItemP]
+    let run: RoutineRunDetailP?
+
+    init(available: Bool, reason: String? = nil, items: [RoutineItemP] = [], run: RoutineRunDetailP? = nil) {
+        self.available = available; self.reason = reason; self.items = items; self.run = run
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        available = try c.decode(Bool.self, forKey: .available)
+        reason = try c.decodeIfPresent(String.self, forKey: .reason)
+        items = try c.decodeIfPresent([RoutineItemP].self, forKey: .items) ?? []
+        run = try c.decodeIfPresent(RoutineRunDetailP.self, forKey: .run)
+    }
+}
+
 /// Full detail for the fronted task (task surface) or the focused Stage.
 struct TaskDetail: Codable {
     var canEditLatestMessage: Bool? = nil
@@ -226,6 +292,9 @@ struct TaskDetail: Codable {
     /// What `/` offers in this thread's composer. Absent for a host older than
     /// the menu, and for a provider that has no commands.
     var commands: [CommandP]? = nil
+    /// The Agent's routines sheet and open run sheet. Only on the Agent's
+    /// detail — see routine-blocks.ts `routinesPayload`.
+    var routines: RoutinesPayload? = nil
 
     /// Does this task have a live terminal? SENT by the engine, which resolves it
     /// from the one provider registry (electron/remote/providers.ts). This is
@@ -803,6 +872,16 @@ enum Event {
     /// "cursor" | "newTask" | "openTask" — chosen at the END, never at the start.
     case scratchpadDeliver(dest: String)
     case scratchpadDiscard
+    // ── Routines (spec §5) ──
+    case routineRunNow(id: String)
+    case routineSetEnabled(id: String, enabled: Bool)
+    case routineEdit(id: String)
+    case routineOpenRun(runId: String)
+    case routineCloseRun
+    case routineCancel(runId: String)
+    case routineOpenTranscript(runId: String)
+    /// "approve" | "dismiss" — see routineResult's `proposals` on Block.
+    case routineProposal(runId: String, proposalId: String, decision: String)
 
     var json: [String: Any] {
         switch self {
@@ -929,6 +1008,15 @@ enum Event {
         case .scratchpadRemove(let id): return ["type": "scratchpadRemove", "id": id]
         case .scratchpadDeliver(let dest): return ["type": "scratchpadDeliver", "dest": dest]
         case .scratchpadDiscard: return ["type": "scratchpadDiscard"]
+        case .routineRunNow(let id): return ["type": "routineRunNow", "id": id]
+        case .routineSetEnabled(let id, let enabled): return ["type": "routineSetEnabled", "id": id, "enabled": enabled]
+        case .routineEdit(let id): return ["type": "routineEdit", "id": id]
+        case .routineOpenRun(let runId): return ["type": "routineOpenRun", "runId": runId]
+        case .routineCloseRun: return ["type": "routineCloseRun"]
+        case .routineCancel(let runId): return ["type": "routineCancel", "runId": runId]
+        case .routineOpenTranscript(let runId): return ["type": "routineOpenTranscript", "runId": runId]
+        case .routineProposal(let runId, let proposalId, let decision):
+            return ["type": "routineProposal", "runId": runId, "proposalId": proposalId, "decision": decision]
         }
     }
 }

@@ -30,6 +30,19 @@ public struct PlanStep: Codable, Equatable, Sendable {
     public let status: String
 }
 
+/// A takes-actions proposal surfaced by a routine result — something the
+/// routine wants done but never does itself (see routineResult below).
+public struct BlockProposal: Codable, Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let detail: String
+    public let state: String
+
+    public init(id: String, title: String, detail: String, state: String) {
+        self.id = id; self.title = title; self.detail = detail; self.state = state
+    }
+}
+
 /// One thing the agent did.
 ///
 /// Decoded from a tagged object — `{"kind": "...", ...}` — rather than a Swift
@@ -118,10 +131,23 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
     // unknown
     public let raw: String?
 
+    // routineRun / routineResult — see blocks.ts. Both reuse name, status,
+    // trigger/text, what (the run id), reason and, for routineResult, path
+    // (the routine id) and startedAt (the run's firedAt).
+    public let proposals: [BlockProposal]?
+
     /// Stable within one render pass. Blocks carry no id of their own — the
     /// index is supplied by the presenter, which is the only thing that knows
     /// the position.
-    public var id: String { "\(kind)-\(text ?? command ?? path ?? query ?? raw ?? "")" }
+    ///
+    /// Routine kinds key on `what` (the run id) rather than the normal
+    /// fallback chain: `path` is the routine id on a `routineResult`, which
+    /// two runs of the same routine would share, colliding two very different
+    /// rows into one id.
+    public var id: String {
+        if kind == "routineRun" || kind == "routineResult" { return "\(kind)-\(what ?? "")" }
+        return "\(kind)-\(text ?? command ?? path ?? query ?? raw ?? "")"
+    }
 
     public var isMessage: Bool { kind == "message" }
     public var isUser: Bool { kind == "message" && role == "user" }
@@ -138,7 +164,8 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
                 before: Int? = nil, after: Int? = nil, trigger: String? = nil,
                 startedAt: Int? = nil, raw: String? = nil, mimeType: String? = nil, bytes: Int? = nil,
                 diff: String? = nil, changes: [FileChange]? = nil, error: String? = nil, outcome: String? = nil,
-                format: String? = nil, source: String? = nil) {
+                format: String? = nil, source: String? = nil, proposals: [BlockProposal]? = nil) {
+        self.proposals = proposals
         self.format = format; self.source = source
         self.diff = diff; self.changes = changes; self.error = error; self.outcome = outcome
         self.mimeType = mimeType; self.bytes = bytes
@@ -163,6 +190,7 @@ public enum BlockKind {
         "message", "reasoning", "command", "fileChange", "mcpCall", "fileRead",
         "search", "plan", "subAgent", "denied", "error", "compaction", "attachment",
         "sessionBoundary", "notice",
+        "routineRun", "routineResult",
     ]
     public static func isDrawable(_ kind: String) -> Bool { drawable.contains(kind) }
 }

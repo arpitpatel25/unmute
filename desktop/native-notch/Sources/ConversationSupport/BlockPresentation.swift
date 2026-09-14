@@ -74,8 +74,11 @@ public enum BlockPresentation {
     public static func build(_ blocks: [Block], running: Bool = false) -> [BlockTurn] {
         var turns = buildTurns(blocks)
         // Only the LAST turn can be the live one; everything above it is history
-        // whatever the task is doing now.
-        if running, let last = turns.indices.last, turns[last].reply == nil || turns[last].meta.isRunning {
+        // whatever the task is doing now. A routine turn is never live — it is
+        // an unattended run's own firing/result, reported after the fact, not
+        // this conversation still thinking.
+        let lastIsRoutine = turns.last.map { $0.prompt?.kind == "routineRun" || $0.reply?.kind == "routineResult" } ?? false
+        if running, !lastIsRoutine, let last = turns.indices.last, turns[last].reply == nil || turns[last].meta.isRunning {
             let m = turns[last].meta
             turns[last] = BlockTurn(
                 id: turns[last].id, prompt: turns[last].prompt, work: turns[last].work,
@@ -164,6 +167,19 @@ public enum BlockPresentation {
             body = []
         }
 
+        // A routine's firing and its result never belong inside the turn they
+        // happen to land near in time — they are a separate, unattended
+        // session reported after the fact (spec §5). Each closes whatever
+        // turn was open and forms its own standalone turn: routineRun as the
+        // prompt, routineResult as the reply, and the other side left empty
+        // rather than borrowed from neighbouring work.
+        func appendRoutineTurn(routinePrompt: Block?, routineReply: Block?) {
+            close()
+            turns.append(BlockTurn(id: "turn-\(index)", prompt: routinePrompt, work: [], reply: routineReply,
+                                    meta: meta(of: []), sources: []))
+            index += 1
+        }
+
         for block in blocks {
             // A NEW SESSION IS ITS OWN ROW, never part of a turn. Grouped with
             // the turn before it, it drew ABOVE that turn's reply (surfaced rows
@@ -173,6 +189,14 @@ public enum BlockPresentation {
                 close()
                 body = [block]
                 close()
+                continue
+            }
+            if block.kind == "routineRun" {
+                appendRoutineTurn(routinePrompt: block, routineReply: nil)
+                continue
+            }
+            if block.kind == "routineResult" {
+                appendRoutineTurn(routinePrompt: nil, routineReply: block)
                 continue
             }
             if block.isUser {
