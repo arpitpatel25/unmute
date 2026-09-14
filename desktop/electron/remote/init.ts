@@ -332,7 +332,7 @@ export interface RemoteInitDeps {
    *  header comment on why a cross-tree import breaks local typecheck).
    *  Optional: a build without the notetaker feature wired simply never
    *  registers the capability, same as any other missing dependency. */
-  notetaker?: NotetakerAdapters
+  notetaker?: NotetakerAdapters & NotesReadySource
   /** One-shot call to the user's OWN local CLI, for maintaining session
    *  summaries. Injected for the same reason as `notetaker`: the real
    *  implementation is engine-overrides/electron/notetaker/headlessAgent.ts,
@@ -505,6 +505,8 @@ interface RemoteSettings {
   /** True once the user has set the Agent on/off themselves; until then the
    *  default (on) applies, including on installs from before it was on. */
   unmuteAgentAvailableUserSet: boolean
+  /** Saved Agent prompts that run on a schedule or event inside the Agent runtime. */
+  unmuteRoutinesEnabled: boolean
 }
 
 const settings = new Store<RemoteSettings>({
@@ -557,6 +559,7 @@ const settings = new Store<RemoteSettings>({
     unmuteAgentModels: {},
     unmuteAgentSwitchWhenUnavailable: true,
     unmuteAgentAvailableUserSet: false,
+    unmuteRoutinesEnabled: true,
   },
 })
 
@@ -1054,7 +1057,8 @@ let unmuteAgentRegistry: CapabilityRegistry = new CapabilityRegistry([])
  *  RemoteInitDeps's own comment on why this arrives as an injected opaque
  *  shape rather than a direct import. Read by initializeUnmuteAgent() when
  *  it builds the registry below. */
-let notetakerAdapters: NotetakerAdapters | null = null
+type NotesReadySource = { onNotesReady?(listener: (e: { meetingId: string; title: string; notesPath: string }) => void): () => void }
+let notetakerAdapters: (NotetakerAdapters & NotesReadySource) | null = null
 let runHeadlessSummary: RemoteInitDeps['runHeadless'] | null = null
 
 /**
@@ -1915,6 +1919,7 @@ async function initializeUnmuteAgent(): Promise<void> {
     const client = new AgentRuntimeClient(runtime, {
       onView: view => { if (generation === unmuteAgentGeneration) notchController?.restoreAgentConversation(view) },
       onActivity: activity => { if (generation === unmuteAgentGeneration) broadcastUnmuteAgentActivity(activity) },
+      onRoutines: view => { if (generation === unmuteAgentGeneration) notchController?.restoreRoutines(view) },
     })
     await client.configure({
       masterKey: key.toString('base64'),
@@ -1923,6 +1928,7 @@ async function initializeUnmuteAgent(): Promise<void> {
       conversationCeiling: settings.get('unmuteAgentConversationCeiling') ?? 20,
       notetaker: !!notetakerAdapters,
       ...agentModelSettings(),
+      routines: settings.get('unmuteRoutinesEnabled') !== false,
     })
     if (generation !== unmuteAgentGeneration) { client.dispose(); return }
     void refreshAgentModelCatalog()
@@ -2149,6 +2155,7 @@ async function performSendTaskDraft(id: string, source: TaskReplySource, onSnaps
   })
   return accepted
 }
+
 /** The Codex CLI App Server. One per app; started lazily by the hub itself. */
 let codexHub: CodexHub | null = null
 /** Detached provider owner. The Electron UI only holds this reconnectable socket. */
@@ -5387,6 +5394,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.warn('draft persistence failed', { error: (error as Error).message })
   })
   notetakerAdapters = deps.notetaker ?? null
+  notetakerAdapters?.onNotesReady?.(e => {
+    if (!(unmuteAgentLifecycle instanceof AgentRuntimeClient)) return
+    void unmuteAgentLifecycle.routines.event({ type: 'meeting-notes-ready', ...e })
+      .catch(error => log.warn('routine event failed', { error: (error as Error).message }))
+  })
   sessionManagerRef = deps.sessionManager
   keyboardManagerRef = deps.keyboardManager
   runHeadlessSummary = deps.runHeadless ?? null
@@ -5477,7 +5489,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     if (unmuteAgentLifecycle instanceof AgentRuntimeClient) {
       const client = unmuteAgentLifecycle
       const runtime = agentRuntimeRouting!
-      void agentWorker.call('hello').then(() => recoverAgentRuntime(runtime, async () => {
+      void worker.call('hello').then(() => recoverAgentRuntime(runtime, async () => {
         if (settings.get('unmuteAgentAvailable') !== true || unmuteAgentLifecycle !== client) return false as const
         const root = join(app.getPath('userData'), 'unmute-agent')
         const keyProvider = new SafeStorageKeyProvider({ root: join(root, 'memory'), protectedValueStore: safeStorage })
@@ -5487,11 +5499,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           await client.configure({ masterKey: key.toString('base64'), selectedProvider: settings.get('unmuteAgentProvider'),
             maxActiveProcesses: settings.get('unmuteAgentMaxProcesses'), conversationCeiling: settings.get('unmuteAgentConversationCeiling') ?? 20,
             notetaker: !!notetakerAdapters, ...agentModelSettings() })
+            notetaker: !!notetakerAdapters, routines: settings.get('unmuteRoutinesEnabled') !== false })
         } finally { key.fill(0) }
       }, () => client.reconnect())).catch(error => log.warn('Agent runtime recovery failed', { error: (error as Error).message }))
     }
   })
-  agentWorker.on('computer.activity', event => broadcastAxActivity(event as Parameters<typeof broadcastAxActivity>[0]))
+  worker.on('computer.activity', event => broadcastAxActivity(event as Parameters<typeof broadcastAxActivity>[0]))
   persistentRuntime.on('computer.activity', event => broadcastAxActivity(event as Parameters<typeof broadcastAxActivity>[0]))
   // The initializer is deliberately synchronous, so make the runtime's ready
   // gate own the ordering: no helper (and therefore no replacement app-server)
@@ -5795,7 +5808,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // File watchers are best-effort across macOS sleep and renderer suspension.
   // One immediate, serialized reconciliation on wake/activation repairs any
   // coalesced event without restoring high-frequency background polling.
-  powerMonitor.on('resume', () => manager?.reconcileNow())
+  powerMonitor.on('resume', () => {
+    manager?.reconcileNow()
+    // Timers do not fire during sleep; the runtime catches up on missed routines.
+    if (unmuteAgentLifecycle instanceof AgentRuntimeClient) {
+      void unmuteAgentLifecycle.routines.wake().catch(() => {})
+    }
+  })
   app.on('activate', () => manager?.reconcileNow())
   // ── The Unmute MCP: identity injection + server + registration ──
   // Every dispatched session gets a per-task intercom identity. Wrapping
@@ -6155,6 +6174,34 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         agentNewConversation: async () => {
           const outcome = await unmuteAgentLifecycle?.discard()
           log.event('agent-new-conversation', { discarded: outcome?.discarded ?? false, ...(outcome?.reason ? { reason: outcome.reason } : {}) })
+        },
+        routineAction: async action => {
+          const client = unmuteAgentLifecycle instanceof AgentRuntimeClient ? unmuteAgentLifecycle : null
+          if (!client) throw new Error('Unmute Agent is not running')
+          switch (action.type) {
+            case 'runNow': await client.routines.runNow(action.id); break
+            case 'setEnabled': await client.routines.setEnabled(action.id, action.enabled); break
+            case 'edit': {
+              const error = await shell.openPath(await client.routines.path(action.id))
+              if (error) throw new Error(error)
+              break
+            }
+            case 'cancel': await client.routines.cancel(action.runId); break
+            case 'openTranscript': {
+              const path = await client.routines.transcriptPath(action.runId)
+              if (path) shell.showItemInFolder(path)
+              break
+            }
+            case 'proposal': await client.routines.proposal(action.runId, action.proposalId, action.decision); break
+            case 'markRead': await client.routines.markRead(); break
+          }
+        },
+        routineRunDetail: async runId => {
+          const client = unmuteAgentLifecycle instanceof AgentRuntimeClient ? unmuteAgentLifecycle : null
+          if (!client) return null
+          const found = await client.routines.run(runId)
+          if (!found) return null
+          return { ...found, hasTranscript: !!(await client.routines.transcriptPath(runId)) }
         },
         addressAgent: (on) => {
           if (orchestrateAgentAddressed === on) return
@@ -7814,6 +7861,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       .find((candidate) => candidate.id === provider)?.available === true
     // Preferred provider is pending; the active conversation retains its actual identity.
     log.event('unmute-agent-provider-set', { provider, available: selectedReady })
+    return true
+  })
+  ipcMain.handle('remote:get-routines-enabled', async () => settings.get('unmuteRoutinesEnabled') !== false)
+  ipcMain.handle('remote:set-routines-enabled', async (_e, on: unknown) => {
+    if (typeof on !== 'boolean') return false
+    settings.set('unmuteRoutinesEnabled', on)
+    // Not configured (Agent off) is fine: the next configure reads the setting.
+    await agentRuntimeRouting?.call('agent.update', { routines: on })
+      .catch(error => log.warn('routines setting update failed', { error: (error as Error).message }))
+    log.event('unmute-routines-enabled', { enabled: on })
     return true
   })
   ipcMain.handle('remote:get-agent-availability', async () => structuredClone(unmuteAgentAvailability))

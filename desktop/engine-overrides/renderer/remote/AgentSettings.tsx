@@ -40,6 +40,8 @@ type AgentSettingsAPI = {
   remoteGetAgentAvailability?: () => Promise<AgentAvailabilitySnapshot>
   remoteGetUnmuteAgentAvailable?: () => Promise<boolean>
   remoteSetUnmuteAgentAvailable?: (on: boolean) => Promise<boolean>
+  remoteGetRoutinesEnabled?: () => Promise<boolean>
+  remoteSetRoutinesEnabled?: (on: boolean) => Promise<boolean>
 }
 
 function api(): AgentSettingsAPI {
@@ -71,10 +73,12 @@ export function AgentSettings() {
   const [settings, setSettings] = useState<AgentSettingsSnapshot | null>(null)
   const [availability, setAvailability] = useState<AgentAvailabilitySnapshot | null>(null)
   const [modelChoices, setModelChoices] = useState<AgentModelChoices[] | null>(null)
+  const [routinesEnabled, setRoutinesEnabledState] = useState(true)
 
   const load = useCallback(() => {
     void api().remoteGetAgentSettings?.().then((value) => value && setSettings(value)).catch(() => {})
     void api().remoteGetAgentAvailability?.().then((value) => value && setAvailability(value)).catch(() => {})
+    void api().remoteGetRoutinesEnabled?.().then((value) => setRoutinesEnabledState(value !== false)).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -121,6 +125,9 @@ export function AgentSettings() {
   const setSwitch = async (on: boolean) => {
     setSettings((current) => current ? { ...current, switchWhenUnavailable: on } : current)
     await api().remoteSetUnmuteAgentSwitch?.(on)
+  const setRoutinesEnabled = async (on: boolean) => {
+    setRoutinesEnabledState(on)
+    await api().remoteSetRoutinesEnabled?.(on)
     load()
   }
 
@@ -142,6 +149,12 @@ export function AgentSettings() {
           description="Hold right Command and talk to Unmute itself — what it remembers, what you have been working on, and what to pick back up."
         >
           <Toggle checked={enabled} onChange={(on) => void setEnabled(on)} />
+        </SettingRow>
+        <SettingRow
+          label="Routines"
+          description="Saved prompts that run on their own — on a schedule or when meeting notes are ready — and post their results in the Agent’s chat. Say “every weekday at 9, tell me what I worked on yesterday” to make one."
+        >
+          <Toggle checked={routinesEnabled} disabled={!enabled} onChange={(on) => void setRoutinesEnabled(on)} />
         </SettingRow>
       </div>
 

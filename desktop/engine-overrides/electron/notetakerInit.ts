@@ -76,6 +76,7 @@ import {
 import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
 import { generateNotes, DEFAULT_SUMMARY_INSTRUCTIONS, type MeetingNotes, type NoteProvider } from './notetaker/notesSummary'
 import { cleanupTranscript } from './notetaker/transcriptCleanup'
+import { emitNotesReady, onNotesReady } from './notetakerEvents'
 
 const log = createNotetakerLogger('init')
 
@@ -1718,12 +1719,16 @@ function readCleanedTranscriptSegments(meetingId: string): TranscriptSegment[] {
  *  for transcript.json — a crash mid-write must never leave a corrupt
  *  cleaned-transcript.json/notes.json behind. */
 function writeMeetingJsonFile(meetingId: string, fileName: string, data: unknown): void {
-  const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
+  const meetingDir = meetingDirectory(meetingId)
   fs.mkdirSync(meetingDir, { recursive: true })
   const target = path.join(meetingDir, fileName)
   const temp = `${target}.${process.pid}.tmp`
   fs.writeFileSync(temp, JSON.stringify(data), 'utf8')
   fs.renameSync(temp, target)
+}
+
+function meetingDirectory(meetingId: string): string {
+  return path.join(app.getPath('userData'), 'meetings', meetingId)
 }
 
 const CLEANED_TRANSCRIPT_FILENAME = 'cleaned-transcript.json'
@@ -1786,6 +1791,8 @@ async function runSummaryStage(meetingId: string, segments: TranscriptSegment[],
       mlog.event('pipeline-summary-succeeded', { title: result.notes.title })
       finalTitle = result.notes.title
     }
+    emitNotesReady({ meetingId, title: finalTitle, notesPath: path.join(meetingDirectory(meetingId), NOTES_FILENAME) },
+      error => mlog.error('notes-ready-listener-threw', { error: error instanceof Error ? error.message : String(error) }))
     const opened = openMeetingInApp(meetingId)
     showNotetakerNotification({
       title: 'Meeting notes ready',
@@ -2122,5 +2129,7 @@ export function notetakerAgentAdapters() {
     async open(meetingId: string) {
       return openMeetingInApp(meetingId)
     },
+
+    onNotesReady,
   }
 }

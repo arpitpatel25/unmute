@@ -300,6 +300,11 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:get-unmute-agent-available'),
   remoteSetUnmuteAgentAvailable: (on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-unmute-agent-available', on),
+  /** Agent routines: saved prompts that run on a schedule or event. On by default. */
+  remoteGetRoutinesEnabled: (): Promise<boolean> =>
+    ipcRenderer.invoke('remote:get-routines-enabled'),
+  remoteSetRoutinesEnabled: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-routines-enabled', on),
   /** Current wall-owned terminal session (or null) — read once on mount. */
   remoteGetOrchestrateOwner: (): Promise<string | null> => ipcRenderer.invoke('remote:get-orchestrate-owner'),
   /** Attach an image to a session: bytes are saved under the task's dir and the
