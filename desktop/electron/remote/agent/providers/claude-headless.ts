@@ -184,6 +184,11 @@ export function headlessArgv(
   /** Streaming input: the process stays up and reads turns as JSON from stdin
    *  instead of one prompt followed by EOF. */
   streamingInput = false,
+  /** Provider-specific flags appended after the intercom's own — e.g.
+   *  `--chrome` for a takes-actions routine's actor. Still before the
+   *  session flags, which must stay last: see the comment on `launch.argv`
+   *  below for why those are never re-derived here. */
+  extraArgs: readonly string[] = [],
 ): string[] {
   // Confine the Agent to its own intercom. Without --strict-mcp-config the
   // flag ADDS to whatever the user has registered at user scope — which in the
@@ -218,6 +223,7 @@ export function headlessArgv(
     // its latency.
     '--effort', 'medium',
     ...mcpArgs,
+    ...extraArgs,
     // Fresh-vs-resume was already decided by the runtime. Re-deriving it here
     // is how two paths that must agree start disagreeing.
     ...launch.argv,
@@ -345,6 +351,9 @@ export interface HeadlessAgentProcessOptions {
   spawn?: HeadlessSpawner
   readSystemPrompt?: (path: string) => Promise<string>
   allowedTools?: string
+  /** Extra CLI flags appended before the session flags — e.g. `--chrome` for
+   *  a takes-actions routine's actor process. Empty by default. */
+  extraArgs?: readonly string[]
   /**
    * EVERY LINE THE CLI SPOKE, for the record.
    *
@@ -396,6 +405,7 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
   private readonly spawn: HeadlessSpawner
   private readonly readSystemPrompt: (path: string) => Promise<string>
   private readonly allowedTools: string
+  private readonly extraArgs: readonly string[]
   private readonly onTrace: (trace: AgentTrace) => void
   private readonly onSpawn: NonNullable<HeadlessAgentProcessOptions['onSpawn']>
   private pending: AgentProcessLaunch | null = null
@@ -409,6 +419,7 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
     this.spawn = options.spawn ?? defaultSpawner
     this.readSystemPrompt = options.readSystemPrompt ?? ((path) => fs.readFile(path, 'utf8'))
     this.allowedTools = options.allowedTools ?? AGENT_TOOL_ALLOWLIST
+    this.extraArgs = options.extraArgs ?? []
     this.onTrace = options.onTrace ?? (() => {})
     this.onSpawn = options.onSpawn ?? (() => {})
   }
@@ -431,7 +442,7 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
     // A plain prompt on stdin cannot carry a picture. With images, the one turn
     // is written as a stream-json message instead — same process, same exit.
     const imageBlocks = await claudeImageBlocks(images)
-    const argv = headlessArgv(launch, systemPrompt, this.allowedTools, imageBlocks.length > 0)
+    const argv = headlessArgv(launch, systemPrompt, this.allowedTools, imageBlocks.length > 0, this.extraArgs)
     this.onSpawn({ argv, cwd: launch.cwd, session: launch.session })
     const child = this.spawn(
       argv,
@@ -539,6 +550,7 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
   private readonly spawn: HeadlessSpawner
   private readonly readSystemPrompt: (path: string) => Promise<string>
   private readonly allowedTools: string
+  private readonly extraArgs: readonly string[]
   private readonly onTrace: (trace: AgentTrace) => void
   private readonly onSpawn: NonNullable<HeadlessAgentProcessOptions['onSpawn']>
   private pending: AgentProcessLaunch | null = null
@@ -570,6 +582,7 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
     this.spawn = options.spawn ?? defaultSpawner
     this.readSystemPrompt = options.readSystemPrompt ?? ((path) => fs.readFile(path, 'utf8'))
     this.allowedTools = options.allowedTools ?? AGENT_TOOL_ALLOWLIST
+    this.extraArgs = options.extraArgs ?? []
     this.onTrace = options.onTrace ?? (() => {})
     this.onSpawn = options.onSpawn ?? (() => {})
   }
@@ -635,7 +648,7 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
     const resumed: AgentProcessLaunch = this.hasSpawned && this.sessionId
       ? { ...launch, argv: ['--resume', this.sessionId] }
       : launch
-    const argv = headlessArgv(resumed, systemPrompt, this.allowedTools, true)
+    const argv = headlessArgv(resumed, systemPrompt, this.allowedTools, true, this.extraArgs)
     this.onSpawn({ argv, cwd: launch.cwd, session: resumed.session })
     const child = this.spawn(
       argv,

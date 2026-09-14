@@ -34,6 +34,13 @@ export interface ClaudeCodeProviderOptions {
   observe?: ProviderEventObserver
   hookEvents?: ClaudeHookEventSource
   executor?: Omit<ClaudeCodeExecutorOpts, 'claudeBin' | 'appendSystemPrompt' | 'extraArgs' | 'tmux'>
+  /** Passed straight through to the headless/persistent driver's
+   *  `--allowedTools`. Defaults to the Agent's own read-only intercom grant;
+   *  a routine's actor process overrides it with ACTOR_ALLOWED_TOOLS. */
+  allowedTools?: string
+  /** Extra CLI flags for the headless/persistent driver — e.g. `['--chrome']`
+   *  for a takes-actions routine's actor. Never applied to the REPL driver. */
+  extraArgs?: readonly string[]
 }
 
 /** Claude Code CLI adapter with a pinned UUID for every fresh conversation. */
@@ -64,9 +71,10 @@ export class ClaudeCodeProvider extends CliProviderRuntime {
     // what the turn cost. An injected sink rather than an import inside the
     // driver, so the driver stays testable without one.
     const trace = agentTraceSinks('claude')
+    const headlessOptions = { ...trace, allowedTools: options.allowedTools, extraArgs: options.extraArgs }
     const processFactory = options.processFactory
-      ?? (runtime === 'persistent' ? () => new PersistentHeadlessAgentProcess(trace)
-        : runtime === 'headless' ? () => new HeadlessAgentProcess(trace)
+      ?? (runtime === 'persistent' ? () => new PersistentHeadlessAgentProcess(headlessOptions)
+        : runtime === 'headless' ? () => new HeadlessAgentProcess(headlessOptions)
           : replFactory)
     super({
       id: 'claude',

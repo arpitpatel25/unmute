@@ -118,6 +118,15 @@ export interface AgentSubmissionContext {
   runId: string
   provider: AgentProviderId
   onAccepted: NonNullable<AgentRunInput['onAccepted']>
+  /** A routine run supplies its own cwd/constitution/mcp instead of the live
+   *  Agent's — evaluated in place of `options.runtime()`, which must not run
+   *  at all when this is present. */
+  runtime?: AgentControllerRuntime
+  /** A routine run is handed only its read-only tool list instead of the
+   *  live Agent's full capability set — evaluated in place of
+   *  `options.capabilities.tools(principal)`, which must not run at all
+   *  when this is present. */
+  capabilities?: readonly { name: string; description: string }[]
 }
 
 export interface AgentConversationHandoff {
@@ -244,11 +253,11 @@ export class UnmuteAgentController {
         throw new ControllerFailure('provider-unavailable')
       }
       devInteractionStarted(interactionId, { runId, provider, transcript: validated.transcript, resumed: !!validated.priorRunId })
-      const runtime = validateRuntime(this.options.runtime())
+      const runtime = validateRuntime(context?.runtime ?? this.options.runtime())
       const recent = (await this.options.supervisor.recentExchanges())
         .filter(exchange => (validated.priorRunId ?? context?.carryoverRunId) === exchange.runId)
         .slice(-MAX_RECENT_EXCHANGES)
-      const capabilities = this.options.capabilities.tools(principal)
+      const capabilities = context?.capabilities ?? this.options.capabilities.tools(principal)
       const transcript = providerTranscript(validated, handles, recent, capabilities, context?.handoff)
       devTrace('interaction.prompt', {
         interactionId, runId, provider,

@@ -187,6 +187,61 @@ test('the Agent runs at medium effort, not the CLI\'s high default', () => {
   assert.equal(argv[argv.indexOf('--effort') + 1], 'medium')
 })
 
+// ── extraArgs (routines' takes-actions Claude process — §4) ───────────────
+//
+// A takes-actions routine runs a Claude process configured with `--chrome`
+// and the wider ACTOR_ALLOWED_TOOLS list. Both ride through the same
+// headlessArgv the ordinary Agent turn uses, so they must land before the
+// session flags the runtime already computed, never after.
+test('extraArgs land after the intercom flags and before the session flags the runtime computed', () => {
+  const argv = headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'C', 'mcp__unmute', false, ['--chrome'])
+  assert.ok(argv.includes('--chrome'))
+  assert.ok(argv.indexOf('--chrome') < argv.indexOf('--session-id'))
+})
+
+test('an unset allowedTools/extraArgs leaves the default argv unchanged', () => {
+  const argv = headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'CONSTITUTION')
+  assert.ok(!argv.includes('--chrome'))
+  const allowed = (argv[argv.indexOf('--allowedTools') + 1] ?? '').split(',')
+  assert.deepEqual(allowed, ['mcp__unmute', 'Read', 'Glob', 'Grep'])
+})
+
+test('a wider allowedTools list and --chrome both reach the spawned argv', async () => {
+  const child = new FakeChild()
+  const spawns: string[][] = []
+  const driver = new HeadlessAgentProcess({
+    readSystemPrompt: async () => 'CONSTITUTION',
+    allowedTools: 'mcp__unmute,mcp__claude-in-chrome,Read,Glob,Grep',
+    extraArgs: ['--chrome'],
+    spawn: (argv) => { spawns.push(argv); return child },
+  })
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('go check the inbox')
+  assert.ok(spawns[0]!.includes('--chrome'))
+  assert.equal(
+    spawns[0]![spawns[0]!.indexOf('--allowedTools') + 1],
+    'mcp__unmute,mcp__claude-in-chrome,Read,Glob,Grep',
+  )
+})
+
+test('the persistent driver threads the same allowedTools and extraArgs', async () => {
+  const child = new FakeChild()
+  const spawns: string[][] = []
+  const driver = new PersistentHeadlessAgentProcess({
+    readSystemPrompt: async () => 'CONSTITUTION',
+    allowedTools: 'mcp__unmute,mcp__claude-in-chrome,Read,Glob,Grep',
+    extraArgs: ['--chrome'],
+    spawn: (argv) => { spawns.push(argv); return child },
+  })
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('go check the inbox')
+  assert.ok(spawns[0]!.includes('--chrome'))
+  assert.equal(
+    spawns[0]![spawns[0]!.indexOf('--allowedTools') + 1],
+    'mcp__unmute,mcp__claude-in-chrome,Read,Glob,Grep',
+  )
+})
+
 // ── the driver ────────────────────────────────────────────────────────────
 
 class FakeChild implements HeadlessChild {

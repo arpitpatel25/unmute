@@ -40,4 +40,44 @@ test('controller uses actual resumed provider and never injects another run tran
   assert.match(transcripts[2], /Assistant: The signed build is installed\./)
   controller.dispose()
 })
+
+// A routine run (executor.ts) supplies its own cwd/constitution/mcp and its
+// own read-only tool list instead of the live Agent's. Both overrides must
+// win outright — options.runtime() and options.capabilities.tools() must not
+// even run, since the live Agent's cwd is not one a routine should touch.
+test('a context runtime/capabilities override wins outright; the live-Agent options are never called', async () => {
+  let runtimeCalls = 0
+  let capabilitiesCalls = 0
+  const seen: { cwd?: string } = {}
+  const session = (input: AgentRunInput | AgentResumeInput): SupervisedAgentSession => {
+    seen.cwd = input.cwd
+    return {
+      runId: 'r', provider: 'claude',
+      run: { id: 'r', provider: 'claude', state: 'complete', createdAt: 1, lastUserAt: 1, lastActivityAt: 1, providerWorkEnded: true },
+      handle: { provider: 'claude', opaqueId: 'h' }, activity: empty(),
+      completion: Promise.resolve({ outcome: 'completed', finalText: 'ok' }),
+    }
+  }
+  const controller = new UnmuteAgentController({
+    supervisor: { start: (async (input: AgentRunInput) => session(input)) as never, resume: async (_id, input) => session(input), recentExchanges: async () => [] },
+    tokens: { closeRun() {} },
+    attachmentHandles: new InteractionAttachmentHandles(),
+    capabilities: { tools: () => { capabilitiesCalls += 1; return [{ name: 'live_tool', description: 'live' }] } },
+    journal: { appendExchange: async () => {} },
+    selectedProvider: () => 'claude',
+    runtime: () => {
+      runtimeCalls += 1
+      return { cwd: '/live', constitutionPath: '/live/constitution.md', environment: {}, mcp: { endpoint: 'http://127.0.0.1/mcp', config: 'strict' } }
+    },
+  })
+  const override = { cwd: '/routines/run-1', constitutionPath: '/routines/run-1/constitution.md', environment: {}, mcp: { endpoint: 'http://127.0.0.1/mcp', config: 'strict' } }
+  await controller.submit(
+    { transcript: 'do the routine' },
+    { interactionId: 'i1', runId: 'r', provider: 'claude', onAccepted: async () => {}, runtime: override, capabilities: [{ name: 'routine_runs', description: 'read-only' }] },
+  )
+  assert.equal(runtimeCalls, 0, 'options.runtime() must not run when a context override is supplied')
+  assert.equal(capabilitiesCalls, 0, 'options.capabilities.tools() must not run when a context override is supplied')
+  assert.equal(seen.cwd, '/routines/run-1')
+  controller.dispose()
+})
 async function* empty() {}
