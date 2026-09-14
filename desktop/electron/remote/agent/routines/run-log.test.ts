@@ -4,6 +4,7 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RoutineRunLog } from './run-log'
+import { writeFileAtomic } from './atomic'
 import type { RoutineRun } from './types'
 
 async function tempPath(): Promise<string> {
@@ -86,4 +87,45 @@ test('lastSuccess: newest done, or skipped nothing-in-window, ignores others', a
   await log.upsert(run({ id: 'd', routineId: 'r1', status: 'skipped', reason: 'missed', firedAt: 30 }))
   assert.equal(log.lastSuccess('r1')?.id, 'c')
   assert.equal(log.lastSuccess('nope'), undefined)
+})
+
+test('a failed write rejects for its own caller but does not poison later upserts', async () => {
+  const path = await tempPath()
+  let calls = 0
+  const log = new RoutineRunLog({
+    path,
+    persist: async (p, content) => {
+      calls++
+      if (calls === 1) throw new Error('disk full')
+      await writeFileAtomic(p, content)
+    },
+  })
+  await assert.rejects(log.upsert(run({ id: 'a' })), /disk full/)
+  // The failed write never committed, so it isn't in memory either.
+  assert.equal(log.all().length, 0)
+
+  await log.upsert(run({ id: 'b' }))
+  assert.equal(log.all().length, 1)
+  assert.equal(log.get('b')?.id, 'b')
+  const text = await readFile(path, 'utf8')
+  assert.deepEqual((JSON.parse(text) as RoutineRun[]).map(r => r.id), ['b'])
+})
+
+test('30 concurrent upserts survive even when some writes fail', async () => {
+  const path = await tempPath()
+  let calls = 0
+  const log = new RoutineRunLog({
+    path,
+    persist: async (p, content) => {
+      calls++
+      if (calls % 5 === 0) throw new Error('flaky disk')
+      await writeFileAtomic(p, content)
+    },
+  })
+  const results = await Promise.allSettled(Array.from({ length: 30 }, (_, i) => log.upsert(run({ id: `run-${i}`, firedAt: i }))))
+  const rejected = results.filter(r => r.status === 'rejected').length
+  assert.ok(rejected > 0, 'the flaky writes should actually reject')
+  assert.equal(log.all().length, 30 - rejected)
+  const text = await readFile(path, 'utf8')
+  assert.equal((JSON.parse(text) as RoutineRun[]).length, 30 - rejected)
 })

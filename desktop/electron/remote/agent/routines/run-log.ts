@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { writeFileAtomic } from './atomic'
 import type { RoutineRun, RunStatus } from './types'
 
 const TERMINAL: ReadonlySet<RunStatus> = new Set(['done', 'failed', 'cancelled', 'skipped'])
@@ -11,12 +11,14 @@ function isNotFound(error: unknown): boolean {
 export class RoutineRunLog {
   private readonly path: string
   private readonly max: number
+  private readonly persist: (path: string, content: string) => Promise<void>
   private runs: RoutineRun[] = []
   private chain: Promise<void> = Promise.resolve()
 
-  constructor(opts: { path: string; max?: number }) {
+  constructor(opts: { path: string; max?: number; persist?: (path: string, content: string) => Promise<void> }) {
     this.path = opts.path
     this.max = opts.max ?? 500
+    this.persist = opts.persist ?? writeFileAtomic
   }
 
   async load(): Promise<RoutineRun[]> {
@@ -50,29 +52,35 @@ export class RoutineRunLog {
     return this.runs.some(r => r.key === key)
   }
 
-  // Writes are chained onto a single promise so concurrent upserts never race
-  // to read-modify-write the same file — each write sees the prior one's result.
+  // `next` is what THIS call reports to its caller: it rejects if the write
+  // fails. `this.chain` is what later calls wait on before starting their own
+  // write; it is wrapped in `.catch(() => {})` so one failed write can never
+  // stall every upsert queued after it (a chain built from unwrapped
+  // rejections stops running its `.then` callbacks forever after the first).
   upsert(run: RoutineRun): Promise<void> {
-    this.chain = this.chain.then(() => this.write(run))
-    return this.chain
+    const next = this.chain.then(() => this.write(run))
+    this.chain = next.catch(() => {})
+    return next
+  }
+
+  private trim(runs: RoutineRun[]): RoutineRun[] {
+    const result = [...runs]
+    while (result.length > this.max) {
+      const index = result.findIndex(r => TERMINAL.has(r.status))
+      if (index < 0) break
+      result.splice(index, 1)
+    }
+    return result
   }
 
   private async write(run: RoutineRun): Promise<void> {
     const index = this.runs.findIndex(r => r.id === run.id)
-    if (index >= 0) this.runs[index] = run
-    else this.runs.push(run)
-    this.trim()
-    const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`
-    await fs.writeFile(tmp, JSON.stringify(this.runs), { mode: 0o600 })
-    await fs.rename(tmp, this.path)
-  }
-
-  private trim(): void {
-    while (this.runs.length > this.max) {
-      const index = this.runs.findIndex(r => TERMINAL.has(r.status))
-      if (index < 0) break
-      this.runs.splice(index, 1)
-    }
+    const next = index >= 0 ? this.runs.map((r, i) => (i === index ? run : r)) : [...this.runs, run]
+    const trimmed = this.trim(next)
+    // Only commit to `this.runs` once the write actually lands, so a failed
+    // write leaves in-memory state matching what's still on disk.
+    await this.persist(this.path, JSON.stringify(trimmed))
+    this.runs = trimmed
   }
 
   lastSuccess(routineId: string): RoutineRun | undefined {

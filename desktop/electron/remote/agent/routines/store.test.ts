@@ -105,6 +105,51 @@ test('update merges fields, validates, and rewrites the same file', async () => 
   await assert.rejects(store.update(entry.id, { maxMinutes: 999 }), /1 and 30/)
 })
 
+test('a filename that is not a valid routine id surfaces as an error entry, not a throw', async () => {
+  const root = await tempRoot()
+  await writeFile(join(root, 'UPPERCASE.md'), '---\nname: X\nschedule: daily 09:00\nprompt: p\n---\nHello\n')
+  const store = new RoutineStore({ root, watch: false })
+  const entries = await store.load()
+  const bad = entries.find(e => e.id === 'UPPERCASE')!
+  assert.equal(bad.error, 'File name must be lowercase letters, numbers and dashes')
+  assert.equal(bad.definition, undefined)
+})
+
+test('a corrupt state.json falls back to a clean default instead of throwing', async () => {
+  const root = await tempRoot()
+  await writeFile(join(root, 'state.json'), 'not json at all')
+  const store = new RoutineStore({ root, watch: false })
+  const entries = await store.load()
+  assert.deepEqual(entries, [])
+
+  // load() also repairs state.json in place: the next write is valid JSON again.
+  const entry = await store.create({ name: 'A', schedule: 'daily 09:00', prompt: 'p' })
+  assert.equal(entry.state.enabled, true)
+  const state = JSON.parse(await readFile(join(root, 'state.json'), 'utf8'))
+  assert.equal(state.version, 1)
+})
+
+test('a load failure triggered by the watcher is reported to onError, not thrown into the void', async () => {
+  const root = await tempRoot()
+  const errors: unknown[] = []
+  const store = new RoutineStore({ root, watch: true, onError: error => { errors.push(error) } })
+  await store.load()
+
+  // Force the NEXT load() (triggered by the watcher below) to fail: replace
+  // state.json with a directory, so writeState()'s rename onto it throws
+  // EISDIR — deterministic on both macOS and Linux, no permission trickery.
+  const { rm, mkdir } = await import('node:fs/promises')
+  await rm(join(root, 'state.json'), { force: true })
+  await mkdir(join(root, 'state.json'))
+
+  store.onChange(() => {}) // starts the watcher; a failing reload never calls this listener
+  await writeFile(join(root, 'b.md'), '---\nname: B\nschedule: daily 09:00\nprompt: p\n---\nx\n')
+
+  await new Promise(resolve => setTimeout(resolve, 400)) // past the 200ms debounce
+  assert.ok(errors.length > 0, 'onError should have been called at least once')
+  store.close()
+})
+
 test('onChange fires after a file changes on disk, and close stops the watcher', async () => {
   const root = await tempRoot()
   const store = new RoutineStore({ root, watch: true })

@@ -1,16 +1,18 @@
 import { promises as fs, mkdirSync, watch as fsWatch, type FSWatcher } from 'node:fs'
-import { randomUUID } from 'node:crypto'
 import { join, sep } from 'node:path'
+import { diagnostic, diagnosticError } from '../../diagnostics'
 import { nextFireAt, formatSchedule } from './schedule'
 import { formatWindow } from './window'
+import { writeFileAtomic } from './atomic'
 import {
-  type RoutineDefinition, type RoutineFields, parseDefinition, definitionFromFields, serializeDefinition, slugify,
+  type RoutineDefinition, type RoutineFields, ROUTINE_ID, parseDefinition, definitionFromFields, serializeDefinition, slugify,
 } from './definition'
 import type { RoutineEntry, RoutineState } from './types'
 
 const STATE_FILE = 'state.json'
 const TRASH_DIR = '.trash'
 const DEBOUNCE_MS = 200
+const INVALID_NAME_ERROR = 'File name must be lowercase letters, numbers and dashes'
 
 interface PersistedRoutineState extends RoutineState { scheduleText?: string }
 interface PersistedState { version: 1; routines: Record<string, PersistedRoutineState> }
@@ -28,18 +30,20 @@ export class RoutineStore {
   private readonly statePath: string
   private readonly now: () => number
   private readonly watchEnabled: boolean
+  private readonly onError: (error: unknown) => void
   private entries = new Map<string, RoutineEntry>()
   private state: PersistedState = { version: 1, routines: {} }
   private watcher: FSWatcher | null = null
   private debounceTimer: NodeJS.Timeout | null = null
   private listeners = new Set<() => void>()
 
-  constructor(opts: { root: string; now?: () => number; watch?: boolean }) {
+  constructor(opts: { root: string; now?: () => number; watch?: boolean; onError?: (error: unknown) => void }) {
     this.routinesDir = opts.root
     this.trashDir = join(opts.root, TRASH_DIR)
     this.statePath = join(opts.root, STATE_FILE)
     this.now = opts.now ?? Date.now
     this.watchEnabled = opts.watch ?? true
+    this.onError = opts.onError ?? (error => diagnostic('routines-store-reload-failed', diagnosticError(error)))
     // Synchronous so onChange() can fs.watch the directory right after
     // construction without forcing every caller to await load() first.
     mkdirSync(this.routinesDir, { recursive: true })
@@ -60,10 +64,14 @@ export class RoutineStore {
 
       let definition: RoutineDefinition | undefined
       let error: string | undefined
-      try {
-        definition = parseDefinition(id, await fs.readFile(path, 'utf8'))
-      } catch (e) {
-        error = (e as Error).message
+      if (!ROUTINE_ID.test(id)) {
+        error = INVALID_NAME_ERROR
+      } else {
+        try {
+          definition = parseDefinition(id, await fs.readFile(path, 'utf8'))
+        } catch (e) {
+          error = (e as Error).message
+        }
       }
 
       let enabled = prior?.enabled ?? true
@@ -104,7 +112,7 @@ export class RoutineStore {
     const id = slugify(fields.name ?? '', new Set(this.entries.keys()))
     const definition = definitionFromFields(id, fields)
     const path = join(this.routinesDir, `${id}.md`)
-    await this.writeFileAtomic(path, serializeDefinition(definition))
+    await writeFileAtomic(path, serializeDefinition(definition))
 
     const scheduleText = formatSchedule(definition.schedule)
     const fireAt = nextFireAt(definition.schedule, this.now())
@@ -122,7 +130,7 @@ export class RoutineStore {
 
     const merged: RoutineFields = { ...fieldsFromDefinition(entry.definition), ...fields }
     const definition = definitionFromFields(id, merged)
-    await this.writeFileAtomic(entry.path, serializeDefinition(definition))
+    await writeFileAtomic(entry.path, serializeDefinition(definition))
 
     const scheduleText = formatSchedule(definition.schedule)
     const prior = this.state.routines[id]
@@ -203,7 +211,9 @@ export class RoutineStore {
       this.debounceTimer = null
       // A self-write also lands here; reloading is idempotent so there is no
       // need to tell self-writes and external edits apart.
-      this.load().then(() => { for (const listener of this.listeners) listener() }).catch(() => {})
+      this.load()
+        .then(() => { for (const listener of this.listeners) listener() })
+        .catch(error => this.onError(error))
     }, DEBOUNCE_MS)
   }
 
@@ -220,12 +230,6 @@ export class RoutineStore {
   }
 
   private writeState(): Promise<void> {
-    return this.writeFileAtomic(this.statePath, JSON.stringify(this.state))
-  }
-
-  private async writeFileAtomic(path: string, content: string): Promise<void> {
-    const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`
-    await fs.writeFile(tmp, content, { mode: 0o600 })
-    await fs.rename(tmp, path)
+    return writeFileAtomic(this.statePath, JSON.stringify(this.state))
   }
 }
