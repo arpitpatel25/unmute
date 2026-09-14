@@ -1,11 +1,10 @@
 // The facts a ticket owes the user, and the questions its buttons must ask.
 //
-// WHY THIS IS ITS OWN MODULE. Two surfaces render a ticket — the Orchestrator
-// wall (dark, mono, `OrchestrateWall.tsx`) and the Tasks page in the main window
-// (light, `TaskPanel.tsx`) — and both must answer "which agent, which model,
-// which directory" and "may this task be resumed" identically. The four ad-hoc
-// `agent !== 'codex-desktop'` checks that the provider registry replaced are
-// exactly what happens when two surfaces each keep their own copy.
+// WHY THIS IS ITS OWN MODULE. Every surface that renders a ticket — today the
+// Tasks page in the main window (`TaskPanel.tsx`) — must answer "which agent,
+// which model, which directory" and "may this task be resumed" identically. The
+// four ad-hoc `agent !== 'codex-desktop'` checks that the provider registry
+// replaced are exactly what happens when two surfaces each keep their own copy.
 //
 // Pure: no React, no electron, no IPC. Unit-tested by taskFacts.test.ts.
 

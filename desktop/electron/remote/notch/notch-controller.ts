@@ -2811,9 +2811,7 @@ export class NotchController {
     // A straight filter, not a fold — grouping, ordering and every card are
     // untouched; the old ones simply are not there. That is the difference from
     // "show all", which unfolds ONE group's stale tail and is a different
-    // control answering a different question. This one already existed in the
-    // React wall (OrchestrateWall's `Last 24h / All`); the Swift cockpit, the
-    // one actually in use, never got it.
+    // control answering a different question.
     //
     // ANYTHING WAITING ON YOU IGNORES IT. A filter that can hide a blocked task
     // is a way to lose work, not a way to focus — the same reason UNFOLDABLE

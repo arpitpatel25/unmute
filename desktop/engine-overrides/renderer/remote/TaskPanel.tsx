@@ -2,9 +2,8 @@
 //
 // The in-app list of what your agents are doing: one ticket per task, the
 // needs-you ones lifted to the top, each naming its agent, its model and its
-// working directory. The dark wall (`OrchestrateWall.tsx`) is the same
-// information at survey scale; this is the same information at reading scale,
-// and both take their facts from `taskFacts.ts` so they cannot drift.
+// working directory. Its facts come from `taskFacts.ts` so they cannot drift
+// from any other surface that shows a ticket.
 //
 // ONE SOURCE OF TRUTH FOR THE SELECTED PAGE. This panel used to carry its own
 // `'tasks' | 'how' | 'setup'` state and its own buttons into those pages, from
@@ -51,7 +50,6 @@ const STATE_COLOR: Record<RemoteTask['state'], string> = {
 type SetupAPI = {
   remoteGetSetupStatus?: () => Promise<{ complete: boolean; blocker?: string | null }>
   remoteGetSettings?: () => Promise<{ permissionMode?: string }>
-  remoteOpenOrchestrate?: () => Promise<boolean>
   remoteOpenInTerminal?: (id: string) => Promise<boolean>
   remoteOpenArtifact?: (t: 'url' | 'path', v: string) => Promise<boolean>
 }
@@ -316,13 +314,6 @@ export function TaskPanel({ page = 'tasks', onPageChange }: {
           {activeCount ? <span className="text-ink-35 font-normal"> · {activeCount} working</span> : null}
         </p>
         <div className="flex items-center gap-2">
-          <button
-            className="text-[11px] font-medium px-3 py-1.5 rounded-full border border-border text-ink-60 hover:bg-cream-mid"
-            title="Open the full wall — every task at survey scale (⌘⇧O)"
-            onClick={() => { void api().remoteOpenOrchestrate?.() }}
-          >
-            Open the wall
-          </button>
           {activeCount > 0 && (
             <button
               className="text-[11px] font-medium px-3 py-1.5 rounded-full border border-border text-ink-60 hover:bg-cream-mid"
