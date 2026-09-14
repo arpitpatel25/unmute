@@ -252,6 +252,26 @@ export function isUnmuteMachinery(cwd: string | undefined): boolean {
  *  them are still the person's, so strip the tags rather than drop the turn. */
 const IMAGE_TAG = /^(?:\s*<\/?image\b[^>]*>\s*)+/
 
+/**
+ * A session that ran INSIDE a routine's own run directory, not one a person
+ * drove. Left unmarked, its turns would feed the next routine's manifest as
+ * if they were something someone said — the self-feeding loop behind the
+ * deleted session-summary sweep (see the module doc above). Checked on the
+ * cwd rather than on how the session started, because that is the one fact
+ * that cannot be spoofed by what a routine's own prompt happens to say.
+ *
+ * Segment-matched rather than substring-matched, and split on both `/` and
+ * `\` rather than `path.sep`: this index runs on whatever machine holds the
+ * transcript, not necessarily the one that wrote it.
+ */
+function isRoutineRunCwd(cwd: string): boolean {
+  const segments = cwd.split(/[\\/]/)
+  for (let i = 0; i + 2 < segments.length; i++) {
+    if (segments[i] === 'unmute-agent' && segments[i + 1] === 'routines' && segments[i + 2] === 'runs') return true
+  }
+  return false
+}
+
 export function defaultIndexRoot(home: string = homedir()): string {
   return join(home, '.unmute', 'remote', 'session-index')
 }
@@ -563,9 +583,12 @@ export class SessionTurnIndex {
     const provenance = await readSessionProvenance(path, harness, id, prefix).catch(
       (): SessionProvenance => ({ kind: 'unknown' }))
     const cwd = cwdFromPrefix(prefix)
+    // Overrides whatever readSessionProvenance decided: a routine's own run is
+    // never a main conversation regardless of how its transcript opens.
+    const kind: SessionProvenance['kind'] = cwd && isRoutineRunCwd(cwd) ? 'routine' : provenance.kind
     this.sessions.set(id, {
       id, provider: harness, path,
-      provenance: provenance.kind,
+      provenance: kind,
       // Subagents are LABELLED, never omitted: hiding them hides evidence.
       // The refusal to act on one lives in requireMainSession.
       ...(provenance.parentSessionId ? { parentSessionId: provenance.parentSessionId } : {}),

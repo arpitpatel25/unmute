@@ -43,7 +43,9 @@ export interface LocatedSession {
 }
 
 export interface SessionProvenance {
-  kind: 'main' | 'subagent' | 'unknown'
+  // 'routine' is never produced here: it is assigned in turn-index.ts from the
+  // session's cwd, once the cwd it needs has already been recovered below.
+  kind: 'main' | 'subagent' | 'unknown' | 'routine'
   parentSessionId?: string
   reason?: string
 }

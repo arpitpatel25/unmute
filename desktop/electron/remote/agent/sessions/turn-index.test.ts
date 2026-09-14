@@ -574,6 +574,23 @@ test('leaving a session and coming back to it is recorded; one burst is not', as
   assert.equal(sessions.find(s => s.id === burst)!.returns, undefined)
 })
 
+/**
+ * Guards against the self-feeding loop the manifest exists to avoid: a
+ * routine's own run directory must never look like a main conversation, no
+ * matter what its transcript's opening line says.
+ */
+test('a session whose cwd is a routine run gets provenance routine', async () => {
+  const w = await workspace()
+  await fs.writeFile(join(w.claudeProjects, `${CLAUDE_ID}.jsonl`),
+    claudeUser('daily standup summary', { cwd: '/Users/me/.unmute/unmute-agent/routines/runs/2026-09-14T09-00-00' }))
+
+  await new SessionTurnIndex({ roots: w.roots, root: w.indexRoot }).sync()
+
+  const session = (await sessionsOf(w.indexRoot)).find(s => s.id === CLAUDE_ID)!
+  assert.equal(session.provenance, 'routine')
+  assert.equal(session.cwd, '/Users/me/.unmute/unmute-agent/routines/runs/2026-09-14T09-00-00')
+})
+
 test('a session tailed a day later counts the gap across the two passes', async () => {
   const w = await workspace()
   const path = join(w.claudeProjects, `${CLAUDE_ID}.jsonl`)
