@@ -16,10 +16,10 @@ export interface RoutineFields {
 export const ROUTINE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 const KEYS = ['name', 'schedule', 'window', 'kind', 'provider', 'inputs', 'when-empty', 'max-minutes', 'speak'] as const
-const KINDS: readonly RoutineKind[] = ['read-only', 'takes-actions']
-const PROVIDERS = ['agent', 'claude', 'codex'] as const
-const INPUTS: readonly RoutineInput[] = ['sessions', 'memory', 'meetings', 'dictation']
-const WHEN_EMPTY = ['note', 'silent'] as const
+export const KINDS: readonly RoutineKind[] = ['read-only', 'takes-actions']
+export const PROVIDERS = ['agent', 'claude', 'codex'] as const
+export const INPUTS: readonly RoutineInput[] = ['sessions', 'memory', 'meetings', 'dictation']
+export const WHEN_EMPTY = ['note', 'silent'] as const
 
 export function slugify(name: string, taken: ReadonlySet<string>): string {
   let base = name

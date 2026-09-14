@@ -21,6 +21,8 @@ export interface RoutineState { enabled: boolean; nextFireAt: number | null }
 export interface RoutineEntry { id: string; path: string; definition?: RoutineDefinition; error?: string; state: RoutineState }
 export interface RoutineItemView {
   id: string; name: string; scheduleLabel: string; kind: RoutineKind; enabled: boolean; nextRunAt: number | null
+  /** The definition's actual window, canonical grammar text from `formatWindow` — '' for an invalid routine. */
+  window: string
   nextRunLabel: string; lastRun?: { status: RunStatus; at: number }; running: boolean; error?: string; path: string
 }
 export interface RoutinesView { available: boolean; reason?: string; items: RoutineItemView[]; runs: RoutineRun[] }

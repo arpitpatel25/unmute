@@ -43,10 +43,12 @@ test('create shows the item in the view with its next run label', async t => {
   assert.equal(definitionPath, join(s.root, 'routines', 'morning-recap.md'))
   assert.match(await readFile(definitionPath, 'utf8'), /name: Morning recap/)
   assert.equal(item.nextRunLabel, 'Today 09:00')
+  assert.equal(item.window, 'yesterday-or-last-run')
   const view = s.service.view()
   assert.equal(view.available, true)
   assert.deepEqual(view.items.map(i => i.id), ['morning-recap'])
   assert.equal(view.items[0]!.scheduleLabel, 'Daily at 09:00')
+  assert.equal(view.items[0]!.window, 'yesterday-or-last-run')
   assert.equal(s.views.at(-1)!.items.length, 1)
 })
 
@@ -59,6 +61,7 @@ test('items sort by name; paused and event routines get their labels', async t =
   const [alpha, zeta] = s.service.view().items
   assert.equal(alpha!.name, 'Alpha')
   assert.equal(alpha!.nextRunLabel, 'After your next meeting')
+  assert.equal(alpha!.window, 'none', 'an event schedule defaults its window to none')
   assert.equal(zeta!.nextRunLabel, 'Paused')
   assert.equal(zeta!.enabled, false)
 })
@@ -73,6 +76,14 @@ test('update schedule changes nextRunAt; remove drops the item', async t => {
   assert.equal(updated.nextRunLabel, describeNext(updated.nextRunAt, s.now))
   await s.service.remove('recap')
   assert.deepEqual(s.service.view().items, [])
+})
+
+test('a custom window survives an update that touches neither window nor schedule', async t => {
+  const s = await setup()
+  t.after(() => s.service.close())
+  await s.service.create({ name: 'Recap', schedule: 'daily 09:00', prompt: 'p', window: 'last 3 days' })
+  const renamed = await s.service.update('recap', { name: 'Recap v2' })
+  assert.equal(renamed.window, 'last 3 days')
 })
 
 test('run now reports running, then lastRun, result text and runs', async t => {

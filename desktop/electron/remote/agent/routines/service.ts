@@ -8,6 +8,7 @@ import { RoutineRunLog } from './run-log'
 import { RoutineRunner, type MeetingNotesEvent } from './runner'
 import { describeNext, describeSchedule } from './schedule'
 import { RoutineStore } from './store'
+import { formatWindow } from './window'
 import type { RoutineEntry, RoutineItemView, RoutineRun, RoutinesView, RunStatus } from './types'
 
 const OFF_REASON = 'Routines are turned off in Settings'
@@ -168,6 +169,7 @@ export class RoutineService {
       : describeNext(entry.state.nextFireAt, this.now())
     return {
       id: entry.id, name: d?.name ?? entry.id, scheduleLabel: d ? describeSchedule(d.schedule) : '',
+      window: d ? formatWindow(d.window) : '',
       kind: d?.kind ?? 'read-only', enabled: entry.state.enabled, nextRunAt: entry.state.nextFireAt, nextRunLabel,
       ...(last ? { lastRun: { status: last.status, at: last.endedAt ?? last.firedAt } } : {}),
       running: runs.some(r => r.status === 'queued' || r.status === 'running'),

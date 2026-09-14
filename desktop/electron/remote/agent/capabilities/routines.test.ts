@@ -17,7 +17,7 @@ function item(overrides: Partial<RoutineItemView> = {}): RoutineItemView {
   return {
     id: 'morning-recap', name: 'Morning recap', scheduleLabel: 'Daily at 09:00', kind: 'read-only',
     enabled: true, nextRunAt: 1_000, nextRunLabel: 'Today 09:00', running: false,
-    path: '/root/routines/morning-recap.md', ...overrides,
+    window: 'yesterday-or-last-run', path: '/root/routines/morning-recap.md', ...overrides,
   }
 }
 
@@ -104,7 +104,7 @@ test("a validation error thrown by the service itself is returned as isError tex
   assert.equal(result.content[0]!.text, '"weekdys 09:00" is not a schedule; try "weekdays 09:00", "every 4 hours" or "on meeting-notes-ready"')
 })
 
-test('routine_create returns the parsed preview with window resolved from the grammar default', async () => {
+test('routine_create returns the parsed preview, with window taken verbatim from the item the service returns', async () => {
   const service = fakeService()
   const cap = new RoutinesCapability(service)
   const result = await cap.call(ctx, 'routine_create', { name: 'Morning recap', schedule: 'daily 09:00', prompt: 'Tell me what I did.' })
@@ -117,15 +117,18 @@ test('routine_create returns the parsed preview with window resolved from the gr
   assert.equal(fields.schedule, 'daily 09:00')
 })
 
-test('routine_create resolves an event schedule to a none window by default, and an explicit window is echoed', async () => {
+test('routine_create never recomputes the window — it reports whatever RoutineItemView.window the service resolved', async () => {
   const service = fakeService({
-    create: async () => ({ item: item({ scheduleLabel: 'When meeting notes are ready', nextRunLabel: 'After your next meeting' }), definitionPath: item().path }),
+    create: async () => ({
+      item: item({ window: 'none', scheduleLabel: 'When meeting notes are ready', nextRunLabel: 'After your next meeting' }),
+      definitionPath: item().path,
+    }),
   })
   const cap = new RoutinesCapability(service)
   const result = await cap.call(ctx, 'routine_create', { name: 'Recap', schedule: 'on meeting-notes-ready', prompt: 'p' })
   assert.equal(parse(result).window, 'none')
 
-  const cap2 = new RoutinesCapability(fakeService())
+  const cap2 = new RoutinesCapability(fakeService({ create: async () => ({ item: item({ window: 'last 3 days' }), definitionPath: item().path }) }))
   const explicit = await cap2.call(ctx, 'routine_create', { name: 'Recap', schedule: 'daily 09:00', prompt: 'p', window: 'last 3 days' })
   assert.equal(parse(explicit).window, 'last 3 days')
 })
@@ -139,6 +142,22 @@ test('routine_update sends only the id and the given fields, and reports the new
     window: 'yesterday-or-last-run', kind: 'read-only', nextRun: 'Today 09:00', file: item().path,
   })
   assert.deepEqual(service.calls[0]!.args, ['morning-recap', { schedule: 'daily 10:30' }])
+})
+
+// Fix for task-8 review round 1: a rename-only update used to report a RECOMPUTED default window
+// ('yesterday-or-last-run') instead of the routine's actual persisted one, because the capability
+// had no way to see it. RoutineItemView.window now carries the service's own canonical text, and
+// the capability just relays it — so a rename that touches neither window nor schedule still shows
+// the true, previously-set 'last 3 days'.
+test('routine_update that only renames still reports the actual persisted window, never a recomputed default', async () => {
+  const updateCalls: unknown[] = []
+  const service = fakeService({
+    update: async (...args: unknown[]) => { updateCalls.push(args); return item({ name: 'Morning recap v2', window: 'last 3 days' }) },
+  })
+  const cap = new RoutinesCapability(service)
+  const result = await cap.call(ctx, 'routine_update', { id: 'morning-recap', name: 'Morning recap v2' })
+  assert.equal(parse(result).window, 'last 3 days')
+  assert.deepEqual(updateCalls[0], ['morning-recap', { name: 'Morning recap v2' }])
 })
 
 test('an unknown id on any id-based tool is refused with the exact required sentence', async () => {

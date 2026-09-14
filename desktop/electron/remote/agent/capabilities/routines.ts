@@ -4,41 +4,25 @@ import type {
   ToolDefinition,
   ToolResult,
 } from '../types'
-import type { RoutineFields, RoutineInput, RoutineKind } from '../routines/definition'
+import { INPUTS, KINDS, PROVIDERS, WHEN_EMPTY, type RoutineFields, type RoutineInput, type RoutineKind } from '../routines/definition'
 import type { RoutineService } from '../routines/service'
 import type { RoutineItemView } from '../routines/types'
-import { describeSchedule } from '../routines/schedule'
-import { formatWindow, parseWindow, type WindowRule } from '../routines/window'
 
 /**
  * Routines are separate one-shot sessions the Agent never runs inline — this
  * capability only ever creates, edits and inspects them; the constitution
  * carries the "you never run a routine's work inside this conversation" rule.
  *
- * `RoutineService`'s own read surface (list/create/update) returns a display
- * view (`RoutineItemView`) that has no `window` field — only the store that
- * wrote the definition file knows it. `window` in a create/update result is
- * therefore recomputed HERE from the same fields and the same default rule
- * `definitionFromFields` uses (event → none, otherwise yesterday-or-last-run),
- * which is exact for a create and for an update that touches window or
- * schedule. An update that touches neither reports that same default rather
- * than the routine's actual unchanged window, because nothing in the public
- * service surface exposes it — a known, narrow inaccuracy, not a guess dressed
- * up as certainty.
+ * `window` in a create/update result comes straight off `RoutineItemView.window`
+ * (the service's own canonical `formatWindow` text) — never recomputed here,
+ * so an update that only renames or reschedules still reports the routine's
+ * actual persisted window, not a guessed default.
  */
-
-// Mirrors definition.ts's own (unexported) enums — the two must be kept in sync by hand.
-const KINDS = ['read-only', 'takes-actions'] as const
-const PROVIDERS = ['agent', 'claude', 'codex'] as const
-const INPUTS = ['sessions', 'memory', 'meetings', 'dictation'] as const
-const WHEN_EMPTY = ['note', 'silent'] as const
 
 const SCHEDULE_GRAMMAR = '`daily HH:MM` · `weekdays HH:MM` · `weekends HH:MM` · `mon,wed,fri HH:MM`'
   + ' (any of mon..sun) · `every N minutes` (N ≥ 15) · `every N hours` · `on meeting-notes-ready`'
 const WINDOW_GRAMMAR = '`yesterday-or-last-run` · `since-last-run` · `today` · `last N hours` · `last N days`'
   + ' (N ≤ 30) · `none`'
-
-const EVENT_SCHEDULE_LABEL = describeSchedule({ type: 'event', event: 'meeting-notes-ready' })
 
 const FIELD_PROPERTIES = {
   name: { type: 'string', minLength: 1, maxLength: 60, description: 'A short label for the routine, 1-60 characters.' },
@@ -73,6 +57,12 @@ const FIELD_PROPERTIES = {
 } as const
 
 const FIELD_KEYS = Object.keys(FIELD_PROPERTIES) as (keyof typeof FIELD_PROPERTIES)[]
+
+/** Shared by every tool that takes nothing but an id: pause, resume, delete, run_now. */
+const ID_INPUT_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['id'],
+  properties: { id: { type: 'string', minLength: 1, description: 'The routine id, from routine_list.' } },
+} as const
 
 const tools = [
   {
@@ -122,28 +112,19 @@ const tools = [
     name: 'routine_pause',
     description: 'Turn off a routine so it stops firing on its own schedule or event. Its definition and'
       + ' run history are kept; routine_resume turns it back on.',
-    inputSchema: {
-      type: 'object', additionalProperties: false, required: ['id'],
-      properties: { id: { type: 'string', minLength: 1, description: 'The routine id, from routine_list.' } },
-    },
+    inputSchema: ID_INPUT_SCHEMA,
     consequence: 'reversible-write',
   },
   {
     name: 'routine_resume',
     description: 'Turn a paused routine back on.',
-    inputSchema: {
-      type: 'object', additionalProperties: false, required: ['id'],
-      properties: { id: { type: 'string', minLength: 1, description: 'The routine id, from routine_list.' } },
-    },
+    inputSchema: ID_INPUT_SCHEMA,
     consequence: 'reversible-write',
   },
   {
     name: 'routine_delete',
     description: 'Delete a routine. It moves to .trash and can be recovered by hand; it never fires again once deleted.',
-    inputSchema: {
-      type: 'object', additionalProperties: false, required: ['id'],
-      properties: { id: { type: 'string', minLength: 1, description: 'The routine id, from routine_list.' } },
-    },
+    inputSchema: ID_INPUT_SCHEMA,
     consequence: 'reversible-write',
   },
   {
@@ -151,10 +132,7 @@ const tools = [
     description: "Fire a routine immediately, outside its schedule, as its own separate run. Returns the"
       + ' new run id; check on it with routine_runs. You do not do the routine\'s work yourself and you'
       + ' do not wait for it here.',
-    inputSchema: {
-      type: 'object', additionalProperties: false, required: ['id'],
-      properties: { id: { type: 'string', minLength: 1, description: 'The routine id, from routine_list.' } },
-    },
+    inputSchema: ID_INPUT_SCHEMA,
     consequence: 'reversible-write',
   },
 ] as const satisfies readonly ToolDefinition[]
@@ -230,18 +208,9 @@ function parseLimit(value: unknown): number {
   return value as number
 }
 
-/** Same default rule as `definitionFromFields`: event schedules get no window, everything else
- *  gets yesterday-or-last-run — see the class comment for what this cannot know on an update. */
-function resolveWindowLabel(fields: Partial<RoutineFields>, scheduleLabel: string): string {
-  if (fields.window !== undefined) return formatWindow(parseWindow(fields.window))
-  const rule: WindowRule = scheduleLabel === EVENT_SCHEDULE_LABEL ? { type: 'none' } : { type: 'yesterday-or-last-run' }
-  return formatWindow(rule)
-}
-
-function preview(fields: Partial<RoutineFields>, item: RoutineItemView, file: string) {
+function preview(item: RoutineItemView, file: string) {
   return {
-    id: item.id, name: item.name, schedule: item.scheduleLabel,
-    window: resolveWindowLabel(fields, item.scheduleLabel),
+    id: item.id, name: item.name, schedule: item.scheduleLabel, window: item.window,
     kind: item.kind, nextRun: item.nextRunLabel, file,
   }
 }
@@ -284,7 +253,7 @@ export class RoutinesCapability implements CapabilityModule {
           const value = object(input, FIELD_KEYS, ['name', 'schedule', 'prompt'])
           const fields = parseFields(value) as RoutineFields
           const { item, definitionPath } = await this.service.create(fields)
-          return ok(preview(fields, item, definitionPath))
+          return ok(preview(item, definitionPath))
         }
 
         case 'routine_update': {
@@ -292,7 +261,7 @@ export class RoutinesCapability implements CapabilityModule {
           const id = string(value.id, 'id')
           const fields = parseFields(value)
           const item = await guardId(id, () => this.service.update(id, fields))
-          return ok(preview(fields, item, item.path))
+          return ok(preview(item, item.path))
         }
 
         case 'routine_pause': {
