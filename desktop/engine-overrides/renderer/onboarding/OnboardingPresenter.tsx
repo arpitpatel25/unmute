@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 
+import unmuteLogo from '../assets/unmute-logo.png'
 import { clipUrl } from './clips'
 import { emptyPresenter, reducePresenter, type PresenterCard, type PresenterMessage } from './presenterState'
 import './presenter.css'
@@ -15,10 +16,6 @@ type PresenterApi = {
 
 function api(): PresenterApi {
   return (window as unknown as { electronAPI?: PresenterApi }).electronAPI ?? {}
-}
-
-function UnmuteGlyph() {
-  return <span className="ob-presenter__glyph" aria-hidden="true">un</span>
 }
 
 function ProviderButton({ provider, card }: { provider: 'claude' | 'codex'; card: NonNullable<PresenterCard> }) {
@@ -75,7 +72,7 @@ export function OnboardingPresenter() {
 
   return <main className="ob-presenter" data-action={state.action}>
     <section className="ob-presenter__glass">
-      <header className="ob-presenter__identity"><UnmuteGlyph /><span>Unmute</span></header>
+      <header className="ob-presenter__identity"><img src={unmuteLogo} alt="Unmute" /></header>
       <div className="ob-presenter__film">
         {!state.videoUnavailable && state.clipId
           ? <video
@@ -88,7 +85,7 @@ export function OnboardingPresenter() {
               onPause={() => setPaused(true)}
               onError={() => dispatch({ type: 'video-unavailable' })}
             />
-          : <div className="ob-presenter__standin"><UnmuteGlyph /><span>Founder video will appear here</span></div>}
+          : <div className="ob-presenter__standin"><span className="ob-presenter__logo-plate"><img src={unmuteLogo} alt="" /></span><span>Founder video will appear here</span></div>}
         <div className="ob-presenter__filmshade" />
         <div className="ob-presenter__caption" aria-live="polite">{state.caption || 'Preparing your introduction…'}</div>
       </div>

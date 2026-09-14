@@ -41,37 +41,38 @@
     .topbar h1 { margin: 0; font-size: 19px; font-weight: 680; letter-spacing: -.03em; }
     .topbar p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
     .counter { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-    .desktop { position: relative; max-width: 1180px; min-height: 716px; margin: auto; overflow: hidden; border: 1px solid rgba(255,255,255,.15); border-radius: 24px; background: radial-gradient(circle at 72% 28%, rgba(191,44,142,.78), transparent 31%), radial-gradient(circle at 26% 22%, rgba(51,71,169,.85), transparent 38%), linear-gradient(135deg, #141225, #4d0e48 56%, #120b2a); box-shadow: 0 32px 90px rgba(0,0,0,.48); }
-    .desktop::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(125deg, transparent 42%, rgba(255,255,255,.08) 55%, transparent 69%); }
-    .menu { position: relative; z-index: 1; height: 30px; display: flex; align-items: center; gap: 14px; padding: 0 13px; color: rgba(255,255,255,.76); background: rgba(8,8,12,.28); backdrop-filter: blur(18px); font-size: 10px; }
+    .desktop { position: relative; max-width: 1180px; min-height: 716px; margin: auto; overflow: hidden; border: 1px solid rgba(26,23,20,.14); border-radius: 24px; background: #f0ede4; box-shadow: 0 32px 90px rgba(0,0,0,.35); }
+    .desktop::after { content: ""; position: absolute; top: 30px; bottom: 0; left: 0; width: 178px; pointer-events: none; background: #e6e1d6; border-right: 1px solid rgba(26,23,20,.09); }
+    .desktop::before { content: "unmute\A\A Dictation\A Notetaker\A Agent\A Orchestrator\A Account\A Settings"; position: absolute; z-index: 2; top: 62px; left: 26px; width: 130px; white-space: pre; line-height: 3.25; color: rgba(26,23,20,.52); font-size: 10px; font-weight: 560; }
+    .menu { position: relative; z-index: 4; height: 30px; display: flex; align-items: center; gap: 14px; padding: 0 13px; color: rgba(26,23,20,.6); background: #e6e1d6; border-bottom: 1px solid rgba(26,23,20,.09); font-size: 10px; }
     .traffic { display: flex; gap: 6px; margin-right: 5px; }
     .traffic i { width: 8px; height: 8px; border-radius: 50%; background: #ff5f57; }
     .traffic i:nth-child(2) { background: #febc2e; }.traffic i:nth-child(3) { background: #28c840; }
-    .app-ghost { position: absolute; inset: 72px 36px 38px 36px; border-radius: 18px; background: rgba(8,9,15,.72); border: 1px solid rgba(255,255,255,.09); backdrop-filter: blur(26px); box-shadow: 0 20px 60px rgba(0,0,0,.3); }
-    .app-ghost::before { content: "Unmute"; position: absolute; top: 20px; left: 24px; font-weight: 700; font-size: 13px; }
-    .app-ghost::after { content: "Dictation    Notetaker    Agent    Orchestrator    Account    Settings"; position: absolute; left: 24px; top: 64px; bottom: 24px; width: 152px; padding-top: 18px; white-space: pre-wrap; line-height: 3.2; color: rgba(255,255,255,.35); border-top: 1px solid rgba(255,255,255,.08); font-size: 10px; }
+    .app-ghost { position: absolute; z-index: 1; top: 58px; right: 36px; bottom: 38px; left: 210px; border-radius: 16px; background: #fafaf6; border: 1px solid rgba(26,23,20,.09); box-shadow: 0 8px 32px rgba(26,23,20,.08); }
+    .app-ghost::before { content: "Unmute"; position: absolute; top: 20px; left: 24px; color: #1a1714; font-weight: 700; font-size: 13px; }
+    .app-ghost::after { content: ""; }
     .presenter { position: relative; z-index: 3; width: 432px; min-height: 660px; margin: 20px 28px 24px auto; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; }
-    .glass, .card { position: relative; overflow: hidden; border: 1px solid rgba(255,255,255,.14); background: var(--panel); box-shadow: 0 22px 60px rgba(0,0,0,.36), inset 0 1px rgba(255,255,255,.08); backdrop-filter: blur(34px) saturate(145%); }
-    .glass { border-radius: 29px; padding: 10px; }
-    .glass::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(118deg, rgba(255,255,255,.13), transparent 18%, transparent 78%, rgba(126,151,255,.1)); mix-blend-mode: screen; }
+    .glass, .card { position: relative; overflow: hidden; border: 1px solid rgba(26,23,20,.11); background: rgba(240,237,228,.96); color: #1a1714; box-shadow: 0 16px 48px rgba(26,23,20,.18), inset 0 1px rgba(255,255,255,.72); backdrop-filter: blur(20px) saturate(115%); }
+    .glass { border-radius: 20px; padding: 10px; }
+    .glass::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(120deg, rgba(255,255,255,.42), transparent 24%, transparent 76%, rgba(224,48,48,.025)); }
     .identity { position: relative; height: 36px; padding: 0 8px 8px; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; }
-    .identity .glyph { width: 20px; height: 20px; border-radius: 7px; background: #050507; color: white; font-size: 9px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.11); }
-    .film { position: relative; aspect-ratio: 5/6; overflow: hidden; border-radius: 21px; background: #08080a; box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); }
+    .identity .glyph { width: 76px; height: 20px; border-radius: 0; background: transparent; color: #1a1714; font-size: 12px; box-shadow: none; letter-spacing: -.04em; }
+    .film { position: relative; aspect-ratio: 5/6; overflow: hidden; border-radius: 16px; background: #08080a; box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); }
     .founder { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--muted); background: radial-gradient(circle at 42% 28%, rgba(83,100,160,.28), transparent 42%), #09090c; }
     .founder .portrait { width: 86px; height: 104px; border-radius: 44px 44px 24px 24px; background: linear-gradient(145deg, rgba(255,255,255,.2), rgba(255,255,255,.035)); border: 1px solid rgba(255,255,255,.09); }
     .founder span { font-size: 11px; }
     .shade { position: absolute; inset: 40% 0 0; background: linear-gradient(transparent, rgba(0,0,0,.9)); }
     .caption { position: absolute; z-index: 1; left: 20px; right: 20px; bottom: 18px; font-size: 16px; font-weight: 590; line-height: 1.32; letter-spacing: -.017em; text-wrap: balance; text-shadow: 0 1px 12px #000; }
     .controls { position: relative; height: 35px; display: flex; align-items: end; gap: 4px; padding: 7px 4px 0; }
-    .control { border: 0; border-radius: 10px; padding: 7px 10px; color: var(--muted); background: transparent; font-size: 11px; cursor: pointer; }
-    .status { margin-left: auto; padding: 7px 7px 2px; color: rgba(255,255,255,.4); font-size: 10px; }
-    .card { min-height: 94px; border-radius: 21px; padding: 17px 18px; background: var(--plane); }
+    .control { border: 0; border-radius: 10px; padding: 7px 10px; color: rgba(26,23,20,.6); background: transparent; font-size: 11px; cursor: pointer; }
+    .status { margin-left: auto; padding: 7px 7px 2px; color: rgba(26,23,20,.35); font-size: 10px; }
+    .card { min-height: 94px; border-radius: 16px; padding: 17px 18px; background: rgba(250,250,246,.98); }
     .card h2 { margin: 0 0 7px; font-size: 14px; letter-spacing: -.01em; }
-    .card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
-    .phrase { margin: 0; color: #fff; font-size: 15px; line-height: 1.35; }
-    .phrase::before, .phrase::after { color: var(--blue); }.phrase::before { content: "“"; }.phrase::after { content: "”"; }
-    .primary { float: right; margin-top: 10px; border: 0; border-radius: 10px; padding: 8px 12px; background: rgba(255,255,255,.93); color: #09090b; font-size: 11px; font-weight: 650; }
-    .choices { display: flex; gap: 7px; margin-top: 12px; }.choices button { flex: 1; min-height: 36px; border: 0; border-radius: 10px; color: white; background: rgba(255,255,255,.09); font-size: 11px; }
+    .card p { margin: 0; color: rgba(26,23,20,.6); font-size: 12px; line-height: 1.4; }
+    .phrase { margin: 0; color: #1a1714; font-size: 15px; line-height: 1.35; }
+    .phrase::before, .phrase::after { color: #e03030; }.phrase::before { content: "“"; }.phrase::after { content: "”"; }
+    .primary { float: right; margin-top: 10px; border: 0; border-radius: 10px; padding: 8px 12px; background: #1a1714; color: white; font-size: 11px; font-weight: 650; }
+    .choices { display: flex; gap: 7px; margin-top: 12px; }.choices button { flex: 1; min-height: 36px; border: 1px solid rgba(26,23,20,.11); border-radius: 10px; color: #1a1714; background: white; font-size: 11px; }
     .state-switch { display: flex; gap: 5px; margin-top: 9px; }
     .state-switch button { border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; color: var(--muted); background: transparent; font-size: 9px; cursor: pointer; }
     .state-switch button.active { color: #09090b; background: rgba(255,255,255,.92); }
