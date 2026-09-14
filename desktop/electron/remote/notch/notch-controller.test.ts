@@ -3716,3 +3716,127 @@ test('opening another run while a detail fetch is in flight still loads it', asy
   pending.shift()!(); await tick(); await tick()
   assert.equal(h.client.last('showTask')!.task.routines!.run?.runId, 'b')
 })
+
+test('a spoken routine line does not survive a new conversation', () => {
+  const h = setup()
+  restoreAgent(h, { startedAt: 0 })
+  h.controller.restoreRoutines(routinesView([]))
+  h.controller.restoreRoutines(routinesView([routineRun({ id: 'run1', speak: true, status: 'failed', endedAt: 500 })]))
+  restoreAgent(h, { startedAt: 1000 })
+  h.client.fire({ type: 'pocketOpen' })
+  const agent = pocketOf(h)!.slots.find(s => s.kind === 'agent')!
+  assert.equal(agent.ask, 'Ask me anything')
+  assert.notEqual(agent.status, 'failed')
+})
+
+test('a failed spoken routine never makes the Agent look failed', () => {
+  const h = setup()
+  restoreAgent(h)
+  h.controller.restoreRoutines(routinesView([]))
+  h.controller.restoreRoutines(routinesView([routineRun({ id: 'run1', speak: true, status: 'failed', resultPreview: 'Could not read' })]))
+  h.client.fire({ type: 'pocketOpen' })
+  const agent = pocketOf(h)!.slots.find(s => s.kind === 'agent')!
+  assert.equal(agent.ask, '◆ Digest: Could not read')
+  assert.notEqual(agent.status, 'failed')
+  h.client.fire({ type: 'pocketExpand' }); h.flush()
+  assert.notEqual(h.client.last('showTask')!.task.status, 'failed')
+})
+
+test('a run that ends while the Agent chat is open is marked read', () => {
+  const actions: unknown[] = []
+  const h = setup({ deps: { routineAction: async (a) => { actions.push(a) } } })
+  restoreAgent(h)
+  h.controller.restoreRoutines(routinesView([]))
+  openAgentChat(h)
+  assert.deepEqual(actions, [])
+  h.controller.restoreRoutines(routinesView([routineRun({ id: 'run1', unread: true })]))
+  assert.deepEqual(actions, [{ type: 'markRead' }])
+})
+
+test('full results are fetched only for runs the chat shows', async () => {
+  const fetched: string[] = []
+  const h = setup({ deps: { routineRunDetail: async (runId) => { fetched.push(runId); return null } } })
+  restoreAgent(h, { startedAt: 1000 })
+  h.controller.restoreRoutines(routinesView([
+    routineRun({ id: 'old-read', firedAt: 100, endedAt: 110 }),
+    routineRun({ id: 'old-unread', firedAt: 200, endedAt: 210, unread: true }),
+    routineRun({ id: 'new', firedAt: 2000, endedAt: 2010 }),
+  ]))
+  await tick()
+  assert.deepEqual(fetched.sort(), ['new', 'old-unread'])
+})
+
+test('a failed cancel does not re-fetch the open run detail', async () => {
+  let fetched = 0
+  const run = routineRun({ id: 'run1', status: 'running', endedAt: undefined, posted: false })
+  const h = setup({ deps: {
+    routineAction: async () => { throw new Error('nope') },
+    routineRunDetail: async () => { fetched++; return { run, result: null, hasTranscript: false } },
+  } })
+  h.controller.restoreRoutines(routinesView([run]))
+  openAgentChat(h)
+  h.client.fire({ type: 'routineOpenRun', runId: 'run1' })
+  await tick(); await tick()
+  assert.equal(fetched, 1)
+  h.client.fire({ type: 'routineCancel', runId: 'run1' })
+  await tick(); await tick()
+  assert.equal(fetched, 1)
+  assert.equal(h.client.last('showTask')!.task.deliveryError, 'nope')
+})
+
+test('a successful cancel re-fetches the open run detail', async () => {
+  let fetched = 0
+  const run = routineRun({ id: 'run1', status: 'running', endedAt: undefined, posted: false })
+  const h = setup({ deps: {
+    routineAction: async () => {},
+    routineRunDetail: async () => { fetched++; return { run, result: null, hasTranscript: false } },
+  } })
+  h.controller.restoreRoutines(routinesView([run]))
+  openAgentChat(h)
+  h.client.fire({ type: 'routineOpenRun', runId: 'run1' })
+  await tick(); await tick()
+  h.client.fire({ type: 'routineCancel', runId: 'run1' })
+  await tick(); await tick()
+  assert.equal(fetched, 2)
+})
+
+test('an open run detail is re-fetched when its run changes', async () => {
+  let fetched = 0
+  let current = routineRun({ id: 'run1', status: 'running', endedAt: undefined, posted: false })
+  const h = setup({ deps: { routineRunDetail: async () => { fetched++; return { run: current, result: null, hasTranscript: false } } } })
+  h.controller.restoreRoutines(routinesView([current]))
+  openAgentChat(h)
+  h.client.fire({ type: 'routineOpenRun', runId: 'run1' })
+  await tick(); await tick()
+  assert.equal(fetched, 1)
+  h.controller.restoreRoutines(routinesView([current]))
+  await tick(); await tick()
+  assert.equal(fetched, 1, 'unchanged run, no fetch')
+  current = { ...current, activity: [{ at: 1, text: 'reading' }] }
+  h.controller.restoreRoutines(routinesView([current]))
+  await tick(); await tick()
+  assert.equal(fetched, 2, 'activity grew')
+  current = { ...current, status: 'cancelled', endedAt: 900 }
+  h.controller.restoreRoutines(routinesView([current]))
+  await tick(); await tick()
+  assert.equal(fetched, 3, 'status and endedAt changed')
+  assert.equal(h.client.last('showTask')!.task.routines!.run?.status, 'cancelled')
+})
+
+test('opening the Agent with nothing unread does not mark read', () => {
+  const actions: unknown[] = []
+  const h = setup({ deps: { routineAction: async (a) => { actions.push(a) } } })
+  h.controller.restoreRoutines(routinesView([routineRun({ id: 'run1' })]))
+  openAgentChat(h)
+  assert.deepEqual(actions, [])
+})
+
+test('the first seed with an unread run puts the Agent in front', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  h.controller.restoreRoutines(routinesView([routineRun({ id: 'run1', unread: true })]))
+  h.client.fire({ type: 'pocketOpen' })
+  const slot = pocketOf(h)!.slots[0]
+  assert.equal(slot.kind, 'agent')
+  assert.equal(slot.demanding, true)
+})

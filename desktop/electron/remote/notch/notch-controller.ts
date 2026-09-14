@@ -781,7 +781,10 @@ export class NotchController {
     on('routineEdit', e => { void routineAction({ type: 'edit', id: (e as { id: string }).id }) })
     on('routineCancel', e => {
       const runId = (e as { runId: string }).runId
-      void routineAction({ type: 'cancel', runId })?.then(() => { if (this.routineDetailRunId === runId) this.fetchRoutineDetail(runId) })
+      // Only a cancel that landed changes the run worth re-reading.
+      void this.deps.routineAction?.({ type: 'cancel', runId }).then(
+        () => { if (this.routineDetailRunId === runId) this.fetchRoutineDetail(runId) },
+        error => this.agentUnavailable((error as Error).message))
     })
     on('routineOpenTranscript', e => { void routineAction({ type: 'openTranscript', runId: (e as { runId: string }).runId }) })
     on('routineProposal', e => {
@@ -2703,6 +2706,8 @@ export class NotchController {
     if (snapshot.notice && !freshNotice) this.agentBaseBlocks.unshift({ kind: 'message', role: 'assistant', text: snapshot.notice })
     if (snapshot.error) this.agentBaseBlocks.push({ kind: 'error', message: snapshot.error })
     this.agentChatStartedAt = snapshot.chat.startedAt ?? 0
+    // A spoken routine line belongs to the conversation it was spoken into.
+    if (this.agentRoutineLine && this.agentRoutineLine.at < this.agentChatStartedAt) this.agentRoutineLine = null
     const answer = [...snapshot.chat.turns].reverse().find(t => t.role === 'agent')
     this.agentAnswerAt = answer?.at
     const answerLine = answer ? { text: conciseLine(answer.text), at: answer.at, failed: !!answer.failed } : null
@@ -2728,18 +2733,28 @@ export class NotchController {
       this.seenRoutineEnds = new Map(ended.map(r => [r.id, r.endedAt!]))
       if (view.runs.some(r => r.unread) && !this.agentOpen) this.agentUnread = true
     } else {
+      let readWhileOpen = false
       for (const run of ended) {
         if (this.seenRoutineEnds.get(run.id) === run.endedAt) continue
         this.seenRoutineEnds.set(run.id, run.endedAt!)
-        if (!this.agentOpen) this.agentUnread = true
+        if (this.agentOpen) readWhileOpen = true
+        else this.agentUnread = true
+        // Text only: a failed routine shows in its own result block, never by
+        // making the whole Agent look failed.
         if (run.speak) {
-          this.agentRoutineLine = { text: conciseLine(`◆ ${run.name}: ${firstLine(run.resultPreview)}`), at: run.endedAt!, failed: run.status === 'failed' }
+          this.agentRoutineLine = { text: conciseLine(`◆ ${run.name}: ${firstLine(run.resultPreview)}`), at: run.endedAt!, failed: false }
           this.agentLine = this.agentRoutineLine
         }
       }
+      // Landed under an open chat: already read, so a relaunch must not re-front it.
+      if (readWhileOpen) {
+        void this.deps.routineAction?.({ type: 'markRead' }).catch(error => log.warn('routine markRead failed', { error: (error as Error).message }))
+      }
     }
-    for (const run of view.runs) {
-      if (run.status === 'done' && run.posted && !this.routineResults.has(run.id)) this.fetchRoutineResult(run.id)
+    // Full results only for what the chat will actually show.
+    for (const entry of routineEntries(view.runs, { since: this.agentChatStartedAt })) {
+      const block = entry.block
+      if (block.kind === 'routineResult' && block.status === 'done' && !this.routineResults.has(block.what)) this.fetchRoutineResult(block.what)
     }
     if (this.routineDetailRunId !== null && this.routineRunDetail) {
       const was = this.routineRunDetail.run
