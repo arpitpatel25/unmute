@@ -61,7 +61,6 @@ import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './lo
 import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete, blockerOf, confirmationKey, type BackendProbe } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape, setOverlaySuppressed } from './overlay'
-import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask, type AgentAvailability } from './router'
 import { CodexRouterEngine } from './codex-router-engine'
 import { prefersCodexRouter, routerScopeMatches } from './router-select'
@@ -6232,9 +6231,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // Pre-warm the floating overlay window (hidden) so the first present is instant.
     createOverlayWindow()
   }
-  // Orchestrate cockpit: ⌘⇧O stays as a fallback entry point; the primary way in
-  // is now the notch's "open dashboard" (→ showCockpit → openOrchestrateWindow).
-  registerOrchestrateShortcut()
   // Apply the docked-mode preference (default ON).
   setDockedMode(settings.get('overlayDocked') !== false)
   // One-time: move users still on the OLD opus default to the new sonnet default
@@ -6436,8 +6432,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     }
     return true
   })
-  // Open the cockpit from the in-app Remote screen (the user-facing entry point;
-  // ⌘⇧O stays as the power-user toggle).
   // THE SWITCH THAT WAS MISSING. `unmuteAgentAvailable` was read in five places
   // and written in none: initialised false, with no IPC, no setter and no
   // control anywhere in the UI. The feature was complete behind a gate that
@@ -6461,7 +6455,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return settings.get('unmuteAgentAvailable') === true
   })
 
-  ipcMain.handle('remote:open-orchestrate', async () => { openOrchestrateWindow(); return true })
   // Current terminal owner — lets a freshly-mounted overlay card learn it owns
   // nothing (or that the wall already owns its session) without waiting for an event.
   ipcMain.handle('remote:get-orchestrate-owner', async () => orchestrateFocusId)

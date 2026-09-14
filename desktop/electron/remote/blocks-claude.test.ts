@@ -210,6 +210,24 @@ test('a sidechain entry does not pollute the main thread', () => {
   assert.equal(only(blocks, 'message').length, 1)
 })
 
+test('a live sub-agent brief is not shown as user speech', () => {
+  // The SDK stream has no isSidechain. A sub-agent's frames — its brief in the
+  // user slot included — are marked only by the Agent call that owns them, and
+  // that brief used to render as a message the user had sent.
+  const { blocks } = run([
+    user('real prompt', { parent_tool_use_id: null }),
+    assistant([{ type: 'tool_use', id: 'toolu_agent', name: 'Agent', input: { description: 'implement task 4' } }], { parent_tool_use_id: null }),
+    user([{ type: 'text', text: 'You are implementing Task 4' }], { parent_tool_use_id: 'toolu_agent' }),
+    assistant([{ type: 'tool_use', id: 'toolu_inner', name: 'Bash', input: { command: 'ls' } }], { parent_tool_use_id: 'toolu_agent' }),
+    user([{ type: 'tool_result', tool_use_id: 'toolu_inner', content: 'a.ts' }], { parent_tool_use_id: 'toolu_agent' }),
+    assistant([{ type: 'text', text: 'task 4 done' }], { parent_tool_use_id: 'toolu_agent' }),
+    user([{ type: 'tool_result', tool_use_id: 'toolu_agent', content: 'task 4 done' }], { parent_tool_use_id: null }),
+  ])
+  assert.deepEqual(only(blocks, 'message').map(m => [m.role, m.text]), [['user', 'real prompt']])
+  assert.equal(only(blocks, 'command').length, 0, "the sub-agent's own commands stay inside its subAgent block")
+  assert.equal(only(blocks, 'subAgent').length, 1)
+})
+
 test('meta and command-output entries are not shown as user speech', () => {
   const { blocks } = run([
     user('<local-command-stdout></local-command-stdout>', { isMeta: true }),

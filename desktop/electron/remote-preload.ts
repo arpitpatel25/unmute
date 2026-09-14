@@ -273,8 +273,6 @@ export const remotePreloadExtensions = {
    *  (or null) so a capture routes there deterministically. Additive. */
   remoteSetOrchestrateFocus: (id: string | null): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-orchestrate-focus', id),
-  /** Open the Orchestrate cockpit window from the in-app Remote screen. */
-  remoteOpenOrchestrate: (): Promise<boolean> => ipcRenderer.invoke('remote:open-orchestrate'),
   /** Is the Unmute Agent switched on? Gates its key, its capture destination
    *  and its settings section — see init.ts. */
   remoteGetUnmuteAgentAvailable: (): Promise<boolean> =>

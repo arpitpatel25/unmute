@@ -10,6 +10,16 @@ NotchLog.log("=== unmute-notch launch === pid=\(ProcessInfo.processInfo.processI
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
+// ALWAYS DARK, whatever the system appearance.
+//
+// The surface was designed and tuned in dark mode, but everything that uses a
+// system colour or control — the composer's text, `.secondary` labels, pickers,
+// popovers, menus, tooltips, the glass material — followed the Mac into light
+// mode and turned illegible on the black plane. Pinning the whole app here,
+// before AppController builds a single window, makes light mode render exactly
+// what dark mode renders, everywhere, with nothing to keep in sync per view.
+app.appearance = NSAppearance(named: .darkAqua)
+
 let controller = AppController()
 
 IPC.startReadLoop { command in
