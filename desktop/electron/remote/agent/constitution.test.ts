@@ -528,3 +528,17 @@ test('an action is a one-line receipt in a fixed mould; a question is not', () =
   // And the other half: a question keeps its full length.
   assert.match(AGENT_PRINCIPLES, /answer it at the length the answer takes/)
 })
+
+/**
+ * §6 of the agent-routines design: the Agent creates and reports on routines,
+ * but never runs one's work itself — that happens in the routine's own,
+ * separate, unattended session (see routines/prompt.ts).
+ */
+test('routines are named: create them, confirm in one line, never do their work here', () => {
+  assert.match(AGENT_PRINCIPLES, /ROUTINES\. The user can have routines/)
+  assert.match(AGENT_PRINCIPLES, /routine_create/)
+  assert.match(AGENT_PRINCIPLES, /confirm the schedule, window and kind back in one line/)
+  assert.match(AGENT_PRINCIPLES, /Never do a routine's work inside this conversation/)
+  assert.match(AGENT_PRINCIPLES, /routine_list/)
+  assert.match(AGENT_PRINCIPLES, /routine_runs/)
+})
