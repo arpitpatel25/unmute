@@ -28,8 +28,12 @@ import { conciseLine } from '../agent/conversation'
 import { randomUUID } from 'node:crypto'
 import type { AgentConversationView } from '../agent/lifecycle'
 import { agentModel, agentModelLabel } from '../agent/modelPolicy'
+import type { RoutineRun, RoutinesView } from '../agent/routines/types'
+import { mergeRoutineBlocks, routineEntries, routinesPayload } from './routine-blocks'
 
 const log = createLogger('notch-controller')
+const ROUTINE_TERMINAL: ReadonlySet<RoutineRun['status']> = new Set(['done', 'failed', 'cancelled', 'skipped'])
+const firstLine = (text: string | undefined): string => (text ?? '').split('\n').find(l => l.trim())?.trim() ?? ''
 
 // Task shape as serializeTask emits it (the same object remote:list returns).
 export interface TaskLite {
@@ -212,6 +216,10 @@ export interface NotchControllerDeps {
   agentInstalledProviders?(): Promise<Array<'claude' | 'codex'>>
   /** End the Agent conversation and keep nothing. */
   agentNewConversation?(): Promise<void>
+  /** Routine controls from the Agent's routines and run sheets. */
+  routineAction?(action: { type: 'runNow'; id: string } | { type: 'setEnabled'; id: string; enabled: boolean } | { type: 'edit'; id: string } | { type: 'cancel'; runId: string } | { type: 'openTranscript'; runId: string } | { type: 'proposal'; runId: string; proposalId: string; decision: 'approve' | 'dismiss' } | { type: 'markRead' }): Promise<void>
+  /** One run with its full result text, for the run sheet and the chat. */
+  routineRunDetail?(runId: string): Promise<{ run: RoutineRun; result: string | null; hasTranscript: boolean } | null>
   /** THE VOICE IS POINTED AT THE AGENT (its card is in front, or its chat is
    *  open). Separate from `focus`, which names a task and must never be handed
    *  an id the task runtime cannot resolve. Optional: a host that does not wire
@@ -605,6 +613,25 @@ export class NotchController {
   private agentBlocks: Block[] = []
   /** Messages in the Agent's current provider session; 0 when there is no earlier one to hide. */
   private agentSessionMessages = 0
+  /** The conversation's own blocks; `agentBlocks` is these with routine runs
+   *  merged in by time (rebuildAgentBlocks). */
+  private agentBaseBlocks: Block[] = []
+  /** When the last real Agent answer landed — kept apart from `agentLine`,
+   *  which a speaking routine can also set. */
+  private agentAnswerAt?: number
+  private agentRoutineLine: { text: string; at: number; failed: boolean } | null = null
+  private agentChatStartedAt = 0
+  private routinesView: RoutinesView | null = null
+  /** Full result text per run id, read once from the run's result file. */
+  private routineResults = new Map<string, string>()
+  private routineResultFetches = new Set<string>()
+  /** The open run sheet: which run, and what was last fetched for it. */
+  private routineDetailRunId: string | null = null
+  private routineRunDetail: { run: RoutineRun; result: string | null; hasTranscript: boolean } | null = null
+  private routineDetailFetching = false
+  private routineDetailStale = false
+  /** Run id → endedAt already accounted for. Null until the first view seeds it. */
+  private seenRoutineEnds: Map<string, number> | null = null
   /** True while it is thinking, so the card can say so. */
   private agentBusy = false
   /** UNREAD IS THE WHOLE RULE. Set when it answers, cleared the moment the user
@@ -744,6 +771,34 @@ export class NotchController {
       void this.deps.agentSetModel?.(provider, model).catch(error => this.agentUnavailable((error as Error).message))
     })
     on('agentNewConversation', () => { void this.deps.agentNewConversation?.().catch(error => this.agentUnavailable((error as Error).message)) })
+    const routineAction = (action: Parameters<NonNullable<NotchControllerDeps['routineAction']>>[0]) =>
+      this.deps.routineAction?.(action).catch(error => this.agentUnavailable((error as Error).message))
+    on('routineRunNow', e => { void routineAction({ type: 'runNow', id: (e as { id: string }).id }) })
+    on('routineSetEnabled', e => {
+      const { id, enabled } = e as { id: string; enabled: boolean }
+      void routineAction({ type: 'setEnabled', id, enabled })
+    })
+    on('routineEdit', e => { void routineAction({ type: 'edit', id: (e as { id: string }).id }) })
+    on('routineCancel', e => {
+      const runId = (e as { runId: string }).runId
+      void routineAction({ type: 'cancel', runId })?.then(() => { if (this.routineDetailRunId === runId) this.fetchRoutineDetail(runId) })
+    })
+    on('routineOpenTranscript', e => { void routineAction({ type: 'openTranscript', runId: (e as { runId: string }).runId }) })
+    on('routineProposal', e => {
+      const { runId, proposalId, decision } = e as { runId: string; proposalId: string; decision: 'approve' | 'dismiss' }
+      void routineAction({ type: 'proposal', runId, proposalId, decision })
+    })
+    on('routineOpenRun', e => {
+      const runId = (e as { runId: string }).runId
+      this.routineDetailRunId = runId
+      this.routineRunDetail = null
+      this.fetchRoutineDetail(runId)
+    })
+    on('routineCloseRun', () => {
+      this.routineDetailRunId = null
+      this.routineRunDetail = null
+      if (this.agentOpen) this.sendAgentDetail()
+    })
     on('surfaceFillChanged', e => {
       const fill = (e as { fill: number }).fill
       if (Number.isFinite(fill)) this.deps.setSurfaceFill?.(fill)
@@ -2159,6 +2214,9 @@ export class NotchController {
     this.cameFromPocket = this.pocketMode === 'open'
     const wasUnread = this.agentUnread
     this.agentUnread = false
+    if (this.routinesView?.runs.some(r => r.unread)) {
+      void this.deps.routineAction?.({ type: 'markRead' }).catch(error => log.warn('routine markRead failed', { error: (error as Error).message }))
+    }
     this.engaged = 'task'
     // NOT setFocus: focus means a TASK, and handing the task runtime an id it
     // cannot resolve is how a surface ends up addressing nothing. The Agent is
@@ -2228,6 +2286,7 @@ export class NotchController {
         ...(pendingMessage ? { error: pendingMessage } : {}),
       },
       ...(this.agentBusy ? { activity: pendingMessage ?? 'Thinking' } : {}),
+      ...(this.routinesView !== null ? { routines: routinesPayload(this.routinesView, this.routineRunDetail ?? undefined) } : {}),
     }
     this.client.send({ type: 'showTask', task: detail })
   }
@@ -2495,8 +2554,9 @@ export class NotchController {
   /** The user said something to the Agent. */
   agentAsked(text: string): void {
     this.agentBusy = true
-    this.agentBlocks = [...this.agentBlocks,
+    this.agentBaseBlocks = [...this.agentBaseBlocks,
       { kind: 'message', role: 'user', text: text.trim(), at: Date.now() }]
+    this.mergeAgentBlocks()
     // WHAT THE CARD IS ABOUT TO SAY, and that it is now busy — so a card stuck
     // on "Thinking…" can be traced to the turn that never came back rather
     // than to the surface.
@@ -2511,9 +2571,11 @@ export class NotchController {
     const text = raw.trim()
     this.agentBusy = false
     this.agentLine = { text: conciseLine(text), at, failed }
-    this.agentBlocks = [...this.agentBlocks, failed
+    this.agentAnswerAt = at
+    this.agentBaseBlocks = [...this.agentBaseBlocks, failed
       ? { kind: 'error', message: text }
       : { kind: 'message', role: 'assistant', text, at }]
+    this.mergeAgentBlocks()
     // UNREAD ONLY IF THEY ARE NOT ALREADY LOOKING AT IT. Coming to the front of
     // the pocket is how the Agent gets your attention; it does not need to when
     // it already has it, and marking it unread under an open chat would put a
@@ -2551,8 +2613,11 @@ export class NotchController {
    */
   agentPurged(): void {
     const had = this.agentBlocks.length
-    this.agentBlocks = []
+    this.agentBaseBlocks = []
     this.agentLine = null
+    this.agentRoutineLine = null
+    this.agentAnswerAt = undefined
+    this.mergeAgentBlocks()
     this.agentUnread = false
     this.agentBusy = false
     if (this.agentOpen) this.sendAgentDetail()
@@ -2589,7 +2654,7 @@ export class NotchController {
   }
 
   restoreAgentConversation({ record, snapshot, selectedProvider }: AgentConversationView): void {
-    const previousAnswer = this.agentLine?.at
+    const previousAnswer = this.agentAnswerAt
     this.agentProvider = record.provider ?? undefined
     this.agentSelectedProvider = selectedProvider ?? record.pendingProvider ?? record.provider ?? 'claude'
     this.agentPendingProvider = record.pendingProvider
@@ -2625,7 +2690,7 @@ export class NotchController {
     const earlier = split === -1 ? turns : turns.slice(0, split)
     const current = split === -1 ? [] : turns.slice(split)
     const freshNotice = !!snapshot.notice && /^(Switched to|Started a fresh conversation)/.test(snapshot.notice)
-    this.agentBlocks = [
+    this.agentBaseBlocks = [
       ...earlier.flatMap(toBlocks),
       ...(earlier.length && sessionStart !== undefined ? [{ kind: 'sessionBoundary' as const, text: sessionDivider(sessionStart, snapshot.notice) }] : []),
       ...current.flatMap(toBlocks),
@@ -2635,13 +2700,101 @@ export class NotchController {
     if (this.historyTask === NotchController.AGENT_SLOT && this.agentSessionMessages) {
       this.historyLimit = Math.max(this.historyLimit, this.agentSessionMessages)
     }
-    if (snapshot.notice && !freshNotice) this.agentBlocks.unshift({ kind: 'message', role: 'assistant', text: snapshot.notice })
-    if (snapshot.error) this.agentBlocks.push({ kind: 'error', message: snapshot.error })
+    if (snapshot.notice && !freshNotice) this.agentBaseBlocks.unshift({ kind: 'message', role: 'assistant', text: snapshot.notice })
+    if (snapshot.error) this.agentBaseBlocks.push({ kind: 'error', message: snapshot.error })
+    this.agentChatStartedAt = snapshot.chat.startedAt ?? 0
     const answer = [...snapshot.chat.turns].reverse().find(t => t.role === 'agent')
-    this.agentLine = answer ? { text: conciseLine(answer.text), at: answer.at, failed: !!answer.failed } : null
+    this.agentAnswerAt = answer?.at
+    const answerLine = answer ? { text: conciseLine(answer.text), at: answer.at, failed: !!answer.failed } : null
+    // A spoken routine result newer than the last answer keeps the card's line.
+    this.agentLine = this.agentRoutineLine && this.agentRoutineLine.at > (answerLine?.at ?? -Infinity) ? this.agentRoutineLine : answerLine
     if (answer && answer.at !== previousAnswer && !this.agentOpen) this.agentUnread = true
-    if (this.agentOpen) this.sendAgentDetail()
+    this.rebuildAgentBlocks()
     this.reconcile()
+  }
+
+  /**
+   * ROUTINE RUNS, MERGED INTO THE AGENT'S CHAT (spec §5).
+   *
+   * The first view only seeds what has already ended: a relaunch must not
+   * re-announce every old result, so unread comes from the run records alone.
+   * After that, a run that newly ends with a posted result is news — unread
+   * when the chat is closed, and the card's line when the routine speaks.
+   */
+  restoreRoutines(view: RoutinesView): void {
+    this.routinesView = view
+    const ended = view.runs.filter(r => r.posted && r.endedAt !== undefined && ROUTINE_TERMINAL.has(r.status))
+    if (this.seenRoutineEnds === null) {
+      this.seenRoutineEnds = new Map(ended.map(r => [r.id, r.endedAt!]))
+      if (view.runs.some(r => r.unread) && !this.agentOpen) this.agentUnread = true
+    } else {
+      for (const run of ended) {
+        if (this.seenRoutineEnds.get(run.id) === run.endedAt) continue
+        this.seenRoutineEnds.set(run.id, run.endedAt!)
+        if (!this.agentOpen) this.agentUnread = true
+        if (run.speak) {
+          this.agentRoutineLine = { text: conciseLine(`◆ ${run.name}: ${firstLine(run.resultPreview)}`), at: run.endedAt!, failed: run.status === 'failed' }
+          this.agentLine = this.agentRoutineLine
+        }
+      }
+    }
+    for (const run of view.runs) {
+      if (run.status === 'done' && run.posted && !this.routineResults.has(run.id)) this.fetchRoutineResult(run.id)
+    }
+    if (this.routineDetailRunId !== null && this.routineRunDetail) {
+      const was = this.routineRunDetail.run
+      const now = view.runs.find(r => r.id === was.id)
+      if (now && (now.status !== was.status || now.endedAt !== was.endedAt || now.activity.length !== was.activity.length)) {
+        this.fetchRoutineDetail(was.id)
+      }
+    }
+    this.rebuildAgentBlocks()
+    this.reconcile()
+  }
+
+  private mergeAgentBlocks(): void {
+    this.agentBlocks = this.routinesView
+      ? mergeRoutineBlocks(this.agentBaseBlocks,
+        routineEntries(this.routinesView.runs, { since: this.agentChatStartedAt, results: this.routineResults }),
+        { busy: this.agentBusy })
+      : [...this.agentBaseBlocks]
+  }
+
+  private rebuildAgentBlocks(): void {
+    this.mergeAgentBlocks()
+    if (this.agentOpen) this.sendAgentDetail()
+  }
+
+  /** At most once per run id; a missing result keeps the preview. */
+  private fetchRoutineResult(runId: string): void {
+    const fetch = this.deps.routineRunDetail
+    if (!fetch || this.routineResultFetches.has(runId)) return
+    this.routineResultFetches.add(runId)
+    void fetch(runId).then(detail => {
+      if (detail?.result == null) return
+      this.routineResults.set(runId, detail.result)
+      this.rebuildAgentBlocks()
+    }).catch(error => log.warn('routine result fetch failed', { runId, error: (error as Error).message }))
+  }
+
+  /** The open run sheet's run, one fetch in flight at a time. */
+  private fetchRoutineDetail(runId: string): void {
+    const fetch = this.deps.routineRunDetail
+    if (!fetch) return
+    // A request made mid-flight (another run opened, a cancel landed) is not
+    // dropped: it is fetched again once the current one settles.
+    if (this.routineDetailFetching) { this.routineDetailStale = true; return }
+    this.routineDetailFetching = true
+    void fetch(runId).then(detail => {
+      if (this.routineDetailRunId !== runId) return
+      this.routineRunDetail = detail
+      if (this.agentOpen) this.sendAgentDetail()
+    }).catch(error => this.agentUnavailable((error as Error).message)).finally(() => {
+      this.routineDetailFetching = false
+      if (!this.routineDetailStale) return
+      this.routineDetailStale = false
+      if (this.routineDetailRunId !== null) this.fetchRoutineDetail(this.routineDetailRunId)
+    })
   }
 
   agentUnavailable(message: string): void {

@@ -157,6 +157,8 @@ export interface CommandItemP {
 export interface TaskDetailP {
   /** What `/` offers in this conversation, as its own provider reported it. */
   commands?: CommandItemP[]
+  /** The Agent's routines sheet and open run sheet. Only on the Agent's detail. */
+  routines?: import('./routine-blocks').RoutinesP
   canEditLatestMessage?: boolean
   olderMessages?: number
   id: string
@@ -537,6 +539,9 @@ export type NotchEvent =
   | { type: 'agentSetModel'; provider: 'claude' | 'codex'; model: string }
   /** End this Agent conversation and keep nothing; the next turn starts clean. */
   | { type: 'agentNewConversation' }
+  | { type: 'routineRunNow'; id: string } | { type: 'routineSetEnabled'; id: string; enabled: boolean } | { type: 'routineEdit'; id: string }
+  | { type: 'routineOpenRun'; runId: string } | { type: 'routineCloseRun' } | { type: 'routineCancel'; runId: string }
+  | { type: 'routineOpenTranscript'; runId: string } | { type: 'routineProposal'; runId: string; proposalId: string; decision: 'approve' | 'dismiss' }
   | { type: 'cancelTaskFollowup' | 'restoreTaskFollowup' | 'queueSavedTaskFollowup' | 'recoverUncertainFollowup'; id: string; queueId: string }
   | { type: 'mute'; id: string }
   | { type: 'kill'; id: string }
