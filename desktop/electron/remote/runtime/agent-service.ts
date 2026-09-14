@@ -22,6 +22,7 @@ import { IndexSearchCapability } from '../agent/capabilities/index-search'
 import { warmTurnSearch } from '../agent/sessions/turn-search'
 import { HandoffCapability } from '../agent/capabilities/handoff'
 import { NotetakerCapability } from '../agent/capabilities/notetaker'
+import { RoutinesCapability, type RoutinesServiceLike } from '../agent/capabilities/routines'
 import { DeliveryCapability, type AttachmentDeliveryTransaction, type DeliveryAttachmentMetadata } from '../agent/capabilities/delivery'
 import { MemoryCrypto } from '../agent/memory/crypto'
 import { EncryptedRecordStore } from '../agent/memory/record-store'
@@ -36,14 +37,21 @@ import { SESSION_PREAMBLE } from '../session-policy'
 import { startMcpServer, MCP_PATH, type McpServer } from '../mcp-server'
 import { createLogger } from '../log'
 import { diagnostic } from '../diagnostics'
+import { RoutineService } from '../agent/routines/service'
+import { RoutineAgentExecutor, ACTOR_ALLOWED_TOOLS, type RoutineRunPair } from '../agent/routines/executor'
+import type { RoutinesView } from '../agent/routines/types'
+import type { AgentRunMcpContext } from '../agent/supervisor'
+import { findTranscriptById } from '../transcript-locate'
+import { findRollout } from '../codex/cli-session'
 
-export type AgentRuntimeConfig = { masterKey: string; selectedProvider: AgentProviderId; maxActiveProcesses?: number; conversationCeiling?: number; notetaker?: boolean
+export type AgentRuntimeConfig = { masterKey: string; selectedProvider: AgentProviderId; maxActiveProcesses?: number; conversationCeiling?: number; notetaker?: boolean; routines?: boolean
   /** Per-provider default model and fallbacks (agent/modelPolicy.ts). */
   models?: AgentModelChoices
   /** Continue on another provider when this one cannot answer. Default on. */
   switchWhenUnavailable?: boolean }
 export type AgentRuntimeEvent = { kind: 'view'; view: AgentConversationView } | { kind: 'activity'; activity: AgentInteractionActivity }
-  | { kind: 'completion'; submissionId: string; result: AgentInteractionResult }
+  | { kind: 'completion'; submissionId: string; result: AgentInteractionResult } | { kind: 'routines'; view: RoutinesView }
+export type RoutineProviders = { reader: Map<AgentProviderId, AgentProvider>; actor?: Map<AgentProviderId, AgentProvider> }
 export type AgentHostCall = (method: string, args: unknown[]) => Promise<any>
 export class AgentRuntimeService {
   private key?: Buffer
@@ -60,11 +68,20 @@ export class AgentRuntimeService {
   private activity?: AgentInteractionActivity
   private records?: EncryptedRecordStore
   private memory?: MemoryService
+  private routines?: RoutineService
+  private routineSupervisors: AgentRunSupervisor[] = []
+  private routineControllers: UnmuteAgentController[] = []
+  private routineDeps?: { registry: CapabilityRegistry; tokens: AgentTokenStore; handles: InteractionAttachmentHandles }
+  private routineProviders: RoutineProviders
   constructor(private root: string, private emit: (event: AgentRuntimeEvent) => void, private host: AgentHostCall,
-    providers?: Map<AgentProviderId, AgentProvider>, private openIndex = openSqlCipherMemoryIndex) {
+    providers?: Map<AgentProviderId, AgentProvider>, private openIndex = openSqlCipherMemoryIndex, routineProviders?: RoutineProviders) {
     this.providers = providers ?? new Map<AgentProviderId, AgentProvider>([
       ['claude', new ClaudeCodeProvider({ runtime: 'persistent' })], ['codex', new CodexCliProvider({ runtime: 'persistent' })],
     ])
+    this.routineProviders = routineProviders ?? {
+      reader: new Map<AgentProviderId, AgentProvider>([['claude', new ClaudeCodeProvider({ runtime: 'headless' })], ['codex', new CodexCliProvider({ runtime: 'headless' })]]),
+      actor: new Map<AgentProviderId, AgentProvider>([['claude', new ClaudeCodeProvider({ runtime: 'headless', allowedTools: ACTOR_ALLOWED_TOOLS, extraArgs: ['--chrome'] })]]),
+    }
   }
   private async configure(input: AgentRuntimeConfig): Promise<unknown> {
     setAgentModelChoices(input.models)
@@ -75,6 +92,7 @@ export class AgentRuntimeService {
       this.config!.selectedProvider = input.selectedProvider
       this.config!.conversationCeiling = input.conversationCeiling
       if (providerChanged) await this.lifecycle.requestProvider(input.selectedProvider)
+      await this.applyRoutines(input.routines)
       return this.snapshot()
     }
     if (this.configuring) return this.configuring
@@ -146,6 +164,7 @@ export class AgentRuntimeService {
         new IndexSearchCapability(),
         new HandoffCapability({ createTask: input => this.host('handoff.createTask', [input]), taskStatus: id => this.host('handoff.taskStatus', [id]), cardForSession: id => this.host('handoff.cardForSession', [id]) }),
         ...(config.notetaker ? [new NotetakerCapability({ list: limit => this.host('notetaker.list', [limit]), search: (q, limit) => this.host('notetaker.search', [q, limit]), read: id => this.host('notetaker.read', [id]), open: id => this.host('notetaker.open', [id]) })] : []),
+        new RoutinesCapability(this.lazyRoutines()),
         new DeliveryCapability({ resolveAttachment: (principal, handle) => attachments.resolveForDelivery(principal, handle),
           copyText: text => this.host('delivery.copyText', [text]), prepareTaskDraftText: (id, text) => this.host('delivery.prepareTaskDraftText', [id, text]),
           openAttachmentFile: metadata => this.transaction('delivery.openAttachmentFile', metadata),
@@ -157,22 +176,24 @@ export class AgentRuntimeService {
       this.supervisor = new AgentRunSupervisor({ providers: this.providers, tokenStore: tokens, journal, selectedProvider, maxActiveProcesses: config.maxActiveProcesses,
         log: (event, data) => createLogger('agent-runtime').event(event, data) })
       this.controller = new UnmuteAgentController({ supervisor: this.supervisor, tokens, attachmentHandles: handles, journal, capabilities: registry, selectedProvider,
-        runtime: () => {
-          const endpoint = `http://127.0.0.1:${this.mcp!.port}${MCP_PATH}`
-          return { cwd: dirname(constitutionPath), constitutionPath, environment: process.env,
-            mcp: { endpoint, config: JSON.stringify({ mcpServers: { unmute: { type: 'http', url: endpoint, headers: { Authorization: 'Bearer ${UNMUTE_MCP_TOKEN}' } } } }) } }
-        }, onActivity: activity => {
+        runtime: () => ({ cwd: dirname(constitutionPath), constitutionPath, environment: process.env, mcp: this.mcpContext() }), onActivity: activity => {
           this.activity = activity
           diagnostic('agent-interaction-activity', { interactionId: activity.interactionId, runId: activity.agentRunId,
             provider: activity.provider, kind: activity.kind })
           this.emit({ kind: 'activity', activity })
         },
       })
+      /* Only the Agent's own controller is consulted here. Routine runs mint tokens in the same store,
+       * but their controllers are deliberately absent: with no live interaction context, every
+       * non-read capability call from a routine is refused by authorizeCapabilityCall. That
+       * omission is what keeps routine runs read-only. */
       this.mcp = await startMcpServer({ resolveCaller: token => token ? tokens.resolve(token) : null,
         capabilityContext: principal => this.controller!.interactionContext(principal),
         createTask: async () => { throw new Error('Use agent handoff capability') }, taskStatus: async () => { throw new Error('Use agent handoff capability') },
       }, 0, registry)
       await this.supervisor.initialize()
+      this.routineDeps = { registry, tokens, handles }
+      await this.startRoutines(this.routinesEnabled())
       this.lifecycle = new AgentConversationLifecycle({ journal, store: new AgentConversationStore({ root: join(this.root, 'runtime', 'conversations'), crypto }),
         attachmentsDir: join(this.root, 'runtime', 'chat-attachments'),
         controller: this.controller, selectedProvider, ceiling: () => this.config?.conversationCeiling ?? 20, prepareFresh,
@@ -188,13 +209,82 @@ export class AgentRuntimeService {
       return this.snapshot()
     } catch (error) { await this.close(); throw error }
   }
+  private routinesEnabled(): boolean { return this.config?.routines !== false && process.env.UNMUTE_ROUTINES !== '0' }
+  private mcpContext(): AgentRunMcpContext {
+    const endpoint = `http://127.0.0.1:${this.mcp!.port}${MCP_PATH}`
+    return { endpoint, config: JSON.stringify({ mcpServers: { unmute: { type: 'http', url: endpoint, headers: { Authorization: 'Bearer ${UNMUTE_MCP_TOKEN}' } } } }) }
+  }
+  private routineService(): RoutineService {
+    if (!this.routines) throw new Error('Routines are not ready yet')
+    return this.routines
+  }
+  /** The registry is built before the routines service (and rebuilt services replace it), so the capability reads it late. */
+  private lazyRoutines(): RoutinesServiceLike {
+    const service = () => this.routineService()
+    return {
+      list: () => service().list(), create: fields => service().create(fields), update: (id, fields) => service().update(id, fields),
+      remove: id => service().remove(id), setEnabled: (id, enabled) => service().setEnabled(id, enabled), runNow: id => service().runNow(id),
+      runs: opts => service().runs(opts), result: runId => service().result(runId),
+    }
+  }
+  private async startRoutines(enabled: boolean): Promise<void> {
+    const { registry, tokens, handles } = this.routineDeps!
+    const selectedProvider = () => this.config!.selectedProvider
+    let executor: RoutineAgentExecutor | undefined
+    const pair = (name: 'reader' | 'actor', providers: Map<AgentProviderId, AgentProvider>): RoutineRunPair => {
+      const journal = new AgentJournal({ root: join(this.root, 'routines', 'agent-journal', name) })
+      const supervisor = new AgentRunSupervisor({ providers, tokenStore: tokens, journal, maxActiveProcesses: 2, selectedProvider,
+        log: (event, data) => createLogger('agent-routines').event(event, { pair: name, ...data }) })
+      const controller = new UnmuteAgentController({ supervisor, tokens, attachmentHandles: handles, journal, capabilities: registry, selectedProvider,
+        runtime: () => { throw new Error('routine runs pass their runtime') }, onActivity: activity => executor?.routeActivity(activity) })
+      this.routineSupervisors.push(supervisor); this.routineControllers.push(controller)
+      return { controller, supervisor }
+    }
+    if (enabled) {
+      const reader = pair('reader', this.routineProviders.reader)
+      const actor = this.routineProviders.actor ? pair('actor', this.routineProviders.actor) : undefined
+      await Promise.all(this.routineSupervisors.map(supervisor => supervisor.initialize()))
+      executor = new RoutineAgentExecutor({ reader, actor,
+        baseConstitution: async () => agentConstitution(SESSION_PREAMBLE, (await loadPersona(join(this.root, 'agent'))).text),
+        readTools: () => registry.tools({ kind: 'unmute-agent', runId: 'routine', interactionId: 'routine', expiresAt: Number.MAX_SAFE_INTEGER })
+          .filter(tool => tool.consequence === 'read'),
+        mcp: () => this.mcpContext(), environment: process.env })
+    }
+    const routines = new RoutineService({ root: this.root, enabled, agentProvider: selectedProvider,
+      executor: executor ?? { start: () => { throw new Error('Routines are turned off in Settings') }, dispose: async () => {} },
+      emit: view => { if (this.routines === routines) this.emit({ kind: 'routines', view }) } })
+    this.routines = routines
+    await routines.initialize()
+  }
+  /** A Settings toggle rebuilds the service (and its supervisors) with the new flag; the new service emits its view. */
+  private async applyRoutines(value: boolean | undefined): Promise<void> {
+    if (value === undefined || (value !== false) === (this.config!.routines !== false)) return
+    this.config!.routines = value
+    await this.stopRoutines()
+    await this.startRoutines(this.routinesEnabled())
+  }
+  private async stopRoutines(): Promise<void> {
+    const routines = this.routines; this.routines = undefined
+    await routines?.close()
+    for (const controller of this.routineControllers) controller.dispose()
+    await Promise.all(this.routineSupervisors.map(supervisor => supervisor.dispose()))
+    this.routineControllers = []; this.routineSupervisors = []
+  }
+  private async transcriptPath(runId: string): Promise<string | null> {
+    try {
+      const run = this.routines?.run(runId)
+      if (!run?.providerSessionId) return null
+      return run.provider === 'codex' ? await findRollout(run.providerSessionId)
+        : await findTranscriptById(join(this.root, 'routines', 'runs', run.id), run.providerSessionId)
+    } catch { return null }
+  }
   private async transaction(method: string, metadata: DeliveryAttachmentMetadata, taskId?: string): Promise<AttachmentDeliveryTransaction> {
     const chunks: Buffer[] = []
     return { write: async chunk => { chunks.push(Buffer.from(chunk)) }, rollback: async () => { for (const chunk of chunks) chunk.fill(0); chunks.length = 0 },
       commit: async () => { const data = Buffer.concat(chunks); try { await this.host(method, [metadata, data.toString('base64'), taskId]) } finally { data.fill(0); for (const chunk of chunks) chunk.fill(0); chunks.length = 0 } },
     }
   }
-  private snapshot() { return { view: this.lifecycle?.view(), activity: this.activity, availability: { available: !!this.lifecycle && this.probes.some(p => p.available), providers: this.probes.map(p => ({ ...p, id: p.provider })) } } }
+  private snapshot() { return { view: this.lifecycle?.view(), activity: this.activity, availability: { available: !!this.lifecycle && this.probes.some(p => p.available), providers: this.probes.map(p => ({ ...p, id: p.provider })) }, routines: this.routines?.view() } }
   async invoke(method: string, args: unknown[]): Promise<unknown> {
     if (method === 'configure') return this.configure(args[0] as AgentRuntimeConfig)
     if (method === 'disable') { await this.close(); return true }
@@ -208,6 +298,7 @@ export class AgentRuntimeService {
         this.config.selectedProvider = update.selectedProvider
         await this.lifecycle.requestProvider(update.selectedProvider)
       }
+      await this.applyRoutines(update.routines)
       return this.snapshot()
     }
     if (method === 'snapshot' || method === 'availability') return this.snapshot()
@@ -241,10 +332,29 @@ export class AgentRuntimeService {
       case 'memory.get': return this.memory!.get(a[0], a[1], a[2])
       case 'memory.forget': return this.memory!.forget(a[0], a[1])
       case 'memory.restore': return this.memory!.restore(a[0], a[1])
+      case 'routines.view': return this.routineService().view()
+      case 'routines.create': return this.routineService().create(a[0])
+      case 'routines.update': return this.routineService().update(a[0], a[1])
+      case 'routines.remove': return this.routineService().remove(a[0])
+      case 'routines.setEnabled': return this.routineService().setEnabled(a[0], a[1])
+      case 'routines.runNow': return this.routineService().runNow(a[0])
+      case 'routines.event': return this.routineService().event(a[0])
+      case 'routines.wake': return this.routineService().wake()
+      case 'routines.cancel': return this.routineService().cancel(a[0])
+      case 'routines.proposal': return this.routineService().decideProposal(a[0], a[1], a[2])
+      case 'routines.markRead': return this.routineService().markRead()
+      case 'routines.run': {
+        const routines = this.routineService(), run = routines.run(a[0])
+        return run ? { run, result: await routines.result(run.id) } : null
+      }
+      case 'routines.path': return this.routineService().definitionPath(a[0])
+      case 'routines.transcriptPath': return this.transcriptPath(a[0])
       default: throw new Error('Unknown Agent runtime command')
     }
   }
   async close(): Promise<void> {
+    await this.stopRoutines().catch(error => createLogger('agent-runtime').event('routines-close-failed', { message: error instanceof Error ? error.message : String(error) }))
+    this.routineDeps = undefined
     this.lifecycle?.dispose(); this.lifecycle = undefined
     this.controller?.dispose(); this.controller = undefined
     await this.supervisor?.dispose(); this.supervisor = undefined

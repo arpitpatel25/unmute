@@ -126,6 +126,7 @@ function validateSettlement(value: AgentPendingSettlement): AgentPendingSettleme
 function validate(value: AgentConversationSnapshot): AgentConversationSnapshot {
   if (!value || !Number.isSafeInteger(value.generation) || value.generation < 1
     || !value.chat || (value.chat.runId !== null && !ID.test(value.chat.runId))
+    || (value.chat.startedAt !== undefined && !Number.isFinite(value.chat.startedAt))
     || !Array.isArray(value.chat.turns) || value.chat.turns.some(t => !t || !['user', 'agent'].includes(t.role) || typeof t.text !== 'string' || !Number.isFinite(t.at))
     || !value.draft || typeof value.draft.text !== 'string' || !Number.isSafeInteger(value.draft.revision)
     || !Array.isArray(value.queued) || value.queued.some(q => !q || !ID.test(q.submissionId) || typeof q.input?.transcript !== 'string')

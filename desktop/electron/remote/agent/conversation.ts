@@ -60,6 +60,9 @@ export interface AgentChatSnapshot {
   /** The run these turns belong to. A new run means a new conversation. */
   runId: string | null
   turns: AgentChatTurn[]
+  /** When this conversation began (fresh record or discard). Routine runs fired
+   *  before it are not shown in the chat. Legacy snapshots lack it: treat as 0. */
+  startedAt?: number
 }
 
 export class AgentChat {

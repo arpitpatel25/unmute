@@ -5,6 +5,10 @@ import type { AgentInteractionActivity, AgentInteractionInput, AgentInteractionR
 import type { AgentProviderId } from '../agent/provider'
 import type { EncryptedRecordStore } from '../agent/memory/record-store'
 import type { MemoryService } from '../agent/memory/service'
+import type { RoutineService } from '../agent/routines/service'
+import type { RoutineRun, RoutinesView } from '../agent/routines/types'
+
+type Rpc<T extends (...args: any[]) => any> = (...args: Parameters<T>) => Promise<Awaited<ReturnType<T>>>
 
 /** Disposable UI subscription; the daemon owns conversation and provider life. */
 export class AgentRuntimeClient {
@@ -18,19 +22,44 @@ export class AgentRuntimeClient {
     forget: (...args) => this.rpc.call('agent.memory.forget', ...args),
     restore: (...args) => this.rpc.call('agent.memory.restore', ...args),
   }
+  readonly routines: {
+    view: Rpc<RoutineService['view']>; create: Rpc<RoutineService['create']>; update: Rpc<RoutineService['update']>
+    remove: Rpc<RoutineService['remove']>; setEnabled: Rpc<RoutineService['setEnabled']>; runNow: Rpc<RoutineService['runNow']>
+    event: Rpc<RoutineService['event']>; wake: Rpc<RoutineService['wake']>; cancel: Rpc<RoutineService['cancel']>
+    proposal: Rpc<RoutineService['decideProposal']>; markRead: Rpc<RoutineService['markRead']>
+    run(runId: string): Promise<{ run: RoutineRun; result: string | null } | null>
+    path(id: string): Promise<string>; transcriptPath(runId: string): Promise<string | null>
+  } = {
+    view: (...args) => this.rpc.call('agent.routines.view', ...args),
+    create: (...args) => this.rpc.call('agent.routines.create', ...args),
+    update: (...args) => this.rpc.call('agent.routines.update', ...args),
+    remove: (...args) => this.rpc.call('agent.routines.remove', ...args),
+    setEnabled: (...args) => this.rpc.call('agent.routines.setEnabled', ...args),
+    runNow: (...args) => this.rpc.call('agent.routines.runNow', ...args),
+    event: (...args) => this.rpc.call('agent.routines.event', ...args),
+    wake: (...args) => this.rpc.call('agent.routines.wake', ...args),
+    cancel: (...args) => this.rpc.call('agent.routines.cancel', ...args),
+    proposal: (...args) => this.rpc.call('agent.routines.proposal', ...args),
+    markRead: (...args) => this.rpc.call('agent.routines.markRead', ...args),
+    run: (...args) => this.rpc.call('agent.routines.run', ...args),
+    path: (...args) => this.rpc.call('agent.routines.path', ...args),
+    transcriptPath: (...args) => this.rpc.call('agent.routines.transcriptPath', ...args),
+  }
   readonly supervisor = { interrupt: async (runId: string): Promise<void> => { await this.rpc.call('agent.interrupt', runId) } }
-  constructor(private rpc: RuntimeRpcClient, private callbacks: { onView(view: AgentConversationView): void; onActivity(activity: AgentInteractionActivity): void }) {
+  constructor(private rpc: RuntimeRpcClient, private callbacks: { onView(view: AgentConversationView): void; onActivity(activity: AgentInteractionActivity): void; onRoutines?(view: RoutinesView): void }) {
     rpc.on('agent.event', this.receive)
   }
   private receive = (event: AgentRuntimeEvent): void => {
     if (event.kind === 'view') { this.current = event.view; this.callbacks.onView(event.view) }
     else if (event.kind === 'activity') this.callbacks.onActivity(event.activity)
+    else if (event.kind === 'routines') this.callbacks.onRoutines?.(event.view)
     else { this.completed.set(event.submissionId, event.result); this.waiting.get(event.submissionId)?.(event.result); this.waiting.delete(event.submissionId) }
   }
-  private restore(snapshot: { view?: AgentConversationView; activity?: AgentInteractionActivity; availability: unknown }): void {
+  private restore(snapshot: { view?: AgentConversationView; activity?: AgentInteractionActivity; availability: unknown; routines?: RoutinesView }): void {
     this.availability = snapshot.availability
     if (snapshot.view) this.receive({ kind: 'view', view: snapshot.view })
     if (snapshot.activity) this.receive({ kind: 'activity', activity: snapshot.activity })
+    if (snapshot.routines) this.receive({ kind: 'routines', view: snapshot.routines })
   }
   async configure(config: AgentRuntimeConfig): Promise<void> { this.restore(await this.rpc.call('agent.configure', config)) }
   async reconnect(): Promise<void> {

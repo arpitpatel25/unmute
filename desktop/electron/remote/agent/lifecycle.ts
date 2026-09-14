@@ -333,7 +333,7 @@ export class AgentConversationLifecycle {
     this.rotationDue = false
     this.record = { generation: this.record.generation + 1, phase: 'ready', runId: null, provider: null,
       ceiling: this.ceiling(), effort: this.record.effort, accepted: [], snapshotId: 'initial' }
-    this.snapshot = { generation: this.record.generation, chat: { runId: null, turns: [] },
+    this.snapshot = { generation: this.record.generation, chat: { runId: null, turns: [], startedAt: this.now() },
       draft: { text: '', revision: 0 }, queued: [], results: {} }
     await this.publish(this.record, this.snapshot)
     // Only after the new record is durable: a crash between these two leaves a
@@ -354,7 +354,7 @@ export class AgentConversationLifecycle {
     if (!state.conversation) {
       if (await this.options.store.established()) throw new Error('The established Agent recovery journal is missing.')
       this.record = { generation: 1, phase: 'ready', runId: null, provider: null, ceiling: this.ceiling(), effort: 'medium', accepted: [], snapshotId: 'initial' }
-      this.snapshot = { generation: 1, chat: { runId: null, turns: [] }, draft: { text: '', revision: 0 }, queued: [], results: {} }
+      this.snapshot = { generation: 1, chat: { runId: null, turns: [], startedAt: this.now() }, draft: { text: '', revision: 0 }, queued: [], results: {} }
       await this.publish(this.record, this.snapshot)
       // No provider turn can enter until both first publication and this marker succeed.
       await this.options.store.markEstablished()

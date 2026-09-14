@@ -434,6 +434,18 @@ test('a conversation is never discarded out from under a running turn', async ()
   } finally { await h.cleanup() }
 })
 
+test('a fresh conversation and a discard both stamp chat.startedAt, and it survives a restart', async () => {
+  const h = await harness()
+  try {
+    assert.equal(h.lifecycle.view().snapshot.chat.startedAt, 1_000, 'a brand-new record starts now')
+    h.advance(5_000)
+    await h.lifecycle.discard()
+    assert.equal(h.lifecycle.view().snapshot.chat.startedAt, 6_000, 'discard starts a new conversation now')
+    const revived = await h.restart()
+    assert.equal(revived.view().snapshot.chat.startedAt, 6_000, 'the stored marker is kept, not re-stamped on restore')
+  } finally { await h.cleanup() }
+})
+
 test('a discarded conversation stays discarded across a restart', async () => {
   const h = await harness()
   try {
