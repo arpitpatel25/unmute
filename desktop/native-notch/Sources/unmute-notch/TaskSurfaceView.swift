@@ -178,7 +178,11 @@ struct TaskSurfaceView: View {
                     }
                 } label: {
                     ProviderMark(backend: config.provider, terminal: true)
-                        .frame(minWidth: 22, minHeight: 22)
+                        // Menu labels receive an expansive AppKit proposal.
+                        // A minimum frame allowed the resizable provider art
+                        // to balloon across the header in the installed app.
+                        .frame(width: 22, height: 22)
+                        .clipped()
                         .contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)

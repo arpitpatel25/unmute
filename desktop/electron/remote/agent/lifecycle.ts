@@ -147,10 +147,13 @@ export class AgentConversationLifecycle {
       record.pendingProvider = provider
       if (record.phase !== 'recovery-required' && snapshot.error) {
         delete snapshot.error
-        snapshot.retryRequired = snapshot.queued.length > 0
-        snapshot.notice = snapshot.retryRequired
-          ? `Provider changed to ${providerName(provider)}. Retry the retained message when ready.`
-          : `Provider changed to ${providerName(provider)}. The next message starts a new conversation.`
+        // A provider switch is an explicit fresh-conversation boundary. A
+        // recoverable failed submission belongs to the provider that rejected
+        // it; retaining it here deadlocks the new provider because enqueue()
+        // refuses every new message while retryRequired is set.
+        snapshot.queued = []
+        delete snapshot.retryRequired
+        snapshot.notice = `Provider changed to ${providerName(provider)}. The next message starts a new conversation.`
       }
       await this.publish(record, snapshot)
     })

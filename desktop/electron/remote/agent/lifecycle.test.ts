@@ -89,7 +89,7 @@ test('rejected fresh reset keeps old chat and queue; only explicit retry publish
   } finally { await h.cleanup() }
 })
 
-test('switching provider clears a recoverable failure and retries the retained message on a fresh run', async () => {
+test('switching provider discards a recoverable failed submission and accepts the next message on a fresh run', async () => {
   const h = await harness()
   try {
     const first = h.lifecycle.submit({ transcript: 'working context', submissionId: 'first' })
@@ -103,9 +103,11 @@ test('switching provider clears a recoverable failure and retries the retained m
     assert.equal(h.lifecycle.view().selectedProvider, 'codex')
     assert.equal(h.lifecycle.view().record.pendingProvider, 'codex')
     assert.equal(h.lifecycle.view().snapshot.error, undefined)
+    assert.equal(h.lifecycle.view().snapshot.retryRequired, undefined)
+    assert.equal(h.lifecycle.view().snapshot.queued.length, 0)
 
     h.setReject(false)
-    const retry = h.lifecycle.retry()
+    const retry = h.lifecycle.submit({ transcript: 'new provider message', submissionId: 'new-provider-message' })
     await h.waitCalls(2)
     assert.equal(h.calls[1].context.provider, 'codex')
     assert.equal(h.calls[1].prior, undefined)
