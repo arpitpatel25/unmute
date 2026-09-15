@@ -13,7 +13,6 @@ struct TaskSurfaceView: View {
     @ObservedObject var model: NotchModel
     let topInset: CGFloat
     @State private var confirmingRemoval = false
-    @State private var pendingAgentProvider: ChatChoiceP? = nil
 
     private var t: TaskDetail? { model.task }
 
@@ -114,21 +113,6 @@ struct TaskSurfaceView: View {
             } message: {
                 Text("This removes the task from Unmute. Provider history and project files are preserved.")
             }
-            .alert("Switch to \(pendingAgentProvider?.label ?? "provider")?", isPresented: agentProviderConfirmation) {
-                Button("Cancel", role: .cancel) { pendingAgentProvider = nil }
-                Button("Switch") {
-                    if let provider = pendingAgentProvider?.id {
-                        model.emit(.agentSwitchProvider(provider: provider))
-                    }
-                    pendingAgentProvider = nil
-                }
-            } message: {
-                if t?.status == .processing {
-                    Text("The current response will finish first. Then this conversation will be archived and a new one will start with a summary and your latest messages.")
-                } else {
-                    Text("This conversation will be archived. A new conversation will start with a summary and your latest messages.")
-                }
-            }
             if model.captureAimed {
                 AimedChip(level: model.captureLevel)
                     .padding(.bottom, 16)
@@ -141,6 +125,16 @@ struct TaskSurfaceView: View {
         task.deliveryError
             ?? task.resumeError
             ?? (task.canResume ? nil : "This connected session cannot resume in chat. Start an Unmute-managed conversation.")
+    }
+
+    /// The Agent's role, "(Sessions manager)", reads as a quieter qualifier
+    /// after its name rather than as part of the name.
+    private func title(_ t: TaskDetail) -> Text {
+        guard t.id == "unmute-agent", let open = t.title.range(of: " (") else {
+            return Text(t.title).font(Theme.fTitle).foregroundColor(Theme.text)
+        }
+        return Text(t.title[..<open.lowerBound]).font(Theme.fTitle).foregroundColor(Theme.text)
+            + Text(t.title[open.lowerBound...]).font(Theme.fTitle).foregroundColor(Theme.textDim)
     }
 
     private func summaryLine(_ t: TaskDetail) -> String? {
@@ -163,33 +157,9 @@ struct TaskSurfaceView: View {
             // It stops there. A card the Agent OPENED is not the Agent: it is a
             // Claude or Codex session, its mark says which, and stamping `un` on
             // it too made every thread look like the Agent's own conversation.
-            if t.id == "unmute-agent", let config = t.chatConfig {
-                Menu {
-                    ForEach(config.providers, id: \.id) { provider in
-                        Button {
-                            if provider.id != config.provider { pendingAgentProvider = provider }
-                        } label: {
-                            if provider.id == config.provider {
-                                Label(provider.label, systemImage: "checkmark")
-                            } else {
-                                Text(provider.label)
-                            }
-                        }
-                    }
-                } label: {
-                    ProviderMark(backend: config.provider, terminal: true)
-                        // Menu labels receive an expansive AppKit proposal.
-                        // A minimum frame allowed the resizable provider art
-                        // to balloon across the header in the installed app.
-                        .frame(width: 22, height: 22)
-                        .clipped()
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Provider: \(config.providerLabel). Click to switch.")
-            } else if t.id == "unmute-agent", t.backend == nil {
+            // The provider is chosen in the composer (AgentProviderSwitch), not
+            // here: a logo in the header never read as something to press.
+            if t.id == "unmute-agent" {
                 UnMark(height: 13)
             } else {
                 ProviderMark(backend: t.backend, terminal: t.hasTerminal)
@@ -205,7 +175,7 @@ struct TaskSurfaceView: View {
             //
             // Its ABSENCE is the useful half. Speak with no chip showing and
             // the words are going to the router to become a new task.
-            Text(t.title).font(Theme.fTitle).foregroundColor(Theme.text).lineLimit(1)
+            title(t).lineLimit(1)
             StatusLabel(status: t.status)
             if let e = t.elapsed { NumText(text: e) }
             Spacer(minLength: 8)
@@ -255,12 +225,6 @@ struct TaskSurfaceView: View {
         }
     }
 
-    private var agentProviderConfirmation: Binding<Bool> {
-        Binding(
-            get: { pendingAgentProvider != nil },
-            set: { if !$0 { pendingAgentProvider = nil } }
-        )
-    }
 
 
 

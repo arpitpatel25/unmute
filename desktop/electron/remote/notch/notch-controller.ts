@@ -172,6 +172,8 @@ export interface NotchControllerDeps {
   agentDraftChanged?(text: string, revision: number): Promise<void>
   agentRetry?(): Promise<void>
   agentSwitchProvider?(provider: 'claude' | 'codex'): Promise<void>
+  /** Which Agent providers have their CLI installed. Only these are offered. */
+  agentInstalledProviders?(): Promise<Array<'claude' | 'codex'>>
   /** End the Agent conversation and keep nothing. */
   agentNewConversation?(): Promise<void>
   /** THE VOICE IS POINTED AT THE AGENT (its card is in front, or its chat is
@@ -511,6 +513,9 @@ export class NotchController {
   private agentProvider?: 'claude' | 'codex'
   private agentSelectedProvider: 'claude' | 'codex' = 'claude'
   private agentPendingProvider?: 'claude' | 'codex'
+  /** Unknown until the first probe answers; nothing is offered before then. */
+  private agentInstalled: Array<'claude' | 'codex'> = []
+  private agentInstalledProbe?: Promise<void>
   private agentModel?: string
   private agentError?: string
   private agentCanRetry = false
@@ -605,6 +610,7 @@ export class NotchController {
     on('agentSwitchProvider', e => {
       const provider = (e as { provider?: unknown }).provider
       if (provider !== 'claude' && provider !== 'codex') return
+      if (!this.agentInstalled.includes(provider)) return
       void this.deps.agentSwitchProvider?.(provider).catch(error => this.agentUnavailable((error as Error).message))
     })
     on('agentNewConversation', () => { void this.deps.agentNewConversation?.().catch(error => this.agentUnavailable((error as Error).message)) })
@@ -1799,6 +1805,7 @@ export class NotchController {
   /** The Agent's chat, in the same payload every other backend renders into. */
   private sendAgentDetail(): void {
     if (this.historyTask !== NotchController.AGENT_SLOT) { this.historyTask = NotchController.AGENT_SLOT; this.historyLimit = 10 }
+    this.probeAgentProviders()
     const selected = this.agentSelectedProvider
     const pendingMessage = this.agentPendingProvider
       ? this.agentBusy
@@ -1807,7 +1814,7 @@ export class NotchController {
       : undefined
     const detail: TaskDetailP = {
       id: NotchController.AGENT_SLOT,
-      title: 'Unmute',
+      title: 'Unmute (Sessions manager)',
       origin: 'unmute-agent',
       backend: this.agentProvider,
       modelLabel: this.agentModel ? `${this.agentModel} · medium` : 'Model not reported · medium',
@@ -1828,13 +1835,27 @@ export class NotchController {
         providerLabel: providerLabel(selected),
         model: agentModel(selected),
         modelLabel: agentModelLabel(selected),
-        providers: [{ id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }],
+        // A provider whose CLI is not installed would only fail on the next
+        // message, so it is not offered at all.
+        providers: this.agentInstalled.map(id => ({ id, label: providerLabel(id), description: agentModelLabel(id) })),
         models: [], efforts: [], permissions: [], cwd: '', mutable: true, busy: this.agentBusy,
         ...(pendingMessage ? { error: pendingMessage } : {}),
       },
       ...(this.agentBusy ? { activity: pendingMessage ?? 'Thinking' } : {}),
     }
     this.client.send({ type: 'showTask', task: detail })
+  }
+
+  /** Re-sends the Agent's chat once the installed set is known or changes.
+   *  The probe itself is cached upstream, so asking on every send is cheap. */
+  private probeAgentProviders(): void {
+    if (this.agentInstalledProbe || !this.deps.agentInstalledProviders) return
+    this.agentInstalledProbe = this.deps.agentInstalledProviders().then(installed => {
+      const next = (['claude', 'codex'] as const).filter(id => installed.includes(id))
+      if (next.join() === this.agentInstalled.join()) return
+      this.agentInstalled = next
+      if (this.historyTask === NotchController.AGENT_SLOT) this.sendAgentDetail()
+    }).catch(() => {}).finally(() => { this.agentInstalledProbe = undefined })
   }
 
   private onPocketMove(e: { delta?: number; to?: number }): void {

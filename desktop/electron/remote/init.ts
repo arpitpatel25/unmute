@@ -5539,6 +5539,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           settings.set('unmuteAgentProvider', provider)
           log.event('unmute-agent-provider-set', { provider, via: 'notch' })
         },
+        agentInstalledProviders: async () => {
+          const [claude, codex] = await Promise.all([claudeCliAvailable(), codexCliAvailable()])
+          return [...(claude ? ['claude' as const] : []), ...(codex ? ['codex' as const] : [])]
+        },
         // ONE CONVERSATION AT A TIME: starting a new one ends the old one, it
         // does not sit beside it. Refused rather than forced while a turn is
         // running, so nothing is discarded out from under a live provider.
