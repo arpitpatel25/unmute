@@ -5954,7 +5954,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const claudeSessions = await listClaudeRuntimeSessions()
     const liveClaude = new Set(claudeSessions.filter(session => session.alive).map(session => session.sessionId))
     await Promise.all(manager!.list().filter(task => task.claudeSessionSettings && liveClaude.has(task.sessionId))
-      .map(task => manager!.resume(task.id, { touchActivity: false })))
+      .map(task => manager!.resume(task.id, { touchActivity: false, hydrateHistory: false })))
     await manager?.reattachPersistent()
   }).catch(error => {
     log.warn('persistent task recovery failed', { error: (error as Error).message })

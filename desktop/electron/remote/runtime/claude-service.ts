@@ -19,6 +19,7 @@ export interface ClaudeRuntimeEvent {
   state: ClaudeRuntimeState
 }
 export const CLAUDE_RUNTIME_RELEASED = 'The provider runtime no longer exists; recover the conversation before submitting'
+const CLAUDE_RECONNECT_EVENT_LIMIT = 100
 type Entry = {
   driver: ClaudeTaskSession; events: ClaudeRuntimeEvent[]; opening: Promise<void>; opened: boolean
   /** Last time this session was spoken to or spoke. Drives the idle reap. */
@@ -186,7 +187,14 @@ export class ClaudeRuntimeService {
       }
       entry.usedAt = this.now()
       await entry.opening
-      return { ...this.state(entry.driver), sequence: entry.events.length }
+      return {
+        ...this.state(entry.driver),
+        sequence: entry.events.length,
+        // Completed conversation content comes from durable chat frames. The
+        // UI only needs the recent daemon tail to catch activity that happened
+        // while Electron was disconnected.
+        replayFrom: Math.max(0, entry.events.length - CLAUDE_RECONNECT_EVENT_LIMIT),
+      }
     }
     const entry = this.sessions.get(id)
     if (!entry) throw new Error(CLAUDE_RUNTIME_RELEASED)

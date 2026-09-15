@@ -46,8 +46,12 @@ export class PersistentClaudeTaskSession extends ClaudeTaskSession {
       const info = await this.rpc.call<{ capabilities?: string[] }>('runtime.info')
       if (!info.capabilities?.includes('claude.resumeSessionAt')) throw new Error('Claude background runtime needs checkpoint support before editing.')
     }
-    const opened = await this.rpc.call<ClaudeRuntimeState & { sequence: number }>('claude.open', this.sessionId, { ...options, sessionId: this.sessionId })
+    const opened = await this.rpc.call<ClaudeRuntimeState & { sequence: number; replayFrom?: number }>('claude.open', this.sessionId, { ...options, sessionId: this.sessionId })
     if (opened.sequence < this.sequence) this.sequence = 0
+    // Older daemons omit replayFrom and retain the original behavior. New
+    // daemons give a bounded boundary so a fresh UI cannot replay the
+    // runtime's entire event lifetime into the Electron heap.
+    if (opened.replayFrom !== undefined && this.sequence < opened.replayFrom) this.sequence = opened.replayFrom
     while (this.sequence < opened.sequence) {
       const events = await this.rpc.call<ClaudeRuntimeEvent[]>('claude.replay', this.sessionId, this.sequence)
       if (!events.length) throw new Error('Background runtime replay is incomplete')

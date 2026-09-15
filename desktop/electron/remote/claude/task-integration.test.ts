@@ -288,7 +288,7 @@ test('new conversation creates a visible workspace but sends nothing until the r
   manager.shutdown()
 })
 
-test('restart restores structured history without starting a provider and preserves completion', async () => {
+test('restart restores metadata only and loads structured history when the card is opened', async () => {
   const baseDir = await mkdtemp(join(tmpdir(), 'unmute-chat-restore-'))
   const manager = new TaskManager({
     baseDir, executorFactory: () => { throw new Error('No PTY') },
@@ -302,10 +302,18 @@ test('restart restores structured history without starting a provider and preser
   await (manager as any).persistState(manager.get(id))
   await writeFile(join(home, 'chat-frames.json'), JSON.stringify([{ type: 'assistant', uuid: 'a', message: { content: [{ type: 'text', text: 'Restored reply' }] } }]))
   manager.shutdown()
-  const restarted = new TaskManager({ baseDir, executorFactory: () => { throw new Error('Restart must not spawn') } })
+  const restarted = new TaskManager({
+    baseDir, executorFactory: () => { throw new Error('Restart must not spawn a PTY') },
+    claudeSessionOptions: async task => ({ binary: 'fake', cwd: task.cwd }),
+    claudeTaskFactory: () => ({ alive: true, busy: false, async start() {}, close() {} } as never),
+  })
   await restarted.rehydrate()
   assert.equal(restarted.get(id)?.state, 'done')
   assert.equal(restarted.get(id)?.turnOutcome, 'completed')
+  assert.equal(restarted.get(id)?.blocks, undefined)
+  assert.equal(await restarted.resume(id, { touchActivity: false, hydrateHistory: false }), true)
+  assert.equal(restarted.get(id)?.blocks, undefined)
+  await restarted.loadBlocksFor(id)
   assert.deepEqual(restarted.get(id)?.blocks, [{ kind: 'message', role: 'assistant', text: 'Restored reply' }])
   restarted.shutdown()
 })
