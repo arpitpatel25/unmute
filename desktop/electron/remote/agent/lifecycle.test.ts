@@ -116,6 +116,32 @@ test('switching provider discards a recoverable failed submission and accepts th
   } finally { await h.cleanup() }
 })
 
+test('a retained message from an earlier build\'s provider switch no longer blocks sends after restart', async () => {
+  const h = await harness()
+  try {
+    const first = h.lifecycle.submit({ transcript: 'working context', submissionId: 'first' })
+    await h.waitCalls(1); await h.accept(0); h.calls[0].settle(); await first
+    h.setReject(true)
+    await h.lifecycle.submit({ transcript: 'retained request', submissionId: 'retained' })
+    // Earlier builds cleared the error on switch but kept the failed message
+    // behind retryRequired, which enqueue() refuses to send past.
+    const { record, snapshot } = h.lifecycle.view()
+    delete snapshot.error
+    await (h.lifecycle as any).publish({ ...record, pendingProvider: 'codex' }, { ...snapshot, retryRequired: true })
+    h.setReject(false)
+
+    await h.restart()
+    assert.equal(h.lifecycle.view().snapshot.retryRequired, undefined)
+    assert.equal(h.lifecycle.view().snapshot.queued.length, 0)
+    const next = h.lifecycle.submit({ transcript: 'new provider message', submissionId: 'after-restart' })
+    await h.waitCalls(2)
+    assert.equal(h.calls[1].text, 'new provider message')
+    assert.equal(h.calls[1].context.provider, 'codex')
+    await h.accept(1); h.calls[1].settle()
+    assert.equal((await next).outcome, 'completed')
+  } finally { await h.cleanup() }
+})
+
 test('a switch requested during a response waits for settlement and hands recent messages to the new provider', async () => {
   const h = await harness()
   try {
