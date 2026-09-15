@@ -99,7 +99,7 @@ import type { Block } from './blocks'
 import { blocksFromClaudeTranscript } from './blocks-claude'
 import { ClaudeTaskSession, type ClaudeTaskOptions } from './claude/task-session'
 import { ClaudeTaskChannel } from './claude/task-channel'
-import { readClaudeHistory, retainClaudeHistoryDisplay } from './claude/chat-history'
+import { CLAUDE_HISTORY_STALE_MARKER, readClaudeHistory, retainClaudeHistoryDisplay } from './claude/chat-history'
 import { isDeepStrictEqual } from 'node:util'
 import type { TaskInput } from './task-input'
 import { blocksFromRollout } from './codex/blocks-rollout'
@@ -1322,7 +1322,7 @@ export class TaskManager extends EventEmitter {
     // Preserve receipt/provider history for diagnosis; never kill a source session.
   }
 
-  private async connectClaude(task: Task, resume: boolean): Promise<void> {
+  private async connectClaude(task: Task, resume: boolean, hydrateHistory = true): Promise<void> {
     await validateProject(task.cwd)
     resume = resume && !task.chatUnstarted
     if (task.claudeSessionSettings?.permissionMode === 'bypassPermissions' && !this.chatFullAccessAllowed(task.id)) throw new Error('Recorded full access exceeds the configured sandbox roots. Select Ask for approval before resuming.')
@@ -1366,7 +1366,16 @@ export class TaskManager extends EventEmitter {
         })
         this.claudeHistoryWrites.set(task.id, writes)
       })
-      if (resume || task.claudeForkFromSessionId) {
+      // Startup reattachment receives only a bounded daemon tail. Never let
+      // that projection replace the complete durable frame file; opening the
+      // card merges history and re-enables persistence. Until then the file
+      // falls behind whatever the session keeps doing, so mark it stale:
+      // otherwise a later read trusts it and never consults provider history.
+      if (resume && !hydrateHistory) {
+        channel.suspendPersistence()
+        await writeFileAtomic(join(task.home, CLAUDE_HISTORY_STALE_MARKER), '')
+      }
+      if ((resume && hydrateHistory) || task.claudeForkFromSessionId) {
         const recovered = await readClaudeHistory({ ...task, sessionId: !resume && task.claudeForkFromSessionId ? task.claudeForkFromSessionId : task.sessionId, chatUnstarted: false })
         restoredFrames = recovered.frames
         if (!resume && task.claudeResumeSessionAt) {
@@ -3181,8 +3190,18 @@ export class TaskManager extends EventEmitter {
       task.history = recovered.history
       if (recovered.frames.some(f => f.type === 'user' || f.type === 'assistant')) {
         const live = this.claudeTasks.get(id)?.channel
-        if (live) live.mergeHistory(recovered.frames)
-        else {
+        if (live) {
+          live.mergeHistory(recovered.frames)
+          // The merged, complete frames are now being saved. Only then may the
+          // marker go; a partial read keeps it so the next open recovers again.
+          if (recovered.history.phase === 'ready') {
+            const failedBefore = task.deliveryError
+            await this.claudeHistoryWrites.get(id)
+            // The writer reports a failed save only through deliveryError.
+            const saveFailed = task.deliveryError !== failedBefore && task.deliveryError?.startsWith('Could not save chat history')
+            if (!saveFailed) await fs.rm(join(task.home, CLAUDE_HISTORY_STALE_MARKER), { force: true })
+          }
+        } else {
           const parsed = blocksFromClaudeTranscript(ClaudeTaskChannel.displayTranscript(recovered.frames))
           // Block-only legacy/local display has no UUIDs to reconcile safely.
           // Keep it intact until complete history can replace it; partial raw
@@ -4477,14 +4496,10 @@ export class TaskManager extends EventEmitter {
         continuationConfidence: meta.continuationConfidence,
         ...this.groupFromMeta(meta),
       }
-      if (task.claudeSessionSettings) {
-        const recovered = await readClaudeHistory(task)
-        task.history = recovered.history
-        const parsed = blocksFromClaudeTranscript(ClaudeTaskChannel.displayTranscript(recovered.frames))
-        if (recovered.history.phase === 'ready' || !task.conversation?.length) task.blocks = parsed.blocks
-        if (parsed.usage) task.usage = parsed.usage
-        if (task.history.phase === 'missing' && task.conversation?.length) task.history = { ...task.history, phase: 'partial' }
-      }
+      // A receipt is enough to restore the wall. Reading every Claude frame
+      // file here made startup proportional to all historical chats and kept
+      // their parsed copies alive even when no one opened those cards.
+      // loadBlocksFor() owns history hydration when a card becomes visible.
       const identityRepaired = await this.reconcileCodexIdentity(task)
       if (await fs.lstat(join(task.home, 'attachments')).catch(() => null)) {
         try { await this.prepareAttachmentStorage(task) }
@@ -6071,7 +6086,7 @@ export class TaskManager extends EventEmitter {
    * comes back alive + warm (re-attachable terminal, ready for a follow-up).
    * Returns false if the task is unknown, already alive, or its dir was removed.
    */
-  async resume(id: string, opts: { touchActivity?: boolean } = {}): Promise<boolean> {
+  async resume(id: string, opts: { touchActivity?: boolean; hydrateHistory?: boolean } = {}): Promise<boolean> {
     const tlog = log.child({ taskId: id })
     const task = this.tasks.get(id)
     if (!task) { tlog.warn('resume: no such task'); return false }
@@ -6104,7 +6119,7 @@ export class TaskManager extends EventEmitter {
     }
     if (task.claudeSessionSettings) {
       try {
-        await this.connectClaude(task, true)
+        await this.connectClaude(task, true, opts.hydrateHistory !== false)
         if (legacyMigration) {
           task.sessionOwnership = 'unmute'; task.chatUnstarted = false
           this.mergeMeta(task, {
@@ -6346,6 +6361,10 @@ export class TaskManager extends EventEmitter {
   opened(id: string): void {
     const task = this.tasks.get(id)
     if (!task) return
+    // History and provider lifetime are separate. An already-live runtime
+    // still needs its card hydrated, while an inactive card remains
+    // metadata-only until this explicit user gesture.
+    void this.loadBlocksFor(id).catch(() => {})
     if (task.chatUnstarted) return
     if (isExternalAgent(task.agent)) return
     if (this.executors.get(id)?.alive) return

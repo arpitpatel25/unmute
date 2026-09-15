@@ -420,7 +420,7 @@ struct StageComposer: View {
                         .frame(height: ComposerHeight.resolve(measured: editorHeight))
                         .focused($focused)
                     if taskId == "unmute-agent", let config {
-                        Text(config.modelLabel).font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
+                        AgentProviderSwitch(model: model, config: config)
                     } else if config == nil, let m = modelLabel, !m.isEmpty {
                         Text(m).font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
                     }

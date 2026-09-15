@@ -173,7 +173,7 @@ struct ComposerToolPicker: View {
 
 /// A menu row that lights on hover. AppKit gives this free in a real menu; a
 /// popover is a plain view and has to say so itself.
-private struct HoverRowStyle: ButtonStyle {
+struct HoverRowStyle: ButtonStyle {
     @State private var hovering = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

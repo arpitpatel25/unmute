@@ -5539,6 +5539,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           settings.set('unmuteAgentProvider', provider)
           log.event('unmute-agent-provider-set', { provider, via: 'notch' })
         },
+        agentInstalledProviders: async () => {
+          const [claude, codex] = await Promise.all([claudeCliAvailable(), codexCliAvailable()])
+          return [...(claude ? ['claude' as const] : []), ...(codex ? ['codex' as const] : [])]
+        },
         // ONE CONVERSATION AT A TIME: starting a new one ends the old one, it
         // does not sit beside it. Refused rather than forced while a turn is
         // running, so nothing is discarded out from under a live provider.
@@ -5954,7 +5958,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const claudeSessions = await listClaudeRuntimeSessions()
     const liveClaude = new Set(claudeSessions.filter(session => session.alive).map(session => session.sessionId))
     await Promise.all(manager!.list().filter(task => task.claudeSessionSettings && liveClaude.has(task.sessionId))
-      .map(task => manager!.resume(task.id, { touchActivity: false })))
+      .map(task => manager!.resume(task.id, { touchActivity: false, hydrateHistory: false })))
     await manager?.reattachPersistent()
   }).catch(error => {
     log.warn('persistent task recovery failed', { error: (error as Error).message })

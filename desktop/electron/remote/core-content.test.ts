@@ -8,7 +8,7 @@ import { TaskManager } from './task-manager'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { readClaudeHistory } from './claude/chat-history'
+import { CLAUDE_HISTORY_STALE_MARKER, readClaudeHistory } from './claude/chat-history'
 
 test('Codex retains every changed file and complete patch in one stable item', () => {
   const changes = [{ path: '/a', kind: { type: 'update' }, diff: '@@ -1 +1 @@\n-old\n+new\n' },
@@ -202,6 +202,23 @@ test('exact-session disk recovery merges saved owned metadata and local-only fra
   assert.deepEqual(ready.frames.map(f => f.uuid), ['s1', 'u1', 'local-answer', 'e1', 'u2'])
   assert.equal(ready.frames[1].unmuteDisplayText, 'Original display')
   assert.deepEqual(ready.frames[1].unmuteAttachments, (local[2] as any).unmuteAttachments)
+})
+
+test('a stale-history marker makes a complete-looking saved file recover newer provider frames', async t => {
+  const root = await fs.mkdtemp(join(tmpdir(), 'content-stale-recovery-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const home = join(root, 'receipt'), projects = join(root, 'projects'), project = join(projects, 'moved')
+  await fs.mkdir(home); await fs.mkdir(project, { recursive: true })
+  const saved = { type: 'user', uuid: 'u1', sessionId: 'exact', message: { content: [{ type: 'text', text: 'before restart' }] } }
+  const later = { type: 'assistant', uuid: 'a2', sessionId: 'exact', message: { content: [{ type: 'text', text: 'finished while unopened' }] } }
+  await fs.writeFile(join(home, 'chat-frames.json'), JSON.stringify([saved]))
+  await fs.writeFile(join(project, 'exact.jsonl'), [saved, later].map(f => JSON.stringify(f)).join('\n'))
+  const task = { home, cwd: '/never-accessed-project', sessionId: 'exact' }
+  assert.deepEqual((await readClaudeHistory(task, projects)).frames.map(f => f.uuid), ['u1'])
+  await fs.writeFile(join(home, CLAUDE_HISTORY_STALE_MARKER), '')
+  const recovered = await readClaudeHistory(task, projects)
+  assert.equal(recovered.history.phase, 'ready')
+  assert.deepEqual(recovered.frames.map(f => f.uuid), ['u1', 'a2'])
 })
 
 test('Codex subagent interruption and Claude multi-result frames retain all exposed outcomes', () => {

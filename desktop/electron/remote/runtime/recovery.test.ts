@@ -56,6 +56,39 @@ test('Claude reconnect reuses live work, but reopens a dead driver with the same
   } finally { service.close(); await rm(root, { recursive: true, force: true }) }
 })
 
+test('Claude reconnect replays only the bounded recent runtime tail', async () => {
+  const { PersistentClaudeTaskSession } = await import('./claude-client')
+  const replayOffsets: number[] = []
+  const seen: string[] = []
+  const rpc = {
+    on() {}, off() {},
+    async call(method: string, ...args: unknown[]) {
+      if (method === 'claude.open') return {
+        alive: true, busy: false, followupBlocked: false, followupUnavailable: false,
+        models: [], sequence: 1_000, replayFrom: 900,
+      }
+      if (method === 'claude.replay') {
+        const offset = args[1] as number
+        replayOffsets.push(offset)
+        return Array.from({ length: Math.min(100, 1_000 - offset) }, (_, index) => ({
+          sessionId: 'bounded', sequence: offset + index + 1,
+          event: { type: 'text', text: `event-${offset + index + 1}` },
+          state: { alive: true, busy: false, followupBlocked: false, followupUnavailable: false, models: [] },
+        }))
+      }
+      throw new Error(`Unexpected method ${method}`)
+    },
+  } as unknown as RuntimeRpcClient
+  const driver = new PersistentClaudeTaskSession(rpc, {
+    binary: 'claude', cwd: '/tmp', sessionId: 'bounded', resume: true,
+    onEvent(event) { if (event.type === 'text') seen.push(event.text) },
+  })
+  await driver.start()
+  assert.deepEqual(replayOffsets, [900])
+  assert.equal(seen.length, 100)
+  assert.equal(seen.at(-1), 'event-1000')
+})
+
 test('an idle-released Claude process resumes transparently on the next send', async () => {
   const { PersistentClaudeTaskSession } = await import('./claude-client')
   const root = await mkdtemp(join(tmpdir(), 'claude-idle-resume-'))

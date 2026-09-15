@@ -147,10 +147,13 @@ export class AgentConversationLifecycle {
       record.pendingProvider = provider
       if (record.phase !== 'recovery-required' && snapshot.error) {
         delete snapshot.error
-        snapshot.retryRequired = snapshot.queued.length > 0
-        snapshot.notice = snapshot.retryRequired
-          ? `Provider changed to ${providerName(provider)}. Retry the retained message when ready.`
-          : `Provider changed to ${providerName(provider)}. The next message starts a new conversation.`
+        // A provider switch is an explicit fresh-conversation boundary. A
+        // recoverable failed submission belongs to the provider that rejected
+        // it; retaining it here deadlocks the new provider because enqueue()
+        // refuses every new message while retryRequired is set.
+        snapshot.queued = []
+        delete snapshot.retryRequired
+        snapshot.notice = `Provider changed to ${providerName(provider)}. The next message starts a new conversation.`
       }
       await this.publish(record, snapshot)
     })
@@ -240,6 +243,13 @@ export class AgentConversationLifecycle {
     this.record = state.conversation
     this.snapshot = await this.options.store.read(this.record.snapshotId)
     this.snapshot.lastActivityAt ??= this.now()
+    // Only an earlier build's provider switch ever set retryRequired: it kept
+    // the failed message and refused every new one until it was retried. A
+    // switch now discards that message, so settle the leftover the same way.
+    if (this.snapshot.retryRequired) {
+      this.snapshot.queued = []
+      delete this.snapshot.retryRequired
+    }
     if (this.snapshot.generation !== this.record.generation || this.snapshot.chat.runId !== this.record.runId
       || (this.record.runId && !state.runs.some(r => r.id === this.record.runId && r.provider === this.record.provider && r.providerHandle))) throw new Error('Agent conversation recovery identity is invalid.')
     await this.options.store.markEstablished()

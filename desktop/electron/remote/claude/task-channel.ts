@@ -36,7 +36,11 @@ export class ClaudeTaskChannel {
   private renderTimer?: ReturnType<typeof setTimeout>
   private serializedFrames = ''
   private submissions = new Map<string, TaskInput[]>()
+  private persistenceEnabled = true
   constructor(private patch: (patch: CodexPatch) => void, private persist?: (frames: Frame[]) => void) {}
+
+  suspendPersistence(): void { this.persistenceEnabled = false }
+  private persistFrames(): void { if (this.persistenceEnabled) this.persist?.(this.frames) }
 
   /** Display projection only. Persisted provider text stays complete. */
   static displayTranscript(frames: Frame[]): string {
@@ -56,7 +60,8 @@ export class ClaudeTaskChannel {
     // Keep the checkpoint at its original boundary. Moving a fresh checkpoint
     // past newly recovered results would hide those results again.
     this.restore(mergeClaudeHistory(this.frames, frames))
-    this.persist?.(this.frames)
+    this.persistenceEnabled = true
+    this.persistFrames()
   }
   expectSubmission(id: string, parts: TaskInput[]): void { this.submissions.set(id, parts) }
 
@@ -100,7 +105,7 @@ export class ClaudeTaskChannel {
         this.frames.push(f)
         this.serializedFrames += `${this.serializedFrames ? '\n' : ''}${ClaudeTaskChannel.displayTranscript([f])}`
         if (f.type === 'assistant') this.partial.clear()
-        this.persist?.(this.frames)
+        this.persistFrames()
         this.render()
       }
     } else if (event.type === 'turn-start') {
@@ -108,7 +113,7 @@ export class ClaudeTaskChannel {
       this.cancelling = false; this.resultError = undefined
       this.frames.push({ type: 'system', uuid: `unmute-start:${event.submissionId}`, unmuteTurnStart: Date.now() })
       this.serializedFrames = ClaudeTaskChannel.displayTranscript(this.frames)
-      this.persist?.(this.frames)
+      this.persistFrames()
       this.patch({ turnOutcome: null, errorReason: '' })
       this.present()
     } else if (event.type === 'request') {
@@ -127,7 +132,7 @@ export class ClaudeTaskChannel {
       const outcome = cancelled ? 'cancelled' : event.message.is_error ? 'failed' : 'completed'
       this.frames.push({ type: 'system', uuid: `unmute-end:${event.submissionId ?? this.frames.length}`, unmuteTurnEnd: outcome, durationMs: event.message.duration_ms })
       this.serializedFrames = ClaudeTaskChannel.displayTranscript(this.frames)
-      this.persist?.(this.frames); this.render()
+      this.persistFrames(); this.render()
       this.patch({ state: cancelled ? 'done' : event.message.is_error ? 'failed' : 'done', turnOutcome: outcome, activity: null, clearQuestion: true,
         ...(cancelled ? { errorReason: '' } : event.message.is_error ? { errorReason: this.resultError } : { assistantText: event.message.result || undefined }) })
     } else if (event.type === 'error') {
@@ -153,7 +158,7 @@ export class ClaudeTaskChannel {
       const frame = { type: 'assistant', timestamp: new Date().toISOString(), message: { content: [...this.partial.values()] } }
       this.frames.push(frame)
       this.serializedFrames += `${this.serializedFrames ? '\n' : ''}${JSON.stringify(frame)}`
-      this.persist?.(this.frames)
+      this.persistFrames()
       this.partial.clear()
     }
     this.render()

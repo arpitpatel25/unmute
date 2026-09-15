@@ -89,7 +89,7 @@ test('rejected fresh reset keeps old chat and queue; only explicit retry publish
   } finally { await h.cleanup() }
 })
 
-test('switching provider clears a recoverable failure and retries the retained message on a fresh run', async () => {
+test('switching provider discards a recoverable failed submission and accepts the next message on a fresh run', async () => {
   const h = await harness()
   try {
     const first = h.lifecycle.submit({ transcript: 'working context', submissionId: 'first' })
@@ -103,14 +103,42 @@ test('switching provider clears a recoverable failure and retries the retained m
     assert.equal(h.lifecycle.view().selectedProvider, 'codex')
     assert.equal(h.lifecycle.view().record.pendingProvider, 'codex')
     assert.equal(h.lifecycle.view().snapshot.error, undefined)
+    assert.equal(h.lifecycle.view().snapshot.retryRequired, undefined)
+    assert.equal(h.lifecycle.view().snapshot.queued.length, 0)
 
     h.setReject(false)
-    const retry = h.lifecycle.retry()
+    const retry = h.lifecycle.submit({ transcript: 'new provider message', submissionId: 'new-provider-message' })
     await h.waitCalls(2)
     assert.equal(h.calls[1].context.provider, 'codex')
     assert.equal(h.calls[1].prior, undefined)
     assert.equal(h.calls[1].context.carryoverRunId, h.calls[0].context.runId)
     await h.accept(1); h.calls[1].settle(); await retry
+  } finally { await h.cleanup() }
+})
+
+test('a retained message from an earlier build\'s provider switch no longer blocks sends after restart', async () => {
+  const h = await harness()
+  try {
+    const first = h.lifecycle.submit({ transcript: 'working context', submissionId: 'first' })
+    await h.waitCalls(1); await h.accept(0); h.calls[0].settle(); await first
+    h.setReject(true)
+    await h.lifecycle.submit({ transcript: 'retained request', submissionId: 'retained' })
+    // Earlier builds cleared the error on switch but kept the failed message
+    // behind retryRequired, which enqueue() refuses to send past.
+    const { record, snapshot } = h.lifecycle.view()
+    delete snapshot.error
+    await (h.lifecycle as any).publish({ ...record, pendingProvider: 'codex' }, { ...snapshot, retryRequired: true })
+    h.setReject(false)
+
+    await h.restart()
+    assert.equal(h.lifecycle.view().snapshot.retryRequired, undefined)
+    assert.equal(h.lifecycle.view().snapshot.queued.length, 0)
+    const next = h.lifecycle.submit({ transcript: 'new provider message', submissionId: 'after-restart' })
+    await h.waitCalls(2)
+    assert.equal(h.calls[1].text, 'new provider message')
+    assert.equal(h.calls[1].context.provider, 'codex')
+    await h.accept(1); h.calls[1].settle()
+    assert.equal((await next).outcome, 'completed')
   } finally { await h.cleanup() }
 })
 
