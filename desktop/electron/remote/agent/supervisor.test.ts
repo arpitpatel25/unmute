@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { AgentRunSupervisor } from './supervisor'
 import { AgentJournal } from './journal'
 import { AgentTokenStore } from './tokens'
-import type { AgentProvider, AgentStartInput } from './provider'
+import { AgentProviderError, type AgentProvider, type AgentStartInput } from './provider'
 
 test('pinned exact provider survives idle/restart with renewed credentials and missing handle fails closed', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-supervisor-'))
@@ -45,3 +45,29 @@ test('pinned exact provider survives idle/restart with renewed credentials and m
   } finally { await supervisor.dispose(); await rm(root, { recursive: true, force: true }) }
 })
 async function* empty() {}
+
+test('provider startup failure logs the requested model and safe driver detail before returning a public error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-supervisor-log-'))
+  const events: Array<{ event: string; data: Record<string, unknown> }> = []
+  const provider: AgentProvider = {
+    id: 'codex', probe: async () => ({ provider: 'codex', available: true }),
+    start: async () => { throw new AgentProviderError('provider-unavailable', 'model gpt-6-astra is not available') },
+    resume: async () => { throw new Error('not used') }, interrupt: async () => {}, close: async () => {},
+  }
+  const supervisor = new AgentRunSupervisor({
+    providers: { codex: provider }, journal: new AgentJournal({ root }), tokenStore: new AgentTokenStore(),
+    timers: { setInterval: () => 0, clearInterval: () => {} },
+    log: (event, data) => events.push({ event, data }),
+  })
+  try {
+    await assert.rejects(supervisor.start({
+      runId: 'run', interactionId: 'turn', cwd: '/runtime', transcript: 'private request',
+      constitutionPath: '/runtime/constitution.md', environment: {},
+      mcp: { endpoint: 'http://127.0.0.1/mcp', config: 'strict' },
+    }, 'codex'), /unavailable/)
+    assert.deepEqual(events, [{ event: 'agent-provider-start-failed', data: {
+      runId: 'run', provider: 'codex', model: 'gpt-5.6-sol', operation: 'start',
+      code: 'provider-unavailable', detail: 'model gpt-6-astra is not available',
+    } }])
+  } finally { await supervisor.dispose(); await rm(root, { recursive: true, force: true }) }
+})

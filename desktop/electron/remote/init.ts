@@ -141,6 +141,7 @@ import { PersistentCodexHub } from './runtime/codex-client'
 import { CompatibleCodexRuntime } from './runtime/codex-routing'
 import { fileOwnershipStore } from './runtime/codex-ownership'
 import { CompatibleAgentRuntime, recoverAgentRuntime } from './runtime/agent-routing'
+import { agentRuntimeRoot } from './runtime/agent-schema'
 import { PersistentClaudeTaskSession } from './runtime/claude-client'
 import { AgentRuntimeClient } from './runtime/agent-client'
 import { registerRuntimeHost } from './runtime/host-bridge'
@@ -4896,7 +4897,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     })().catch(error => log.warn('Claude edit runtime recovery failed', { error: (error as Error).message }))
   })
   releaseRuntimeHost = registerRuntimeHost(persistentRuntime, invokeRuntimeHost)
-  const agentWorker = new PersistentRuntimeClient(join(app.getPath('userData'), 'persistent-runtime-agent-metadata-v1'), join(__dirname, 'unmute-runtime.js'))
+  const agentWorker = new PersistentRuntimeClient(agentRuntimeRoot(app.getPath('userData')), join(__dirname, 'unmute-runtime.js'))
   releaseAgentRuntimeHost = registerRuntimeHost(agentWorker, invokeRuntimeHost)
   agentRuntimeRouting = new CompatibleAgentRuntime(persistentRuntime, agentWorker)
   agentRuntimeRouting.on('reconnected', () => {

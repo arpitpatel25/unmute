@@ -226,6 +226,7 @@ export class AgentRunSupervisor {
       await this.options.journal.upsertRun(run)
       return await this.startProviderTurn(run, input, false)
     } catch (error) {
+      this.logStartFailure(run, error, 'start')
       await this.failStart(run)
       throw publicFailure(error)
     }
@@ -256,6 +257,7 @@ export class AgentRunSupervisor {
       await this.options.journal.upsertRun(run)
       return await this.startProviderTurn(run, input, Boolean(run.providerHandle))
     } catch (error) {
+      this.logStartFailure(run, error, 'resume')
       await this.failStart(run)
       throw publicFailure(error)
     }
@@ -567,6 +569,18 @@ export class AgentRunSupervisor {
     this.activeProcesses = Math.max(0, this.activeProcesses - 1)
     this.options.tokenStore.closeRun(run.id)
     await this.options.journal.upsertRun(run).catch(() => {})
+  }
+
+  private logStartFailure(run: AgentRun, error: unknown, operation: 'start' | 'resume'): void {
+    const providerError = error instanceof AgentProviderError ? error : undefined
+    this.options.log?.('agent-provider-start-failed', {
+      runId: run.id,
+      provider: run.provider,
+      model: agentModel(run.provider),
+      operation,
+      code: providerError?.code ?? 'unknown',
+      ...(providerError?.diagnostic ? { detail: providerError.diagnostic } : {}),
+    })
   }
 
   private release(runId: string, turn: LiveTurn): void {
