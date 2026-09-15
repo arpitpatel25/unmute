@@ -237,6 +237,7 @@ export class RoutineRunner {
     return {
       id, routineId: d.id, name: d.name, key, kind: d.kind, trigger, status: 'queued', firedAt: this.now(),
       activity: [], posted: false, unread: false, speak: d.speak,
+      color: this.deps.store.get(d.id)?.state.color ?? 'white',
     }
   }
 

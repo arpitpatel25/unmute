@@ -11,6 +11,18 @@ export interface RoutineDefinition {
 export interface RoutineFields {
   name: string; schedule: string; prompt: string; window?: string; kind?: RoutineKind
   provider?: 'agent' | 'claude' | 'codex'; inputs?: RoutineInput[]; whenEmpty?: 'note' | 'silent'; maxMinutes?: number; speak?: boolean
+  /** Create only, never a file key: false skips the CONCISE_LINE prepended to the prompt. */
+  concise?: boolean
+}
+
+export const CONCISE_LINE = 'Keep the result short and scannable: at most 5 bullets or ~100 words. Lead with what matters.'
+
+/** The prompt a new routine is saved with: CONCISE_LINE first unless `concise` is false or it is already there. */
+export function withConciseLine(fields: RoutineFields): RoutineFields {
+  if (fields.concise === false) return fields
+  const prompt = (fields.prompt ?? '').trim()
+  if (prompt.startsWith(CONCISE_LINE)) return fields
+  return { ...fields, prompt: prompt ? `${CONCISE_LINE}\n${prompt}` : prompt }
 }
 
 export const ROUTINE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/

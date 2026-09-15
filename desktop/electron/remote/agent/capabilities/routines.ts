@@ -56,6 +56,11 @@ const FIELD_PROPERTIES = {
   speak: { type: 'boolean', description: "Announce the result aloud when it finishes. Defaults to false." },
 } as const
 
+const CREATE_PROPERTIES = {
+  ...FIELD_PROPERTIES,
+  concise: { type: 'boolean', description: 'Default true. Set false only when the user explicitly asks for a detailed or long result.' },
+} as const
+
 const FIELD_KEYS = Object.keys(FIELD_PROPERTIES) as (keyof typeof FIELD_PROPERTIES)[]
 
 /** Shared by every tool that takes nothing but an id: pause, resume, delete, run_now. */
@@ -94,7 +99,7 @@ const tools = [
       + ' the next run in words — confirm schedule, window and kind back to the user in one line.',
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['name', 'schedule', 'prompt'],
-      properties: FIELD_PROPERTIES,
+      properties: CREATE_PROPERTIES,
     },
     consequence: 'reversible-write',
   },
@@ -250,8 +255,9 @@ export class RoutinesCapability implements CapabilityModule {
           return ok(await this.runsView(input))
 
         case 'routine_create': {
-          const value = object(input, FIELD_KEYS, ['name', 'schedule', 'prompt'])
+          const value = object(input, [...FIELD_KEYS, 'concise'], ['name', 'schedule', 'prompt'])
           const fields = parseFields(value) as RoutineFields
+          if (value.concise !== undefined) fields.concise = boolean(value.concise, 'concise')
           const { item, definitionPath } = await this.service.create(fields)
           return ok(preview(item, definitionPath))
         }

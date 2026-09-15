@@ -217,7 +217,7 @@ export interface NotchControllerDeps {
   /** End the Agent conversation and keep nothing. */
   agentNewConversation?(): Promise<void>
   /** Routine controls from the Agent's routines and run sheets. */
-  routineAction?(action: { type: 'runNow'; id: string } | { type: 'setEnabled'; id: string; enabled: boolean } | { type: 'edit'; id: string } | { type: 'cancel'; runId: string } | { type: 'openTranscript'; runId: string } | { type: 'proposal'; runId: string; proposalId: string; decision: 'approve' | 'dismiss' } | { type: 'markRead' }): Promise<void>
+  routineAction?(action: { type: 'runNow'; id: string } | { type: 'setEnabled'; id: string; enabled: boolean } | { type: 'update'; id: string; fields: { name: string; schedule: string; window: string; kind: string; prompt: string } } | { type: 'cancel'; runId: string } | { type: 'openTranscript'; runId: string } | { type: 'proposal'; runId: string; proposalId: string; decision: 'approve' | 'dismiss' } | { type: 'markRead' }): Promise<void>
   /** One run with its full result text, for the run sheet and the chat. */
   routineRunDetail?(runId: string): Promise<{ run: RoutineRun; result: string | null; hasTranscript: boolean } | null>
   /** THE VOICE IS POINTED AT THE AGENT (its card is in front, or its chat is
@@ -778,7 +778,10 @@ export class NotchController {
       const { id, enabled } = e as { id: string; enabled: boolean }
       void routineAction({ type: 'setEnabled', id, enabled })
     })
-    on('routineEdit', e => { void routineAction({ type: 'edit', id: (e as { id: string }).id }) })
+    on('routineUpdate', e => {
+      const { id, fields } = e as { id: string; fields: { name: string; schedule: string; window: string; kind: string; prompt: string } }
+      void routineAction({ type: 'update', id, fields })
+    })
     on('routineCancel', e => {
       const runId = (e as { runId: string }).runId
       // Only a cancel that landed changes the run worth re-reading.
@@ -2742,7 +2745,7 @@ export class NotchController {
         // Text only: a failed routine shows in its own result block, never by
         // making the whole Agent look failed.
         if (run.speak) {
-          this.agentRoutineLine = { text: conciseLine(`◆ ${run.name}: ${firstLine(run.resultPreview)}`), at: run.endedAt!, failed: false }
+          this.agentRoutineLine = { text: conciseLine(`${run.name}: ${firstLine(run.resultPreview)}`), at: run.endedAt!, failed: false }
           this.agentLine = this.agentRoutineLine
         }
       }

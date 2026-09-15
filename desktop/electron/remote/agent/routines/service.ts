@@ -6,7 +6,7 @@ import type { RoutineExecutor } from './executor'
 import { defaultIndexDir } from './manifest'
 import { RoutineRunLog } from './run-log'
 import { RoutineRunner, type MeetingNotesEvent } from './runner'
-import { describeNext, describeSchedule } from './schedule'
+import { describeNext, describeSchedule, formatSchedule } from './schedule'
 import { RoutineStore } from './store'
 import { formatWindow } from './window'
 import type { RoutineEntry, RoutineItemView, RoutineRun, RoutinesView, RunStatus } from './types'
@@ -69,6 +69,7 @@ export class RoutineService {
 
   view(): RoutinesView {
     const runs = [...this.log.all()].sort((a, b) => a.firedAt - b.firedAt).slice(-VIEW_RUNS)
+      .map(r => this.withColor(r))
     return {
       available: this.opts.enabled, ...(this.opts.enabled ? {} : { reason: OFF_REASON }),
       items: this.list(), runs,
@@ -118,7 +119,13 @@ export class RoutineService {
   }
 
   run(runId: string): RoutineRun | undefined {
-    return this.log.get(runId)
+    const run = this.log.get(runId)
+    return run && this.withColor(run)
+  }
+
+  /** Runs recorded before colours existed take the routine's current colour, or white. */
+  private withColor(run: RoutineRun): RoutineRun {
+    return run.color ? run : { ...run, color: this.store.get(run.routineId)?.state.color ?? 'white' }
   }
 
   /** Newest first, for the Agent's `routine_runs` tool. */
@@ -170,6 +177,7 @@ export class RoutineService {
     return {
       id: entry.id, name: d?.name ?? entry.id, scheduleLabel: d ? describeSchedule(d.schedule) : '',
       window: d ? formatWindow(d.window) : '',
+      schedule: d ? formatSchedule(d.schedule) : '', prompt: d?.prompt ?? '', color: entry.state.color ?? 'white',
       kind: d?.kind ?? 'read-only', enabled: entry.state.enabled, nextRunAt: entry.state.nextFireAt, nextRunLabel,
       ...(last ? { lastRun: { status: last.status, at: last.endedAt ?? last.firedAt } } : {}),
       running: runs.some(r => r.status === 'queued' || r.status === 'running'),

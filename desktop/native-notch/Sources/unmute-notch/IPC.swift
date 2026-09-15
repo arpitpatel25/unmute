@@ -186,6 +186,11 @@ struct RoutineItemP: Codable {
     let lastRunLabel: String?
     let running: Bool?
     let error: String?
+    /// Canonical grammar text for the inline editor — "" for an invalid routine.
+    let schedule: String?
+    let window: String?
+    let prompt: String?
+    let color: String?
 }
 
 /// One activity line in an open run's transcript — see
@@ -205,6 +210,7 @@ struct RoutineRunDetailP: Codable {
     let status: String
     let trigger: String?
     let firedAt: Int?
+    let color: String?
     let endedAt: Int?
     let windowLabel: String?
     let totals: String?
@@ -875,7 +881,8 @@ enum Event {
     // ── Routines (spec §5) ──
     case routineRunNow(id: String)
     case routineSetEnabled(id: String, enabled: Bool)
-    case routineEdit(id: String)
+    /// `fields` is name, schedule, window, kind and prompt, all canonical text.
+    case routineUpdate(id: String, fields: [String: String])
     case routineOpenRun(runId: String)
     case routineCloseRun
     case routineCancel(runId: String)
@@ -1010,7 +1017,7 @@ enum Event {
         case .scratchpadDiscard: return ["type": "scratchpadDiscard"]
         case .routineRunNow(let id): return ["type": "routineRunNow", "id": id]
         case .routineSetEnabled(let id, let enabled): return ["type": "routineSetEnabled", "id": id, "enabled": enabled]
-        case .routineEdit(let id): return ["type": "routineEdit", "id": id]
+        case .routineUpdate(let id, let fields): return ["type": "routineUpdate", "id": id, "fields": fields]
         case .routineOpenRun(let runId): return ["type": "routineOpenRun", "runId": runId]
         case .routineCloseRun: return ["type": "routineCloseRun"]
         case .routineCancel(let runId): return ["type": "routineCancel", "runId": runId]

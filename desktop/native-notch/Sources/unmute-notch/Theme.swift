@@ -57,10 +57,18 @@ enum Theme {
     /// blue that may fail contrast for someone.
     static let cLink = Color(nsColor: .linkColor)
 
-    /// A ROUTINE in the Agent's chat — its run chip, its result's edge, the
-    /// header button. Warmer than cNeeds so a routine never reads as a task
-    /// waiting on you.
-    static let routine = Color(red: 0.96, green: 0.71, blue: 0.29)
+    /// A ROUTINE'S OWN COLOUR — fixed when it was created (state.json), so its
+    /// run chip, result and sheet row always match. Unknown names read white.
+    static func routine(_ name: String?) -> Color {
+        switch name {
+        case "red":    return Color(red: 0xF8 / 255, green: 0x71 / 255, blue: 0x71 / 255)
+        case "blue":   return Color(red: 0x60 / 255, green: 0xA5 / 255, blue: 0xFA / 255)
+        case "yellow": return Color(red: 0xFA / 255, green: 0xCC / 255, blue: 0x15 / 255)
+        case "green":  return Color(red: 0x4A / 255, green: 0xDE / 255, blue: 0x80 / 255)
+        case "pink":   return Color(red: 0xF4 / 255, green: 0x72 / 255, blue: 0xB6 / 255)
+        default:       return Color(white: 0.92)
+        }
+    }
 
     static func status(_ s: TaskStatus) -> Color {
         switch s {

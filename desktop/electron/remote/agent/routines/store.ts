@@ -6,8 +6,9 @@ import { formatWindow } from './window'
 import { writeFileAtomic } from './atomic'
 import {
   type RoutineDefinition, type RoutineFields, ROUTINE_ID, parseDefinition, definitionFromFields, serializeDefinition, slugify,
+  withConciseLine,
 } from './definition'
-import type { RoutineEntry, RoutineState } from './types'
+import { ROUTINE_COLORS, type RoutineEntry, type RoutineState } from './types'
 
 const STATE_FILE = 'state.json'
 const TRASH_DIR = '.trash'
@@ -17,7 +18,14 @@ const DEBOUNCE_MS = 200
 const INVALID_NAME_ERROR = 'File name must be lowercase letters, numbers and dashes'
 
 interface PersistedRoutineState extends RoutineState { scheduleText?: string }
-interface PersistedState { version: 1; routines: Record<string, PersistedRoutineState> }
+/** `colorCursor` counts every colour ever assigned, so deleting a routine never reshuffles the rest. */
+interface PersistedState { version: 1; routines: Record<string, PersistedRoutineState>; colorCursor?: number }
+
+function assignColor(state: PersistedState): string {
+  const k = state.colorCursor ?? 0
+  state.colorCursor = k + 1
+  return ROUTINE_COLORS[k % ROUTINE_COLORS.length]
+}
 
 function fieldsFromDefinition(d: RoutineDefinition): RoutineFields {
   return {
@@ -88,16 +96,18 @@ export class RoutineStore {
 
       let enabled = prior?.enabled ?? true
       let fireAt = prior?.nextFireAt ?? null
+      // Names are sorted, so routines missing a colour get one in stable id order.
+      const color = prior?.color ?? assignColor(state)
       if (definition) {
         const scheduleText = formatSchedule(definition.schedule)
         if (!prior || prior.scheduleText !== scheduleText) fireAt = nextFireAt(definition.schedule, this.now())
-        state.routines[id] = { enabled, nextFireAt: fireAt, scheduleText }
+        state.routines[id] = { enabled, nextFireAt: fireAt, scheduleText, color }
       } else {
-        state.routines[id] = prior ?? { enabled, nextFireAt: fireAt }
+        state.routines[id] = { ...(prior ?? { enabled, nextFireAt: fireAt }), color }
       }
 
       entries.set(id, {
-        id, path, state: { enabled, nextFireAt: fireAt },
+        id, path, state: { enabled, nextFireAt: fireAt, color },
         ...(definition ? { definition } : {}), ...(error !== undefined ? { error } : {}),
       })
     }
@@ -123,16 +133,18 @@ export class RoutineStore {
   create(fields: RoutineFields): Promise<RoutineEntry> { return this.exclusive(() => this.createNow(fields)) }
   private async createNow(fields: RoutineFields): Promise<RoutineEntry> {
     const id = slugify(fields.name ?? '', new Set(this.entries.keys()))
-    const definition = definitionFromFields(id, fields)
+    const { concise: _concise, ...rest } = withConciseLine(fields)
+    const definition = definitionFromFields(id, rest)
     const path = join(this.routinesDir, `${id}.md`)
     await writeFileAtomic(path, serializeDefinition(definition))
 
     const scheduleText = formatSchedule(definition.schedule)
     const fireAt = nextFireAt(definition.schedule, this.now())
-    this.state.routines[id] = { enabled: true, nextFireAt: fireAt, scheduleText }
+    const color = assignColor(this.state)
+    this.state.routines[id] = { enabled: true, nextFireAt: fireAt, scheduleText, color }
     await this.writeState()
 
-    const entry: RoutineEntry = { id, path, definition, state: { enabled: true, nextFireAt: fireAt } }
+    const entry: RoutineEntry = { id, path, definition, state: { enabled: true, nextFireAt: fireAt, color } }
     this.entries.set(id, entry)
     return entry
   }
@@ -142,7 +154,8 @@ export class RoutineStore {
     const entry = this.entries.get(id)
     if (!entry?.definition) throw new Error(`Routine "${id}" was not found`)
 
-    const merged: RoutineFields = { ...fieldsFromDefinition(entry.definition), ...fields }
+    const { concise: _concise, ...changed } = fields
+    const merged: RoutineFields = { ...fieldsFromDefinition(entry.definition), ...changed }
     const definition = definitionFromFields(id, merged)
     await writeFileAtomic(entry.path, serializeDefinition(definition))
 
@@ -150,10 +163,11 @@ export class RoutineStore {
     const prior = this.state.routines[id]
     const fireAt = !prior || prior.scheduleText !== scheduleText ? nextFireAt(definition.schedule, this.now()) : prior.nextFireAt
     const enabled = prior?.enabled ?? true
-    this.state.routines[id] = { enabled, nextFireAt: fireAt, scheduleText }
+    const color = prior?.color ?? entry.state.color
+    this.state.routines[id] = { enabled, nextFireAt: fireAt, scheduleText, ...(color !== undefined ? { color } : {}) }
     await this.writeState()
 
-    const updated: RoutineEntry = { id, path: entry.path, definition, state: { enabled, nextFireAt: fireAt } }
+    const updated: RoutineEntry = { id, path: entry.path, definition, state: { enabled, nextFireAt: fireAt, ...(color !== undefined ? { color } : {}) } }
     this.entries.set(id, updated)
     return updated
   }
@@ -179,11 +193,10 @@ export class RoutineStore {
       if (fireAt === null || fireAt <= now) fireAt = nextFireAt(entry.definition.schedule, now)
     }
 
-    const scheduleText = this.state.routines[id]?.scheduleText
-    this.state.routines[id] = { enabled, nextFireAt: fireAt, ...(scheduleText !== undefined ? { scheduleText } : {}) }
+    this.state.routines[id] = { ...this.state.routines[id], enabled, nextFireAt: fireAt }
     await this.writeState()
 
-    this.entries.set(id, { ...entry, state: { enabled, nextFireAt: fireAt } })
+    this.entries.set(id, { ...entry, state: { ...entry.state, enabled, nextFireAt: fireAt } })
   }
 
   setNextFireAt(id: string, at: number | null): Promise<void> { return this.exclusive(() => this.setNextFireAtNow(id, at)) }
@@ -191,11 +204,10 @@ export class RoutineStore {
     const entry = this.entries.get(id)
     if (!entry) throw new Error(`Routine "${id}" was not found`)
 
-    const scheduleText = this.state.routines[id]?.scheduleText
-    this.state.routines[id] = { enabled: entry.state.enabled, nextFireAt: at, ...(scheduleText !== undefined ? { scheduleText } : {}) }
+    this.state.routines[id] = { ...this.state.routines[id], enabled: entry.state.enabled, nextFireAt: at }
     await this.writeState()
 
-    this.entries.set(id, { ...entry, state: { enabled: entry.state.enabled, nextFireAt: at } })
+    this.entries.set(id, { ...entry, state: { ...entry.state, nextFireAt: at } })
   }
 
   onChange(listener: () => void): () => void {

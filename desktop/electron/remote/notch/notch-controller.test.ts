@@ -3618,7 +3618,7 @@ test('a speaking routine run sets the Agent line', () => {
   h.controller.restoreRoutines(routinesView([routineRun({ id: 'run1', speak: true, resultPreview: 'Two PRs merged\nmore detail' })]))
   h.client.fire({ type: 'pocketOpen' })
   const agent = pocketOf(h)!.slots.find(s => s.kind === 'agent')!
-  assert.equal(agent.ask, '◆ Digest: Two PRs merged')
+  assert.equal(agent.ask, 'Digest: Two PRs merged')
 })
 
 test('routineOpenRun sends the Agent detail with routines.run, routineCloseRun clears it', async () => {
@@ -3641,7 +3641,7 @@ test('every routine event maps to the right routineAction', async () => {
   const h = setup({ deps: { routineAction: async (a) => { actions.push(a) } } })
   h.client.fire({ type: 'routineRunNow', id: 'x' })
   h.client.fire({ type: 'routineSetEnabled', id: 'x', enabled: false })
-  h.client.fire({ type: 'routineEdit', id: 'x' })
+  h.client.fire({ type: 'routineUpdate', id: 'x', fields: { name: 'N', schedule: 'daily 09:00', window: 'today', kind: 'read-only', prompt: 'P' } })
   h.client.fire({ type: 'routineCancel', runId: 'r1' })
   h.client.fire({ type: 'routineOpenTranscript', runId: 'r1' })
   h.client.fire({ type: 'routineProposal', runId: 'r1', proposalId: 'p1', decision: 'approve' })
@@ -3649,7 +3649,7 @@ test('every routine event maps to the right routineAction', async () => {
   assert.deepEqual(actions, [
     { type: 'runNow', id: 'x' },
     { type: 'setEnabled', id: 'x', enabled: false },
-    { type: 'edit', id: 'x' },
+    { type: 'update', id: 'x', fields: { name: 'N', schedule: 'daily 09:00', window: 'today', kind: 'read-only', prompt: 'P' } },
     { type: 'cancel', runId: 'r1' },
     { type: 'openTranscript', runId: 'r1' },
     { type: 'proposal', runId: 'r1', proposalId: 'p1', decision: 'approve' },
@@ -3736,7 +3736,7 @@ test('a failed spoken routine never makes the Agent look failed', () => {
   h.controller.restoreRoutines(routinesView([routineRun({ id: 'run1', speak: true, status: 'failed', resultPreview: 'Could not read' })]))
   h.client.fire({ type: 'pocketOpen' })
   const agent = pocketOf(h)!.slots.find(s => s.kind === 'agent')!
-  assert.equal(agent.ask, '◆ Digest: Could not read')
+  assert.equal(agent.ask, 'Digest: Could not read')
   assert.notEqual(agent.status, 'failed')
   h.client.fire({ type: 'pocketExpand' }); h.flush()
   assert.notEqual(h.client.last('showTask')!.task.status, 'failed')

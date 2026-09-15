@@ -252,7 +252,7 @@ struct TaskSurfaceView: View {
         if t.id == "unmute-agent", let routines = t.routines {
             ZStack {
                 if model.routinesSheetOpen {
-                    RoutinesSheet(routines: routines, close: { model.routinesSheetOpen = false }, emit: model.emit)
+                    RoutinesSheet(routines: routines, error: t.deliveryError, close: { model.routinesSheetOpen = false }, emit: model.emit)
                 }
                 if let run = routines.run {
                     RoutineRunSheet(detail: run, close: { model.emit(.routineCloseRun) }, emit: model.emit)

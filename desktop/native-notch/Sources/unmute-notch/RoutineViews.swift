@@ -8,7 +8,7 @@ import ConversationSupport
 // One chat, no second panel. A routine shows up twice in the transcript — a
 // right-aligned chip when it fires and an Agent-style reply when it finishes —
 // and everything else about a run lives one tap away in the run sheet. The
-// only amber on this surface is the routine's; nothing else borrows it.
+// colours on this surface are each routine's own, fixed when it was created.
 
 /// Local 24h HH:MM for an epoch-millisecond instant.
 enum RoutineClock {
@@ -28,13 +28,15 @@ enum RoutineClock {
 // MARK: - the run chip
 
 /// The moment a routine fired. Right-aligned like your own message because it
-/// is a prompt, not an answer — just one you set up earlier.
+/// is a prompt, not an answer — just one you set up earlier. The icon carries
+/// the status, so the text never repeats it with a symbol.
 struct RoutineRunChip: View {
     let block: Block
     let open: () -> Void
 
     private var status: String { block.status ?? "running" }
     private var name: String { block.name ?? "Routine" }
+    private var tint: Color { Theme.routine(block.color) }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -44,13 +46,13 @@ struct RoutineRunChip: View {
                     icon
                     Text(label)
                         .font(.system(size: 12))
-                        .foregroundColor(status == "failed" ? Theme.cError : Theme.textDim)
+                        .foregroundColor(Theme.textDim)
                         .strikethrough(status == "cancelled", color: Theme.textFaint)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 .padding(.horizontal, 11).padding(.vertical, 6)
-                .overlay(Capsule().stroke(Theme.routine.opacity(0.45), lineWidth: 0.75))
+                .overlay(Capsule().stroke(tint.opacity(0.45), lineWidth: 0.75))
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -61,11 +63,11 @@ struct RoutineRunChip: View {
     @ViewBuilder private var icon: some View {
         switch status {
         case "queued", "running":
-            ProgressView().controlSize(.mini)
+            ProgressView().controlSize(.mini).tint(tint)
         default:
             Image(systemName: symbol)
                 .font(.system(size: 9.5, weight: .semibold))
-                .foregroundColor(status == "failed" ? Theme.cError : Theme.routine)
+                .foregroundColor(tint)
         }
     }
 
@@ -81,67 +83,103 @@ struct RoutineRunChip: View {
 
     private var label: String {
         switch status {
-        case "queued":    return "◆ \(name) · waiting for a free slot"
-        case "done":      return "✓ \(name) · done — result below"
-        case "failed":    return "\(name) · failed — see below"
+        case "queued":    return "\(name) · waiting for a free slot"
+        case "done":      return "\(name) · done"
+        case "failed":    return "\(name) · failed"
         case "cancelled": return "\(name) · cancelled"
         case "skipped":   return "\(name) · skipped"
-        default:
-            return (["◆ \(name)", "working on it", block.trigger, RoutineClock.hhmm(block.at)] as [String?])
-                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        default:          return "\(name) · working on it"
         }
     }
 }
 
 // MARK: - the result
 
-/// What a routine came back with, written like an Agent reply — the same text
-/// style as BlockAnswer — with a thin amber edge and the routine's name.
+/// What a routine came back with, laid out exactly like a question and its
+/// answer: the routine on the right as the "question" bubble, marked with its
+/// colour, and the response underneath in the Agent's own text style with a
+/// thin rule in the same colour. Either half opens the run sheet.
 struct RoutineResultView: View {
     let block: Block
     let taskId: String
     let open: () -> Void
     var emit: (Event) -> Void = IPC.emit
+    /// See Theme.userBubble: the lift is tone-aware.
+    @ObservedObject private var appearance = Appearance.shared
 
     private var status: String { block.status ?? "done" }
+    private var tint: Color { Theme.routine(block.color) }
     /// The routine id rides on `path` — see routine-blocks.ts, which sets
     /// `path: run.routineId` because Block has no dedicated field for it.
     private var routineId: String? { block.path.flatMap { $0.isEmpty ? nil : $0 } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button(action: open) {
-                HStack(spacing: 6) {
-                    Text("◆ \(block.name ?? "Routine")")
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundColor(Theme.routine)
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    if let range { NumText(text: range) }
-                }
-                .contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 0) {
+                Spacer(minLength: 40)
+                Button(action: open) { bubble }
+                    .buttonStyle(.plain)
+                    .help("Open this run")
             }
-            .buttonStyle(.plain)
-            .help("Open this run")
 
-            content
+            VStack(alignment: .leading, spacing: 8) {
+                content
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: open)
 
-            if let proposals = block.proposals, !proposals.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(proposals, id: \.id) { p in
-                        RoutineProposalRow(proposal: p) { decision in
-                            guard let runId = block.what, !runId.isEmpty else { return }
-                            emit(.routineProposal(runId: runId, proposalId: p.id, decision: decision))
+                if let proposals = block.proposals, !proposals.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(proposals, id: \.id) { p in
+                            RoutineProposalRow(proposal: p) { decision in
+                                guard let runId = block.what, !runId.isEmpty else { return }
+                                emit(.routineProposal(runId: runId, proposalId: p.id, decision: decision))
+                            }
                         }
                     }
                 }
+                actions
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 13)
+            // An overlay rather than an HStack sibling, so the rule takes the
+            // content's measured height instead of a flexible shape's guess.
+            .overlay(alignment: .leading) { Rectangle().fill(tint).frame(width: 2) }
+        }
+    }
+
+    private var bubble: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Circle().fill(tint).frame(width: 7, height: 7)
+                .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 1 }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(block.name ?? "Routine")
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let caption {
+                    Text(caption)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(Theme.textFaint)
+                        .lineLimit(1)
+                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 13)
-        // An overlay rather than an HStack sibling, so the rule takes the
-        // content's measured height instead of a flexible shape's guess.
-        .overlay(alignment: .leading) { Rectangle().fill(Theme.routine).frame(width: 2) }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 20).fill(Theme.userBubble))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.userBubbleEdge, lineWidth: 0.5))
+        .contentShape(RoundedRectangle(cornerRadius: 20))
+    }
+
+    /// What fired it and when, e.g. "Scheduled · 22:16".
+    private var caption: String? {
+        let t = block.trigger ?? ""
+        let what: String? = t.hasSuffix("schedule") ? "Scheduled"
+            : t == "notes ready" ? "Meeting notes ready"
+            : t == "approved" ? "Approved"
+            : t.isEmpty ? nil : t
+        let parts = [what, RoutineClock.hhmm(block.startedAt) ?? RoutineClock.hhmm(block.at)].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     @ViewBuilder private var content: some View {
@@ -150,33 +188,29 @@ struct RoutineResultView: View {
             // `reason` is a code (timeout, missed, …); `text` is the sentence
             // written for people, so only `text` is ever shown.
             NoticeRow(text: nonEmpty(block.text) ?? "The routine failed.", tone: .error)
-            runAgain("Run again")
         case "skipped":
             Text(nonEmpty(block.text) ?? "Skipped")
-                .font(.system(size: 12))
-                .foregroundColor(Theme.textFaint)
-                .lineLimit(1)
-            // Spec §2.5: a missed clock fire offers Run now. Other skips (e.g.
-            // nothing in the window) would only skip again.
-            if block.reason == "missed" { runAgain("Run now") }
+                .font(.system(size: 13))
+                .foregroundColor(Theme.textDim)
+                .fixedSize(horizontal: false, vertical: true)
         default:
             BlockAnswer(text: block.text ?? "")
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        switch status {
+        case "failed": runAgain("Run again")
+        // Spec §2.5: a missed clock fire offers Run now. Other skips (e.g.
+        // nothing in the window) would only skip again.
+        case "skipped" where block.reason == "missed": runAgain("Run now")
+        default: EmptyView()
         }
     }
 
     @ViewBuilder private func runAgain(_ label: String) -> some View {
         if let routineId {
             KeyButton(label: label, symbol: "arrow.clockwise") { emit(.routineRunNow(id: routineId)) }
-        }
-    }
-
-    private var range: String? {
-        let start = RoutineClock.hhmm(block.startedAt), end = RoutineClock.hhmm(block.at)
-        switch (start, end) {
-        case let (s?, e?): return "\(s) → \(e)"
-        case let (s?, nil): return s
-        case let (nil, e?): return e
-        default: return nil
         }
     }
 
@@ -247,10 +281,10 @@ struct RoutinesHeaderButton: View {
         Button(action: show) {
             Text(label)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundColor(Theme.routine.opacity(hovering ? 1 : 0.85))
+                .foregroundColor(hovering ? Theme.text : Theme.textDim)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(Capsule().fill(hovering ? Theme.raisedHover : Theme.raised))
-                .overlay(Capsule().stroke(Theme.routine.opacity(0.3), lineWidth: 0.5))
+                .overlay(Capsule().stroke(Theme.hairline, lineWidth: 0.5))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -260,9 +294,9 @@ struct RoutinesHeaderButton: View {
 
     private var label: String {
         switch routines.items.count {
-        case 0:  return "◆ Routines"
-        case 1:  return "◆ 1 routine"
-        default: return "◆ \(routines.items.count) routines"
+        case 0:  return "Routines"
+        case 1:  return "1 routine"
+        default: return "\(routines.items.count) routines"
         }
     }
 }
@@ -287,8 +321,12 @@ private struct RoutineSheetCard<Content: View>: View {
 
 struct RoutinesSheet: View {
     let routines: RoutinesPayload
+    /// The Agent's delivery error — where a rejected edit (bad schedule, empty
+    /// prompt) comes back, shown inside the open editor.
+    var error: String? = nil
     let close: () -> Void
     var emit: (Event) -> Void = IPC.emit
+    @State private var editingId: String?
 
     var body: some View {
         RoutineSheetCard {
@@ -309,13 +347,20 @@ struct RoutinesSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(routines.items, id: \.id) { item in
-                            RoutineItemRow(item: item, emit: emit)
+                            if editingId == item.id {
+                                RoutineEditForm(item: item, error: error,
+                                                close: { editingId = nil }, emit: emit)
+                            } else {
+                                RoutineItemRow(item: item, edit: { editingId = item.id }, emit: emit)
+                            }
                         }
                     }
                     .padding(.trailing, 4)
                 }
-                Text("Or just say “every Monday at 10, …” to add one.")
-                    .font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
+                if editingId == nil {
+                    Text("Or just say “every Monday at 10, …” to add one.")
+                        .font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -324,18 +369,21 @@ struct RoutinesSheet: View {
 
 private struct RoutineItemRow: View {
     let item: RoutineItemP
+    let edit: () -> Void
     let emit: (Event) -> Void
 
     private var enabled: Bool { item.enabled ?? true }
     private var running: Bool { item.running ?? false }
+    private var tint: Color { Theme.routine(item.color) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
+                Circle().fill(tint).frame(width: 7, height: 7)
                 Text(item.name).font(Theme.fBodyMed).foregroundColor(Theme.text).lineLimit(1)
                 if let kind = item.kind {
                     Badge(text: kind == "takes-actions" ? "takes actions" : "read-only",
-                          color: kind == "takes-actions" ? Theme.routine : Theme.textDim)
+                          color: kind == "takes-actions" ? tint : Theme.textDim)
                 }
                 if !enabled { Badge(text: "paused", color: Theme.textFaint) }
                 Spacer(minLength: 0)
@@ -346,7 +394,7 @@ private struct RoutineItemRow: View {
                 Text(schedule).font(.system(size: 11.5)).foregroundColor(Theme.textDim).lineLimit(2)
             }
             if running {
-                Text("running now").font(.system(size: 11.5)).foregroundColor(Theme.routine)
+                Text("running now").font(.system(size: 11.5)).foregroundColor(tint)
             } else if let last = item.lastRunLabel {
                 Text(last).font(.system(size: 11.5)).foregroundColor(Theme.textFaint).lineLimit(1)
             }
@@ -361,13 +409,202 @@ private struct RoutineItemRow: View {
                 KeyButton(label: enabled ? "Pause" : "Resume") {
                     emit(.routineSetEnabled(id: item.id, enabled: !enabled))
                 }
-                KeyButton(label: "Edit") { emit(.routineEdit(id: item.id)) }
+                KeyButton(label: "Edit", action: edit)
             }
             .padding(.top, 2)
         }
         .padding(.horizontal, 11).padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline, lineWidth: 0.5))
+    }
+}
+
+/// A routine's row opened into a form: every field separate, composed back
+/// into the canonical grammar text the engine validates (RoutineFormSupport).
+private struct RoutineEditForm: View {
+    let item: RoutineItemP
+    let error: String?
+    let close: () -> Void
+    let emit: (Event) -> Void
+
+    @State private var name: String
+    @State private var schedule: RoutineScheduleDraft
+    @State private var window: RoutineWindowDraft
+    @State private var kind: String
+    @State private var prompt: String
+    /// Set once Save is sent; the form closes when the saved values come back.
+    @State private var saving = false
+    private let rawSchedule: String
+
+    init(item: RoutineItemP, error: String?, close: @escaping () -> Void, emit: @escaping (Event) -> Void) {
+        self.item = item; self.error = error; self.close = close; self.emit = emit
+        rawSchedule = item.schedule ?? ""
+        _name = State(initialValue: item.name)
+        _schedule = State(initialValue: RoutineScheduleDraft.parse(item.schedule ?? ""))
+        _window = State(initialValue: RoutineWindowDraft.parse(item.window ?? ""))
+        _kind = State(initialValue: item.kind == "takes-actions" ? "takes-actions" : "read-only")
+        _prompt = State(initialValue: item.prompt ?? "")
+    }
+
+    private var tint: Color { Theme.routine(item.color) }
+
+    private var fields: [String: String] {
+        ["name": name.trimmingCharacters(in: .whitespacesAndNewlines),
+         "schedule": schedule.text,
+         "window": window.text,
+         "kind": kind,
+         "prompt": prompt.trimmingCharacters(in: .whitespacesAndNewlines)]
+    }
+
+    private var current: [String: String] {
+        ["name": item.name, "schedule": item.schedule ?? "", "window": item.window ?? "",
+         "kind": item.kind ?? "read-only", "prompt": item.prompt ?? ""]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Circle().fill(tint).frame(width: 7, height: 7)
+                Text("Edit routine").font(Theme.fBodyMed).foregroundColor(Theme.text)
+                Spacer(minLength: 0)
+            }
+
+            section("Name") {
+                TextField("Name", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12.5))
+            }
+
+            section("How often") {
+                Picker("How often", selection: $schedule.frequency) {
+                    ForEach(RoutineFrequency.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu).fixedSize()
+                if !schedule.recognised, !rawSchedule.isEmpty {
+                    Text("Couldn’t read “\(rawSchedule)”, so this shows Daily 09:00.")
+                        .font(.system(size: 11)).foregroundColor(Theme.textFaint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if schedule.frequency == .specificDays { dayChips }
+                if schedule.frequency.usesClock {
+                    HStack(spacing: 6) {
+                        Text("at").font(.system(size: 12)).foregroundColor(Theme.textDim)
+                        DatePicker("Time", selection: timeBinding, displayedComponents: .hourAndMinute)
+                            .labelsHidden()
+                            .datePickerStyle(.field)
+                            .environment(\.locale, Locale(identifier: "en_GB"))
+                            .fixedSize()
+                    }
+                }
+                if schedule.frequency == .everyHours {
+                    Stepper(value: $schedule.everyHours, in: RoutineScheduleDraft.hourRange) {
+                        stepperLabel("Every \(schedule.everyHours) \(schedule.everyHours == 1 ? "hour" : "hours")")
+                    }
+                }
+                if schedule.frequency == .everyMinutes {
+                    Stepper(value: $schedule.everyMinutes, in: RoutineScheduleDraft.minuteRange,
+                            step: RoutineScheduleDraft.minuteStep) {
+                        stepperLabel("Every \(schedule.everyMinutes) minutes")
+                    }
+                }
+            }
+
+            section("Time period to look at") {
+                Picker("Time period", selection: $window.choice) {
+                    ForEach(RoutineWindowChoice.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu).fixedSize()
+                if window.choice == .lastHours {
+                    Stepper(value: $window.hours, in: RoutineWindowDraft.hourRange) {
+                        stepperLabel("Last \(window.hours) \(window.hours == 1 ? "hour" : "hours")")
+                    }
+                }
+                if window.choice == .lastDays {
+                    Stepper(value: $window.days, in: RoutineWindowDraft.dayRange) {
+                        stepperLabel("Last \(window.days) \(window.days == 1 ? "day" : "days")")
+                    }
+                }
+            }
+
+            section("Kind") {
+                Picker("Kind", selection: $kind) {
+                    Text("Read-only").tag("read-only")
+                    Text("Takes actions").tag("takes-actions")
+                }
+                .labelsHidden().pickerStyle(.segmented).fixedSize()
+            }
+
+            section("Prompt") {
+                TextEditor(text: $prompt)
+                    .font(.system(size: 12.5))
+                    .scrollContentBackground(.hidden)
+                    .padding(4)
+                    .frame(minHeight: 110, maxHeight: 200)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Theme.raised))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.hairline, lineWidth: 0.5))
+            }
+
+            if saving, let error, !error.isEmpty {
+                Text(error).font(.system(size: 11.5)).foregroundColor(Theme.cError)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 6) {
+                KeyButton(label: saving ? "Saving…" : "Save", action: save)
+                QuietButton(label: "Cancel", action: close)
+            }
+        }
+        .padding(.horizontal, 11).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(tint.opacity(0.45), lineWidth: 0.75))
+        // The saved values coming back is the success signal.
+        .onChange(of: current) { _ in if saving { close() } }
+    }
+
+    private func save() {
+        if fields == current { close(); return }
+        saving = true
+        emit(.routineUpdate(id: item.id, fields: fields))
+    }
+
+    private var dayChips: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<7, id: \.self) { index in
+                let on = schedule.days.contains(index)
+                Button {
+                    if on { schedule.days.remove(index) } else { schedule.days.insert(index) }
+                } label: {
+                    Text(RoutineScheduleDraft.dayLabels[index])
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(on ? Theme.text : Theme.textDim)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Capsule().fill(on ? tint.opacity(0.22) : Theme.raised))
+                        .overlay(Capsule().stroke(on ? tint.opacity(0.6) : Theme.hairline, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var timeBinding: Binding<Date> {
+        Binding(
+            get: { Calendar.current.date(bySettingHour: schedule.hour, minute: schedule.minute, second: 0, of: Date()) ?? Date() },
+            set: { date in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+                schedule.hour = c.hour ?? 9
+                schedule.minute = c.minute ?? 0
+            })
+    }
+
+    private func stepperLabel(_ text: String) -> some View {
+        Text(text).font(.system(size: 12)).foregroundColor(Theme.text).monospacedDigit()
+    }
+
+    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.system(size: 11, weight: .medium)).foregroundColor(Theme.textFaint)
+            content()
+        }
     }
 }
 
@@ -419,14 +656,14 @@ struct RoutineRunSheet: View {
     }
 
     private var title: String {
-        (["◆ \(detail.name)", detail.trigger, RoutineClock.hhmm(detail.firedAt)] as [String?])
+        ([detail.name, detail.trigger, RoutineClock.hhmm(detail.firedAt)] as [String?])
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     private var statusColor: Color {
         switch detail.status {
         case "failed":             return Theme.cError
-        case "running", "queued":  return Theme.routine
+        case "running", "queued":  return Theme.routine(detail.color)
         default:                   return Theme.textDim
         }
     }

@@ -6185,9 +6185,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           switch (action.type) {
             case 'runNow': await client.routines.runNow(action.id); break
             case 'setEnabled': await client.routines.setEnabled(action.id, action.enabled); break
-            case 'edit': {
-              const error = await shell.openPath(await client.routines.path(action.id))
-              if (error) throw new Error(error)
+            case 'update': {
+              const { name, schedule, window, kind, prompt } = action.fields
+              if (kind !== 'read-only' && kind !== 'takes-actions') throw new Error(`"${kind}" is not a kind; use read-only or takes-actions`)
+              await client.routines.update(action.id, { name, schedule, window, kind, prompt })
               break
             }
             case 'cancel': await client.routines.cancel(action.runId); break

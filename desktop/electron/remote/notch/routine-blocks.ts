@@ -59,7 +59,7 @@ export function routineEntries(
       at: run.firedAt,
       block: {
         kind: 'routineRun', at: run.firedAt, name: run.name, status: run.status,
-        trigger: triggerLabel(run), what: run.id,
+        trigger: triggerLabel(run), what: run.id, color: run.color ?? 'white',
         ...(run.reason ? { reason: run.reason } : {}),
       },
     })
@@ -76,7 +76,7 @@ export function routineEntries(
       at,
       block: {
         kind: 'routineResult', at, startedAt: run.firedAt, name: run.name, status, text,
-        what: run.id, path: run.routineId,
+        what: run.id, path: run.routineId, trigger: triggerLabel(run), color: run.color ?? 'white',
         ...(run.reason ? { reason: run.reason } : {}),
         ...(proposals ? { proposals } : {}),
       },
@@ -179,10 +179,12 @@ export function mergeRoutineBlocks(
 export interface RoutineItemP {
   id: string; name: string; scheduleLabel: string; kind: 'read-only' | 'takes-actions'; enabled: boolean
   nextRunLabel: string; lastRunLabel?: string; running: boolean; error?: string
+  /** Canonical text for the inline editor — '' for an invalid routine. */
+  schedule: string; window: string; prompt: string; color: string
 }
 
 export interface RoutineRunDetailP {
-  runId: string; routineId: string; name: string; status: string; trigger: string; firedAt: number
+  runId: string; routineId: string; name: string; status: string; trigger: string; firedAt: number; color: string
   endedAt?: number; windowLabel?: string; totals?: string; provider?: string
   activity: Array<{ at: number; text: string }>; result?: string; error?: string
   canCancel: boolean; hasTranscript: boolean
@@ -206,6 +208,7 @@ function routineItemPayload(item: RoutineItemView, now: number): RoutineItemP {
     ...(item.lastRun ? { lastRunLabel: lastRunLabel(item.lastRun, now) } : {}),
     running: item.running,
     ...(item.error ? { error: item.error } : {}),
+    schedule: item.schedule, window: item.window, prompt: item.prompt, color: item.color,
   }
 }
 
@@ -213,7 +216,7 @@ function runDetailPayload(run: RoutineRun, result: string | null, hasTranscript:
   const resolvedResult = result ?? run.resultPreview
   return {
     runId: run.id, routineId: run.routineId, name: run.name, status: run.status, trigger: triggerLabel(run),
-    firedAt: run.firedAt,
+    firedAt: run.firedAt, color: run.color ?? 'white',
     ...(run.endedAt !== undefined ? { endedAt: run.endedAt } : {}),
     ...(run.window?.label ? { windowLabel: run.window.label } : {}),
     ...(run.manifestTotals ? { totals: `${run.manifestTotals.sessions} sessions · ${run.manifestTotals.turns} turns` } : {}),

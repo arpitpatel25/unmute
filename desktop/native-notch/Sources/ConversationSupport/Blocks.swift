@@ -135,6 +135,8 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
     // trigger/text, what (the run id), reason and, for routineResult, path
     // (the routine id) and startedAt (the run's firedAt).
     public let proposals: [BlockProposal]?
+    /// The routine's palette colour name — "white" | "red" | "blue" | "yellow" | "green" | "pink".
+    public let color: String?
 
     /// Stable within one render pass. Blocks carry no id of their own — the
     /// index is supplied by the presenter, which is the only thing that knows
@@ -164,8 +166,10 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
                 before: Int? = nil, after: Int? = nil, trigger: String? = nil,
                 startedAt: Int? = nil, raw: String? = nil, mimeType: String? = nil, bytes: Int? = nil,
                 diff: String? = nil, changes: [FileChange]? = nil, error: String? = nil, outcome: String? = nil,
-                format: String? = nil, source: String? = nil, proposals: [BlockProposal]? = nil) {
+                format: String? = nil, source: String? = nil, proposals: [BlockProposal]? = nil,
+                color: String? = nil) {
         self.proposals = proposals
+        self.color = color
         self.format = format; self.source = source
         self.diff = diff; self.changes = changes; self.error = error; self.outcome = outcome
         self.mimeType = mimeType; self.bytes = bytes

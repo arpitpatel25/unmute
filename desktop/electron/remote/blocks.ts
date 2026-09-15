@@ -118,7 +118,7 @@ export type Block =
    * as its own turn in the Agent chat — see notch/routine-blocks.ts for the
    * merge that places it among the Agent's own blocks by time.
    */
-  | { kind: 'routineRun'; at: number; name: string; status: RunStatus; trigger: string; what: string; reason?: string }
+  | { kind: 'routineRun'; at: number; name: string; status: RunStatus; trigger: string; what: string; color?: string; reason?: string }
   | {
       kind: 'routineResult'
       at: number
@@ -130,6 +130,10 @@ export type Block =
       what: string
       /** The routine id — reuses Swift Block.path. */
       path: string
+      /** What fired the run, worded like the start chip's trigger. */
+      trigger?: string
+      /** The routine's palette colour name. */
+      color?: string
       reason?: string
       proposals?: Array<{ id: string; title: string; detail: string; state: string }>
     }
