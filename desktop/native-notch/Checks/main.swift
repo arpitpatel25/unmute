@@ -69,6 +69,8 @@ check("arm event", (Event.scratchpadArm(true).json["type"] as? String) == "scrat
 check("remove event", (Event.scratchpadRemove(id: "e1").json["id"] as? String) == "e1")
 check("deliver event", (Event.scratchpadDeliver(dest: "openTask").json["dest"] as? String) == "openTask")
 check("discard event", (Event.scratchpadDiscard.json["type"] as? String) == "scratchpadDiscard")
+check("Agent provider switch event", (Event.agentSwitchProvider(provider: "claude").json["type"] as? String) == "agentSwitchProvider"
+      && (Event.agentSwitchProvider(provider: "claude").json["provider"] as? String) == "claude")
 
 // The unarmed fast path: a `pill` line must still decode exactly as before.
 guard case let .pill(ps) = Command.decode(#"{"type":"pill","state":{"phase":"recording","elapsed":3}}"#) else { check("pill still decodes", false); exit(1) }

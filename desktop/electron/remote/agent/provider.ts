@@ -86,7 +86,7 @@ export type AgentProviderErrorCode =
 
 /** Public errors are deliberately typed and path/driver-message free. */
 export class AgentProviderError extends Error {
-  constructor(readonly code: AgentProviderErrorCode) {
+  constructor(readonly code: AgentProviderErrorCode, readonly diagnostic?: string) {
     super(publicErrorMessage(code))
     this.name = 'AgentProviderError'
   }
@@ -297,9 +297,9 @@ export class CliProviderRuntime implements AgentProvider {
         await current.driver.submitUserTurn(input.transcript)
         if (input.requireObservedAcceptance) await withTimeout(current.observed.promise, this.options.handleTimeoutMs ?? 8_000)
         return { handle, activity: current.activity, completion: current.completion.promise, ...(current.model ? { model: current.model } : {}) }
-      } catch {
+      } catch (error) {
         await this.failAndClose(current)
-        throw new AgentProviderError(input.requireObservedAcceptance && current.driver.hasDispatched !== false ? 'acceptance-uncertain' : 'provider-unavailable')
+        throw providerFailure(input.requireObservedAcceptance && current.driver.hasDispatched !== false ? 'acceptance-uncertain' : 'provider-unavailable', error, input)
       }
     }
     if (current) {
@@ -369,9 +369,9 @@ export class CliProviderRuntime implements AgentProvider {
 
     try {
       await driver.start(launch)
-    } catch {
+    } catch (error) {
       await this.closeDriver(live)
-      throw new AgentProviderError('provider-unavailable')
+      throw providerFailure('provider-unavailable', error, input)
     }
     void this.consume(live)
 
@@ -380,9 +380,9 @@ export class CliProviderRuntime implements AgentProvider {
       try {
         await driver.submitUserTurn(input.transcript)
         submitted = true
-      } catch {
+      } catch (error) {
         await this.closeDriver(live)
-        throw new AgentProviderError(input.requireObservedAcceptance && driver.hasDispatched !== false ? 'acceptance-uncertain' : 'provider-unavailable')
+        throw providerFailure(input.requireObservedAcceptance && driver.hasDispatched !== false ? 'acceptance-uncertain' : 'provider-unavailable', error, input)
       }
     }
 
@@ -406,10 +406,10 @@ export class CliProviderRuntime implements AgentProvider {
     if (!submitted) {
       try {
         await driver.submitUserTurn(input.transcript)
-      } catch {
+      } catch (error) {
         this.active.delete(key)
         await this.closeDriver(live)
-        throw new AgentProviderError(input.requireObservedAcceptance && driver.hasDispatched !== false ? 'acceptance-uncertain' : 'provider-unavailable')
+        throw providerFailure(input.requireObservedAcceptance && driver.hasDispatched !== false ? 'acceptance-uncertain' : 'provider-unavailable', error, input)
       }
     }
     if (input.requireObservedAcceptance) {
@@ -564,6 +564,12 @@ function redact(value: string, input: AgentStartInput): string {
   return out
     .replace(/(^|[\s("'`])\/(?!\/)[^\s,;:)\]}"'`]+/g, '$1[path]')
     .replace(/[A-Za-z]:\\[^\s,;:)\]}"']+/g, '[path]')
+}
+
+function providerFailure(code: AgentProviderErrorCode, error: unknown, input: AgentStartInput): AgentProviderError {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  const diagnostic = message ? [...redact(message, input)].slice(0, 500).join('') : undefined
+  return new AgentProviderError(code, diagnostic)
 }
 
 export interface ProviderObservation {

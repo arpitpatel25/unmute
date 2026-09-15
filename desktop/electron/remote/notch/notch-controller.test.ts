@@ -2095,13 +2095,26 @@ test('the chat stays open while you read it', () => {
 
 test('durable Agent restore shows actual provider/full chat and preserves newer draft while enqueue awaits', async () => {
   let acknowledge!: () => void
-  const h = setup({ deps: { agentSend: async () => new Promise<void>(resolve => { acknowledge = resolve }) } })
+  const switched: string[] = []
+  const h = setup({ deps: {
+    agentSend: async () => new Promise<void>(resolve => { acknowledge = resolve }),
+    agentSwitchProvider: async (provider) => { switched.push(provider) },
+  } })
   const long = '🙂 full answer '.repeat(3000)
-  h.controller.restoreAgentConversation({ record: { generation: 2, phase: 'ready', provider: 'codex', model: 'observed-model', runId: 'r', effort: 'medium', ceiling: 20, accepted: [], snapshotId: 's' }, snapshot: { generation: 2, chat: { runId: 'r', turns: [{ role: 'agent', text: long, at: 1 }] }, draft: { text: 'first', revision: 1 }, queued: [] } })
+  h.controller.restoreAgentConversation({ selectedProvider: 'claude', record: { generation: 2, phase: 'ready', provider: 'codex', pendingProvider: 'claude', model: 'observed-model', runId: 'r', effort: 'medium', ceiling: 20, accepted: [], snapshotId: 's' }, snapshot: { generation: 2, chat: { runId: 'r', turns: [{ role: 'agent', text: long, at: 1 }] }, draft: { text: 'first', revision: 1 }, queued: [] } })
   h.client.fire({ type: 'pocketOpen' }); h.client.fire({ type: 'pocketExpand' }); h.flush()
   assert.equal(h.client.last('showTask')!.task.backend, 'codex')
   assert.equal(h.client.last('showTask')!.task.modelLabel, 'observed-model · medium')
+  assert.deepEqual(h.client.last('showTask')!.task.chatConfig, {
+    provider: 'claude', providerLabel: 'Claude', model: 'opus', modelLabel: 'Opus 5',
+    providers: [{ id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }],
+    models: [], efforts: [], permissions: [], cwd: '', mutable: true, busy: false,
+    error: 'Claude selected. The next message starts a new conversation.',
+  })
   assert.equal((h.client.last('showTask')!.task.blocks![0] as { text: string }).text, long)
+  h.client.fire({ type: 'agentSwitchProvider', provider: 'claude' } as never)
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.deepEqual(switched, ['claude'])
   h.client.fire({ type: 'sendDraft', id: 'unmute-agent' })
   h.client.fire({ type: 'setDraftText', id: 'unmute-agent', text: 'new edit', clientRevision: 2 })
   acknowledge(); await new Promise<void>(resolve => setImmediate(resolve)); h.flush()

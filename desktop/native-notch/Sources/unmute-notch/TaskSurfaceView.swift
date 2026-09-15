@@ -13,6 +13,7 @@ struct TaskSurfaceView: View {
     @ObservedObject var model: NotchModel
     let topInset: CGFloat
     @State private var confirmingRemoval = false
+    @State private var pendingAgentProvider: ChatChoiceP? = nil
 
     private var t: TaskDetail? { model.task }
 
@@ -113,6 +114,21 @@ struct TaskSurfaceView: View {
             } message: {
                 Text("This removes the task from Unmute. Provider history and project files are preserved.")
             }
+            .alert("Switch to \(pendingAgentProvider?.label ?? "provider")?", isPresented: agentProviderConfirmation) {
+                Button("Cancel", role: .cancel) { pendingAgentProvider = nil }
+                Button("Switch") {
+                    if let provider = pendingAgentProvider?.id {
+                        model.emit(.agentSwitchProvider(provider: provider))
+                    }
+                    pendingAgentProvider = nil
+                }
+            } message: {
+                if t?.status == .processing {
+                    Text("The current response will finish first. Then this conversation will be archived and a new one will start with a summary and your latest messages.")
+                } else {
+                    Text("This conversation will be archived. A new conversation will start with a summary and your latest messages.")
+                }
+            }
             if model.captureAimed {
                 AimedChip(level: model.captureLevel)
                     .padding(.bottom, 16)
@@ -147,7 +163,29 @@ struct TaskSurfaceView: View {
             // It stops there. A card the Agent OPENED is not the Agent: it is a
             // Claude or Codex session, its mark says which, and stamping `un` on
             // it too made every thread look like the Agent's own conversation.
-            if t.id == "unmute-agent", t.backend == nil {
+            if t.id == "unmute-agent", let config = t.chatConfig {
+                Menu {
+                    ForEach(config.providers, id: \.id) { provider in
+                        Button {
+                            if provider.id != config.provider { pendingAgentProvider = provider }
+                        } label: {
+                            if provider.id == config.provider {
+                                Label(provider.label, systemImage: "checkmark")
+                            } else {
+                                Text(provider.label)
+                            }
+                        }
+                    }
+                } label: {
+                    ProviderMark(backend: config.provider, terminal: true)
+                        .frame(minWidth: 22, minHeight: 22)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Provider: \(config.providerLabel). Click to switch.")
+            } else if t.id == "unmute-agent", t.backend == nil {
                 UnMark(height: 13)
             } else {
                 ProviderMark(backend: t.backend, terminal: t.hasTerminal)
@@ -211,6 +249,13 @@ struct TaskSurfaceView: View {
             }
             CloseButton { model.emit(.collapsed) }
         }
+    }
+
+    private var agentProviderConfirmation: Binding<Bool> {
+        Binding(
+            get: { pendingAgentProvider != nil },
+            set: { if !$0 { pendingAgentProvider = nil } }
+        )
     }
 
 

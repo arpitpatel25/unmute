@@ -89,6 +89,78 @@ test('rejected fresh reset keeps old chat and queue; only explicit retry publish
   } finally { await h.cleanup() }
 })
 
+test('switching provider clears a recoverable failure and retries the retained message on a fresh run', async () => {
+  const h = await harness()
+  try {
+    const first = h.lifecycle.submit({ transcript: 'working context', submissionId: 'first' })
+    await h.waitCalls(1); await h.accept(0); h.calls[0].settle(); await first
+    h.setReject(true)
+    const failed = await h.lifecycle.submit({ transcript: 'retained request', submissionId: 'retained' })
+    assert.equal(failed.outcome, 'failed')
+    assert.equal(h.lifecycle.view().snapshot.error, 'retained error')
+
+    await h.lifecycle.requestProvider('codex')
+    assert.equal(h.lifecycle.view().selectedProvider, 'codex')
+    assert.equal(h.lifecycle.view().record.pendingProvider, 'codex')
+    assert.equal(h.lifecycle.view().snapshot.error, undefined)
+
+    h.setReject(false)
+    const retry = h.lifecycle.retry()
+    await h.waitCalls(2)
+    assert.equal(h.calls[1].context.provider, 'codex')
+    assert.equal(h.calls[1].prior, undefined)
+    assert.equal(h.calls[1].context.carryoverRunId, h.calls[0].context.runId)
+    await h.accept(1); h.calls[1].settle(); await retry
+  } finally { await h.cleanup() }
+})
+
+test('a switch requested during a response waits for settlement and hands recent messages to the new provider', async () => {
+  const h = await harness()
+  try {
+    const first = h.lifecycle.submit({ transcript: 'opening question', submissionId: 'first' })
+    await h.waitCalls(1); await h.accept(0); h.calls[0].settle(); await first
+
+    const active = h.lifecycle.submit({ transcript: 'latest question', submissionId: 'active' })
+    await h.waitCalls(2); await h.accept(1)
+    await h.lifecycle.requestProvider('codex')
+    assert.equal(h.lifecycle.view().record.provider, 'claude')
+    assert.equal(h.lifecycle.view().record.pendingProvider, 'codex')
+    h.calls[1].settle(); await active
+
+    const continued = h.lifecycle.submit({ transcript: 'continue', submissionId: 'continued' })
+    await h.waitCalls(3)
+    assert.equal(h.calls[2].context.provider, 'codex')
+    assert.deepEqual(h.calls[2].context.handoff?.recentTurns.map(turn => [turn.role, turn.text]), [
+      ['user', 'opening question'],
+      ['agent', 'answer opening question'],
+      ['user', 'latest question'],
+      ['agent', 'answer latest question'],
+    ])
+    assert.match(h.calls[2].context.handoff?.summary ?? '', /opening question/)
+    await h.accept(2); h.calls[2].settle(); await continued
+  } finally { await h.cleanup() }
+})
+
+test('a provider handoff copies only the latest six complete exchanges and summarizes older work', async () => {
+  const h = await harness()
+  try {
+    for (let n = 1; n <= 8; n++) {
+      const pending = h.lifecycle.submit({ transcript: `question ${n}`, submissionId: `turn-${n}` })
+      await h.waitCalls(n); await h.accept(n - 1); h.calls[n - 1].settle(); await pending
+    }
+    await h.lifecycle.requestProvider('codex')
+    const switched = h.lifecycle.submit({ transcript: 'continue', submissionId: 'switched' })
+    await h.waitCalls(9)
+    const handoff = h.calls[8].context.handoff!
+    assert.equal(handoff.recentTurns.length, 12)
+    assert.equal(handoff.recentTurns[0].text, 'question 3')
+    assert.equal(handoff.recentTurns.at(-1)?.text, 'answer question 8')
+    assert.match(handoff.summary, /question 1/)
+    assert.match(handoff.summary, /question 2/)
+    await h.accept(8); h.calls[8].settle(); await switched
+  } finally { await h.cleanup() }
+})
+
 test('idle requires the threshold and an empty draft; successful rotation retains visible history', async () => {
   const h = await harness(2)
   try {

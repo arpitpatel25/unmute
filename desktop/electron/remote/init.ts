@@ -141,6 +141,7 @@ import { PersistentCodexHub } from './runtime/codex-client'
 import { CompatibleCodexRuntime } from './runtime/codex-routing'
 import { fileOwnershipStore } from './runtime/codex-ownership'
 import { CompatibleAgentRuntime, recoverAgentRuntime } from './runtime/agent-routing'
+import { agentRuntimeRoot } from './runtime/agent-schema'
 import { PersistentClaudeTaskSession } from './runtime/claude-client'
 import { AgentRuntimeClient } from './runtime/agent-client'
 import { registerRuntimeHost } from './runtime/host-bridge'
@@ -4896,7 +4897,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     })().catch(error => log.warn('Claude edit runtime recovery failed', { error: (error as Error).message }))
   })
   releaseRuntimeHost = registerRuntimeHost(persistentRuntime, invokeRuntimeHost)
-  const agentWorker = new PersistentRuntimeClient(join(app.getPath('userData'), 'persistent-runtime-agent-metadata-v1'), join(__dirname, 'unmute-runtime.js'))
+  const agentWorker = new PersistentRuntimeClient(agentRuntimeRoot(app.getPath('userData')), join(__dirname, 'unmute-runtime.js'))
   releaseAgentRuntimeHost = registerRuntimeHost(agentWorker, invokeRuntimeHost)
   agentRuntimeRouting = new CompatibleAgentRuntime(persistentRuntime, agentWorker)
   agentRuntimeRouting.on('reconnected', () => {
@@ -5532,6 +5533,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         }),
         agentDraftChanged: (text, revision) => unmuteAgentLifecycle?.setDraft(text, revision) ?? Promise.reject(new Error('Agent unavailable')),
         agentRetry: async () => { await unmuteAgentLifecycle?.retry() },
+        agentSwitchProvider: async (provider) => {
+          if (!unmuteAgentLifecycle) throw new Error('Agent unavailable')
+          await unmuteAgentLifecycle.requestProvider(provider)
+          settings.set('unmuteAgentProvider', provider)
+          log.event('unmute-agent-provider-set', { provider, via: 'notch' })
+        },
         // ONE CONVERSATION AT A TIME: starting a new one ends the old one, it
         // does not sit beside it. Refused rather than forced while a turn is
         // running, so nothing is discarded out from under a live provider.

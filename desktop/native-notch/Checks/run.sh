@@ -51,7 +51,7 @@ bin=$(swift build --package-path "$pkg" --show-bin-path)
 # The support modules these files import. Test bundles are excluded on purpose:
 # `*Tests.build` also holds `.o` files and linking them pulls in XCTest.
 objs=""
-for m in ConversationSupport SurfaceSizeSupport LifecycleSupport; do
+for m in ConversationSupport SurfaceSizeSupport LifecycleSupport IPCSupport; do
   [ -d "$bin/$m.build" ] || { echo "MISSING: $bin/$m.build — did swift build fail?" >&2; exit 1; }
   for o in "$bin/$m.build"/*.o; do objs="$objs $o"; done
 done

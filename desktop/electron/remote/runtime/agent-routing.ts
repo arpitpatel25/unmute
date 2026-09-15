@@ -2,6 +2,7 @@ import { RuntimeRpcClient } from './rpc'
 import type { AgentRuntimeConfig } from './agent-service'
 import type { AgentConversationView } from '../agent/lifecycle'
 import { diagnostic } from '../diagnostics'
+import { AGENT_RUNTIME_SCHEMA } from './agent-schema'
 
 type Snapshot = { view?: AgentConversationView }
 /** Refresh configuration only after process loss, obtaining keys from the UI
@@ -9,7 +10,7 @@ type Snapshot = { view?: AgentConversationView }
 export async function recoverAgentRuntime(rpc: RuntimeRpcClient, configure: () => Promise<void | false>, reconnect: () => Promise<void>): Promise<void> {
   if (!(await rpc.call<Snapshot>('agent.snapshot')).view) {
     if (await configure() === false) return
-    diagnostic('agent-runtime-reconfigured', { runtimeSchema: 'agent-metadata-v1', reason: 'worker-restarted' })
+    diagnostic('agent-runtime-reconfigured', { runtimeSchema: AGENT_RUNTIME_SCHEMA, reason: 'worker-restarted' })
   }
   await reconnect()
 }
@@ -46,14 +47,14 @@ export class CompatibleAgentRuntime extends RuntimeRpcClient {
         this.owner = this.current
         this.config = undefined
         await this.current.call('hello')
-        diagnostic('agent-runtime-owner-selected', { runtimeSchema: 'agent-metadata-v1', reused: true })
+        diagnostic('agent-runtime-owner-selected', { runtimeSchema: AGENT_RUNTIME_SCHEMA, reused: true })
         return false
       }
       this.owner = this.legacy
     }
     if (!upgrade || !this.config) return false
     if (busy(old)) {
-      diagnostic('agent-runtime-upgrade-deferred', { runtimeSchema: 'agent-metadata-v1', reason: 'legacy-busy' })
+      diagnostic('agent-runtime-upgrade-deferred', { runtimeSchema: AGENT_RUNTIME_SCHEMA, reason: 'legacy-busy' })
       return false
     }
     if (old.view) await this.legacy.call('agent.disable')
@@ -62,7 +63,7 @@ export class CompatibleAgentRuntime extends RuntimeRpcClient {
     this.owner = this.current
     await this.current.call('agent.configure', this.config)
     this.config = undefined
-    diagnostic('agent-runtime-upgraded', { runtimeSchema: 'agent-metadata-v1' })
+    diagnostic('agent-runtime-upgraded', { runtimeSchema: AGENT_RUNTIME_SCHEMA })
     return true
   }
   override async call<T = any>(method: string, ...args: unknown[]): Promise<T> {

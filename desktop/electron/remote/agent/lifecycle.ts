@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { AGENT_TURN_CEILING } from './continuity'
 import { AgentProviderError, type AgentProviderId } from './provider'
-import type { AgentInteractionInput, AgentInteractionResult, AgentSubmissionContext } from './controller'
+import type { AgentConversationHandoff, AgentInteractionInput, AgentInteractionResult, AgentSubmissionContext } from './controller'
 import type { AgentConversationRecord, AgentJournal, JournalAgentRun } from './journal'
 import type { AgentConversationSnapshot, AgentConversationStore, AgentPendingSettlement } from './conversation-store'
 import { diagnostic } from '../diagnostics'
 
-export interface AgentConversationView { record: AgentConversationRecord; snapshot: AgentConversationSnapshot }
+export interface AgentConversationView { record: AgentConversationRecord; snapshot: AgentConversationSnapshot; selectedProvider?: AgentProviderId }
 interface Options {
   journal: Pick<AgentJournal, 'read' | 'checkpointConversation'>
   store: Pick<AgentConversationStore, 'write' | 'read' | 'remove' | 'established' | 'markEstablished' | 'writeSettlement' | 'readSettlement' | 'clearSettlement'>
@@ -41,7 +41,11 @@ export class AgentConversationLifecycle {
     return this.initialization ??= this.restore().catch(error => { this.initialization = undefined; throw error })
   }
   view(): AgentConversationView {
-    const view = structuredClone({ record: this.record, snapshot: this.snapshot })
+    const view = structuredClone({
+      record: this.record,
+      snapshot: this.snapshot,
+      selectedProvider: this.record.pendingProvider ?? this.record.provider ?? this.options.selectedProvider(),
+    })
     if (this.pendingSettlement) {
       applySettlement(view, this.pendingSettlement)
       view.snapshot.settlementPending = true
@@ -74,6 +78,9 @@ export class AgentConversationLifecycle {
       }
       if (input.priorRunId && input.priorRunId !== this.record.runId) {
         completion = Promise.resolve(failure('That Agent conversation is not the current conversation.', 'run-unavailable')); return
+      }
+      if (this.snapshot.retryRequired) {
+        completion = Promise.resolve(failure('Retry or discard the retained Agent message before sending another.', 'interaction-failed')); return
       }
       const snapshot = structuredClone(this.snapshot)
       // Prepare lazily on the next interaction: no provider is started solely
@@ -134,8 +141,18 @@ export class AgentConversationLifecycle {
     if (provider !== 'claude' && provider !== 'codex') throw new Error('Invalid Agent provider')
     await this.lock(async () => {
       const record = { ...this.record }
+      const snapshot = structuredClone(this.snapshot)
+      const current = record.pendingProvider ?? record.provider ?? this.options.selectedProvider()
+      if (provider === current) return
       record.pendingProvider = provider
-      await this.publish(record, this.snapshot)
+      if (record.phase !== 'recovery-required' && snapshot.error) {
+        delete snapshot.error
+        snapshot.retryRequired = snapshot.queued.length > 0
+        snapshot.notice = snapshot.retryRequired
+          ? `Provider changed to ${providerName(provider)}. Retry the retained message when ready.`
+          : `Provider changed to ${providerName(provider)}. The next message starts a new conversation.`
+      }
+      await this.publish(record, snapshot)
     })
   }
 
@@ -153,6 +170,7 @@ export class AgentConversationLifecycle {
       const first = this.snapshot.queued[0]
       if (!first) { completion = Promise.resolve(failure('No retained Agent input to retry.')); return }
       const snapshot = { ...this.snapshot }; delete snapshot.error
+      delete snapshot.retryRequired
       await this.publish(this.record, snapshot)
       let waiter = this.waiting.get(first.submissionId)
       if (!waiter) { waiter = waiting(); this.waiting.set(first.submissionId, waiter) }
@@ -251,7 +269,7 @@ export class AgentConversationLifecycle {
     if (this.draining || this.stopped) return
     this.draining = true
     try {
-      while (!this.stopped && !this.pendingSettlement && this.snapshot.queued.length && !this.snapshot.error && this.record.phase !== 'recovery-required') await this.turn()
+      while (!this.stopped && !this.pendingSettlement && this.snapshot.queued.length && !this.snapshot.error && !this.snapshot.retryRequired && this.record.phase !== 'recovery-required') await this.turn()
     } catch {
       if (!this.stopped) {
         this.snapshot.error = 'The Agent conversation could not be saved. Input has been retained; retry after storage recovers.'
@@ -284,6 +302,9 @@ export class AgentConversationLifecycle {
       result = await this.options.controller.submit({ ...input, priorRunId: fresh ? undefined : prepared.candidateRunId }, {
         interactionId: prepared.interactionId, runId: prepared.candidateRunId, provider,
         ...(fresh && this.record.runId ? { carryoverRunId: this.record.runId } : {}),
+        ...(fresh && this.record.runId && this.record.provider
+          ? { handoff: conversationHandoff(this.snapshot, this.record.provider) }
+          : {}),
         onAccepted: async run => {
           await this.lock(async () => {
             this.assertPrepared(prepared)
@@ -311,6 +332,7 @@ export class AgentConversationLifecycle {
             snapshot.chat.turns.push({ role: 'user', text: input.transcript, at: Date.now() })
             snapshot.queued = snapshot.queued.filter(q => q.submissionId !== prepared.submissionId)
             delete snapshot.error
+            delete snapshot.retryRequired
             try { await this.publish(record, snapshot, [run]) }
             catch {
               acceptanceUncertain = true
@@ -408,6 +430,53 @@ function applySettlement(view: AgentConversationView, pending: AgentPendingSettl
 }
 
 function waiting(): Waiting { let resolve!: Waiting['resolve']; const promise = new Promise<AgentInteractionResult>(r => { resolve = r }); return { promise, resolve } }
+function providerName(provider: AgentProviderId): string { return provider === 'claude' ? 'Claude' : 'Codex' }
+
+const HANDOFF_EXCHANGES = 6
+const HANDOFF_RECENT_CODE_POINTS = 24 * 1024
+const HANDOFF_SUMMARY_CODE_POINTS = 4 * 1024
+
+function conversationHandoff(snapshot: AgentConversationSnapshot, fromProvider: AgentProviderId): AgentConversationHandoff {
+  const pairs: Array<Array<{ role: 'user' | 'agent'; text: string }>> = []
+  let user: { role: 'user'; text: string } | undefined
+  for (const turn of snapshot.chat.turns) {
+    if (turn.role === 'user') user = { role: 'user', text: turn.text }
+    else if (user) {
+      pairs.push([user, { role: 'agent', text: turn.text }])
+      user = undefined
+    }
+  }
+  const recentTurns = boundRecentTurns(pairs.slice(-HANDOFF_EXCHANGES).flat())
+  const older = pairs.slice(0, -HANDOFF_EXCHANGES)
+  const summarySource = older.length > 0 ? older : pairs.slice(0, 1)
+  const summaryBody = summarySource.map(pair => (
+    `User: ${excerpt(pair[0].text, 320)}\nAssistant: ${excerpt(pair[1].text, 320)}`
+  )).join('\n\n')
+  const summary = excerpt(
+    `Previous ${providerName(fromProvider)} conversation: ${pairs.length} completed exchange${pairs.length === 1 ? '' : 's'}.`
+    + (summaryBody ? `\n${summaryBody}` : ''),
+    HANDOFF_SUMMARY_CODE_POINTS,
+  )
+  return { fromProvider, summary, recentTurns }
+}
+
+function boundRecentTurns(turns: Array<{ role: 'user' | 'agent'; text: string }>): Array<{ role: 'user' | 'agent'; text: string }> {
+  let remaining = HANDOFF_RECENT_CODE_POINTS
+  const bounded: Array<{ role: 'user' | 'agent'; text: string }> = []
+  for (const turn of [...turns].reverse()) {
+    if (remaining <= 0) break
+    const text = excerpt(turn.text, remaining)
+    remaining -= [...text].length
+    bounded.push({ role: turn.role, text })
+  }
+  return bounded.reverse()
+}
+
+function excerpt(text: string, cap: number): string {
+  const points = [...text.trim()]
+  return points.length <= cap ? points.join('') : `${points.slice(0, Math.max(0, cap - 1)).join('')}…`
+}
+
 function failure(message: string, code: NonNullable<AgentInteractionResult['error']>['code'] = 'interaction-failed'): AgentInteractionResult {
   return { interactionId: '', agentRunId: '', source: 'provider', outcome: 'failed', presentation: 'transient', error: { code, message } }
 }

@@ -27,6 +27,7 @@ import { nextFocusedComposer, type ComposerFocusEvent } from './composerFocus'
 import { conciseLine } from '../agent/conversation'
 import { randomUUID } from 'node:crypto'
 import type { AgentConversationView } from '../agent/lifecycle'
+import { agentModel, agentModelLabel } from '../agent/modelPolicy'
 
 const log = createLogger('notch-controller')
 
@@ -170,6 +171,7 @@ export interface NotchControllerDeps {
   agentSend?(text: string, submission: { submissionId: string; revision: number }): Promise<void>
   agentDraftChanged?(text: string, revision: number): Promise<void>
   agentRetry?(): Promise<void>
+  agentSwitchProvider?(provider: 'claude' | 'codex'): Promise<void>
   /** End the Agent conversation and keep nothing. */
   agentNewConversation?(): Promise<void>
   /** THE VOICE IS POINTED AT THE AGENT (its card is in front, or its chat is
@@ -507,6 +509,8 @@ export class NotchController {
   private agentDraft = ''
   private agentDraftRevision = 0
   private agentProvider?: 'claude' | 'codex'
+  private agentSelectedProvider: 'claude' | 'codex' = 'claude'
+  private agentPendingProvider?: 'claude' | 'codex'
   private agentModel?: string
   private agentError?: string
   private agentCanRetry = false
@@ -598,6 +602,11 @@ export class NotchController {
       this.sendAgentDraft(event.submissionId, event.revision)
     })
     on('agentRetry', () => { void this.deps.agentRetry?.().catch(error => this.agentUnavailable((error as Error).message)) })
+    on('agentSwitchProvider', e => {
+      const provider = (e as { provider?: unknown }).provider
+      if (provider !== 'claude' && provider !== 'codex') return
+      void this.deps.agentSwitchProvider?.(provider).catch(error => this.agentUnavailable((error as Error).message))
+    })
     on('agentNewConversation', () => { void this.deps.agentNewConversation?.().catch(error => this.agentUnavailable((error as Error).message)) })
     on('surfaceFillChanged', e => {
       const fill = (e as { fill: number }).fill
@@ -1790,6 +1799,12 @@ export class NotchController {
   /** The Agent's chat, in the same payload every other backend renders into. */
   private sendAgentDetail(): void {
     if (this.historyTask !== NotchController.AGENT_SLOT) { this.historyTask = NotchController.AGENT_SLOT; this.historyLimit = 10 }
+    const selected = this.agentSelectedProvider
+    const pendingMessage = this.agentPendingProvider
+      ? this.agentBusy
+        ? `Switching to ${providerLabel(this.agentPendingProvider)} when the current response finishes.`
+        : `${providerLabel(this.agentPendingProvider)} selected. The next message starts a new conversation.`
+      : undefined
     const detail: TaskDetailP = {
       id: NotchController.AGENT_SLOT,
       title: 'Unmute',
@@ -1808,7 +1823,16 @@ export class NotchController {
       resumable: false,
       ...messageWindow(this.agentBlocks, this.historyLimit),
       draft: { text: this.agentDraft, attachments: [], clientRevision: this.agentDraftRevision },
-      ...(this.agentBusy ? { activity: 'Thinking' } : {}),
+      chatConfig: {
+        provider: selected,
+        providerLabel: providerLabel(selected),
+        model: agentModel(selected),
+        modelLabel: agentModelLabel(selected),
+        providers: [{ id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }],
+        models: [], efforts: [], permissions: [], cwd: '', mutable: true, busy: this.agentBusy,
+        ...(pendingMessage ? { error: pendingMessage } : {}),
+      },
+      ...(this.agentBusy ? { activity: pendingMessage ?? 'Thinking' } : {}),
     }
     this.client.send({ type: 'showTask', task: detail })
   }
@@ -2129,13 +2153,15 @@ export class NotchController {
     log.ui('agent-chat', { shown: false, why: 'another surface took the front' })
   }
 
-  restoreAgentConversation({ record, snapshot }: AgentConversationView): void {
+  restoreAgentConversation({ record, snapshot, selectedProvider }: AgentConversationView): void {
     const previousAnswer = this.agentLine?.at
     this.agentProvider = record.provider ?? undefined
+    this.agentSelectedProvider = selectedProvider ?? record.pendingProvider ?? record.provider ?? 'claude'
+    this.agentPendingProvider = record.pendingProvider
     this.agentModel = record.model
     this.agentBusy = !snapshot.settlementPending && (record.phase === 'sending' || !!record.prepared && record.phase !== 'recovery-required')
     this.agentError = snapshot.error
-    this.agentCanRetry = !!snapshot.settlementPending || !!snapshot.error && record.phase !== 'recovery-required' && snapshot.queued.length > 0
+    this.agentCanRetry = !!snapshot.settlementPending || (!!snapshot.error || snapshot.retryRequired === true) && record.phase !== 'recovery-required' && snapshot.queued.length > 0
     if (snapshot.draft.revision >= this.agentDraftRevision) {
       this.agentDraft = snapshot.draft.text; this.agentDraftRevision = snapshot.draft.revision
     }
@@ -2935,4 +2961,8 @@ export class NotchController {
    *  a parallel recount — see sendPocket. */
   get attentionCount(): number { return this.lastWaiting }
   get engagedState(): Engaged { return this.engaged }
+}
+
+function providerLabel(provider: 'claude' | 'codex'): string {
+  return provider === 'claude' ? 'Claude' : 'Codex'
 }
