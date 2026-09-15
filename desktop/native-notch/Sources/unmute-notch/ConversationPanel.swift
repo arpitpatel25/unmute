@@ -419,7 +419,9 @@ struct StageComposer: View {
                                      })
                         .frame(height: ComposerHeight.resolve(measured: editorHeight))
                         .focused($focused)
-                    if config == nil, let m = modelLabel, !m.isEmpty {
+                    if taskId == "unmute-agent", let config {
+                        Text(config.modelLabel).font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
+                    } else if config == nil, let m = modelLabel, !m.isEmpty {
                         Text(m).font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
                     }
                     if sending {
@@ -490,7 +492,7 @@ struct StageComposer: View {
     /// reasonable time". Pulling it out costs nothing and keeps the next
     /// addition from having to discover that again.
     @ViewBuilder private var controls: some View {
-        if let config {
+        if let config, taskId != "unmute-agent" {
             ComposerControls(
                 config: config,
                 change: { model.emit(.configureChat(id: taskId, field: $0, value: $1)) },
