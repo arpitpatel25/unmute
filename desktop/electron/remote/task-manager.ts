@@ -99,7 +99,7 @@ import type { Block } from './blocks'
 import { blocksFromClaudeTranscript } from './blocks-claude'
 import { ClaudeTaskSession, type ClaudeTaskOptions } from './claude/task-session'
 import { ClaudeTaskChannel } from './claude/task-channel'
-import { readClaudeHistory, retainClaudeHistoryDisplay } from './claude/chat-history'
+import { CLAUDE_HISTORY_STALE_MARKER, readClaudeHistory, retainClaudeHistoryDisplay } from './claude/chat-history'
 import { isDeepStrictEqual } from 'node:util'
 import type { TaskInput } from './task-input'
 import { blocksFromRollout } from './codex/blocks-rollout'
@@ -1368,8 +1368,13 @@ export class TaskManager extends EventEmitter {
       })
       // Startup reattachment receives only a bounded daemon tail. Never let
       // that projection replace the complete durable frame file; opening the
-      // card merges history and re-enables persistence.
-      if (resume && !hydrateHistory) channel.suspendPersistence()
+      // card merges history and re-enables persistence. Until then the file
+      // falls behind whatever the session keeps doing, so mark it stale:
+      // otherwise a later read trusts it and never consults provider history.
+      if (resume && !hydrateHistory) {
+        channel.suspendPersistence()
+        await writeFileAtomic(join(task.home, CLAUDE_HISTORY_STALE_MARKER), '')
+      }
       if ((resume && hydrateHistory) || task.claudeForkFromSessionId) {
         const recovered = await readClaudeHistory({ ...task, sessionId: !resume && task.claudeForkFromSessionId ? task.claudeForkFromSessionId : task.sessionId, chatUnstarted: false })
         restoredFrames = recovered.frames
@@ -3185,8 +3190,18 @@ export class TaskManager extends EventEmitter {
       task.history = recovered.history
       if (recovered.frames.some(f => f.type === 'user' || f.type === 'assistant')) {
         const live = this.claudeTasks.get(id)?.channel
-        if (live) live.mergeHistory(recovered.frames)
-        else {
+        if (live) {
+          live.mergeHistory(recovered.frames)
+          // The merged, complete frames are now being saved. Only then may the
+          // marker go; a partial read keeps it so the next open recovers again.
+          if (recovered.history.phase === 'ready') {
+            const failedBefore = task.deliveryError
+            await this.claudeHistoryWrites.get(id)
+            // The writer reports a failed save only through deliveryError.
+            const saveFailed = task.deliveryError !== failedBefore && task.deliveryError?.startsWith('Could not save chat history')
+            if (!saveFailed) await fs.rm(join(task.home, CLAUDE_HISTORY_STALE_MARKER), { force: true })
+          }
+        } else {
           const parsed = blocksFromClaudeTranscript(ClaudeTaskChannel.displayTranscript(recovered.frames))
           // Block-only legacy/local display has no UUIDs to reconcile safely.
           // Keep it intact until complete history can replace it; partial raw

@@ -318,6 +318,57 @@ test('restart restores metadata only and loads structured history when the card 
   restarted.shutdown()
 })
 
+test('work a reconnected session does before its card is opened still appears after the runtime is gone', async () => {
+  const baseDir = await mkdtemp(join(tmpdir(), 'unmute-stale-history-'))
+  const previousHome = process.env.HOME
+  process.env.HOME = join(baseDir, 'home')
+  try {
+    const factory = (options: ClaudeTaskOptions) => { emit = options.onEvent; return { alive: true, busy: false, async start() {}, close() {} } as never }
+    let emit!: ClaudeTaskOptions['onEvent']
+    const make = () => new TaskManager({ baseDir, executorFactory: () => { throw new Error('No PTY') },
+      claudeSessionOptions: async task => ({ binary: 'fake', cwd: task.cwd }), claudeTaskFactory: factory })
+    const saved = { type: 'user', uuid: 'u1', message: { content: [{ type: 'text', text: 'Before restart' }] } }
+    const later = { type: 'assistant', uuid: 'a2', message: { content: [{ type: 'text', text: 'Finished while unopened' }] } }
+
+    const first = make()
+    const id = await first.dispatch('Hello')
+    const { home, sessionId } = first.get(id)!
+    await (first as any).persistState(first.get(id))
+    await writeFile(join(home, 'chat-frames.json'), JSON.stringify([saved]))
+    first.shutdown()
+
+    // Startup with the Claude runtime still alive; the card is never opened.
+    const reconnected = make()
+    await reconnected.rehydrate()
+    assert.equal(await reconnected.resume(id, { touchActivity: false, hydrateHistory: false }), true)
+    emit({ type: 'message', message: later } as never)
+    await (reconnected as any).claudeHistoryWrites.get(id)
+    reconnected.shutdown()
+    const project = join(process.env.HOME, '.claude', 'projects', 'moved')
+    await fs.mkdir(project, { recursive: true })
+    await writeFile(join(project, `${sessionId}.jsonl`), [saved, later].map(f => JSON.stringify({ ...f, sessionId })).join('\n'))
+
+    // Next launch: the runtime is gone, and the card is opened.
+    const reopened = make()
+    await reopened.rehydrate()
+    await reopened.loadBlocksFor(id)
+    assert.deepEqual(reopened.get(id)?.blocks?.map(b => (b as any).text), ['Before restart', 'Finished while unopened'])
+    reopened.shutdown()
+
+    // Once a live card has merged and saved complete history, the marker goes.
+    const merged = make()
+    await merged.rehydrate()
+    assert.equal(await merged.resume(id, { touchActivity: false, hydrateHistory: false }), true)
+    await merged.loadBlocksFor(id)
+    await (merged as any).claudeHistoryWrites.get(id)
+    assert.deepEqual(JSON.parse(await readFile(join(home, 'chat-frames.json'), 'utf8')).map((f: any) => f.uuid), ['u1', 'a2'])
+    await assert.rejects(stat(join(home, 'chat-frames.stale')))
+    merged.shutdown()
+  } finally {
+    process.env.HOME = previousHome
+  }
+})
+
 test('partial recovery cannot erase readable block-only content during reconnect and persisted replay', async () => {
   const baseDir = await mkdtemp(join(tmpdir(), 'unmute-partial-reconnect-'))
   const manager = new TaskManager({ baseDir, executorFactory: () => { throw new Error('No PTY') },

@@ -7,6 +7,10 @@ import type { Block } from '../blocks'
 type Frame = Record<string, any>
 export type ClaudeHistory = { frames: Frame[]; history: HistoryState }
 const incomplete = (frames: Frame[]) => frames.some(f => f.unmuteHistoryIncomplete === true)
+/** Beside chat-frames.json while a reconnected session runs with saving
+ * suspended: the saved file may be missing newer turns, so it cannot be
+ * trusted alone and provider history is merged in on read. */
+export const CLAUDE_HISTORY_STALE_MARKER = 'chat-frames.stale'
 
 /** A block-only older display has no UUIDs to reconcile. Keep raw recovery
  * privately, but checkpoint the readable projection until complete recovery. */
@@ -64,7 +68,8 @@ export async function readClaudeHistory(task: { home: string; cwd: string; sessi
     const value: unknown = JSON.parse(await fs.readFile(join(task.home, 'chat-frames.json'), 'utf8'))
     if (!Array.isArray(value) || value.some(f => !f || typeof f !== 'object' || !['user', 'assistant', 'system'].includes(f.type))) throw new Error('Invalid saved history frames')
     saved = value
-    if (saved.length && !incomplete(saved)) return { frames: saved, history: { phase: 'ready' } }
+    const stale = await fs.access(join(task.home, CLAUDE_HISTORY_STALE_MARKER)).then(() => true, () => false)
+    if (saved.length && !incomplete(saved) && !stale) return { frames: saved, history: { phase: 'ready' } }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') failure = `Could not read saved history: ${(error as Error).message}`
   }
