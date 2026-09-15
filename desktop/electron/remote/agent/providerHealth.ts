@@ -1,25 +1,20 @@
-// Falling back to the other CLI when the chosen one is not working.
+// Remembering provider health without changing the provider the user chose.
 //
 // The Agent lane reads ONE setting — `unmuteAgentProvider` — and, before this
-// module, used it unconditionally. When that provider stopped working the lane
-// simply stopped: every session summary failed, the sweep abandoned, and the
-// same doomed call was made again sixty seconds later, forever. Observed in the
-// field as 12 failed CLI launches a minute for hours, with `recent-sessions.md`
-// never written once.
+// module, repeatedly retried it while unavailable. Health state can suppress
+// wasteful background retries, but it must never route an interaction to a
+// different provider: provider identity is a user-visible decision.
 //
 // WHY NO ERROR CLASSIFICATION. An earlier design parsed the failure text to
 // tell "out of credits" from "auth expired" from a network blip, and parsed the
 // reset timestamp out of the message. That is a lot of string matching against
 // another tool's human-readable output, which changes without notice. A failure
-// is a failure: the request did not get done, and the other provider is sitting
-// right there. So any failure counts, and the cooldown is a fixed window rather
+// is a failure, so any failure counts and the cooldown is a fixed window rather
 // than a parsed deadline.
 //
-// WHY A COOLDOWN AND NOT JUST RETRY-ON-FAILURE. Retrying without memory is
-// correct but wasteful: every call still tries the broken provider first, so
-// the 12 doomed launches a minute stay exactly as they were and merely get a
-// working second attempt bolted on. Remembering the failure for a window is
-// what actually stops the spend.
+// WHY A COOLDOWN. Remembering the failure lets automatic background work avoid
+// repeatedly launching a broken provider. It is scheduling state, never
+// permission to substitute another provider.
 //
 // WHY THE USER'S SETTING IS NEVER WRITTEN. This state is in-memory and
 // deliberately not persisted. The Notetaker's equivalent calls
@@ -92,24 +87,13 @@ export class ProviderHealth {
     return false
   }
 
-  /**
-   * The providers to try, preferred first.
-   *
-   * Returns the preferred provider even when every provider is cooling down:
-   * the caller still has to attempt something, and attempting the user's own
-   * choice is the least surprising thing to do. `installed` filters to CLIs
-   * that are actually present, so a machine with only one of them never
-   * "falls back" to a binary that does not exist.
-   */
+  /** The only provider a user request may use. Availability is reported to the
+   * caller; it is never repaired by silently substituting another identity. */
   order(
     preferred: AgentProviderId,
-    installed: (provider: AgentProviderId) => boolean = () => true,
+    _installed: (provider: AgentProviderId) => boolean = () => true,
   ): AgentProviderId[] {
-    const candidates = [preferred, ...PROVIDER_IDS.filter((id) => id !== preferred)]
-      .filter((id) => installed(id))
-    const usable = candidates.filter((id) => this.isUsable(id))
-    if (usable.length > 0) return usable
-    return candidates.length > 0 ? [candidates[0]] : [preferred]
+    return [preferred]
   }
 
   /** For logging and the availability payload the UI reads. */

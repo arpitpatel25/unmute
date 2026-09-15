@@ -12,16 +12,15 @@ function clock(start = 1_000_000) {
 test('a provider that has not failed is usable, and preferred stays first', () => {
   const health = new ProviderHealth()
   assert.equal(health.isUsable('codex'), true)
-  assert.deepEqual(health.order('codex'), ['codex', 'claude'])
-  assert.deepEqual(health.order('claude'), ['claude', 'codex'])
+  assert.deepEqual(health.order('codex'), ['codex'])
+  assert.deepEqual(health.order('claude'), ['claude'])
 })
 
-test('any failure routes the next request to the other provider', () => {
+test('a provider failure never silently routes work to another provider', () => {
   const health = new ProviderHealth()
   health.markFailed('codex')
   assert.equal(health.isUsable('codex'), false)
-  // The whole point: the user's setting still says codex, but the work runs.
-  assert.deepEqual(health.order('codex'), ['claude'])
+  assert.deepEqual(health.order('codex'), ['codex'])
 })
 
 test('the cooldown lapses on its own and the preferred provider resumes', () => {
@@ -34,7 +33,7 @@ test('the cooldown lapses on its own and the preferred provider resumes', () => 
 
   c.advance(1)
   assert.equal(health.isUsable('codex'), true, 'usable again the moment the window elapses')
-  assert.deepEqual(health.order('codex'), ['codex', 'claude'], 'and is preferred again, with nothing to undo')
+  assert.deepEqual(health.order('codex'), ['codex'], 'and remains the only selected provider')
 })
 
 test('a success clears the cooldown early', () => {
@@ -63,9 +62,9 @@ test('a CLI that is not installed is never fallen back to', () => {
   assert.deepEqual(health.order('codex', (id) => id === 'codex'), ['codex'])
 })
 
-test('an uninstalled preferred provider falls straight through to the installed one', () => {
+test('an uninstalled preferred provider remains selected and fails visibly', () => {
   const health = new ProviderHealth()
-  assert.deepEqual(health.order('codex', (id) => id === 'claude'), ['claude'])
+  assert.deepEqual(health.order('codex', (id) => id === 'claude'), ['codex'])
 })
 
 test('the snapshot reports the cooldown deadline for the UI, and drops it once lapsed', () => {

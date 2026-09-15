@@ -20,6 +20,7 @@ import {
   type AppendExchangeInput,
   type JournalAgentRun,
 } from './journal'
+import { agentModel } from './modelPolicy'
 
 const DEFAULT_IDLE_MS = 15 * 60 * 1_000
 const DEFAULT_SWEEP_MS = 60_000
@@ -427,7 +428,7 @@ export class AgentRunSupervisor {
     const tokenExpiresAt = this.now() + positiveInteger(input.tokenTtlMs, this.tokenTtlMs)
     const providerInput: AgentStartInput = {
       requireObservedAcceptance: input.requireObservedAcceptance,
-      model: run.model ?? input.model,
+      model: agentModel(run.provider),
       runId: run.id,
       interactionId: input.interactionId,
       cwd: input.cwd,
