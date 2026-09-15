@@ -15,6 +15,8 @@ export interface AgentConversationSnapshot {
   results?: Record<string, AgentInteractionResult>
   notice?: string
   error?: string
+  /** A recoverable failure was cleared by a provider switch; replay stays explicit. */
+  retryRequired?: boolean
   /** Presentation-only indication; the terminal result has its own recovery file. */
   settlementPending?: boolean
 }
@@ -126,6 +128,7 @@ function validate(value: AgentConversationSnapshot): AgentConversationSnapshot {
     || !value.chat || (value.chat.runId !== null && !ID.test(value.chat.runId))
     || !Array.isArray(value.chat.turns) || value.chat.turns.some(t => !t || !['user', 'agent'].includes(t.role) || typeof t.text !== 'string' || !Number.isFinite(t.at))
     || !value.draft || typeof value.draft.text !== 'string' || !Number.isSafeInteger(value.draft.revision)
-    || !Array.isArray(value.queued) || value.queued.some(q => !q || !ID.test(q.submissionId) || typeof q.input?.transcript !== 'string')) throw new Error('Invalid Agent conversation')
+    || !Array.isArray(value.queued) || value.queued.some(q => !q || !ID.test(q.submissionId) || typeof q.input?.transcript !== 'string')
+    || (value.retryRequired !== undefined && typeof value.retryRequired !== 'boolean')) throw new Error('Invalid Agent conversation')
   return value
 }

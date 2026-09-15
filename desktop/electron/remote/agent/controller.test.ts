@@ -22,9 +22,22 @@ test('controller uses actual resumed provider and never injects another run tran
   assert.doesNotMatch(transcripts[0], /TRANSIENT_OTHER/)
   await controller.submit({ transcript: 'fresh' })
   assert.doesNotMatch(transcripts[1], /TRANSIENT_OLD|TRANSIENT_OTHER/)
-  await controller.submit({ transcript: 'continue the task' }, { interactionId: 'handover', runId: 'new', provider: 'claude', carryoverRunId: 'old', onAccepted: async () => {} })
+  await controller.submit({ transcript: 'continue the task' }, {
+    interactionId: 'handover', runId: 'new', provider: 'claude', carryoverRunId: 'old', onAccepted: async () => {},
+    handoff: {
+      fromProvider: 'codex',
+      summary: 'The earlier conversation established the launch constraints.',
+      recentTurns: [
+        { role: 'user', text: 'Use the signed build.' },
+        { role: 'agent', text: 'The signed build is installed.' },
+      ],
+    },
+  })
   assert.match(transcripts[2], /TRANSIENT_OLD/)
   assert.doesNotMatch(transcripts[2], /TRANSIENT_OTHER/)
+  assert.match(transcripts[2], /earlier conversation established the launch constraints/)
+  assert.match(transcripts[2], /User: Use the signed build\./)
+  assert.match(transcripts[2], /Assistant: The signed build is installed\./)
   controller.dispose()
 })
 async function* empty() {}
