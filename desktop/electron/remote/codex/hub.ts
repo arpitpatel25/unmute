@@ -34,6 +34,7 @@ import { sameQuestion, type QuestionReference } from '../question-reference'
 import type { TaskInput } from '../task-input'
 import type { FollowupGate, FollowupTurnEnded, NewTurnOutcome } from '../task-followup'
 import { randomUUID } from 'node:crypto'
+import { codexExtraRoots } from '../skill-catalog'
 
 const log = createLogger('codex-hub')
 
@@ -257,6 +258,12 @@ export class CodexHub {
       srv.onRequest((r) => this.onServerRequest(r, srv))
       await srv.start()
       this.server = srv
+      // CLAUDE'S SKILLS, ANSWERABLE TO `$name`. Codex resolves a skill by name
+      // against the roots it knows, so a skill it cannot see is a turn that
+      // reads the token as prose. Best-effort and never fatal: a Codex too old
+      // to know the method still has to carry the user's work.
+      try { await srv.request('skills/extraRoots/set', { extraRoots: codexExtraRoots() }) }
+      catch (error) { log.warn('skill roots not set', { error: (error as Error).message }) }
       return srv
     })().finally(() => { this.starting = null })
     return this.starting

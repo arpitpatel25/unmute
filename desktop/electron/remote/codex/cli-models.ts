@@ -36,7 +36,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { listCodexModels, type CodexModel } from './appserver'
+import { listCodexModels, type CodexModel, listCodexSkills, type CodexSkill } from './appserver'
 import { resolveCodexCli } from './driver'
 import { createLogger } from '../log'
 
@@ -88,6 +88,17 @@ export async function listCodexCliModels(opts: { force?: boolean; now?: () => nu
     return models
   })().finally(() => { inflight = null })
   return inflight
+}
+
+/**
+ * The skills the user's Codex can see from `cwd`, or [] if it could not be
+ * asked. Resolved through the SAME binary the models list uses, so the menu can
+ * never describe a Codex other than the one that will run the turn.
+ */
+export async function listCodexCliSkills(cwd: string, extraRoots: string[] = []): Promise<CodexSkill[]> {
+  const bin = await resolveCodexCli(which)
+  if (!bin) { log.warn('codex-cli-skills-no-binary', {}); return [] }
+  return await listCodexSkills(cwd, { bin, extraRoots }).catch(() => [] as CodexSkill[])
 }
 
 /** Drop the cache — after a `codex update`, or when a read must be fresh. */

@@ -232,3 +232,25 @@ test('questions remain separately correlated and advance only after delivered an
   await c.answer('two', driver as any)
   assert.deepEqual(answers[0], ['r', { behavior: 'answer', answers: { 'First?': 'one', 'Second?': 'two' } }])
 })
+
+test('a reattached tail never claims its history is complete, so opening the card still loads it', () => {
+  // Startup reattachment replays only the daemon's recent events. If that tail
+  // reports `ready`, loadBlocksFor() trusts it and never merges the full
+  // conversation: the card shows the last reply and no "Load earlier messages".
+  const patches: any[] = [], channel = new ClaudeTaskChannel(p => patches.push(p))
+  channel.suspendPersistence()
+  channel.event({ type: 'message', message: { type: 'user', uuid: 'late-prompt', message: { content: [{ type: 'text', text: 'recent prompt' }] } } })
+  channel.event({ type: 'message', message: { type: 'assistant', uuid: 'late-reply', message: { content: [{ type: 'text', text: 'recent reply' }] } } })
+  assert.ok(patches.length > 0)
+  assert.ok(patches.every(p => p.history?.phase !== 'ready'), 'a tail-only projection must not mark history ready')
+
+  // Opening the card merges the durable history; only now is it complete.
+  channel.mergeHistory([
+    { type: 'user', uuid: 'first-prompt', message: { content: [{ type: 'text', text: 'first prompt' }] } },
+    { type: 'assistant', uuid: 'first-reply', message: { content: [{ type: 'text', text: 'first reply' }] } },
+    { type: 'user', uuid: 'late-prompt', message: { content: [{ type: 'text', text: 'recent prompt' }] } },
+    { type: 'assistant', uuid: 'late-reply', message: { content: [{ type: 'text', text: 'recent reply' }] } },
+  ])
+  assert.equal(patches.at(-1).history?.phase, 'ready')
+  assert.ok(patches.at(-1).blocks.some((b: any) => b.text === 'first prompt'), 'the earlier conversation is back')
+})

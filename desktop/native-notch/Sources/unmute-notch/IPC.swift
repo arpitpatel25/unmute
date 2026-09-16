@@ -123,6 +123,43 @@ struct TaskDraftP: Codable {
     /// a message the user did not arm it for.
     var tool: String? = nil
 }
+/// One command the composer's slash menu can insert.
+///
+/// EVERY property is defaulted, and that is the contract rather than a style
+/// choice: a synthesized decoder makes an undefaulted key mandatory, so one
+/// renamed field on the host silently drops the WHOLE TaskDetail and the card
+/// stops updating (the CockpitData trap the Checks script exists to catch).
+///
+/// `token` is provider-native — "/name" for Claude, "$name" for Codex — and is
+/// inserted verbatim. Never rebuild it from `name`.
+struct CommandP: Codable {
+    var name: String = ""
+    var title: String = ""
+    var description: String = ""
+    var argumentHint: String = ""
+    var scope: String = ""
+    var token: String = ""
+
+    private enum CodingKeys: String, CodingKey { case name, title, description, argumentHint, scope, token }
+
+    /// A DEFAULT VALUE IS NOT A DECODER DEFAULT. The synthesized `init(from:)`
+    /// ignores the declarations above and makes every key mandatory, so one
+    /// command missing a `title` throws — and the throw takes the whole
+    /// TaskDetail with it, not just that row. Read every field as optional.
+    init(from decoder: Decoder) throws {
+        guard let c = try? decoder.container(keyedBy: CodingKeys.self) else { return }
+        // `try?` flattens the optional decodeIfPresent returns: a missing key
+        // and a wrong-typed one both land on the declaration's default.
+        func text(_ key: CodingKeys) -> String { (try? c.decodeIfPresent(String.self, forKey: key)) ?? "" }
+        name = text(.name)
+        title = text(.title)
+        description = text(.description)
+        argumentHint = text(.argumentHint)
+        scope = text(.scope)
+        token = text(.token)
+    }
+}
+
 struct ChatChoiceP: Codable { let id: String; let label: String; let description: String? }
 struct ChatConfigP: Codable {
     let provider: String; let providerLabel: String; let model: String; let modelLabel: String
@@ -183,6 +220,9 @@ struct TaskDetail: Codable {
     var composerMode: String? = nil
     var chatConfig: ChatConfigP? = nil
     var canCompose: Bool? = nil
+    /// What `/` offers in this thread's composer. Absent for a host older than
+    /// the menu, and for a provider that has no commands.
+    var commands: [CommandP]? = nil
 
     /// Does this task have a live terminal? SENT by the engine, which resolves it
     /// from the one provider registry (electron/remote/providers.ts). This is

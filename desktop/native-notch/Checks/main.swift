@@ -99,6 +99,29 @@ check("absent `on` defaults to ON", a2 == true)
 guard case let .autoPresent(a3) = Command.decode(#"{"type":"autoPresent","on":"maybe"}"#) else { check("malformed autoPresent decodes", false); exit(1) }
 check("malformed `on` defaults to ON", a3 == true)
 
+// ── THE COMPOSER'S COMMAND MENU ON THE WIRE ─────────────────────────────────
+//
+// `commands` is additive: a host that predates it, or a provider with nothing
+// to offer, sends a TaskDetail without the key and the card must still update.
+// And every field of a command is defaulted, because ONE undefaulted key in a
+// synthesized decoder makes that key mandatory — which does not drop the
+// command, it drops the entire TaskDetail, and the card silently stops moving.
+let withCommands = #"""
+{"type":"showTask","task":{"id":"t1","title":"Build","status":"processing","kind":"session","alive":true,"commands":[{"name":"frontend-design","title":"Frontend Design","description":"Guidance for distinctive visual design","argumentHint":"[target]","scope":"Personal","token":"/frontend-design"},{"name":"plan","token":"$plan","scope":"Project"},{"name":"review"}]}}
+"""#
+guard case let .showTask(t1) = Command.decode(withCommands) else { check("task with commands decodes", false); exit(1) }
+check("task with commands decodes", t1.commands?.count == 3)
+check("the token is carried verbatim", t1.commands?[0].token == "/frontend-design")
+check("a provider-native token is NOT rewritten to a slash", t1.commands?[1].token == "$plan")
+check("scope and argument hint survive", t1.commands?[0].scope == "Personal" && t1.commands?[0].argumentHint == "[target]")
+check("a command with only a name still decodes", t1.commands?[2].name == "review")
+check("...with empty strings rather than a dropped task", t1.commands?[2].token == "" && t1.commands?[2].description == "")
+
+let noCommands = #"{"type":"showTask","task":{"id":"t1","title":"Build","status":"processing","kind":"session","alive":true}}"#
+guard case let .showTask(t2) = Command.decode(noCommands) else { check("task WITHOUT commands decodes", false); exit(1) }
+check("task WITHOUT commands decodes", t2.id == "t1")
+check("absent commands is nil — no menu, not a dropped task", t2.commands == nil)
+
 // ── GEOMETRY ─────────────────────────────────────────────────────────────────
 //
 // The layout maths, with the screen measurements handed in rather than read

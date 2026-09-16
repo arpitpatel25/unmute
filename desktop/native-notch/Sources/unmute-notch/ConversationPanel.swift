@@ -266,6 +266,8 @@ struct StageComposer: View {
     var followup: FollowupP? = nil
     var composerMode: String? = nil
     var question: QuestionP? = nil
+    /// What `/` offers in this thread. Empty ⇒ the menu never opens.
+    var commands: [CommandP] = []
     var pastePolicy: ComposerPastePolicy = .default
     @State private var confirmUncertainRecovery = false
     @State private var text = ""
@@ -276,6 +278,7 @@ struct StageComposer: View {
     @State private var newChatOpen = false
     @State private var editorSelection = NSRange(location: 0, length: 0)
     @ObservedObject private var staging = ComposerStagingStore.shared
+    @StateObject private var slash = SlashMenuState()
     @FocusState private var focused: Bool
     /// Theme.composerFill follows Appearance.tone, and a computed colour
     /// changing does not invalidate a view on its own — the same belt-and-
@@ -406,6 +409,8 @@ struct StageComposer: View {
                     SubmitTextEditor(text: Binding(get: { text }, set: editText), measuredHeight: $editorHeight, taskId: taskId, pastePolicy: pastePolicy,
                                      placeholder: placeholder, onSubmit: send, onImagePaste: attachImage,
                                      onFocusChange: reportFocus,
+                                     onKey: handleKey,
+                                     commandTokens: Set(commands.map(\.token)),
                                      onSelectionChange: { editorSelection = $0 },
                                      onAttachmentReserved: { [taskId, clientRevision] operation, name, selection, snapshot in
                                          model.emit(.reserveDraftAttachment(id: taskId, operationId: operation, name: name,
@@ -456,9 +461,14 @@ struct StageComposer: View {
         .onAppear {
             text = draft?.text ?? ""
             clientRevision = draft?.clientRevision ?? 0
+            // A menu left open by the card we just replaced. Composers are keyed
+            // `.id(taskId)`, so this instance's own state is already fresh; the
+            // outgoing one's registration is what has to go.
+            _ = SlashMenuState.closePresented()
             staging.reconcile(task: taskId, attachmentIds: draftAttachmentIds)
         }
         .frame(maxWidth: 760)
+        .overlay(alignment: .top) { slashMenu }
         .frame(maxWidth: .infinity, alignment: .center)
         .popover(isPresented: $newChatOpen) { NewConversationSetup(model: model, close: { newChatOpen = false }) }
         .onChange(of: RemoteDraftSnapshot(text: draft?.text ?? "", revision: draft?.clientRevision)) { remote in
@@ -466,11 +476,16 @@ struct StageComposer: View {
                                       remoteText: remote.text, remoteRevision: remote.revision)
             text = next.text
             clientRevision = next.revision
+            // The host echoes every draft back. Re-deriving (rather than
+            // closing) keeps the menu up through the echo of the keystroke that
+            // opened it, and still closes it if the host replaced the draft.
+            slash.refresh(draft: next.text, commands: commands)
         }
         .onChange(of: taskId) { _ in
             text = draft?.text ?? ""
             clientRevision = draft?.clientRevision ?? 0
             attachmentError = nil
+            slash.close()
             editorSelection = NSRange(location: (text as NSString).length, length: 0)
             if focused { reportFocus(true) }
             staging.reconcile(task: taskId, attachmentIds: draftAttachmentIds)
@@ -484,6 +499,63 @@ struct StageComposer: View {
         text = value
         clientRevision += 1
         model.emit(.setDraftText(id: taskId, text: value, clientRevision: clientRevision))
+        slash.refresh(draft: value, commands: commands)
+    }
+
+    /// OUTSIDE the composer's own layout, on purpose: an overlay draws over the
+    /// conversation above and contributes nothing to the height the text view
+    /// measures, so the menu cannot feed the measure/set loop.
+    @ViewBuilder private var slashMenu: some View {
+        if slash.isOpen {
+            // LIFTED CLEAR by an explicit offset. An alignment guide inside an
+            // overlay was silently ignored in the field: the menu sat on the
+            // composer's top edge and covered the very text being typed. The
+            // height is arithmetic, so the offset is exact without measuring.
+            let height = SlashCommandMenu.height(matches: slash.matches.count)
+            SlashCommandMenu(state: slash, accept: acceptCommand)
+                .frame(height: height)
+                .offset(y: -(height + 8))
+        }
+    }
+
+    /// The keys the menu claims while it is open. Every arm returns false when
+    /// it is not, which is what leaves ordinary editing untouched.
+    private func handleKey(_ key: ComposerKeyCommand) -> Bool {
+        switch key {
+        case .up:     return slash.move(-1)
+        case .down:   return slash.move(1)
+        case .cancel: return slash.cancel()
+        case .accept:
+            guard let command = slash.highlighted else { return false }
+            acceptCommand(command)
+            return true
+        }
+    }
+
+    private func acceptCommand(_ command: CommandP) {
+        // The token VERBATIM — Codex's is "$name", not "/name" — through the
+        // same `setDraftText` path every other edit takes, so Electron's copy of
+        // the draft stays in step. The trailing space both makes room for the
+        // prompt and takes the draft out of command shape, which is what closes
+        // the menu.
+        let inserted = SlashCommands.accepted(token: command.token)
+        editText(inserted)
+        slash.close()
+        focused = true
+        putCaretAtEnd(inserted)
+    }
+
+    /// A programmatic edit keeps the text view's OLD caret offset (updateNSView
+    /// clamps it rather than moving it), which would leave the caret inside the
+    /// token we just inserted. Deferred so it does not matter whether the
+    /// SwiftUI update has landed yet — it writes the string either way.
+    private func putCaretAtEnd(_ value: String) {
+        DispatchQueue.main.async {
+            let owner = NSApp.windows.first { $0 is NotchWindow && $0.isVisible }
+            guard let view = owner?.firstResponder as? NSTextView else { return }
+            if view.string != value { view.string = value }
+            view.setSelectedRange(NSRange(location: (value as NSString).length, length: 0))
+        }
     }
 
     /// EXTRACTED, not inlined. The composer's body is already at the limit of
@@ -588,6 +660,10 @@ private struct SubmitTextEditor: NSViewRepresentable {
     let onSubmit: () -> Void
     let onImagePaste: (String, String, String, NSRange?, String?, String?) -> Void
     let onFocusChange: (Bool) -> Void
+    /// Returns true when the composer's menu consumed the key.
+    let onKey: (ComposerKeyCommand) -> Bool
+    /// The tokens this thread offers; the one the draft starts with is painted.
+    let commandTokens: Set<String>
     let onSelectionChange: (NSRange) -> Void
     let onAttachmentReserved: (String, String, NSRange, String) -> Void
     let onAttachmentFailed: (String, String) -> Void
@@ -596,8 +672,8 @@ private struct SubmitTextEditor: NSViewRepresentable {
     let onAttachmentUndo: (String, Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, measuredHeight: $measuredHeight,
-                    onSubmit: onSubmit, onImagePaste: onImagePaste, onSelectionChange: onSelectionChange)
+        Coordinator(text: $text, measuredHeight: $measuredHeight, onSubmit: onSubmit,
+                    onImagePaste: onImagePaste, onKey: onKey, onSelectionChange: onSelectionChange)
     }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -626,6 +702,8 @@ private struct SubmitTextEditor: NSViewRepresentable {
         view.allowsUndo = true
         view.string = text
         scroll.documentView = view
+        context.coordinator.commandTokens = commandTokens
+        context.coordinator.paintCommand(view)
         context.coordinator.measure(view)
         return scroll
     }
@@ -634,6 +712,7 @@ private struct SubmitTextEditor: NSViewRepresentable {
         context.coordinator.text = $text
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onImagePaste = onImagePaste
+        context.coordinator.onKey = onKey
         context.coordinator.onSelectionChange = onSelectionChange
         if let attachmentView = view as? AttachmentTextView {
             attachmentView.onImagePaste = onImagePaste
@@ -654,6 +733,8 @@ private struct SubmitTextEditor: NSViewRepresentable {
             let length = (text as NSString).length
             view.setSelectedRange(NSRange(location: min(selection.location, length), length: min(selection.length, max(0, length - selection.location))))
         }
+        context.coordinator.commandTokens = commandTokens
+        context.coordinator.paintCommand(view)
         context.coordinator.measure(view)
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -661,12 +742,15 @@ private struct SubmitTextEditor: NSViewRepresentable {
         let measuredHeight: Binding<CGFloat>
         var onSubmit: () -> Void
         var onImagePaste: (String, String, String, NSRange?, String?, String?) -> Void
+        var onKey: (ComposerKeyCommand) -> Bool
+        var commandTokens: Set<String> = []
         var onSelectionChange: (NSRange) -> Void
-        init(text: Binding<String>, measuredHeight: Binding<CGFloat>, onSubmit: @escaping () -> Void, onImagePaste: @escaping (String, String, String, NSRange?, String?, String?) -> Void, onSelectionChange: @escaping (NSRange) -> Void) {
+        init(text: Binding<String>, measuredHeight: Binding<CGFloat>, onSubmit: @escaping () -> Void, onImagePaste: @escaping (String, String, String, NSRange?, String?, String?) -> Void, onKey: @escaping (ComposerKeyCommand) -> Bool, onSelectionChange: @escaping (NSRange) -> Void) {
             self.text = text
             self.measuredHeight = measuredHeight
             self.onSubmit = onSubmit
             self.onImagePaste = onImagePaste
+            self.onKey = onKey
             self.onSelectionChange = onSelectionChange
         }
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -676,23 +760,57 @@ private struct SubmitTextEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
             text.wrappedValue = view.string
+            paintCommand(view)
             measure(view)
+        }
+
+        /// A chosen skill reads as a skill: the command the draft starts with
+        /// is drawn in the link blue, the way Claude's and Codex's own apps
+        /// set it apart. TEMPORARY attributes on the layout manager — display
+        /// only — so the draft text, undo, attachments and typing attributes
+        /// are untouched, and prose typed after the token stays ordinary.
+        func paintCommand(_ view: NSTextView) {
+            guard let manager = view.layoutManager else { return }
+            let length = (view.string as NSString).length
+            manager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: NSRange(location: 0, length: length))
+            guard !view.hasMarkedText(),
+                  let range = SlashCommands.leadingCommandRange(in: view.string, tokens: commandTokens) else { return }
+            manager.addTemporaryAttribute(.foregroundColor, value: NSColor.linkColor, forCharacterRange: range)
         }
         func measure(_ view: NSTextView) {
             DispatchQueue.main.async {
                 view.layoutManager?.ensureLayout(for: view.textContainer!)
                 let height = view.layoutManager?.usedRect(for: view.textContainer!).height ?? 0
+                // Centre the text in the frame it is about to get. The inset
+                // does not change usedRect, so it cannot feed back into the
+                // height being measured here.
+                let lineHeight = view.font.flatMap { view.layoutManager?.defaultLineHeight(for: $0) } ?? 17
+                let inset = ComposerHeight.verticalInset(measured: height, lineHeight: lineHeight)
+                if abs(view.textContainerInset.height - inset) > 0.5 {
+                    view.textContainerInset = NSSize(width: 0, height: inset)
+                }
                 if abs(self.measuredHeight.wrappedValue - height) > 0.5 {
                     self.measuredHeight.wrappedValue = height
                 }
             }
         }
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
+            // An open menu owns the navigation keys; `onKey` answers false
+            // whenever it is closed, so nothing here changes for plain typing.
             if textView.hasMarkedText() { return false }
-            if NSEvent.modifierFlags.contains(.shift) { return false }
-            onSubmit()
-            return true
+            switch commandSelector {
+            case #selector(NSResponder.moveUp(_:)):          return onKey(.up)
+            case #selector(NSResponder.moveDown(_:)):        return onKey(.down)
+            case #selector(NSResponder.insertTab(_:)):       return onKey(.accept)
+            case #selector(NSResponder.cancelOperation(_:)): return onKey(.cancel)
+            case #selector(NSResponder.insertNewline(_:)):
+                if NSEvent.modifierFlags.contains(.shift) { return false }
+                // Enter takes the highlighted command INSTEAD of sending.
+                if onKey(.accept) { return true }
+                onSubmit()
+                return true
+            default: return false
+            }
         }
     }
 }

@@ -7,6 +7,8 @@ import type { TaskInput } from '../task-input'
 
 type Json = Record<string, any>
 export interface ClaudeTaskModel { id: string; label: string; description?: string; efforts: string[] }
+/** One slash command this session can run: skills, custom commands, built-ins. */
+export interface ClaudeTaskCommand { name: string; description: string; argumentHint: string }
 export type ClaudePermissionMode = 'acceptEdits' | 'auto' | 'bypassPermissions' | 'manual' | 'dontAsk' | 'plan'
 export type ClaudeTaskEvent =
   | { type: 'message'; message: Json }
@@ -80,6 +82,10 @@ export class ClaudeTaskSession {
   }
   readonly sessionId: string
   models: ClaudeTaskModel[] = []
+  /** What `/` offers in this session. Reported by the CLI at initialize and
+   *  therefore authoritative for THIS cwd, plugins and add-dirs included —
+   *  which a directory scan of our own could only approximate. */
+  commands: ClaudeTaskCommand[] = []
   private child?: ChildProcessWithoutNullStreams
   private starting?: Promise<void>
   private closed = false
@@ -145,6 +151,12 @@ export class ClaudeTaskSession {
           id: m.value, label: m.displayName,
           ...(typeof m.description === 'string' ? { description: m.description } : {}),
           efforts: m.supportsEffort === true && Array.isArray(m.supportedEffortLevels) ? m.supportedEffortLevels.filter((v: unknown): v is string => typeof v === 'string') : [],
+        }] : []) : []
+      this.commands = Array.isArray(initialized.commands) ? initialized.commands.flatMap((c: Json) =>
+        c && typeof c.name === 'string' ? [{
+          name: c.name,
+          description: typeof c.description === 'string' ? c.description : '',
+          argumentHint: typeof c.argumentHint === 'string' ? c.argumentHint : '',
         }] : []) : []
       this.ready = true
     } catch (error) {
