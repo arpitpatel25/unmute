@@ -99,7 +99,7 @@ import { ClaudeCodeProvider } from './agent/providers/claude'
 import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-headless'
 import { reapCodexHeadlessTurns } from './agent/providers/codex-headless'
 import { agentConstitution } from './agent/constitution'
-import { loadPersona } from './agent/persona'
+import { describeRules, loadPersona } from './agent/persona'
 import { AgentConversationLifecycle } from './agent/lifecycle'
 import { AgentConversationStore } from './agent/conversation-store'
 import { buildHandoffPrompt, HandoffCapability } from './agent/capabilities/handoff'
@@ -1342,7 +1342,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
     // `constitution.md` stays as the file every provider is pointed at, so the
     // shape of the handoff to the CLI is unchanged: one path, read at spawn.
     const persona = await loadPersona(join(root, 'agent'))
-    log.event('unmute-agent-persona', { source: persona.source, chars: persona.text.length })
+    log.event('agent-rules-loaded', describeRules(persona))
     const constitutionPath = join(root, 'runtime', 'constitution.md')
     mkdirSync(dirname(constitutionPath), { recursive: true, mode: 0o700 })
     writeFileSync(constitutionPath, agentConstitution(SESSION_PREAMBLE, persona.text),
@@ -1582,6 +1582,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
       ceiling: () => settings.get('unmuteAgentConversationCeiling') ?? 20,
       prepareFresh: async () => {
         const canonical = await loadPersona(join(root, 'agent'))
+        log.event('agent-rules-loaded', describeRules(canonical))
         await fs.writeFile(constitutionPath, agentConstitution(SESSION_PREAMBLE, canonical.text), { encoding: 'utf8', mode: 0o600 })
       },
       pin: (ids) => supervisor.pinConversation(ids),

@@ -25,7 +25,7 @@ import { MemoryService } from '../agent/memory/service'
 import { JsonlMemoryAudit } from '../agent/memory/audit'
 import { DurableMemoryMutationJournal } from '../agent/memory/journal'
 import { openSqlCipherMemoryIndex } from '../agent/memory/sqlcipher-index'
-import { loadPersona } from '../agent/persona'
+import { describeRules, loadPersona } from '../agent/persona'
 import { agentConstitution } from '../agent/constitution'
 import { SESSION_PREAMBLE } from '../session-policy'
 import { startMcpServer, MCP_PATH, type McpServer } from '../mcp-server'
@@ -100,6 +100,7 @@ export class AgentRuntimeService {
       const constitutionPath = join(this.root, 'runtime', 'constitution.md')
       const prepareFresh = async () => {
         const persona = await loadPersona(join(this.root, 'agent'))
+        diagnostic('agent-rules-loaded', describeRules(persona))
         await mkdir(dirname(constitutionPath), { recursive: true, mode: 0o700 })
         await writeFile(constitutionPath, agentConstitution(SESSION_PREAMBLE, persona.text), { mode: 0o600 })
       }

@@ -118,3 +118,19 @@ test('an untouched copy is refreshed even when the disk will not take the write'
   assert.equal(out.source, 'refreshed')
   assert.equal(out.text, AGENT_PRINCIPLES)
 })
+
+/** The log line that answers "which rules is this Agent running?" on any
+ *  machine, without reading its files (asked for on 2026-09-17). */
+test('what the Agent loaded is described in one comparable line', async () => {
+  const { describeRules } = await import('./persona')
+  const seeded = describeRules(await loadPersona('/agent', io({})))
+  assert.equal(seeded.source, 'seeded')
+  assert.equal(seeded.current, true, 'a fresh seed is the shipped rulebook')
+  assert.equal(seeded.loaded, seeded.shipped)
+  assert.match(seeded.loaded, /^[0-9a-f]{16}$/)
+
+  const edited = describeRules(await loadPersona('/agent', io({ [personaPath('/agent')]: 'Be brief.' })))
+  assert.equal(edited.source, 'file')
+  assert.equal(edited.current, false, 'an edited file is visibly not the shipped rules')
+  assert.equal(edited.chars, 'Be brief.'.length)
+})

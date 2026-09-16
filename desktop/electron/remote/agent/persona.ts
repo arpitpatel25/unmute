@@ -107,6 +107,19 @@ function stripHeader(text: string): string {
   return text.replace(/^(\s*<!--[\s\S]*?-->\s*)+/, '').trim()
 }
 
+/**
+ * One line that says which rules an Agent is running, for its log.
+ *
+ * `current` is the question that mattered on 2026-09-16, answerable from a
+ * user's logs instead of their files: is this the rulebook the installed build
+ * ships? `source` says why — seeded fresh, refreshed from an old copy, kept
+ * because a person edited it, or the built-in fallback.
+ */
+export function describeRules(persona: { text: string; source: string }): { source: string; loaded: string; shipped: string; current: boolean; chars: number } {
+  const loaded = fingerprint(persona.text), shipped = fingerprint(AGENT_PRINCIPLES)
+  return { source: persona.source, loaded, shipped, current: loaded === shipped, chars: persona.text.length }
+}
+
 function fingerprint(text: string): string {
   return createHash('sha256').update(text.trim()).digest('hex').slice(0, 16)
 }
