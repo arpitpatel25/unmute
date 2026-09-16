@@ -742,7 +742,12 @@ function openAgentSessions(limit?: number) {
   // only the notch knows the second one.
   const pocket = notchController?.pocketTaskIds() ?? new Set<string>()
   return manager.list()
-    .filter(task => task.state === 'needs-user' || manager!.isLive(task.id))
+    // A CARD IN THE POCKET IS OPEN BY ANY MEANING OF THE WORD. The filter used
+    // to be live-or-waiting, which dropped exactly the case the schema promises
+    // — asleep, and in front of them — so the Agent could not see the card the
+    // person was looking at while they described it, and a relay aimed at it
+    // was refused as a taskId Unmute is not holding.
+    .filter(task => task.state === 'needs-user' || manager!.isLive(task.id) || pocket.has(task.id))
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, limit ?? 50)
     .map(task => {
