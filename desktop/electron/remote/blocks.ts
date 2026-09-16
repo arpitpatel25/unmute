@@ -83,6 +83,9 @@ export type Block =
   | { kind: 'denied'; what: string; reason?: string }
   | { kind: 'error'; message: string }
   | { kind: 'compaction'; before?: number; after?: number; trigger?: string }
+  /** Where a fresh Agent session began. Everything above it is on screen but
+   *  not in the model's memory, beyond the handoff it was given. */
+  | { kind: 'sessionBoundary'; text: string }
   /**
    * A turn boundary, carrying its clock.
    *
@@ -112,7 +115,7 @@ export type BlockKind = Block['kind']
 const KNOWN: ReadonlySet<string> = new Set<BlockKind>([
   'attachment',
   'message', 'reasoning', 'command', 'fileChange', 'mcpCall', 'fileRead',
-  'search', 'plan', 'subAgent', 'denied', 'error', 'compaction', 'canvas',
+  'search', 'plan', 'subAgent', 'denied', 'error', 'compaction', 'sessionBoundary', 'canvas',
   'turnStart', 'turnEnd', 'unknown',
 ])
 

@@ -459,14 +459,21 @@ function conversationHandoff(snapshot: AgentConversationSnapshot, fromProvider: 
   const recentTurns = boundRecentTurns(pairs.slice(-HANDOFF_EXCHANGES).flat())
   const older = pairs.slice(0, -HANDOFF_EXCHANGES)
   const summarySource = older.length > 0 ? older : pairs.slice(0, 1)
-  const summaryBody = summarySource.map(pair => (
-    `User: ${excerpt(pair[0].text, 320)}\nAssistant: ${excerpt(pair[1].text, 320)}`
-  )).join('\n\n')
-  const summary = excerpt(
-    `Previous ${providerName(fromProvider)} conversation: ${pairs.length} completed exchange${pairs.length === 1 ? '' : 's'}.`
-    + (summaryBody ? `\n${summaryBody}` : ''),
-    HANDOFF_SUMMARY_CODE_POINTS,
-  )
+  const header = `Previous ${providerName(fromProvider)} conversation: ${pairs.length} completed exchange${pairs.length === 1 ? '' : 's'}.`
+  // FILLED FROM THE RECENT END. The chat is kept across sessions, so the front
+  // of it can be a week old; truncating the joined text from the start spent
+  // the whole budget there and dropped exactly the work just before the six
+  // exchanges copied verbatim. Oldest gives way first, order is preserved.
+  const clips: string[] = []
+  let budget = HANDOFF_SUMMARY_CODE_POINTS - [...header].length - 1
+  for (const pair of [...summarySource].reverse()) {
+    const clip = `User: ${excerpt(pair[0].text, 320)}\nAssistant: ${excerpt(pair[1].text, 320)}`
+    const cost = [...clip].length + 2
+    if (cost > budget) break
+    clips.unshift(clip)
+    budget -= cost
+  }
+  const summary = excerpt(header + (clips.length ? `\n${clips.join('\n\n')}` : ''), HANDOFF_SUMMARY_CODE_POINTS)
   return { fromProvider, summary, recentTurns }
 }
 

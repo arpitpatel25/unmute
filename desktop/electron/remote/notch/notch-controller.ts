@@ -500,6 +500,8 @@ export class NotchController {
   private agentLine: { text: string; at: number; failed: boolean } | null = null
   /** The whole conversation, as chat blocks, for the expanded card. */
   private agentBlocks: Block[] = []
+  /** Messages in the Agent's current provider session; 0 when there is no earlier one to hide. */
+  private agentSessionMessages = 0
   /** True while it is thinking, so the card can say so. */
   private agentBusy = false
   /** UNREAD IS THE WHOLE RULE. Set when it answers, cleared the moment the user
@@ -1804,7 +1806,7 @@ export class NotchController {
 
   /** The Agent's chat, in the same payload every other backend renders into. */
   private sendAgentDetail(): void {
-    if (this.historyTask !== NotchController.AGENT_SLOT) { this.historyTask = NotchController.AGENT_SLOT; this.historyLimit = 10 }
+    if (this.historyTask !== NotchController.AGENT_SLOT) { this.historyTask = NotchController.AGENT_SLOT; this.historyLimit = this.agentSessionMessages || 10 }
     this.probeAgentProviders()
     const selected = this.agentSelectedProvider
     const pendingMessage = this.agentPendingProvider
@@ -2186,10 +2188,33 @@ export class NotchController {
     if (snapshot.draft.revision >= this.agentDraftRevision) {
       this.agentDraft = snapshot.draft.text; this.agentDraftRevision = snapshot.draft.revision
     }
-    this.agentBlocks = snapshot.chat.turns.map(turn => turn.failed
+    const toBlock = (turn: AgentConversationView['snapshot']['chat']['turns'][number]): Block => turn.failed
       ? { kind: 'error' as const, message: turn.text }
-      : { kind: 'message' as const, role: turn.role === 'user' ? 'user' as const : 'assistant' as const, text: turn.text, at: turn.at })
-    if (snapshot.notice) this.agentBlocks.unshift({ kind: 'message', role: 'assistant', text: snapshot.notice })
+      : { kind: 'message' as const, role: turn.role === 'user' ? 'user' as const : 'assistant' as const, text: turn.text, at: turn.at }
+    // WHAT YOU SEE STOPS WHERE THE MODEL'S MEMORY STOPS. A fresh provider
+    // session — a switch, a rotation — keeps every earlier message on screen,
+    // but the model only has its own session plus a short handoff. 130 messages
+    // read as one conversation while it remembered a dozen (2026-09-16). The
+    // current session begins at its first accepted submission; `accepted` is
+    // emptied on every fresh start, so this holds for chats saved before the
+    // divider existed too.
+    const turns = snapshot.chat.turns
+    const sessionStart = record.runId ? record.accepted[0]?.acceptedAt : undefined
+    const split = sessionStart === undefined ? 0 : turns.findIndex(turn => turn.at >= sessionStart)
+    const earlier = split === -1 ? turns : turns.slice(0, split)
+    const current = split === -1 ? [] : turns.slice(split)
+    const freshNotice = !!snapshot.notice && /^(Switched to|Started a fresh conversation)/.test(snapshot.notice)
+    this.agentBlocks = [
+      ...earlier.map(toBlock),
+      ...(earlier.length && sessionStart !== undefined ? [{ kind: 'sessionBoundary' as const, text: sessionDivider(sessionStart, snapshot.notice) }] : []),
+      ...current.map(toBlock),
+    ]
+    // Opens on the current session alone; earlier ones sit behind "Load earlier".
+    this.agentSessionMessages = earlier.length ? Math.max(1, current.filter(turn => !turn.failed).length) : 0
+    if (this.historyTask === NotchController.AGENT_SLOT && this.agentSessionMessages) {
+      this.historyLimit = Math.max(this.historyLimit, this.agentSessionMessages)
+    }
+    if (snapshot.notice && !freshNotice) this.agentBlocks.unshift({ kind: 'message', role: 'assistant', text: snapshot.notice })
     if (snapshot.error) this.agentBlocks.push({ kind: 'error', message: snapshot.error })
     const answer = [...snapshot.chat.turns].reverse().find(t => t.role === 'agent')
     this.agentLine = answer ? { text: conciseLine(answer.text), at: answer.at, failed: !!answer.failed } : null
@@ -2986,4 +3011,18 @@ export class NotchController {
 
 function providerLabel(provider: 'claude' | 'codex'): string {
   return provider === 'claude' ? 'Claude' : 'Codex'
+}
+
+/** The line drawn where a fresh Agent session began. Says what the model still
+ *  has, because that — not the scrollback — is what the next answer comes from. */
+export function sessionDivider(startedAt: number, notice?: string): string {
+  const d = new Date(startedAt)
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  const today = new Date()
+  const when = d.toDateString() === today.toDateString()
+    ? `at ${time}`
+    : `on ${d.getDate()} ${d.toLocaleString('en-US', { month: 'short' })} at ${time}`
+  const why = notice?.startsWith('Switched to ') ? ` after you switched to ${notice.slice('Switched to '.length).split(' ')[0]}`
+    : notice?.startsWith('Started a fresh conversation') ? ' after a break' : ''
+  return `New conversation started ${when}${why}. The Agent remembers from here, plus the last 6 exchanges above this line.`
 }

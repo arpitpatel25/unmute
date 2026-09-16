@@ -10,11 +10,14 @@ export function messageWindow(blocks: readonly Block[], limit = 10): { blocks: B
   blocks.forEach((block, i) => {
     if (block.kind === 'message' && block.role === 'user') { finish(); starts.push(i) }
     else if (block.kind === 'message' && block.role === 'assistant') finalReply = i
-    else if (block.kind !== 'turnStart' && block.kind !== 'turnEnd') finalReply = undefined
+    else if (block.kind !== 'turnStart' && block.kind !== 'turnEnd' && block.kind !== 'sessionBoundary') finalReply = undefined
   })
   finish()
   const olderMessages = Math.max(0, starts.length - Math.max(1, limit))
-  const shown = blocks.slice(olderMessages ? starts[olderMessages] : 0)
+  let from = olderMessages ? starts[olderMessages] : 0
+  // A divider marking a fresh Agent session belongs to the page it opens.
+  if (from > 0 && blocks[from - 1]?.kind === 'sessionBoundary') from -= 1
+  const shown = blocks.slice(from)
   // DRAWINGS ARE LIFTED HERE, and the position is load-bearing twice over.
   //
   // AFTER the scan above, because that scan decides which blocks are visible

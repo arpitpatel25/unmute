@@ -140,6 +140,16 @@ public enum BlockPresentation {
         }
 
         for block in blocks {
+            // A NEW SESSION IS ITS OWN ROW, never part of a turn. Grouped with
+            // the turn before it, it drew ABOVE that turn's reply (surfaced rows
+            // come before the reply), putting the line that says "the Agent
+            // forgot everything above" in the middle of the thing it forgot.
+            if block.kind == "sessionBoundary" {
+                close()
+                body = [block]
+                close()
+                continue
+            }
             if block.isUser {
                 // A NEW QUESTION ENDS WHATEVER CAME BEFORE, answered or not. An
                 // unanswered turn is a real state — interrupted, or still
