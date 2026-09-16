@@ -20,6 +20,20 @@ function busy(snapshot: Snapshot): boolean {
     || view.snapshot.queued.length > 0 || !!view.snapshot.settlementPending)
 }
 
+/**
+ * Work a process restart would actually interrupt. Narrower than `busy`: a
+ * message that FAILED and is kept for retry sits in the queue with an error,
+ * but it is on disk and survives the restart — counting it deferred an upgrade
+ * indefinitely on 2026-09-16, exactly when the old build had just failed.
+ */
+function inFlight(snapshot: Snapshot): boolean {
+  const view = snapshot.view as undefined | { record: { phase: string; prepared?: unknown }; snapshot: { queued: unknown[]; settlementPending?: boolean; error?: string; retryRequired?: boolean } }
+  if (!view) return false
+  const retained = !!view.snapshot.error || view.snapshot.retryRequired === true
+  return view.record.phase === 'sending' || !!view.record.prepared || !!view.snapshot.settlementPending
+    || (view.snapshot.queued.length > 0 && !retained)
+}
+
 /** Upgrade only the Agent storage owner. Claude/Codex task daemons stay alive. */
 export class CompatibleAgentRuntime extends RuntimeRpcClient {
   private owner?: RuntimeRpcClient
@@ -89,7 +103,7 @@ export class CompatibleAgentRuntime extends RuntimeRpcClient {
     const hello = await this.current.call<{ build?: string; pid?: number }>('hello').catch(() => ({} as { build?: string; pid?: number }))
     if (hello.build === this.expectedBuild) return false
     const fields = { running: hello.build ?? 'unreported', expected: this.expectedBuild, runtimeSchema: AGENT_RUNTIME_SCHEMA }
-    if (busy(modern)) { diagnostic('agent-runtime-stale-build-deferred', fields); return false }
+    if (inFlight(modern)) { diagnostic('agent-runtime-stale-build-deferred', fields); return false }
     diagnostic('agent-runtime-stale-build-replaced', fields)
     try { await this.current.call('runtime.shutdown') }
     catch {

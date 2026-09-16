@@ -153,3 +153,18 @@ test('a busy Agent process from a different build finishes its turn first', asyn
     assert.equal(f.calls.includes('1:runtime.shutdown'), false, 'never interrupts a turn to upgrade')
   } finally { await f.close() }
 })
+
+
+/** FIELD (2026-09-16, dev.7): a message that FAILED on the old build is kept
+ *  queued for retry, and counting it as busy deferred the upgrade indefinitely —
+ *  the one state most in need of new code was the one that could never get it. */
+test('a failed message kept for retry does not keep an old build alive', async () => {
+  const retained = idle() as any
+  retained.view.snapshot.queued = [{ submissionId: 'failed-one' }]
+  retained.view.snapshot.error = 'Codex request failed'
+  const f = await fixture({ availability: {} }, retained, { running: 'old-build', expected: 'new-build' })
+  try {
+    await f.router.call('agent.configure', { masterKey: 'secret' })
+    assert.ok(f.calls.includes('1:runtime.shutdown'), 'a retained failure is on disk and survives the restart')
+  } finally { await f.close() }
+})
