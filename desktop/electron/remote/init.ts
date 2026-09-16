@@ -141,6 +141,7 @@ import { PersistentCodexHub } from './runtime/codex-client'
 import { CompatibleCodexRuntime } from './runtime/codex-routing'
 import { fileOwnershipStore } from './runtime/codex-ownership'
 import { CompatibleAgentRuntime, recoverAgentRuntime } from './runtime/agent-routing'
+import { runtimeBuild } from './runtime/build'
 import { agentRuntimeRoot } from './runtime/agent-schema'
 import { PersistentClaudeTaskSession } from './runtime/claude-client'
 import { AgentRuntimeClient } from './runtime/agent-client'
@@ -684,13 +685,77 @@ async function createAgentWorkspace(group: unknown) {
 /** What the Agent cannot read off the disk: which sessions Unmute is holding
  *  open. A live card takes a follow-up as it is, so knowing this is what keeps
  *  the Agent from resuming a conversation that never went away. */
+interface RelayRequest {
+  taskId: string
+  intent: string
+  context?: string
+  sourceSessions?: ReadonlyArray<{ sessionId: string; provider: 'claude' | 'codex' }>
+  artifacts?: ReadonlyArray<{ kind: 'file' | 'url' | 'identifier'; value: string; label?: string }>
+}
+
+/**
+ * Carry composed words into a card that already exists.
+ *
+ * The COMPOSITION is the Agent's — it read the other sessions — and the shape
+ * is `buildHandoffPrompt`, the same one a handoff uses, so a receiving session
+ * reads carried background as background in both cases rather than as four
+ * clauses of new instructions. What the host adds is what only it can: the
+ * sources are validated against real transcripts before anything is said, and
+ * what was carried is recorded on the destination card afterwards.
+ */
+async function relayIntoSession(input: RelayRequest) {
+  if (!manager) throw new Error('Unmute Remote is not initialized')
+  const sources = input.sourceSessions?.map(source => ({ ...source }))
+  const artifacts = input.artifacts?.map(artifact => ({ ...artifact }))
+  try { await validateContinuationSources(sources, locateSession, input.context) }
+  catch (error) {
+    // Logged, because from the Agent's side this is one refusal sentence and
+    // from ours it is the difference between a hallucinated source id and a
+    // session that genuinely is not on this machine.
+    log.event('agent-session-relay-refused', {
+      taskId: input.taskId, reason: (error as Error).message, sources: sources?.length ?? 0,
+    })
+    throw error
+  }
+  const message = buildHandoffPrompt({
+    intent: input.intent,
+    ...(input.context ? { context: input.context } : {}),
+    ...(artifacts?.length ? { artifacts } : {}),
+  })
+  const result = await agentContinuations.send({ taskId: input.taskId, message })
+  await manager.noteAgentRelay(input.taskId, {
+    ...(sources?.length ? { sources } : {}),
+    ...(artifacts?.length ? { artifacts } : {}),
+  })
+  log.event('agent-session-relay', {
+    taskId: input.taskId,
+    delivered: result.delivered,
+    carriedContext: input.context ? input.context.length : 0,
+    sources: sources?.length ?? 0,
+    artifacts: artifacts?.length ?? 0,
+  })
+  return result
+}
+
+/** The card Unmute holds for a provider session — matched exactly, the same
+ *  way resume finds a card to wake, so both checks agree on what "has a card" means. */
+function agentCardForSession(sessionId: string): { taskId: string; title?: string } | null {
+  const task = manager?.list().find(candidate => candidate.sessionId === sessionId || candidate.codexRolloutId === sessionId)
+  return task ? { taskId: task.id, ...(task.name ? { title: task.name } : {}) } : null
+}
+
 function openAgentSessions(limit?: number) {
   if (!manager) return []
   // Warm and in-front-of-you are different questions with different answers;
   // only the notch knows the second one.
   const pocket = notchController?.pocketTaskIds() ?? new Set<string>()
   return manager.list()
-    .filter(task => task.state === 'needs-user' || manager!.isLive(task.id))
+    // A CARD IN THE POCKET IS OPEN BY ANY MEANING OF THE WORD. The filter used
+    // to be live-or-waiting, which dropped exactly the case the schema promises
+    // — asleep, and in front of them — so the Agent could not see the card the
+    // person was looking at while they described it, and a relay aimed at it
+    // was refused as a taskId Unmute is not holding.
+    .filter(task => task.state === 'needs-user' || manager!.isLive(task.id) || pocket.has(task.id))
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, limit ?? 50)
     .map(task => {
@@ -1347,6 +1412,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
         close: input => closeAgentSession(input.taskId),
         resume: input => agentContinuations.resume(input),
         fork: input => agentContinuations.fork(input),
+        send: input => relayIntoSession(input),
       }),
       // What the user recorded. Optional: only present when the notetaker
       // feature wired its adapters in via RemoteInitDeps.notetaker — a build
@@ -1392,6 +1458,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
           const task = manager?.get(taskId)
           return task ? { state: String(task.state), intent: task.intent } : null
         },
+        cardForSession: async id => agentCardForSession(id),
       }),
       new DeliveryCapability({
         resolveAttachment: (principal, handle) => attachments.resolveForDelivery(principal, handle),
@@ -4017,17 +4084,21 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
     const payload = clipboardPayload(entry)
     return copyHistoryToClipboard(payload.text, payload.attachments)
   }
+  if (method === 'sessions.send') return relayIntoSession(args[0] as RelayRequest)
   if (method === 'sessions.resume') return agentContinuations.resume(args[0])
   if (method === 'sessions.fork') return agentContinuations.fork(args[0])
   if (method === 'sessions.workspaces') return (groupRegistry?.list() ?? []).map(({ id, label }) => ({ id, label }))
   if (method === 'sessions.createWorkspace') return createAgentWorkspace(args[0])
   if (method === 'sessions.open') return openAgentSessions((args[0] as { limit?: number } | undefined)?.limit)
   if (method === 'sessions.close') return closeAgentSession((args[0] as { taskId: string }).taskId)
+  if (method === 'handoff.cardForSession') return agentCardForSession(String(args[0]))
   if (method === 'handoff.createTask') {
     if (!manager) throw new Error('Unmute Remote is not initialized')
     const input = args[0] as Parameters<typeof buildHandoffPrompt>[0] & { title: string; group: string; sourceSessions?: Array<{ sessionId: string; provider: 'claude' | 'codex' }>; cwd?: string; kind: 'oneoff' | 'session'; provider: AgentKind; agentRunId: string }
     await validateContinuationSources(input.sourceSessions, locateSession, input.context)
     const seeded = buildHandoffPrompt(input)
+    const newInstance = (input as { sameJobNewInstance?: string }).sameJobNewInstance
+    if (newInstance) log.event('agent-handoff-new-instance', { reason: newInstance, sources: input.sourceSessions?.length ?? 0 })
     const taskId = await manager.dispatch(seeded, { kind: input.kind, agent: input.provider, agentMetadata: { title: input.title, group: input.group, agentRunId: input.agentRunId }, ...(input.cwd ? { cwd: input.cwd } : {}) })
     manager.mergeAgentOrigin(taskId, input.agentRunId)
     await manager.mergeContinuationProvenance(taskId, {
@@ -4899,7 +4970,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   releaseRuntimeHost = registerRuntimeHost(persistentRuntime, invokeRuntimeHost)
   const agentWorker = new PersistentRuntimeClient(agentRuntimeRoot(app.getPath('userData')), join(__dirname, 'unmute-runtime.js'))
   releaseAgentRuntimeHost = registerRuntimeHost(agentWorker, invokeRuntimeHost)
-  agentRuntimeRouting = new CompatibleAgentRuntime(persistentRuntime, agentWorker)
+  agentRuntimeRouting = new CompatibleAgentRuntime(persistentRuntime, agentWorker, runtimeBuild(join(__dirname, 'unmute-runtime.js')))
   agentRuntimeRouting.on('reconnected', () => {
     if (unmuteAgentLifecycle instanceof AgentRuntimeClient) {
       const client = unmuteAgentLifecycle

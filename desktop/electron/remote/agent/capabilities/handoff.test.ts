@@ -232,3 +232,38 @@ test('a rejected task says which field, and why', async () => {
     assert.match(result.error.message, expected, JSON.stringify(input))
   }
 })
+
+/**
+ * FIELD FAILURE (2026-09-16, 16:45): asked for a dev build "the way we did it
+ * before", the Agent read the quiet-mic card's own session — correctly — and
+ * then made a SECOND session for the same work instead of speaking into the
+ * card that already held it. The rules said both things; code now decides.
+ */
+const SOURCE = 'dcca10df-b869-4a62-ab4e-fe0f52efb50e'
+const create = { title: 'Quiet mic dev build', group: 'Unmute', intent: 'build it', kind: 'session', context: 'Last build used the unmute-test-build skill.', sourceSessions: [{ sessionId: SOURCE, provider: 'claude' }] }
+
+test('a handoff citing a session that already has a card is refused, and points at the card', async () => {
+  const a = adapters({ async cardForSession(id) { return id === SOURCE ? { taskId: 'quiet-mic-card', title: 'Quiet external microphone speech detection' } : null } })
+  const result = await new HandoffCapability(a).call(ctx, 'task_create', create)
+  assert.equal(result.isError, true)
+  const error = parse(result).error
+  assert.equal(error.code, 'already-has-card')
+  assert.match(error.message, /quiet-mic-card/, 'the refusal names the card to send to')
+  assert.match(error.message, /session_send/)
+  assert.deepEqual(a.created, [], 'no second session was made')
+})
+
+test('saying what makes it a different instance lets the handoff through', async () => {
+  const a = adapters({ async cardForSession() { return { taskId: 'comp-card', title: 'Comp Rishi a month' } } })
+  const result = await new HandoffCapability(a).call(ctx, 'task_create', { ...create, sameJobNewInstance: 'the same comp, but for a different customer' })
+  assert.equal(result.isError, undefined)
+  assert.equal(a.created.length, 1)
+  assert.equal(a.created[0].sameJobNewInstance, 'the same comp, but for a different customer')
+})
+
+test('a handoff whose sources have no card is unaffected', async () => {
+  const a = adapters({ async cardForSession() { return null } })
+  const result = await new HandoffCapability(a).call(ctx, 'task_create', create)
+  assert.equal(result.isError, undefined)
+  assert.equal(a.created.length, 1)
+})

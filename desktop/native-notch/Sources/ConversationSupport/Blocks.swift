@@ -162,6 +162,7 @@ public enum BlockKind {
     public static let drawable: Set<String> = [
         "message", "reasoning", "command", "fileChange", "mcpCall", "fileRead",
         "search", "plan", "subAgent", "denied", "error", "compaction", "attachment",
+        "sessionBoundary",
     ]
     public static func isDrawable(_ kind: String) -> Bool { drawable.contains(kind) }
 }

@@ -69,6 +69,10 @@ function adapters(overrides: Partial<SessionAdapters> = {}): SessionAdapters & {
       asked.push({ operation: 'close', ...input })
       return { taskId: input.taskId, closed: true }
     },
+    async send(input) {
+      asked.push({ operation: 'send', ...input })
+      return { taskId: input.taskId, operation: 'send' as const, delivered: true }
+    },
     ...overrides,
   } as SessionAdapters & { asked: any[] }
 }
@@ -256,7 +260,7 @@ test('an expired agent run cannot reopen a session', async () => {
 test('the capability exposes distinct resume and fork tools only to the Agent', () => {
   const capability = new SessionsCapability(adapters())
 
-  assert.deepEqual(capability.tools.map((t) => t.name), ['workspaces_create', 'workspaces_list', 'session_resume', 'session_fork', 'sessions_open', 'session_close'])
+  assert.deepEqual(capability.tools.map((t) => t.name), ['workspaces_create', 'workspaces_list', 'session_resume', 'session_fork', 'session_send', 'sessions_open', 'session_close'])
   assert.deepEqual([...capability.roles], ['unmute-agent'])
   // Keyed by name, not position: adding a tool must not silently reclassify one.
   const consequence = Object.fromEntries(capability.tools.map(t => [t.name, t.consequence]))
@@ -265,10 +269,64 @@ test('the capability exposes distinct resume and fork tools only to the Agent', 
     workspaces_list: 'read',
     session_resume: 'reversible-write',
     session_fork: 'reversible-write',
+    session_send: 'reversible-write',
     sessions_open: 'read',
     // NOT 'destructive': that demands a matching intent flag on the interaction,
     // and the undo has to fire on "no, the other one" and nothing more. It is
     // honest too — the card goes, the transcript stays and can be resumed again.
     session_close: 'reversible-write',
   })
+})
+
+
+test('a relay carries composed words into an existing card and reports delivery', async () => {
+  const a = adapters()
+  const result = await new SessionsCapability(a).call(ctx, 'session_send', {
+    taskId: 'task-7',
+    intent: 'use the same Supabase project here',
+    context: 'Tuesday\'s session settled on the BoloAI project after checking three.',
+    sourceSessions: [{ sessionId: 'aaaaaaaa-1111-2222-3333-444444444444', provider: 'codex' }],
+    artifacts: [{ kind: 'identifier', value: 'boloai-prod', label: 'Supabase project' }],
+  })
+  assert.deepEqual(parse(result), { ok: true, result: { taskId: 'task-7', operation: 'send', delivered: true } })
+  assert.equal(a.asked[0].operation, 'send')
+  assert.equal(a.asked[0].taskId, 'task-7')
+  assert.equal(a.asked[0].sourceSessions.length, 1)
+})
+
+test('a relay without a destination or a request never reaches the adapter', async () => {
+  for (const input of [{ intent: 'do the thing' }, { taskId: 'task-7' }, { taskId: '  ', intent: 'x' }, { taskId: 'task-7', intent: '   ' }]) {
+    const a = adapters()
+    const result = await new SessionsCapability(a).call(ctx, 'session_send', input)
+    assert.equal(result.isError, true)
+    assert.equal(a.asked.length, 0)
+  }
+})
+
+/** Background the receiving session cannot check is worse than none: the whole
+ *  point is that it carries exact facts from a session that is named. */
+test('relayed context must name the sessions it came from', async () => {
+  const a = adapters()
+  const result = await new SessionsCapability(a).call(ctx, 'session_send', {
+    taskId: 'task-7', intent: 'carry on', context: 'they decided to use the second project',
+  })
+  assert.equal(result.isError, true)
+  assert.equal(a.asked.length, 0)
+})
+
+test('a relay repeated in one interaction is delivered once', async () => {
+  const a = adapters()
+  const c = new SessionsCapability(a)
+  const first = await c.call(ctx, 'session_send', { taskId: 'task-7', intent: 'carry on' })
+  const retry = await c.call(ctx, 'session_send', { taskId: 'task-7', intent: 'carry on' })
+  assert.deepEqual(retry, first)
+  assert.equal(a.asked.length, 1)
+})
+
+test('a relay needs the interaction the person is actually in', async () => {
+  const a = adapters()
+  const stale: CapabilityCallContext = { principal: agent, now: NOW, interaction: { id: 'ix-0', active: true, transcript: '' } }
+  const result = await new SessionsCapability(a).call(stale, 'session_send', { taskId: 'task-7', intent: 'carry on' })
+  assert.equal(result.isError, true)
+  assert.equal(a.asked.length, 0)
 })

@@ -189,6 +189,28 @@ test('a provider handoff copies only the latest six complete exchanges and summa
   } finally { await h.cleanup() }
 })
 
+/** The handoff budget used to be filled from the FRONT of the chat, and the
+ *  chat is never cleared across sessions — so a switch on 16 Sep carried clips
+ *  from 8 Sep and nothing from the hours in between. */
+test('a provider handoff summarizes the most recent older work, not the oldest', async () => {
+  const h = await harness()
+  try {
+    const long = 'x'.repeat(400)
+    for (let n = 1; n <= 30; n++) {
+      const pending = h.lifecycle.submit({ transcript: `question ${n} ${long}`, submissionId: `turn-${n}` })
+      await h.waitCalls(n); await h.accept(n - 1); h.calls[n - 1].settle(); await pending
+    }
+    await h.lifecycle.requestProvider('codex')
+    const switched = h.lifecycle.submit({ transcript: 'continue', submissionId: 'switched' })
+    await h.waitCalls(31)
+    const { summary } = h.calls[30].context.handoff!
+    assert.match(summary, /question 24 /, 'the exchange just before the verbatim six is kept')
+    assert.doesNotMatch(summary, /question 1 /, 'the oldest is what gives way')
+    assert.match(summary, /30 completed exchanges/)
+    await h.accept(30); h.calls[30].settle(); await switched
+  } finally { await h.cleanup() }
+})
+
 test('idle requires the threshold and an empty draft; successful rotation retains visible history', async () => {
   const h = await harness(2)
   try {

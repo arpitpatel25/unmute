@@ -2843,3 +2843,35 @@ test('a card that arrives while you are working does not take the surface', () =
   const expanded = h.client.sent.filter((m: { type: string }) => m.type === 'surface')
   assert.equal(expanded.some((m: { id?: string }) => m.id === 'arriver'), false)
 })
+
+/**
+ * THE SCREEN MUST NOT OUTLIVE THE MODEL'S MEMORY WITHOUT SAYING SO. The Agent
+ * chat kept every message across fresh provider sessions — a provider switch,
+ * a rotation — so 130 messages read as one continuous conversation while the
+ * model knew only its current session plus a short handoff (2026-09-16).
+ */
+test('the Agent chat opens on its current session, under a line saying where its memory begins', async () => {
+  const h = setup({ deps: { agentInstalledProviders: async () => ['claude', 'codex'] } })
+  const earlier = Array.from({ length: 6 }, (_, i) => ({ role: (i % 2 ? 'agent' : 'user') as 'agent' | 'user', text: `old ${i}`, at: 100 + i }))
+  const current = [{ role: 'user' as const, text: 'new question', at: 5000 }, { role: 'agent' as const, text: 'new answer', at: 5001 }]
+  h.controller.restoreAgentConversation({ selectedProvider: 'codex', record: { generation: 3, phase: 'ready', provider: 'codex', model: 'm', runId: 'r', effort: 'medium', ceiling: 20, accepted: [{ submissionId: 's', interactionId: 'i', acceptedAt: 5000 }], snapshotId: 's' }, snapshot: { generation: 3, chat: { runId: 'r', turns: [...earlier, ...current] }, draft: { text: '', revision: 0 }, queued: [], notice: 'Switched to Codex — new conversation' } })
+  h.client.fire({ type: 'pocketOpen' }); h.client.fire({ type: 'pocketExpand' }); h.flush()
+  await new Promise<void>(resolve => setImmediate(resolve))
+  const task = h.client.last('showTask')!.task
+  assert.deepEqual(task.blocks!.map(b => b.kind), ['sessionBoundary', 'message', 'message'], 'only the session the model remembers, under its divider')
+  assert.match((task.blocks![0] as { text: string }).text, /switched to Codex/i)
+  assert.match((task.blocks![0] as { text: string }).text, /remembers from here/i)
+  assert.equal(task.olderMessages, 6, 'earlier sessions stay reachable')
+  h.client.fire({ type: 'loadOlderMessages', id: 'unmute-agent' } as never); h.flush()
+  const all = h.client.last('showTask')!.task
+  assert.equal(all.olderMessages, 0)
+  assert.deepEqual(all.blocks!.map(b => b.kind), [...earlier.map(() => 'message'), 'sessionBoundary', 'message', 'message'])
+})
+
+test('an Agent chat with no earlier session shows no divider', async () => {
+  const h = setup({ deps: { agentInstalledProviders: async () => ['claude'] } })
+  h.controller.restoreAgentConversation({ selectedProvider: 'claude', record: { generation: 1, phase: 'ready', provider: 'claude', model: 'm', runId: 'r', effort: 'medium', ceiling: 20, accepted: [{ submissionId: 's', interactionId: 'i', acceptedAt: 10 }], snapshotId: 's' }, snapshot: { generation: 1, chat: { runId: 'r', turns: [{ role: 'user', text: 'hi', at: 10 }, { role: 'agent', text: 'hello', at: 11 }] }, draft: { text: '', revision: 0 }, queued: [] } })
+  h.client.fire({ type: 'pocketOpen' }); h.client.fire({ type: 'pocketExpand' }); h.flush()
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.deepEqual(h.client.last('showTask')!.task.blocks!.map(b => b.kind), ['message', 'message'])
+})

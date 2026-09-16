@@ -25,6 +25,22 @@ final class BlockPresentationTests: XCTestCase {
         Block(kind: "fileChange", path: path, verb: "Edited", added: added, removed: removed)
     }
 
+    // A NEW AGENT SESSION IS ITS OWN ROW. Left inside the previous turn it was
+    // surfaced ABOVE that turn's reply, so "the Agent remembers from here" sat
+    // in the middle of the conversation it had already forgotten.
+    func testSessionBoundaryStandsAloneBetweenTurns() {
+        let turns = BlockPresentation.buildTurns([
+            msg("user", "old question"), msg("assistant", "old answer"),
+            Block(kind: "sessionBoundary", text: "New conversation"),
+            msg("user", "new question"), msg("assistant", "new answer"),
+        ])
+        XCTAssertEqual(turns.count, 3)
+        XCTAssertEqual(turns[0].reply?.text, "old answer", "the previous reply keeps its place")
+        XCTAssertNil(turns[1].prompt)
+        XCTAssertEqual(turns[1].work.map(\.kind), ["sessionBoundary"])
+        XCTAssertEqual(turns[2].prompt?.text, "new question")
+    }
+
     // MARK: - one work group per turn, whatever the harness emits
 
     // CLAUDE NARRATES WHILE IT WORKS. Every one of those texts arrives as a

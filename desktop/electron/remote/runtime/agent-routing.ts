@@ -20,12 +20,29 @@ function busy(snapshot: Snapshot): boolean {
     || view.snapshot.queued.length > 0 || !!view.snapshot.settlementPending)
 }
 
+/**
+ * Work a process restart would actually interrupt. Narrower than `busy`: a
+ * message that FAILED and is kept for retry sits in the queue with an error,
+ * but it is on disk and survives the restart — counting it deferred an upgrade
+ * indefinitely on 2026-09-16, exactly when the old build had just failed.
+ */
+function inFlight(snapshot: Snapshot): boolean {
+  const view = snapshot.view as undefined | { record: { phase: string; prepared?: unknown }; snapshot: { queued: unknown[]; settlementPending?: boolean; error?: string; retryRequired?: boolean } }
+  if (!view) return false
+  const retained = !!view.snapshot.error || view.snapshot.retryRequired === true
+  return view.record.phase === 'sending' || !!view.record.prepared || !!view.snapshot.settlementPending
+    || (view.snapshot.queued.length > 0 && !retained)
+}
+
 /** Upgrade only the Agent storage owner. Claude/Codex task daemons stay alive. */
 export class CompatibleAgentRuntime extends RuntimeRpcClient {
   private owner?: RuntimeRpcClient
   private config?: AgentRuntimeConfig
   private serial: Promise<unknown> = Promise.resolve()
-  constructor(private legacy: RuntimeRpcClient, private current: RuntimeRpcClient) {
+  /** `expectedBuild` identifies the runtime script this app would spawn. The
+   *  Agent's process survives quits and reinstalls, so without it a new build
+   *  keeps running the old build's code until the process happens to die. */
+  constructor(private legacy: RuntimeRpcClient, private current: RuntimeRpcClient, private expectedBuild?: string) {
     super('unused')
     legacy.on('agent.event', this.oldEvent)
     current.on('agent.event', this.newEvent)
@@ -40,7 +57,8 @@ export class CompatibleAgentRuntime extends RuntimeRpcClient {
     if (this.owner === this.current) return false
     const old = await this.legacy.call<Snapshot>('agent.snapshot')
     if (!this.owner) {
-      const modern = await this.current.call<Snapshot>('agent.snapshot')
+      let modern = await this.current.call<Snapshot>('agent.snapshot')
+      if (modern.view && await this.replacedStaleBuild(modern)) modern = {}
       if (modern.view) {
         if (busy(old)) throw new Error('Both Agent runtimes may be active; refusing shared storage handover')
         if (old.view) await this.legacy.call('agent.disable')
@@ -66,6 +84,39 @@ export class CompatibleAgentRuntime extends RuntimeRpcClient {
     diagnostic('agent-runtime-upgraded', { runtimeSchema: AGENT_RUNTIME_SCHEMA })
     return true
   }
+  /**
+   * Replace a configured Agent process that is running a different build.
+   *
+   * REUSE WAS DECIDED BY STORAGE FORMAT ALONE. That is the right test for "can
+   * this process open the conversation", and the wrong one for "is this the
+   * code we just installed": on 2026-09-16 two installs in a row attached to a
+   * process started hours earlier, so a new tool and new rules were installed
+   * and never ran.
+   *
+   * Only an idle process is replaced — a turn in flight finishes on the build
+   * that started it, and the next launch checks again. A process too old to
+   * report its build is stale by definition. The conversation lives on disk, so
+   * the fresh process picks it up exactly where it was.
+   */
+  private async replacedStaleBuild(modern: Snapshot): Promise<boolean> {
+    if (!this.expectedBuild) return false
+    const hello = await this.current.call<{ build?: string; pid?: number }>('hello').catch(() => ({} as { build?: string; pid?: number }))
+    if (hello.build === this.expectedBuild) return false
+    const fields = { running: hello.build ?? 'unreported', expected: this.expectedBuild, runtimeSchema: AGENT_RUNTIME_SCHEMA }
+    if (inFlight(modern)) { diagnostic('agent-runtime-stale-build-deferred', fields); return false }
+    diagnostic('agent-runtime-stale-build-replaced', fields)
+    try { await this.current.call('runtime.shutdown') }
+    catch {
+      // Builds from before this existed have no shutdown command; they do
+      // honour SIGTERM, which runs the same graceful close.
+      if (hello.pid && hello.pid > 0 && hello.pid !== process.pid) {
+        try { process.kill(hello.pid, 'SIGTERM') } catch { /* already gone */ }
+      }
+    }
+    for (let i = 0; i < 100 && this.current.connected; i++) await new Promise(resolve => setTimeout(resolve, 100))
+    return true
+  }
+
   override async call<T = any>(method: string, ...args: unknown[]): Promise<T> {
     if (!method.startsWith('agent.')) throw new Error('Agent router accepts Agent commands only')
     const operation = this.serial.then(async () => {

@@ -7,11 +7,20 @@ import { RuntimeRpcClient, RuntimeRpcServer } from './rpc'
 import { CompatibleAgentRuntime, recoverAgentRuntime } from './agent-routing'
 
 const idle = () => ({ view: { record: { phase: 'ready' }, snapshot: { queued: [] } }, availability: {} })
-async function fixture(oldState: any = idle(), newState: any = { availability: {} }) {
+async function fixture(oldState: any = idle(), newState: any = { availability: {} }, builds?: { running?: string; expected: string }) {
   const root = await mkdtemp(join(tmpdir(), 'agent-routing-'))
   const states = [oldState, newState], calls: string[] = []
-  const servers = states.map((_, i) => new RuntimeRpcServer(join(root, `${i}.sock`), async (method) => {
+  let running = builds?.running
+  const servers: RuntimeRpcServer[] = states.map((_, i) => new RuntimeRpcServer(join(root, `${i}.sock`), async (method) => {
     calls.push(`${i}:${method}`)
+    if (method === 'hello') return { version: 1, pid: 0, ...(i === 1 && running ? { build: running } : {}) }
+    if (i === 1 && method === 'runtime.shutdown') {
+      // The daemon exits; the next connection finds a fresh one on the new build.
+      setTimeout(() => { void (async () => {
+        clients[1].disconnect(); await servers[1].close(); states[1] = { availability: {} }; running = builds?.expected; await servers[1].listen()
+      })() }, 10)
+      return { shuttingDown: true }
+    }
     if (method === 'agent.disable') states[i] = { availability: {} }
     if (method === 'agent.configure') states[i] = idle()
     if (method === 'agent.enqueue') return { submissionId: String(i) }
@@ -19,7 +28,7 @@ async function fixture(oldState: any = idle(), newState: any = { availability: {
   }))
   await Promise.all(servers.map(s => s.listen()))
   const clients = states.map((_, i) => new RuntimeRpcClient(join(root, `${i}.sock`)))
-  const router = new CompatibleAgentRuntime(clients[0], clients[1])
+  const router = new CompatibleAgentRuntime(clients[0], clients[1], builds?.expected)
   return { router, states, calls, clients, restartCurrent: async () => {
     clients[1].disconnect(); await servers[1].close(); states[1] = { availability: {} }; await servers[1].listen()
   }, close: async () => {
@@ -101,5 +110,61 @@ test('worker restart obtains fresh configuration while a live reconnect preserve
     assert.equal(projections, 2)
     assert.deepEqual(await f.router.call('agent.enqueue', {}), { submissionId: '1' })
     assert.equal(f.calls.includes('0:agent.configure'), false)
+  } finally { await f.close() }
+})
+
+
+/**
+ * FIELD FAILURE (2026-09-16): the Agent's process survives quitting and
+ * reinstalling, and was reused whenever its STORAGE format matched — so a new
+ * build ran the old build's code, twice, until it was killed by hand.
+ */
+test('an idle Agent process from a different build is replaced, not reused', async () => {
+  const f = await fixture({ availability: {} }, idle(), { running: 'old-build', expected: 'new-build' })
+  try {
+    await f.router.call('agent.configure', { masterKey: 'secret' })
+    assert.ok(f.calls.includes('1:runtime.shutdown'), 'the stale process is asked to exit')
+    const after = f.calls.slice(f.calls.indexOf('1:runtime.shutdown') + 1).filter(c => !c.endsWith('snapshot') && !c.endsWith('hello'))
+    assert.deepEqual(after, ['1:agent.configure'], 'and the fresh one is configured, once')
+  } finally { await f.close() }
+})
+
+test('an Agent process from before builds were reported is treated as stale', async () => {
+  const f = await fixture({ availability: {} }, idle(), { expected: 'new-build' })
+  try {
+    await f.router.call('agent.configure', { masterKey: 'secret' })
+    assert.ok(f.calls.includes('1:runtime.shutdown'))
+  } finally { await f.close() }
+})
+
+test('an Agent process on the same build is reused', async () => {
+  const f = await fixture({ availability: {} }, idle(), { running: 'same', expected: 'same' })
+  try {
+    await f.router.call('agent.configure', { masterKey: 'secret' })
+    assert.equal(f.calls.includes('1:runtime.shutdown'), false)
+  } finally { await f.close() }
+})
+
+test('a busy Agent process from a different build finishes its turn first', async () => {
+  const busy = idle(); busy.view.record.phase = 'sending'
+  const f = await fixture({ availability: {} }, busy, { running: 'old-build', expected: 'new-build' })
+  try {
+    await f.router.call('agent.snapshot')
+    assert.equal(f.calls.includes('1:runtime.shutdown'), false, 'never interrupts a turn to upgrade')
+  } finally { await f.close() }
+})
+
+
+/** FIELD (2026-09-16, dev.7): a message that FAILED on the old build is kept
+ *  queued for retry, and counting it as busy deferred the upgrade indefinitely —
+ *  the one state most in need of new code was the one that could never get it. */
+test('a failed message kept for retry does not keep an old build alive', async () => {
+  const retained = idle() as any
+  retained.view.snapshot.queued = [{ submissionId: 'failed-one' }]
+  retained.view.snapshot.error = 'Codex request failed'
+  const f = await fixture({ availability: {} }, retained, { running: 'old-build', expected: 'new-build' })
+  try {
+    await f.router.call('agent.configure', { masterKey: 'secret' })
+    assert.ok(f.calls.includes('1:runtime.shutdown'), 'a retained failure is on disk and survives the restart')
   } finally { await f.close() }
 })

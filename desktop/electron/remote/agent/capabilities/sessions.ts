@@ -35,6 +35,15 @@ import { requireAgentMetadata, requireWorkspaceLabel } from '../metadata'
  * open, and only the app can take a card back.
  */
 
+const MAX_INTENT_LENGTH = 2_000
+/** Carried context is sized like a handoff's, because it is the same thing
+ *  arriving at a session that already exists rather than a new one. */
+const MAX_RELAY_CONTEXT_LENGTH = 24_000
+const MAX_RELAY_SOURCES = 12
+const MAX_RELAY_ARTIFACTS = 32
+const SOURCE_PROVIDERS = new Set(['claude', 'codex'])
+const ARTIFACT_KINDS = new Set(['file', 'url', 'identifier'])
+
 const tools = [
   {
     name: 'workspaces_create',
@@ -102,6 +111,62 @@ const tools = [
     consequence: 'reversible-write',
   },
   {
+    name: 'session_send',
+    description: 'Say something in a session Unmute is ALREADY holding, in your own composed words.'
+      + ' This is the tool for carrying work between conversations: the person names a card and'
+      + ' wants what another session worked out brought into it — the approach that succeeded, the'
+      + ' exact project or file it settled on, what was decided. Read the other sessions first,'
+      + ' then write the message yourself. Takes the taskId of the destination card from'
+      + ' sessions_open, never a provider session id. It speaks into that card and changes nothing'
+      + ' else about it — no rename, no workspace change, and it never creates a card, so a taskId'
+      + ' Unmute is not holding is refused rather than replaced with a new session. Use'
+      + ' session_resume when the words are simply the person\'s own request to the session it'
+      + ' reopens, and task_create when the work belongs in a NEW session.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['taskId', 'intent'],
+      properties: {
+        taskId: {
+          type: 'string', minLength: 1, maxLength: 128,
+          description: 'The destination card, exactly as sessions_open reports it.',
+        },
+        intent: {
+          type: 'string', minLength: 1, maxLength: MAX_INTENT_LENGTH,
+          description: 'What the person wants done in that session now, in their own terms.',
+        },
+        context: {
+          type: 'string', maxLength: MAX_RELAY_CONTEXT_LENGTH,
+          description: 'What you read elsewhere that this session needs: decisions, the approach'
+            + ' that worked, constraints, current state. Background, not instructions. Never put'
+            + ' session ids in it — the receiving session cannot look them up.',
+        },
+        sourceSessions: {
+          type: 'array', maxItems: MAX_RELAY_SOURCES,
+          description: 'The exact sessions the context came from. Required whenever context is given.',
+          items: {
+            type: 'object', additionalProperties: false, required: ['sessionId', 'provider'],
+            properties: {
+              sessionId: { type: 'string', minLength: 36, maxLength: 36 },
+              provider: { type: 'string', enum: ['claude', 'codex'] },
+            },
+          },
+        },
+        artifacts: {
+          type: 'array', maxItems: MAX_RELAY_ARTIFACTS,
+          description: 'Exact values to preserve: files, URLs, document or project identifiers.',
+          items: {
+            type: 'object', additionalProperties: false, required: ['kind', 'value'],
+            properties: {
+              kind: { type: 'string', enum: ['file', 'url', 'identifier'] },
+              value: { type: 'string', minLength: 1, maxLength: 4096 },
+              label: { type: 'string', maxLength: 200 },
+            },
+          },
+        },
+      },
+    },
+    consequence: 'reversible-write',
+  },
+  {
     name: 'sessions_open',
     description: 'The sessions Unmute is holding right now, with two separate facts about each:'
       + ' `live` means its process is warm, so a follow-up needs no respawn; `inPocket` means it is'
@@ -160,6 +225,15 @@ export interface SessionActionResult {
   delivered?: boolean
 }
 
+/** A relay's destination is a card, not a provider id, so it carries neither
+ *  a source session nor a resulting one. `delivered:false` means the words are
+ *  in that card's composer, unsent — the session is open either way. */
+export interface SessionRelayResult {
+  taskId: string
+  operation: 'send'
+  delivered: boolean
+}
+
 export interface SessionAdapters {
   createWorkspace(group: string): Promise<{ id: string; label: string }>
   workspaces(): Promise<Array<{ id: string; label: string }>>
@@ -167,6 +241,36 @@ export interface SessionAdapters {
   close(input: { taskId: string }): Promise<{ taskId: string; closed: boolean }>
   resume(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult>
   fork(input: { sessionId: string; intent?: string; title?: string; group?: string }): Promise<SessionActionResult>
+  send(input: {
+    taskId: string; intent: string; context?: string
+    sourceSessions?: ReadonlyArray<{ sessionId: string; provider: 'claude' | 'codex' }>
+    artifacts?: ReadonlyArray<{ kind: 'file' | 'url' | 'identifier'; value: string; label?: string }>
+  }): Promise<SessionRelayResult>
+}
+
+function relaySources(raw: unknown): Array<{ sessionId: string; provider: 'claude' | 'codex' }> | undefined {
+  if (raw === undefined) return undefined
+  if (!Array.isArray(raw) || raw.length > MAX_RELAY_SOURCES) throw new Error('Relay sources are invalid')
+  return raw.map(entry => {
+    const source = entry as { sessionId?: unknown; provider?: unknown }
+    if (typeof source?.sessionId !== 'string' || source.sessionId.trim().length !== 36) throw new Error('A relay source needs a full exact session id')
+    if (typeof source.provider !== 'string' || !SOURCE_PROVIDERS.has(source.provider)) throw new Error('A relay source needs its provider')
+    return { sessionId: source.sessionId.trim(), provider: source.provider as 'claude' | 'codex' }
+  })
+}
+
+function relayArtifacts(raw: unknown): Array<{ kind: 'file' | 'url' | 'identifier'; value: string; label?: string }> | undefined {
+  if (raw === undefined) return undefined
+  if (!Array.isArray(raw) || raw.length > MAX_RELAY_ARTIFACTS) throw new Error('Relay artifacts are invalid')
+  return raw.map(entry => {
+    const artifact = entry as { kind?: unknown; value?: unknown; label?: unknown }
+    if (typeof artifact?.kind !== 'string' || !ARTIFACT_KINDS.has(artifact.kind)) throw new Error('A relay artifact needs a kind')
+    if (typeof artifact.value !== 'string' || !artifact.value.trim() || artifact.value.length > 4096) throw new Error('A relay artifact needs a value')
+    return {
+      kind: artifact.kind as 'file' | 'url' | 'identifier', value: artifact.value.trim(),
+      ...(typeof artifact.label === 'string' && artifact.label.trim() ? { label: artifact.label.trim().slice(0, 200) } : {}),
+    }
+  })
 }
 
 function ok(result: unknown): ToolResult {
@@ -217,6 +321,41 @@ export class SessionsCapability implements CapabilityModule {
       if (!taskId || taskId.length > 128) return fail('invalid-input', 'Task id is invalid')
       try { return ok(await this.adapters.close({ taskId })) }
       catch (error) { return fail('close-failed', (error as Error).message || 'That card could not be closed') }
+    }
+    if (tool === 'session_send') {
+      if (ctx.interaction?.active !== true || ctx.interaction.id !== ctx.principal.interactionId) {
+        return fail('access-denied', 'Speaking into a session requires an active interaction')
+      }
+      const value = (input ?? {}) as Record<string, unknown>
+      const taskId = typeof value.taskId === 'string' ? value.taskId.trim() : ''
+      const intent = typeof value.intent === 'string' ? value.intent.trim() : ''
+      const context = typeof value.context === 'string' ? value.context.trim() : ''
+      if (!taskId || taskId.length > 128) return fail('invalid-input', 'Task id is invalid')
+      if (!intent || intent.length > MAX_INTENT_LENGTH) return fail('invalid-input', 'A relay needs a request to carry')
+      if (context.length > MAX_RELAY_CONTEXT_LENGTH) return fail('invalid-input', 'Carried context is too long')
+      let sourceSessions: Array<{ sessionId: string; provider: 'claude' | 'codex' }> | undefined
+      let artifacts: Array<{ kind: 'file' | 'url' | 'identifier'; value: string; label?: string }> | undefined
+      try {
+        sourceSessions = relaySources(value.sourceSessions)
+        artifacts = relayArtifacts(value.artifacts)
+      } catch (error) { return fail('invalid-input', (error as Error).message) }
+      // CONTEXT THE SESSION CANNOT TRACE IS WORSE THAN NONE. The same rule
+      // task_create enforces: background is only worth carrying when the
+      // sessions it came from are named exactly.
+      if (context && !sourceSessions?.length) return fail('invalid-input', 'Carried context requires exact sourceSessions')
+      for (const [key, entry] of this.operations) if (entry.expiresAt <= ctx.now) this.operations.delete(key)
+      const key = JSON.stringify([ctx.principal.runId, ctx.principal.interactionId, tool, taskId, intent, context])
+      const previous = this.operations.get(key)
+      if (previous) return previous.result
+      const pending = this.adapters.send({
+        taskId, intent,
+        ...(context ? { context } : {}),
+        ...(sourceSessions ? { sourceSessions } : {}),
+        ...(artifacts ? { artifacts } : {}),
+      }).then(ok, (error: unknown) => fail('send-failed',
+        `${(error as Error).message || 'That session could not be spoken into'}. Do not retry this relay in this interaction.`))
+      this.operations.set(key, { expiresAt: ctx.principal.expiresAt, result: pending })
+      return pending
     }
     if (tool !== 'session_resume' && tool !== 'session_fork') {
       return fail('unknown-tool', `Unknown tool: ${tool}`)

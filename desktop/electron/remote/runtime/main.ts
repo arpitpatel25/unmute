@@ -1,4 +1,5 @@
 import { join, isAbsolute } from 'node:path'
+import { runtimeBuild } from './build'
 import { RuntimeRpcServer } from './rpc'
 import { runtimeSocket } from './client'
 import { ClaudeRuntimeService } from './claude-service'
@@ -17,7 +18,11 @@ async function main(): Promise<void> {
   // provider or tool starts, independently of the GUI's logging lifetime.
   configureRemoteLogging({ dir: join(root, 'logs'), runId: `runtime-${process.pid}-${Date.now()}`, synchronous: true })
   setConsoleMirror(false)
-  diagnostic('runtime-started', { root, protocolVersion: 3 })
+  // WHICH BUILD THIS IS, fixed at start. The file on disk is replaced by the
+  // next install while this process keeps running the code it loaded, so it is
+  // read once here and never again.
+  const build = runtimeBuild(process.argv[1])
+  diagnostic('runtime-started', { root, protocolVersion: 3, build })
   process.on('uncaughtExceptionMonitor', error => diagnostic('runtime-uncaught-exception', diagnosticError(error)))
   process.on('exit', code => diagnostic('runtime-exit', { code }))
   // Providers are created lazily after the exclusive listening socket is held.
@@ -29,7 +34,8 @@ async function main(): Promise<void> {
   const computer = new ComputerRuntimeService(event => server.emit('computer.activity', event))
   const server = new RuntimeRpcServer(runtimeSocket(root), async (method, args) => {
     if (method === 'runtime.info') return { version: 4, pid: process.pid, capabilities: ['codex.forkThread', 'codex.forkResult', 'codex.targetedSnapshot', 'codex.identity', 'codex.releaseIdle', 'claude.resumeSessionAt'] }
-    if (method === 'hello') { host.connected(); return { version: 1, pid: process.pid } }
+    if (method === 'hello') { host.connected(); return { version: 1, pid: process.pid, build } }
+    if (method === 'runtime.shutdown') { setImmediate(() => shutdown()); return { shuttingDown: true } }
     if (method === 'host.accept') return host.accept(String(args[0]))
     if (method === 'host.response') return host.response(String(args[0]), args[1], args[2] as string | undefined)
     if (method === 'task.register') return intercom.register(String(args[0]), String(args[1]))

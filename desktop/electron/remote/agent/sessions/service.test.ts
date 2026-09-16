@@ -227,3 +227,77 @@ test('a resume with nothing to say leaves the kind alone', async () => {
   await service.resume({ ...metadata, sessionId: 'source-session' })
   assert.equal(calls.find(c => c.op === 'setKind'), undefined)
 })
+
+/**
+ * RELAY: the fourth verb. The source of the words is one session and the
+ * destination is a DIFFERENT card that already exists. Resume cannot express
+ * it — resume's message is the user's own request and its destination is the
+ * session it just reopened — and task_create cannot either, because that makes
+ * a new session when the person named an existing one.
+ */
+test('a relay speaks into the card that already exists and creates nothing', async () => {
+  const { service, calls } = fixture(true)
+  const result = await service.send({ taskId: 'existing-task', message: 'Use the same Supabase project as before: BoloAI.' })
+  assert.deepEqual(result, { taskId: 'existing-task', operation: 'send', delivered: true })
+  assert.deepEqual(calls, [
+    { op: 'wake', input: 'existing-task' },
+    { op: 'setShelved', input: { id: 'existing-task', shelved: false } },
+    { op: 'opened', input: 'existing-task' },
+    // Words deliberately carried here make this a thread, exactly as a resume
+    // carrying a message does.
+    { op: 'setKind', input: { id: 'existing-task', kind: 'session' } },
+    { op: 'deliver', input: { id: 'existing-task', text: 'Use the same Supabase project as before: BoloAI.' } },
+  ])
+})
+
+test('a relay to a card Unmute is not holding is refused, never turned into a new one', async () => {
+  const { service, calls } = fixture(true)
+  await assert.rejects(service.send({ taskId: 'no-such-task', message: 'anything' }), /not holding/i)
+  assert.deepEqual(calls, [], 'nothing is woken, attached or dispatched')
+})
+
+test('a relay never renames the card it speaks into', async () => {
+  const { service, calls } = fixture(true)
+  const base = service.deps.manager()!
+  service.deps.manager = () => ({
+    ...base,
+    setName: (id: string, name: string) => { calls.push({ op: 'setName', input: { id, name } }) },
+    setGroup: (id: string, group: string) => { calls.push({ op: 'setGroup', input: { id, group } }) },
+  })
+  await service.send({ taskId: 'existing-task', message: 'carry this over' })
+  assert.deepEqual(calls.filter(c => c.op === 'setName' || c.op === 'setGroup'), [],
+    'the destination already has a name and a workspace; a message is not a renaming')
+})
+
+test('a relay that cannot be delivered is parked in that card, never lost', async () => {
+  const { service, calls } = fixture(true, [false, false, false, false, false, false, false, false, false])
+  const result = await service.send({ taskId: 'existing-task', message: 'the approach from Tuesday' })
+  assert.equal(result.delivered, false, 'it says so rather than throwing')
+  assert.deepEqual(calls.at(-1), { op: 'saveDraft', input: { id: 'existing-task', text: 'the approach from Tuesday' } })
+})
+
+test('one relay per interaction, however many times the agent asks', async () => {
+  const { service, calls } = fixture(true)
+  service.deps.interactionId = () => 'interaction-relay'
+  const [a, b] = await Promise.all([
+    service.send({ taskId: 'existing-task', message: 'same words' }),
+    service.send({ taskId: 'existing-task', message: 'same words' }),
+  ])
+  assert.deepEqual(a, b)
+  assert.equal(calls.filter(c => c.op === 'deliver').length, 1)
+})
+
+test('two different messages in one interaction are two relays', async () => {
+  const { service, calls } = fixture(true)
+  service.deps.interactionId = () => 'interaction-relay'
+  await service.send({ taskId: 'existing-task', message: 'first thing' })
+  await service.send({ taskId: 'existing-task', message: 'second thing' })
+  assert.equal(calls.filter(c => c.op === 'deliver').length, 2,
+    'deduplication is for a repeated call, not for a person who said two things')
+})
+
+test('an empty relay is refused before anything is woken', async () => {
+  const { service, calls } = fixture(true)
+  await assert.rejects(service.send({ taskId: 'existing-task', message: '   ' }), /something to say/i)
+  assert.deepEqual(calls, [])
+})
