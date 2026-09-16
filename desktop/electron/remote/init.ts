@@ -737,6 +737,13 @@ async function relayIntoSession(input: RelayRequest) {
   return result
 }
 
+/** The card Unmute holds for a provider session — matched exactly, the same
+ *  way resume finds a card to wake, so both checks agree on what "has a card" means. */
+function agentCardForSession(sessionId: string): { taskId: string; title?: string } | null {
+  const task = manager?.list().find(candidate => candidate.sessionId === sessionId || candidate.codexRolloutId === sessionId)
+  return task ? { taskId: task.id, ...(task.name ? { title: task.name } : {}) } : null
+}
+
 function openAgentSessions(limit?: number) {
   if (!manager) return []
   // Warm and in-front-of-you are different questions with different answers;
@@ -1451,6 +1458,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
           const task = manager?.get(taskId)
           return task ? { state: String(task.state), intent: task.intent } : null
         },
+        cardForSession: async id => agentCardForSession(id),
       }),
       new DeliveryCapability({
         resolveAttachment: (principal, handle) => attachments.resolveForDelivery(principal, handle),
@@ -4083,11 +4091,14 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
   if (method === 'sessions.createWorkspace') return createAgentWorkspace(args[0])
   if (method === 'sessions.open') return openAgentSessions((args[0] as { limit?: number } | undefined)?.limit)
   if (method === 'sessions.close') return closeAgentSession((args[0] as { taskId: string }).taskId)
+  if (method === 'handoff.cardForSession') return agentCardForSession(String(args[0]))
   if (method === 'handoff.createTask') {
     if (!manager) throw new Error('Unmute Remote is not initialized')
     const input = args[0] as Parameters<typeof buildHandoffPrompt>[0] & { title: string; group: string; sourceSessions?: Array<{ sessionId: string; provider: 'claude' | 'codex' }>; cwd?: string; kind: 'oneoff' | 'session'; provider: AgentKind; agentRunId: string }
     await validateContinuationSources(input.sourceSessions, locateSession, input.context)
     const seeded = buildHandoffPrompt(input)
+    const newInstance = (input as { sameJobNewInstance?: string }).sameJobNewInstance
+    if (newInstance) log.event('agent-handoff-new-instance', { reason: newInstance, sources: input.sourceSessions?.length ?? 0 })
     const taskId = await manager.dispatch(seeded, { kind: input.kind, agent: input.provider, agentMetadata: { title: input.title, group: input.group, agentRunId: input.agentRunId }, ...(input.cwd ? { cwd: input.cwd } : {}) })
     manager.mergeAgentOrigin(taskId, input.agentRunId)
     await manager.mergeContinuationProvenance(taskId, {

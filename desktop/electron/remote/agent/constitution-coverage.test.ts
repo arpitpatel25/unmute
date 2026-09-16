@@ -58,3 +58,12 @@ test('the prose says what makes a message a relay rather than a resume', () => {
   assert.ok(/anything you learned by reading/i.test(text),
     'the resume rules must hand off to session_send when the message carries what you read')
 })
+
+/** Observed 2026-09-16: a repeat build went to a NEW task because "same job
+ *  again → new task" matched it and nothing said a card already held it. */
+test('same job becomes a new task only when no card already holds that work', () => {
+  assert.ok(text.includes('ONLY WHEN NO CARD ALREADY HOLDS THAT WORK'))
+  assert.ok(text.includes('sameJobNewInstance'), 'the prose names the escape the guard enforces')
+  assert.ok(/that same\s+card\\?'s own earlier work|that card's own earlier work/.test(text) || text.includes("card's own earlier work"),
+    'carrying covers knowledge from the destination card\'s own history')
+})

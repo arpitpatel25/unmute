@@ -7,6 +7,7 @@ import type {
 import type { ProviderId } from '../../providers.ts'
 import { isAbsolute } from 'node:path'
 import { requireAgentMetadata } from '../metadata'
+import { diagnostic } from '../../diagnostics'
 
 /**
  * Handing outside work to the Orchestrator.
@@ -124,6 +125,13 @@ const tools = [
           type: 'string', maxLength: 4096,
           description: 'Absolute working folder for the synthesized continuation, when prior work is project-bound.',
         },
+        sameJobNewInstance: {
+          type: 'string', maxLength: 300,
+          description: 'Only when a source session already has a card and this is a genuinely'
+            + ' DIFFERENT instance of that job — say what differs ("the same comp, for a different'
+            + ' customer"). A repeat of the same work belongs in that card via session_send, and'
+            + ' task_create refuses it without this.',
+        },
         kind: {
           type: 'string', enum: TASK_KINDS,
           description: 'Choose session for ongoing, conversational, or project work the user may'
@@ -167,17 +175,22 @@ export interface HandoffAdapters {
     kind: TaskKind
     provider: ProviderId
     agentRunId: string
+    sameJobNewInstance?: string
   }): Promise<{ taskId: string }>
   taskStatus(taskId: string): Promise<{ state: string; intent: string } | null>
+  /** The card Unmute already holds for a provider session, if any. Optional so
+   *  a host without cards simply skips the duplicate check. */
+  cardForSession?(sessionId: string): Promise<{ taskId: string; title?: string } | null>
 }
 
-export type HandoffErrorCode = 'access-denied' | 'invalid-input' | 'handoff-failed' | 'not-found'
+export type HandoffErrorCode = 'access-denied' | 'invalid-input' | 'handoff-failed' | 'not-found' | 'already-has-card'
 
 const MESSAGES: Record<HandoffErrorCode, string> = {
   'access-denied': 'Task creation is unavailable',
   'invalid-input': 'Task input is invalid',
   'handoff-failed': 'The task could not be created',
   'not-found': 'That task was not found',
+  'already-has-card': 'That work already has a card',
 }
 
 /**
@@ -279,6 +292,29 @@ export class HandoffCapability implements CapabilityModule {
         if (cwd !== undefined && (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd.length > 4096)) {
           return fail('invalid-input', 'cwd must be an absolute path')
         }
+        const rawInstance = value.sameJobNewInstance
+        if (rawInstance !== undefined && (typeof rawInstance !== 'string' || rawInstance.length > 300)) {
+          return fail('invalid-input', 'sameJobNewInstance must be a short sentence saying what differs')
+        }
+        const newInstance = typeof rawInstance === 'string' ? rawInstance.trim() : ''
+        // ONE PIECE OF WORK, ONE SESSION. Decided here, from facts, rather than
+        // left to the rules: on 2026-09-16 the Agent read the right card's own
+        // session and then made a second session for the same work, because
+        // "same job again → new task" and "carry it into the existing card"
+        // were both true of the sentence. A source that already has a card is
+        // a fact the host can check; whether this is a different instance is
+        // the one judgement left, and it has to be stated to pass.
+        if (!newInstance && Array.isArray(sourceSessions) && this.adapters.cardForSession) {
+          for (const source of sourceSessions as ContinuationSource[]) {
+            const card = await this.adapters.cardForSession(source.sessionId)
+            if (card) {
+              diagnostic('agent-handoff-duplicate-refused', { cardTaskId: card.taskId, sourceSessionId: source.sessionId, runId: ctx.principal.runId })
+              return fail('already-has-card', `"${card.title ?? 'untitled'}" (taskId ${card.taskId}) holds the session you cited.`
+                + ' Put this in that card with session_send, carrying what you read — do not start a second session for the same work.'
+                + ' Only if this is a genuinely different instance of the job, call task_create again with sameJobNewInstance saying what differs.')
+            }
+          }
+        }
         const created = await this.adapters.createTask({
           ...metadata,
           intent,
@@ -291,6 +327,7 @@ export class HandoffCapability implements CapabilityModule {
           ...(Array.isArray(artifacts) && artifacts.length
             ? { artifacts: artifacts.map(item => ({ ...(item as ContinuationArtifact), value: (item as ContinuationArtifact).value.trim() })) } : {}),
           ...(typeof cwd === 'string' ? { cwd } : {}),
+          ...(newInstance ? { sameJobNewInstance: newInstance } : {}),
         })
         return ok({ taskId: created.taskId, status: 'created' })
       }
