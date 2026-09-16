@@ -74,4 +74,17 @@ public enum SlashCommands {
     /// The token VERBATIM, plus the one space that separates it from the prompt
     /// the user carries on typing.
     public static func accepted(token: String) -> String { token + " " }
+
+    /// The UTF-16 range of the command the draft STARTS with, or nil.
+    ///
+    /// Only a token the host actually offered counts, and only as a whole word:
+    /// "/front" is still being typed and "/frontend-designer" is a different
+    /// word, so neither is painted as a chosen skill. UTF-16 because the range
+    /// goes straight to NSLayoutManager.
+    public static func leadingCommandRange(in draftText: String, tokens: Set<String>) -> NSRange? {
+        guard let first = draftText.first, first == "/" || first == "$" else { return nil }
+        let word = draftText.prefix { !$0.isWhitespace }
+        guard tokens.contains(String(word)) else { return nil }
+        return NSRange(location: 0, length: (String(word) as NSString).length)
+    }
 }

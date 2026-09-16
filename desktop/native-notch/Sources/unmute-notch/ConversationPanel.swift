@@ -410,6 +410,7 @@ struct StageComposer: View {
                                      placeholder: placeholder, onSubmit: send, onImagePaste: attachImage,
                                      onFocusChange: reportFocus,
                                      onKey: handleKey,
+                                     commandTokens: Set(commands.map(\.token)),
                                      onSelectionChange: { editorSelection = $0 },
                                      onAttachmentReserved: { [taskId, clientRevision] operation, name, selection, snapshot in
                                          model.emit(.reserveDraftAttachment(id: taskId, operationId: operation, name: name,
@@ -506,8 +507,14 @@ struct StageComposer: View {
     /// measures, so the menu cannot feed the measure/set loop.
     @ViewBuilder private var slashMenu: some View {
         if slash.isOpen {
+            // LIFTED CLEAR by an explicit offset. An alignment guide inside an
+            // overlay was silently ignored in the field: the menu sat on the
+            // composer's top edge and covered the very text being typed. The
+            // height is arithmetic, so the offset is exact without measuring.
+            let height = SlashCommandMenu.height(matches: slash.matches.count)
             SlashCommandMenu(state: slash, accept: acceptCommand)
-                .alignmentGuide(.top) { $0[.bottom] + 6 }
+                .frame(height: height)
+                .offset(y: -(height + 8))
         }
     }
 
@@ -655,6 +662,8 @@ private struct SubmitTextEditor: NSViewRepresentable {
     let onFocusChange: (Bool) -> Void
     /// Returns true when the composer's menu consumed the key.
     let onKey: (ComposerKeyCommand) -> Bool
+    /// The tokens this thread offers; the one the draft starts with is painted.
+    let commandTokens: Set<String>
     let onSelectionChange: (NSRange) -> Void
     let onAttachmentReserved: (String, String, NSRange, String) -> Void
     let onAttachmentFailed: (String, String) -> Void
@@ -693,6 +702,8 @@ private struct SubmitTextEditor: NSViewRepresentable {
         view.allowsUndo = true
         view.string = text
         scroll.documentView = view
+        context.coordinator.commandTokens = commandTokens
+        context.coordinator.paintCommand(view)
         context.coordinator.measure(view)
         return scroll
     }
@@ -722,6 +733,8 @@ private struct SubmitTextEditor: NSViewRepresentable {
             let length = (text as NSString).length
             view.setSelectedRange(NSRange(location: min(selection.location, length), length: min(selection.length, max(0, length - selection.location))))
         }
+        context.coordinator.commandTokens = commandTokens
+        context.coordinator.paintCommand(view)
         context.coordinator.measure(view)
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -730,6 +743,7 @@ private struct SubmitTextEditor: NSViewRepresentable {
         var onSubmit: () -> Void
         var onImagePaste: (String, String, String, NSRange?, String?, String?) -> Void
         var onKey: (ComposerKeyCommand) -> Bool
+        var commandTokens: Set<String> = []
         var onSelectionChange: (NSRange) -> Void
         init(text: Binding<String>, measuredHeight: Binding<CGFloat>, onSubmit: @escaping () -> Void, onImagePaste: @escaping (String, String, String, NSRange?, String?, String?) -> Void, onKey: @escaping (ComposerKeyCommand) -> Bool, onSelectionChange: @escaping (NSRange) -> Void) {
             self.text = text
@@ -746,7 +760,22 @@ private struct SubmitTextEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
             text.wrappedValue = view.string
+            paintCommand(view)
             measure(view)
+        }
+
+        /// A chosen skill reads as a skill: the command the draft starts with
+        /// is drawn in the link blue, the way Claude's and Codex's own apps
+        /// set it apart. TEMPORARY attributes on the layout manager — display
+        /// only — so the draft text, undo, attachments and typing attributes
+        /// are untouched, and prose typed after the token stays ordinary.
+        func paintCommand(_ view: NSTextView) {
+            guard let manager = view.layoutManager else { return }
+            let length = (view.string as NSString).length
+            manager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: NSRange(location: 0, length: length))
+            guard !view.hasMarkedText(),
+                  let range = SlashCommands.leadingCommandRange(in: view.string, tokens: commandTokens) else { return }
+            manager.addTemporaryAttribute(.foregroundColor, value: NSColor.linkColor, forCharacterRange: range)
         }
         func measure(_ view: NSTextView) {
             DispatchQueue.main.async {

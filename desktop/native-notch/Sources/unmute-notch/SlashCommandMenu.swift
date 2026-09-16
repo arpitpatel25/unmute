@@ -118,8 +118,19 @@ struct SlashCommandMenu: View {
     /// own height — and measuring it back would be the measure/set loop this
     /// surface has spun a core on before. Rows are one line by construction, so
     /// the height is arithmetic.
-    private let rowHeight: CGFloat = 28
-    private let visibleRows = 6
+    static let rowHeight: CGFloat = 30
+    static let visibleRows = 6
+    /// The composer's own radius and inset, so the two read as one family:
+    /// row highlights are concentric with the panel (radius minus inset).
+    static let radius: CGFloat = 14
+    static let inset: CGFloat = 5
+
+    /// The menu's full height for this many matches — arithmetic, so the
+    /// composer can lift the menu clear of itself without measuring anything.
+    static func height(matches: Int) -> CGFloat {
+        CGFloat(max(1, min(matches, visibleRows))) * rowHeight + inset * 2
+    }
+    private var rowHeight: CGFloat { Self.rowHeight }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -127,7 +138,7 @@ struct SlashCommandMenu: View {
                 Text("No commands")
                     .font(.system(size: 12))
                     .foregroundColor(Theme.textFaint)
-                    .padding(.horizontal, 11)
+                    .padding(.horizontal, 9)
                     .frame(height: rowHeight)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -142,19 +153,28 @@ struct SlashCommandMenu: View {
                             }
                         }
                     }
-                    .frame(height: CGFloat(min(state.matches.count, visibleRows)) * rowHeight)
+                    .frame(height: CGFloat(min(state.matches.count, Self.visibleRows)) * rowHeight)
                     .onChange(of: state.selection) { proxy.scrollTo($0) }
                 }
             }
         }
-        .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 11).fill(Color(red: 0.10, green: 0.11, blue: 0.13)))
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(Theme.hairline, lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.5), radius: 18, y: 6)
+        .padding(Self.inset)
+        // The composer's surface, radius and edge — the menu is part of it,
+        // not a foreign popup laid over it.
+        .background(RoundedRectangle(cornerRadius: Self.radius).fill(Theme.composerFill))
+        .overlay(RoundedRectangle(cornerRadius: Self.radius).stroke(Theme.composerEdge, lineWidth: 0.75))
+        .clipShape(RoundedRectangle(cornerRadius: Self.radius))
+        .shadow(color: .black.opacity(0.45), radius: 16, y: 4)
     }
 
     private func row(_ command: CommandP, selected: Bool) -> some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
+            // The same blue a chosen skill wears in the draft, so the row and
+            // the token it inserts are recognisably one thing.
+            Image(systemName: "puzzlepiece.extension")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(Theme.cLink)
+                .frame(width: 14)
             Text(command.name.isEmpty ? command.title : command.name)
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundColor(Theme.text)
@@ -180,10 +200,11 @@ struct SlashCommandMenu: View {
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 11)
+        .padding(.horizontal, 9)
         .frame(height: rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(selected ? Theme.raisedHover : Color.clear)
+        .background(RoundedRectangle(cornerRadius: Self.radius - Self.inset)
+            .fill(selected ? Theme.raisedHover : Color.clear))
         .contentShape(Rectangle())
     }
 

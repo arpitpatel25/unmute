@@ -86,4 +86,20 @@ final class SlashCommandQueryTests: XCTestCase {
         XCTAssertEqual(SlashCommands.accepted(token: "$frontend-design"), "$frontend-design ")
         XCTAssertEqual(SlashCommands.accepted(token: "/frontend-design"), "/frontend-design ")
     }
+
+    func testAChosenCommandAtTheStartIsFound() {
+        let tokens: Set<String> = ["/frontend-design", "$hyperframes"]
+        XCTAssertEqual(SlashCommands.leadingCommandRange(in: "/frontend-design make it bold", tokens: tokens),
+                       NSRange(location: 0, length: 16))
+        XCTAssertEqual(SlashCommands.leadingCommandRange(in: "$hyperframes", tokens: tokens),
+                       NSRange(location: 0, length: 12))
+    }
+
+    func testOnlyAWholeOfferedTokenIsPainted() {
+        let tokens: Set<String> = ["/frontend-design"]
+        XCTAssertNil(SlashCommands.leadingCommandRange(in: "/front", tokens: tokens))
+        XCTAssertNil(SlashCommands.leadingCommandRange(in: "/frontend-designer", tokens: tokens))
+        XCTAssertNil(SlashCommands.leadingCommandRange(in: "use /frontend-design", tokens: tokens))
+        XCTAssertNil(SlashCommands.leadingCommandRange(in: "", tokens: tokens))
+    }
 }
