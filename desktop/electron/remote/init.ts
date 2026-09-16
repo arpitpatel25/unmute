@@ -234,9 +234,19 @@ async function captureGestureScreenshot(kind: 'fullscreen' | 'region'): Promise<
   }
 }
 
+/**
+ * The sound macOS itself plays for ⌘⇧3/⌘⇧4. The capture runs `screencapture
+ * -x` (silent) so the sound fires once, from here, for every capture route —
+ * and a screenshot should sound like a screenshot, not a generic alert. Tink
+ * stays as the fallback for a system that moved or dropped the file.
+ */
+const SCREENSHOT_SOUND = '/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif'
+const SCREENSHOT_SOUND_FALLBACK = '/System/Library/Sounds/Tink.aiff'
+
 function playScreenshotFeedback(): void {
-  execFile('/usr/bin/afplay', ['-v', '0.65', '/System/Library/Sounds/Tink.aiff'], { timeout: 3000 }, (error) => {
-    if (error) log.warn('screenshot feedback sound failed', { error: error.message })
+  const sound = existsSync(SCREENSHOT_SOUND) ? SCREENSHOT_SOUND : SCREENSHOT_SOUND_FALLBACK
+  execFile('/usr/bin/afplay', [sound], { timeout: 3000 }, (error) => {
+    if (error) log.warn('screenshot feedback sound failed', { error: error.message, sound })
   })
   pillController?.push({ captureFlashToken: Date.now() })
 }

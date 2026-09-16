@@ -781,6 +781,14 @@ private struct SubmitTextEditor: NSViewRepresentable {
             DispatchQueue.main.async {
                 view.layoutManager?.ensureLayout(for: view.textContainer!)
                 let height = view.layoutManager?.usedRect(for: view.textContainer!).height ?? 0
+                // Centre the text in the frame it is about to get. The inset
+                // does not change usedRect, so it cannot feed back into the
+                // height being measured here.
+                let lineHeight = view.font.flatMap { view.layoutManager?.defaultLineHeight(for: $0) } ?? 17
+                let inset = ComposerHeight.verticalInset(measured: height, lineHeight: lineHeight)
+                if abs(view.textContainerInset.height - inset) > 0.5 {
+                    view.textContainerInset = NSSize(width: 0, height: inset)
+                }
                 if abs(self.measuredHeight.wrappedValue - height) > 0.5 {
                     self.measuredHeight.wrappedValue = height
                 }
