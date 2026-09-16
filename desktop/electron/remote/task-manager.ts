@@ -186,6 +186,16 @@ export interface Task {
   continuationArtifacts?: Array<{ kind: 'file' | 'url' | 'identifier'; value: string; label?: string }>
   /** Agent confidence in the selected continuation, when recorded. */
   continuationConfidence?: number
+  /** Words the Unmute Agent carried INTO this card from elsewhere, appended
+   *  one per relay. Distinct from `continuation*`, which says where this
+   *  conversation came from: a relay leaves that ancestry untouched and records
+   *  only what was brought to it, so the two can never overwrite each other. */
+  agentRelays?: Array<{
+    at: number
+    agentRunId?: string
+    sources?: Array<{ sessionId: string; provider: 'claude' | 'codex' }>
+    artifacts?: Array<{ kind: 'file' | 'url' | 'identifier'; value: string; label?: string }>
+  }>
   /** Durable logical Agent run that produced this card. */
   agentRunId?: string
   /** Short display name for the session (2-5 words), generated async just after
@@ -1733,6 +1743,32 @@ export class TaskManager extends EventEmitter {
     task.origin = 'unmute-agent'
     task.agentRunId = agentRunId
     this.mergeMeta(task, { origin: 'unmute-agent', agentRunId }, 'agent-handoff-origin')
+    this.emit('updated', task)
+  }
+
+  /**
+   * Record that the Agent carried words in from other sessions.
+   *
+   * APPENDS. `mergeContinuationProvenance` REPLACES, because it describes the
+   * one act that created a conversation; a card can receive any number of
+   * relays over its life and each one is its own fact. Bounded so a long-lived
+   * session cannot grow its meta file without limit.
+   */
+  async noteAgentRelay(taskId: string, input: {
+    agentRunId?: string
+    sources?: Array<{ sessionId: string; provider: 'claude' | 'codex' }>
+    artifacts?: Array<{ kind: 'file' | 'url' | 'identifier'; value: string; label?: string }>
+  }): Promise<void> {
+    const task = this.tasks.get(taskId)
+    if (!task) return
+    task.agentRelays = [...(task.agentRelays ?? []), {
+      at: Date.now(),
+      ...(input.agentRunId ? { agentRunId: input.agentRunId } : {}),
+      ...(input.sources?.length ? { sources: input.sources.map(source => ({ ...source })) } : {}),
+      ...(input.artifacts?.length ? { artifacts: input.artifacts.map(artifact => ({ ...artifact })) } : {}),
+    }].slice(-32)
+    this.mergeMeta(task, { agentRelays: task.agentRelays }, 'agent-relay')
+    await this.metaChains.get(taskId)
     this.emit('updated', task)
   }
 
@@ -4230,7 +4266,7 @@ export class TaskManager extends EventEmitter {
       if (this.tasks.has(id)) continue
       if (await this.recordRetired(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result']; continuationMode?: Task['continuationMode']; continuationSources?: Task['continuationSources']; continuationArtifacts?: Task['continuationArtifacts']; continuationConfidence?: number }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result']; continuationMode?: Task['continuationMode']; continuationSources?: Task['continuationSources']; continuationArtifacts?: Task['continuationArtifacts']; continuationConfidence?: number; agentRelays?: Task['agentRelays'] }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { meta = {} }
       if ((meta as Task).continuationPending) continue
       if (!meta.intent) {
@@ -4284,6 +4320,7 @@ export class TaskManager extends EventEmitter {
           continuationSources: meta.continuationSources,
           continuationArtifacts: meta.continuationArtifacts,
           continuationConfidence: meta.continuationConfidence,
+          agentRelays: meta.agentRelays,
           ...this.groupFromMeta(meta),
         }
         this.tasks.set(id, task)
@@ -4494,6 +4531,7 @@ export class TaskManager extends EventEmitter {
         continuationSources: meta.continuationSources,
         continuationArtifacts: meta.continuationArtifacts,
         continuationConfidence: meta.continuationConfidence,
+        agentRelays: meta.agentRelays,
         ...this.groupFromMeta(meta),
       }
       // A receipt is enough to restore the wall. Reading every Claude frame

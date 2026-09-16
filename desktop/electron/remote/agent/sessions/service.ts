@@ -1,4 +1,4 @@
-import type { SessionActionResult } from '../capabilities/sessions'
+import type { SessionActionResult, SessionRelayResult } from '../capabilities/sessions'
 import { requireMainSession, type LocatedSession } from './locate'
 import { resolveAgentMetadata, type WorkspaceRegistry, type MetadataSource } from '../metadata'
 import { isReapedScratchCwd, planFork, planResume } from './resume'
@@ -44,14 +44,14 @@ export interface AgentContinuationDeps {
 
 export class AgentContinuationService {
   constructor(readonly deps: AgentContinuationDeps) {}
-  private operations = new Map<string, Promise<SessionActionResult>>()
-  private once(operation: string, sessionId: string, action: () => Promise<SessionActionResult>): Promise<SessionActionResult> {
+  private operations = new Map<string, Promise<unknown>>()
+  private once<T>(operation: string, sessionId: string, action: () => Promise<T>): Promise<T> {
     const interaction = this.deps.interactionId?.()
     if (!interaction) return action()
     const key = JSON.stringify([interaction, operation, sessionId])
     diagnostic('continuation-requested', { interactionId: interaction, operation, sourceSessionId: sessionId,
       operationId: createHash('sha256').update(key).digest('hex') })
-    const previous = this.operations.get(key)
+    const previous = this.operations.get(key) as Promise<T> | undefined
     if (previous) { diagnostic('continuation-retry-deduplicated', { interactionId: interaction, operation, sourceSessionId: sessionId }); return previous }
     const pending = this.recordOperation(key, action)
     this.operations.set(key, pending)
@@ -59,12 +59,12 @@ export class AgentContinuationService {
     if (this.operations.size > 256) this.operations.delete(this.operations.keys().next().value!)
     return pending
   }
-  private async recordOperation(key: string, action: () => Promise<SessionActionResult>): Promise<SessionActionResult> {
+  private async recordOperation<T>(key: string, action: () => Promise<T>): Promise<T> {
     const root = this.deps.operationRoot
     if (!root) return action()
     await mkdir(root, { recursive: true, mode: 0o700 })
     const file = join(root, createHash('sha256').update(key).digest('hex') + '.json')
-    let previous: { result?: SessionActionResult; error?: string } | undefined
+    let previous: { result?: T; error?: string } | undefined
     try { previous = JSON.parse(await readFile(file, 'utf8')) }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     if (previous) {
@@ -165,6 +165,54 @@ export class AgentContinuationService {
     return {
       ...result, operation: 'resume', sourceSessionId: input.sessionId,
     }
+  }
+
+  /**
+   * RELAY: put composed words into a card that already exists.
+   *
+   * The fourth verb. Resume's destination is the session it just reopened and
+   * its message is the person's own request verbatim; `task_create` makes a new
+   * session. Neither expresses "take what that other session worked out, and
+   * say it in THIS one" — the request people actually make once they have more
+   * than one conversation running.
+   *
+   * It composes nothing itself: the Agent has read the transcripts and written
+   * the message, and a template here would be the fixed prose that got
+   * `session_continue_in` deleted. What belongs here is what the Agent cannot
+   * do from the filesystem — waking the destination, the delivery ladder, and
+   * refusing a destination Unmute is not holding.
+   *
+   * It never renames the card, never changes its workspace and never creates
+   * one. A card the Agent speaks into is the person's card, not the Agent's.
+   */
+  async send(input: { taskId: string; message: string }): Promise<SessionRelayResult> {
+    const taskId = input.taskId?.trim()
+    const message = input.message?.trim()
+    if (!taskId || !message) throw new Error('A relay needs an existing card and something to say')
+    // Keyed by the words as well as the card: a repeated call is one relay,
+    // but a person who said two things gets two.
+    const fingerprint = `${taskId}:${createHash('sha256').update(message).digest('hex')}`
+    return this.once('send', fingerprint, () => this.sendOnce(taskId, message))
+  }
+  private async sendOnce(taskId: string, message: string): Promise<SessionRelayResult> {
+    const manager = this.manager()
+    // NEVER CREATE. The destination was named by the person, and a card that is
+    // not there means the Agent picked the wrong one — inventing a session to
+    // receive the message would hide that behind a success.
+    if (!manager.list().some(task => task.id === taskId)) {
+      throw new Error('Unmute is not holding that card, so there is nothing to speak into')
+    }
+    if (!(await manager.resume(taskId))) throw new Error('That session could not be resumed')
+    // The same wake-then-wait the resume path learned the hard way: resume()
+    // only marks it resumable, opened() is what respawns a cold card, and
+    // delivery has to wait for the process that is still coming up.
+    manager.setShelved?.(taskId, false)
+    manager.opened?.(taskId)
+    manager.setKind?.(taskId, 'session')
+    await this.waitUntilLive(taskId)
+    const delivered = await this.deliverWhenReady(taskId, message)
+    diagnostic('relay-delivered', { taskId, chars: message.length, delivered })
+    return { taskId, operation: 'send', delivered }
   }
 
   /**

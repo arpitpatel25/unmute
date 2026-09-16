@@ -684,6 +684,49 @@ async function createAgentWorkspace(group: unknown) {
 /** What the Agent cannot read off the disk: which sessions Unmute is holding
  *  open. A live card takes a follow-up as it is, so knowing this is what keeps
  *  the Agent from resuming a conversation that never went away. */
+interface RelayRequest {
+  taskId: string
+  intent: string
+  context?: string
+  sourceSessions?: ReadonlyArray<{ sessionId: string; provider: 'claude' | 'codex' }>
+  artifacts?: ReadonlyArray<{ kind: 'file' | 'url' | 'identifier'; value: string; label?: string }>
+}
+
+/**
+ * Carry composed words into a card that already exists.
+ *
+ * The COMPOSITION is the Agent's — it read the other sessions — and the shape
+ * is `buildHandoffPrompt`, the same one a handoff uses, so a receiving session
+ * reads carried background as background in both cases rather than as four
+ * clauses of new instructions. What the host adds is what only it can: the
+ * sources are validated against real transcripts before anything is said, and
+ * what was carried is recorded on the destination card afterwards.
+ */
+async function relayIntoSession(input: RelayRequest) {
+  if (!manager) throw new Error('Unmute Remote is not initialized')
+  const sources = input.sourceSessions?.map(source => ({ ...source }))
+  const artifacts = input.artifacts?.map(artifact => ({ ...artifact }))
+  await validateContinuationSources(sources, locateSession, input.context)
+  const message = buildHandoffPrompt({
+    intent: input.intent,
+    ...(input.context ? { context: input.context } : {}),
+    ...(artifacts?.length ? { artifacts } : {}),
+  })
+  const result = await agentContinuations.send({ taskId: input.taskId, message })
+  await manager.noteAgentRelay(input.taskId, {
+    ...(sources?.length ? { sources } : {}),
+    ...(artifacts?.length ? { artifacts } : {}),
+  })
+  log.event('agent-session-relay', {
+    taskId: input.taskId,
+    delivered: result.delivered,
+    carriedContext: input.context ? input.context.length : 0,
+    sources: sources?.length ?? 0,
+    artifacts: artifacts?.length ?? 0,
+  })
+  return result
+}
+
 function openAgentSessions(limit?: number) {
   if (!manager) return []
   // Warm and in-front-of-you are different questions with different answers;
@@ -1347,6 +1390,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
         close: input => closeAgentSession(input.taskId),
         resume: input => agentContinuations.resume(input),
         fork: input => agentContinuations.fork(input),
+        send: input => relayIntoSession(input),
       }),
       // What the user recorded. Optional: only present when the notetaker
       // feature wired its adapters in via RemoteInitDeps.notetaker — a build
@@ -4017,6 +4061,7 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
     const payload = clipboardPayload(entry)
     return copyHistoryToClipboard(payload.text, payload.attachments)
   }
+  if (method === 'sessions.send') return relayIntoSession(args[0] as RelayRequest)
   if (method === 'sessions.resume') return agentContinuations.resume(args[0])
   if (method === 'sessions.fork') return agentContinuations.fork(args[0])
   if (method === 'sessions.workspaces') return (groupRegistry?.list() ?? []).map(({ id, label }) => ({ id, label }))

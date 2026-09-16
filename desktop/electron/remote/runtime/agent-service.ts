@@ -114,6 +114,7 @@ export class AgentRuntimeService {
           close: input => this.host('sessions.close', [input]),
           resume: input => this.host('sessions.resume', [input]),
           fork: input => this.host('sessions.fork', [input]),
+          send: input => this.host('sessions.send', [input]),
         }),
         new HandoffCapability({ createTask: input => this.host('handoff.createTask', [input]), taskStatus: id => this.host('handoff.taskStatus', [id]) }),
         ...(config.notetaker ? [new NotetakerCapability({ list: limit => this.host('notetaker.list', [limit]), search: (q, limit) => this.host('notetaker.search', [q, limit]), read: id => this.host('notetaker.read', [id]), open: id => this.host('notetaker.open', [id]) })] : []),
