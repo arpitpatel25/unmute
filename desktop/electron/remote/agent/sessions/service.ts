@@ -196,24 +196,38 @@ export class AgentContinuationService {
   }
   private async sendOnce(taskId: string, message: string): Promise<SessionRelayResult> {
     const manager = this.manager()
+    // Field-legible from the first try: which card, how much was carried, and
+    // — when it goes wrong — WHICH card the Agent thought it was speaking to
+    // against the ones that existed. A relay that lands in the wrong place, or
+    // nowhere, is otherwise indistinguishable from one that was never asked for.
+    diagnostic('relay-requested', { taskId, chars: message.length })
     // NEVER CREATE. The destination was named by the person, and a card that is
     // not there means the Agent picked the wrong one — inventing a session to
     // receive the message would hide that behind a success.
     if (!manager.list().some(task => task.id === taskId)) {
+      diagnostic('relay-unknown-card', { taskId, held: manager.list().map(task => task.id).slice(0, 24) })
       throw new Error('Unmute is not holding that card, so there is nothing to speak into')
     }
-    if (!(await manager.resume(taskId))) throw new Error('That session could not be resumed')
+    if (!(await manager.resume(taskId))) {
+      diagnostic('relay-resume-refused', { taskId })
+      throw new Error('That session could not be resumed')
+    }
     // The same wake-then-wait the resume path learned the hard way: resume()
     // only marks it resumable, opened() is what respawns a cold card, and
     // delivery has to wait for the process that is still coming up.
     manager.setShelved?.(taskId, false)
     manager.opened?.(taskId)
     manager.setKind?.(taskId, 'session')
-    await this.waitUntilLive(taskId)
+    const live = await this.waitUntilLiveResult(taskId)
     const delivered = await this.deliverWhenReady(taskId, message)
-    diagnostic('relay-delivered', { taskId, chars: message.length, delivered })
+    diagnostic('relay-delivered', { taskId, chars: message.length, delivered, live })
     return { taskId, operation: 'send', delivered }
   }
+
+  /** Named so a relay can report whether the card came up before it spoke —
+   *  `delivered:true` off a session that never went live is the shape of a
+   *  message landing somewhere unexpected. */
+  private waitUntilLiveResult(taskId: string): Promise<boolean> { return this.waitUntilLive(taskId) }
 
   /**
    * Wait for a woken session to actually be alive.

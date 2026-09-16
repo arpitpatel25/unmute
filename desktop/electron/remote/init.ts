@@ -706,7 +706,16 @@ async function relayIntoSession(input: RelayRequest) {
   if (!manager) throw new Error('Unmute Remote is not initialized')
   const sources = input.sourceSessions?.map(source => ({ ...source }))
   const artifacts = input.artifacts?.map(artifact => ({ ...artifact }))
-  await validateContinuationSources(sources, locateSession, input.context)
+  try { await validateContinuationSources(sources, locateSession, input.context) }
+  catch (error) {
+    // Logged, because from the Agent's side this is one refusal sentence and
+    // from ours it is the difference between a hallucinated source id and a
+    // session that genuinely is not on this machine.
+    log.event('agent-session-relay-refused', {
+      taskId: input.taskId, reason: (error as Error).message, sources: sources?.length ?? 0,
+    })
+    throw error
+  }
   const message = buildHandoffPrompt({
     intent: input.intent,
     ...(input.context ? { context: input.context } : {}),
