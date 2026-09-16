@@ -123,6 +123,9 @@ struct SlashCommandMenu: View {
     /// The composer's own radius and inset, so the two read as one family:
     /// row highlights are concentric with the panel (radius minus inset).
     static let radius: CGFloat = 14
+    /// Fully opaque, and dark enough that every tone's composer tint over it
+    /// still reads as the composer.
+    static let opaqueBase = Color(red: 0.075, green: 0.080, blue: 0.092)
     static let inset: CGFloat = 5
 
     /// The menu's full height for this many matches — arithmetic, so the
@@ -159,9 +162,16 @@ struct SlashCommandMenu: View {
             }
         }
         .padding(Self.inset)
-        // The composer's surface, radius and edge — the menu is part of it,
-        // not a foreign popup laid over it.
-        .background(RoundedRectangle(cornerRadius: Self.radius).fill(Theme.composerFill))
+        // OPAQUE FIRST, then the composer's own tint. composerFill is
+        // translucent, which is right for a field over the bare ground but
+        // wrong for a menu floating over the transcript: the conversation
+        // showed straight through and the rows became unreadable. The solid
+        // base hides whatever is behind; the tint on top keeps it the same
+        // family as the composer.
+        .background(ZStack {
+            RoundedRectangle(cornerRadius: Self.radius).fill(Self.opaqueBase)
+            RoundedRectangle(cornerRadius: Self.radius).fill(Theme.composerFill)
+        })
         .overlay(RoundedRectangle(cornerRadius: Self.radius).stroke(Theme.composerEdge, lineWidth: 0.75))
         .clipShape(RoundedRectangle(cornerRadius: Self.radius))
         .shadow(color: .black.opacity(0.45), radius: 16, y: 4)
