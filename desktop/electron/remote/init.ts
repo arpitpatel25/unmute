@@ -141,6 +141,7 @@ import { PersistentCodexHub } from './runtime/codex-client'
 import { CompatibleCodexRuntime } from './runtime/codex-routing'
 import { fileOwnershipStore } from './runtime/codex-ownership'
 import { CompatibleAgentRuntime, recoverAgentRuntime } from './runtime/agent-routing'
+import { runtimeBuild } from './runtime/build'
 import { agentRuntimeRoot } from './runtime/agent-schema'
 import { PersistentClaudeTaskSession } from './runtime/claude-client'
 import { AgentRuntimeClient } from './runtime/agent-client'
@@ -4958,7 +4959,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   releaseRuntimeHost = registerRuntimeHost(persistentRuntime, invokeRuntimeHost)
   const agentWorker = new PersistentRuntimeClient(agentRuntimeRoot(app.getPath('userData')), join(__dirname, 'unmute-runtime.js'))
   releaseAgentRuntimeHost = registerRuntimeHost(agentWorker, invokeRuntimeHost)
-  agentRuntimeRouting = new CompatibleAgentRuntime(persistentRuntime, agentWorker)
+  agentRuntimeRouting = new CompatibleAgentRuntime(persistentRuntime, agentWorker, runtimeBuild(join(__dirname, 'unmute-runtime.js')))
   agentRuntimeRouting.on('reconnected', () => {
     if (unmuteAgentLifecycle instanceof AgentRuntimeClient) {
       const client = unmuteAgentLifecycle

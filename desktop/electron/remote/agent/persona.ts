@@ -1,7 +1,10 @@
 import { promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
 
+import { createHash } from 'node:crypto'
+
 import { AGENT_PRINCIPLES } from './constitution'
+import { LEGACY_DEFAULT_FINGERPRINTS } from './persona-defaults'
 
 /**
  * unmute-agent.md — the Agent's persona, on disk and editable.
@@ -37,6 +40,9 @@ const PERSONA_HEADER = `<!--
   takes effect on the next FRESH conversation — after the idle purge, or after
   a relaunch. Delete the file and Unmute writes the default back.
 
+  Left untouched, it follows each new build of Unmute. Once you edit it, it is
+  yours and is never changed again.
+
   What belongs here is judgement: how the Agent should think, what it should
   prefer, how it should sound. What must ALWAYS hold lives in the tool schemas
   instead, where it is enforced rather than requested.
@@ -62,27 +68,50 @@ export async function loadPersona(
     writeFile?: (p: string, data: string) => Promise<void>
     mkdir?: (p: string) => Promise<void>
   } = {},
-): Promise<{ text: string; source: 'file' | 'seeded' | 'default' }> {
+  legacyDefaults: ReadonlySet<string> = LEGACY_DEFAULT_FINGERPRINTS,
+): Promise<{ text: string; source: 'file' | 'seeded' | 'refreshed' | 'default' }> {
   const readFile = io.readFile ?? ((p) => fs.readFile(p, 'utf8'))
   const writeFile = io.writeFile ?? ((p, data) => fs.writeFile(p, data, { mode: 0o600 }))
   const mkdir = io.mkdir ?? (async (p) => { await fs.mkdir(p, { recursive: true, mode: 0o700 }) })
   const path = personaPath(agentDir)
 
-  try {
-    const existing = await readFile(path)
-    if (existing.trim()) return { text: stripHeader(existing), source: 'file' }
-  } catch { /* not there yet, or unreadable — seed below */ }
+  let existing: string | undefined
+  try { existing = await readFile(path) } catch { /* not there yet, or unreadable — seed below */ }
+  if (existing?.trim()) {
+    const body = stripHeader(existing)
+    // AN UNTOUCHED COPY FOLLOWS THE BUILD. Never merged and never migrated
+    // still holds for a file a person edited — but a copy nobody touched is
+    // just an old default, and leaving it froze one machine on 8 September's
+    // rules for eight days, through a whole new tool's instructions
+    // (2026-09-16). "Untouched" is a fact, not a guess: the body matches the
+    // fingerprint recorded when it was seeded, or one of every rulebook that
+    // shipped before seeds recorded one.
+    const seededFrom = existing.match(/<!-- unmute-default: ([0-9a-f]{16}) -->/)?.[1]
+    const untouched = seededFrom ? fingerprint(body) === seededFrom : legacyDefaults.has(fingerprint(body))
+    if (!untouched || fingerprint(body) === fingerprint(AGENT_PRINCIPLES)) return { text: body, source: 'file' }
+    try { await writeFile(path, seed()) } catch { /* today's rules still apply; the next start retries */ }
+    return { text: AGENT_PRINCIPLES, source: 'refreshed' }
+  }
 
   try {
     await mkdir(dirname(path))
-    await writeFile(path, `${PERSONA_HEADER}\n${AGENT_PRINCIPLES}\n`)
+    await writeFile(path, seed())
     return { text: AGENT_PRINCIPLES, source: 'seeded' }
   } catch {
     return { text: AGENT_PRINCIPLES, source: 'default' }
   }
 }
 
-/** The HTML comment is for whoever opens the file, not for the model. */
+/** The HTML comments are for whoever opens the file, not for the model. */
 function stripHeader(text: string): string {
-  return text.replace(/^\s*<!--[\s\S]*?-->\s*/, '').trim()
+  return text.replace(/^(\s*<!--[\s\S]*?-->\s*)+/, '').trim()
+}
+
+function fingerprint(text: string): string {
+  return createHash('sha256').update(text.trim()).digest('hex').slice(0, 16)
+}
+
+/** What a fresh copy holds: the header, what it was seeded from, the rules. */
+function seed(): string {
+  return `${PERSONA_HEADER}<!-- unmute-default: ${fingerprint(AGENT_PRINCIPLES)} -->\n\n${AGENT_PRINCIPLES}\n`
 }
