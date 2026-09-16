@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { getWarmStream, warmIsHot, disconnectWarmMic, setWarmBusy, warmState, setCaptureInFlight } from './micWarm'
 import { effectiveSilenceThreshold, decideCut } from './vadPolicy'
+import { heardSpeech, speechThreshold, floatEquivalentOfByteRms } from './speechGate'
 import type { CaptureDestination } from './agentPicker'
 
 type RecordingMode = 'dictation' | 'instruction'
@@ -32,10 +33,18 @@ const MIN_BUDGET_SECONDS = 5 // Don't start recording if budget < 5 seconds
 
 // ─── VAD Chunking Defaults (overridden by server config at recording start) ───
 const DEFAULT_CHUNK_MIN_MS = 30_000
-const DEFAULT_SILENCE_THRESHOLD_RMS = 0.015
+// 2026-09-15: every rms constant in this file is now measured on the FLOAT
+// meter (see speechGate.ts). The numbers below are the float equivalents of
+// the byte-calibrated ones they replace, so the meter change is behaviour-
+// neutral and the only intended change is the speech gate itself.
+const DEFAULT_SILENCE_THRESHOLD_RMS = 0.0143  // was 0.015 on the byte meter
 const DEFAULT_SILENCE_DURATION_MS = 400
 const DEFAULT_HARD_CHUNK_CAP_MS = 45_000
 const DEFAULT_VAD_POLL_INTERVAL_MS = 100
+// Measurement window for the level meter: 1024 samples ≈ 21ms at 48k, vs the
+// 2.7ms the old 8-bit meter looked at. Wide enough to hold a whole quiet
+// syllable, short enough that a cut still lands inside a 400ms silence.
+const METER_FFT_SIZE = 1024
 
 // ─── Noisy-environment detection (signal only, never a fix) ───
 // Rides on the RMS the VAD loop already computes — zero extra audio work.
@@ -54,7 +63,7 @@ const NOISY_WINDOW_FRAMES = 60
 // should go. Clear when the floor sits below 70% of the trigger level for
 // NOISY_CLEAR_EVALS consecutive evaluations (~2s), far enough below the
 // trigger that boundary noise can't flicker the chip.
-const NOISY_CLEAR_FLOOR_RMS = 0.0084
+const NOISY_CLEAR_FLOOR_RMS = 0.0071   // was 0.0084 on the byte meter
 const NOISY_CLEAR_EVALS = 4
 // CALIBRATED against real captures (2026-07-04, post-noise-suppression, 8-bit
 // analyser): music at home ⇒ floor 0.013-0.014, speech 0.11-0.12, ratio 8-9.
@@ -68,7 +77,7 @@ const NOISY_CLEAR_EVALS = 4
 // settings (close mic keeps the floor deceptively low) often slipped under
 // 0.012 and never triggered correction. More sensitive, but the fraction gate
 // below + the delete/phonetic guards keep false positives low-harm.
-const NOISY_FLOOR_RMS = 0.010          // gaps clearly above a quiet room's near-zero floor
+const NOISY_FLOOR_RMS = 0.0089         // was 0.010 on the byte meter
 const NOISY_MAX_RATIO = 12             // safety: voice hugely above floor = mic is fine
 // Cleanup runs when noise was present for a MEANINGFUL FRACTION of the
 // recording — not "ever noisy once" (a 2s blip early on used to commit a whole
@@ -99,8 +108,8 @@ const QUIET_MIN_FRAMES = 30            // ≥3s of evidence
 // RECALIBRATED 2026-07-15: raw (AGC-off) normal speech peaks at rmsMax
 // 0.018-0.044 — the AGC-era 0.07/0.11 bars flagged every capture. Raw bars
 // sit below the quietest observed normal capture.
-const QUIET_MAX_RMS = 0.008            // never louder than this = too faint (raw normal captures peak ≥0.018)
-const QUIET_RECOVER_RMS = 0.014        // clearly audible again → retract
+const QUIET_MAX_RMS = 0.0066           // was 0.008 on the byte meter
+const QUIET_RECOVER_RMS = 0.0133       // was 0.014 on the byte meter
 const QUIET_HINT_COOLDOWN_MS = 10 * 60_000
 let lastQuietHintAt = 0
 
@@ -209,6 +218,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const vadActivatedRef = useRef<boolean>(false)
   const chunkedModeEnabledRef = useRef<boolean>(false)
   const analyserRef = useRef<AnalyserNode | null>(null)
+  // A SECOND analyser, for measurement only. The one above feeds the pill's
+  // waveform and its fftSize (128) is that drawing's bar count — this one is
+  // free to use a window wide enough to judge a quiet voice (see below).
+  const meterRef = useRef<AnalyserNode | null>(null)
   const vadDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Track if we're in the middle of emitting a chunk (MediaRecorder stop/restart cycle)
   const isEmittingChunkRef = useRef<boolean>(false)
@@ -280,6 +293,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       })
     }
     analyserRef.current = null
+    meterRef.current = null
     setAnalyserNode(null)
   }, [])
 
@@ -413,21 +427,36 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     const analyser = analyserRef.current
     if (!analyser) return
 
-    const bufferLength = analyser.frequencyBinCount
-    const dataArray = new Uint8Array(bufferLength)
+    // THE METER (2026-09-15). Was: the 8-bit getByteTimeDomainData array over a
+    // 128-sample window — 2.7ms of audio, read once per 100ms tick, so ~3% of
+    // the recording was ever measured, at a resolution where everything quiet
+    // collapsed into one band near 0.0045. A whisper and an empty room read the
+    // same, which is why quiet speech was discarded as silence (speechGate.ts).
+    // Now: float samples over METER_FFT_SIZE (21ms, ~8x more audio per look) at
+    // full precision. Cost is nil — this loop already pulled a float buffer for
+    // telemetry; that read is folded in here, so it is now ONE read per tick
+    // feeding the gate, the cuts, the noise floor and the telemetry alike.
+    const meter = meterRef.current ?? analyser
+    const samples = new Float32Array(meter.fftSize)
 
     vadIntervalRef.current = setInterval(() => {
       if (isEmittingChunkRef.current) return
 
-      analyser.getByteTimeDomainData(dataArray)
+      meter.getFloatTimeDomainData(samples)
 
-      // Compute RMS
       let sumSquares = 0
-      for (let i = 0; i < bufferLength; i++) {
-        const normalized = (dataArray[i] - 128) / 128
-        sumSquares += normalized * normalized
+      let framePeak = 0
+      let clippedInFrame = 0
+      let allZero = true
+      for (let i = 0; i < samples.length; i++) {
+        const v = samples[i]
+        if (v !== 0) allZero = false
+        const a = Math.abs(v)
+        if (a > framePeak) framePeak = a
+        if (a > 0.99) clippedInFrame++
+        sumSquares += v * v
       }
-      const rms = Math.sqrt(sumSquares / bufferLength)
+      const rms = Math.sqrt(sumSquares / samples.length)
 
       // Telemetry accumulation (same tick, float precision, ~3ms of audio):
       // physical audio quality — peaks, clipping, dead frames — so a bad
@@ -435,16 +464,8 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       {
         const tel = telemetryRef.current
         if (tel) {
-          const fbuf = new Float32Array(analyser.fftSize)
-          analyser.getFloatTimeDomainData(fbuf)
-          let allZero = true
-          for (let i = 0; i < fbuf.length; i++) {
-            const v = fbuf[i]
-            if (v !== 0) allZero = false
-            const a = Math.abs(v)
-            if (a > tel.peak) tel.peak = a
-            if (a > 0.99) tel.clippedSamples++
-          }
+          if (framePeak > tel.peak) tel.peak = framePeak
+          tel.clippedSamples += clippedInFrame
           tel.frames++
           if (allZero) tel.zeroFrames++
           tel.rmsSum += rms
@@ -453,8 +474,17 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         }
       }
 
-      // Track speech across the whole recording (independent of chunk VAD activation)
-      if (rms >= silenceThresholdRef.current) heardSpeechRef.current = true
+      // THE SPEECH GATE (independent of chunk VAD activation). If this never
+      // latches, the whole recording is discarded without an STT call — so it
+      // decides whether a dictation exists at all. It used to be an absolute
+      // `rms >= 0.015`, which is a level a whisper into a wired mic never
+      // reaches; speechGate judges the rise above THIS recording's own noise
+      // floor instead, so the bar follows whatever mic is plugged in.
+      if (!heardSpeechRef.current && heardSpeech(rms, noiseFloorRef.current)) {
+        heardSpeechRef.current = true
+        const floor = noiseFloorRef.current
+        console.log(`[audio:gate] speech at rms=${rms.toFixed(4)} (bar=${speechThreshold(floor).toFixed(4)}, floor=${floor === null ? 'not yet measured' : floor.toFixed(4)})`)
+      }
 
       // Noisy-environment watch: a LIVE signal. Collect every frame; judge twice
       // a second. The chip RAISES when the floor climbs + ratio collapses, and
@@ -685,6 +715,11 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           && noisyEvalHitRef.current / noisyEvalTotalRef.current >= NOISY_FRACTION,
         rmsMax: +tel.rmsMax.toFixed(4),
         rmsAvg: tel.frames ? +(tel.rmsSum / tel.frames).toFixed(4) : 0,
+        // This recording's own noise floor (p20 of the rolling window), or null
+        // if the recording was too short to measure one. quietGuard uses it to
+        // ask "did this ever rise above ITS OWN room?" instead of comparing a
+        // whisper against a fixed level it can never reach.
+        noiseFloor: noiseFloorRef.current,
         peak: +tel.peak.toFixed(3),
         zeroFramePct: tel.frames ? Math.round((tel.zeroFrames / tel.frames) * 100) : 0,
         frames: tel.frames,
@@ -763,7 +798,11 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       const config = await window.electronAPI.getServerConfig()
       if (config?.chunking) {
         chunkMinMsRef.current = config.chunking.min_duration_ms ?? DEFAULT_CHUNK_MIN_MS
-        silenceThresholdRef.current = config.chunking.silence_threshold_rms ?? DEFAULT_SILENCE_THRESHOLD_RMS
+        // Server config still speaks in byte-meter rms (its default is the old
+        // 0.015). Convert, or a config push would silently re-tighten the cuts.
+        silenceThresholdRef.current = config.chunking.silence_threshold_rms != null
+          ? floatEquivalentOfByteRms(config.chunking.silence_threshold_rms)
+          : DEFAULT_SILENCE_THRESHOLD_RMS
         silenceDurationMsRef.current = config.chunking.silence_duration_ms ?? DEFAULT_SILENCE_DURATION_MS
         hardChunkCapMsRef.current = config.chunking.hard_cap_ms ?? DEFAULT_HARD_CHUNK_CAP_MS
         vadPollIntervalMsRef.current = config.chunking.vad_poll_interval_ms ?? DEFAULT_VAD_POLL_INTERVAL_MS
@@ -939,9 +978,16 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     audioContextRef.current = audioContext
     let analyser = audioContext.createAnalyser()
     analyser.fftSize = 128
-    audioContext.createMediaStreamSource(stream).connect(analyser)
+    let source = audioContext.createMediaStreamSource(stream)
+    source.connect(analyser)
     analyserRef.current = analyser
     setAnalyserNode(analyser)
+    // The measurement tap, separate from the waveform's analyser above so the
+    // pill keeps drawing exactly the bars it drew before.
+    let meter = audioContext.createAnalyser()
+    meter.fftSize = METER_FFT_SIZE
+    source.connect(meter)
+    meterRef.current = meter
 
     // Set up MediaRecorder. We tried lowering audioBitsPerSecond to 32_000
     // to shrink uploads but Groq's Whisper endpoint rejected the resulting
@@ -986,7 +1032,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // finally tells the truth. Capped so a pathological stream can never
     // block a dictation. Mac path: skipped entirely (pipe is live at open).
     if (phoneSourceRef.current && !usedWarm) {
-      const probe = new Float32Array(analyser.fftSize)
+      const probe = new Float32Array(meter.fftSize)
       const tGate = Date.now()
       let live = false
       // 10ms cadence: the analyser window is ~3ms of audio, so detection
@@ -996,7 +1042,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       // own voice is a few tens of ms of the first phoneme — inaudible to
       // STT — instead of the first word.
       while (Date.now() - tGate < 3000) {
-        analyser.getFloatTimeDomainData(probe)
+        meter.getFloatTimeDomainData(probe)
         if (probe.some((v) => v !== 0)) { live = true; break }
         await new Promise((r) => setTimeout(r, 10))
       }
@@ -1025,9 +1071,14 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         audioContextRef.current = audioContext
         analyser = audioContext.createAnalyser()
         analyser.fftSize = 128
-        audioContext.createMediaStreamSource(stream).connect(analyser)
+        source = audioContext.createMediaStreamSource(stream)
+        source.connect(analyser)
         analyserRef.current = analyser
         setAnalyserNode(analyser)
+        meter = audioContext.createAnalyser()
+        meter.fftSize = METER_FFT_SIZE
+        source.connect(meter)
+        meterRef.current = meter
         mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
         mediaRecorderRef.current = mediaRecorder
         mediaRecorder.ondataavailable = onRecorderData

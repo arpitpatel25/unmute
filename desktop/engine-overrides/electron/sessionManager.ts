@@ -365,12 +365,15 @@ export class SessionManager {
 
   // Physical capture quality of the current recording (rmsMax etc.), reported
   // once by the renderer at stop. Drives the quiet-capture paste gate.
-  private captureQuality: { sessionId: string | undefined; rmsMax: number; noisy: boolean } | null = null
+  private captureQuality: { sessionId: string | undefined; rmsMax: number; noiseFloor: number | null; noisy: boolean } | null = null
 
   constructor() {
     registerCaptureQualitySink((sessionId, q) => {
       const rmsMax = typeof q.rmsMax === 'number' ? q.rmsMax : 0
-      this.captureQuality = { sessionId, rmsMax, noisy: q.noisy === true }
+      // The recording's own noise floor — the quiet-capture gate compares
+      // rmsMax against THIS, not a fixed level a whisper can never reach.
+      const noiseFloor = typeof q.noiseFloor === 'number' ? q.noiseFloor : null
+      this.captureQuality = { sessionId, rmsMax, noiseFloor, noisy: q.noisy === true }
     })
     registerDraftAcceptHandler(() => {
       console.log('[session] draft-offer ACCEPTED by user')
@@ -516,9 +519,9 @@ export class SessionManager {
     if (session.kind === 'remote') return false
     const q = this.captureQuality
     if (!q || q.sessionId !== session.sessionId) return false
-    if (!isSuspectQuietCapture(q.rmsMax, output)) return false
-    console.log(`[session] 🔇 quiet-capture gate: rmsMax=${q.rmsMax}, transcript=${JSON.stringify(output)} — not pasting`)
-    logTelemetry('quiet-miss', { sessionId: session.sessionId, rmsMax: q.rmsMax, chars: output.length })
+    if (!isSuspectQuietCapture(q.rmsMax, output, q.noiseFloor)) return false
+    console.log(`[session] 🔇 quiet-capture gate: rmsMax=${q.rmsMax}, floor=${q.noiseFloor ?? 'n/a'}, transcript=${JSON.stringify(output)} — not pasting`)
+    logTelemetry('quiet-miss', { sessionId: session.sessionId, rmsMax: q.rmsMax, noiseFloor: q.noiseFloor, chars: output.length })
     sendToWidget('session:quiet-miss')
     return true
   }
