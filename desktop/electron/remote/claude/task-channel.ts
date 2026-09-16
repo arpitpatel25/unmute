@@ -59,8 +59,10 @@ export class ClaudeTaskChannel {
   mergeHistory(frames: Frame[]): void {
     // Keep the checkpoint at its original boundary. Moving a fresh checkpoint
     // past newly recovered results would hide those results again.
-    this.restore(mergeClaudeHistory(this.frames, frames))
+    // Complete again BEFORE the redraw, so the render that shows the merged
+    // conversation is the one that reports it ready.
     this.persistenceEnabled = true
+    this.restore(mergeClaudeHistory(this.frames, frames))
     this.persistFrames()
   }
   expectSubmission(id: string, parts: TaskInput[]): void { this.submissions.set(id, parts) }
@@ -169,8 +171,13 @@ export class ClaudeTaskChannel {
     this.renderTimer = undefined
     const partial = this.partial.size ? '\n' + JSON.stringify({ type: 'assistant', message: { content: [...this.partial.values()] } }) : ''
     const parsed = blocksFromClaudeTranscript(this.serializedFrames + partial)
+    // A SUSPENDED CHANNEL IS A TAIL, NOT A HISTORY. Startup reattachment
+    // replays only the daemon's recent events; calling that `ready` made
+    // loadBlocksFor() skip the durable merge on open, so the card kept just
+    // the last reply and had no earlier messages to offer. mergeHistory()
+    // re-enables persistence, and only then is the conversation complete.
     this.patch({ blocks: parsed.blocks, ...(parsed.usage ? { usage: parsed.usage } : {}),
-      ...(this.frames.some(f => f.type === 'user' || f.type === 'assistant') && !this.frames.some(f => f.unmuteHistoryIncomplete)
+      ...(this.persistenceEnabled && this.frames.some(f => f.type === 'user' || f.type === 'assistant') && !this.frames.some(f => f.unmuteHistoryIncomplete)
         ? { history: { phase: 'ready' as const } } : {}) })
   }
 
