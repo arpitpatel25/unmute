@@ -134,7 +134,20 @@ export interface TurnP {
   ok?: boolean
 }
 
+/** One row of the composer's slash menu. `token` is inserted verbatim — it is
+ *  provider-native (`/name` for Claude, `$name` for Codex). */
+export interface CommandItemP {
+  name: string
+  title: string
+  description: string
+  argumentHint: string
+  scope: string
+  token: string
+}
+
 export interface TaskDetailP {
+  /** What `/` offers in this conversation, as its own provider reported it. */
+  commands?: CommandItemP[]
   canEditLatestMessage?: boolean
   olderMessages?: number
   id: string

@@ -509,6 +509,10 @@ export interface Task {
 export interface TaskManagerOpts {
   /** Session-scoped credentials/configuration, rebuilt on resume; never persisted. */
   claudeSessionOptions?: (task: Task) => Promise<Omit<ClaudeTaskOptions, 'onEvent' | 'resume'>>
+  /** Extra directories this task's Claude must be able to read — the slash
+   *  menu's bridge, resolved per cwd. Failure is never fatal: a chat without
+   *  the other provider's skills still runs its own. */
+  claudeSkillDirs?: (task: Task) => Promise<string[]>
   claudeTaskFactory?: (options: ClaudeTaskOptions, task: Task) => ClaudeTaskSession
   claudeChoice?: (context?: { cwd: string; home: string; managedProjectId?: string }) => NonNullable<Task['claudeSessionSettings']>
   /** Creates a fresh executor per task (default: ClaudeCodeExecutor). */
@@ -808,8 +812,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'claudeSessionOptions' | 'claudeTaskFactory' | 'claudeChoice' | 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>> &
-    Pick<TaskManagerOpts, 'claudeSessionOptions' | 'claudeTaskFactory' | 'claudeChoice' | 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>
+    Required<Omit<TaskManagerOpts, 'claudeSessionOptions' | 'claudeSkillDirs' | 'claudeTaskFactory' | 'claudeChoice' | 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>> &
+    Pick<TaskManagerOpts, 'claudeSessionOptions' | 'claudeSkillDirs' | 'claudeTaskFactory' | 'claudeChoice' | 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -821,6 +825,7 @@ export class TaskManager extends EventEmitter {
     this.opts = {
       executorFactory: opts.executorFactory,
       claudeSessionOptions: opts.claudeSessionOptions,
+      claudeSkillDirs: opts.claudeSkillDirs,
       claudeTaskFactory: opts.claudeTaskFactory,
       claudeChoice: opts.claudeChoice,
       codexHub: opts.codexHub,
@@ -1411,8 +1416,16 @@ export class TaskManager extends EventEmitter {
         this.mergeMeta(task, { claudeSessionSettings: task.claudeSessionSettings }, 'record-browser-choice')
         await this.metaChains.get(task.id)
       }
+      // ADD-DIRS ARE UNIONED, NOT CHOSEN. The session settings carry the
+      // sandbox roots and the spread below would otherwise drop whatever the
+      // options carried; the slash-command bridge is a third source, and all
+      // three have to survive or a session silently loses a capability.
+      let skillDirs: string[] = []
+      try { skillDirs = await this.opts.claudeSkillDirs?.(task) ?? [] }
+      catch (error) { log.child({ taskId: task.id }).warn('skill bridge unavailable', { error: (error as Error).message }) }
       const driver = (this.opts.claudeTaskFactory ?? ((o: ClaudeTaskOptions, _task: Task) => new ClaudeTaskSession(o)))({
         ...options, ...task.claudeSessionSettings, sessionId: task.sessionId, cwd: task.cwd, resume,
+        addDirs: [...new Set([...(options.addDirs ?? []), ...(task.claudeSessionSettings?.addDirs ?? []), ...skillDirs])],
         ...(!resume && task.claudeForkFromSessionId ? { forkFromSessionId: task.claudeForkFromSessionId, resumeSessionAt: task.claudeResumeSessionAt } : {}),
         onEvent: e => {
           const live = this.claudeTasks.get(task.id)

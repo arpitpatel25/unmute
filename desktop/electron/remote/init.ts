@@ -134,6 +134,8 @@ import { NotchController } from './notch/notch-controller'
 import { PillController, type PillStateP } from './notch/pill-controller'
 import { listCodexModels, matchCurrent, type CodexModel } from './codex/appserver'
 import { listCodexCliModels, resolveCodexCliChoice, codexCliChoiceLabel } from './codex/cli-models'
+import { listCodexCliSkills } from './codex/cli-models'
+import { SkillCatalog, codexExtraRoots, type CommandItem } from './skill-catalog'
 import { CodexHub, type CodexInputMetadata } from './codex/hub'
 import { CodexAppServer } from './codex/app-server-client'
 import { PersistentRuntimeClient } from './runtime/client'
@@ -2735,6 +2737,35 @@ let chatClaudeCatalogLoading = false
 let chatClaudeCatalogAttemptAt = 0
 const composerDictation = new ComposerDictationCoordinator()
 
+/**
+ * What `/` offers in a chat, per provider and per project folder.
+ *
+ * Each provider answers for itself — Claude at its `initialize` handshake,
+ * Codex through `skills/list` — because only the provider knows what it can
+ * actually run, plugins and project skills included. The cross-provider half is
+ * upstream of both reads: Codex's skills are symlinked into a per-cwd bridge
+ * that the Claude session is launched with, and Claude's are handed to Codex as
+ * extra roots, so each list already contains the other side's work.
+ */
+const skillCatalog = new SkillCatalog({
+  claudeCommands: async (cwd, addDirs) => {
+    const probe = new ClaudeTaskSession({ binary: 'claude', cwd, addDirs, controlTimeoutMs: 15_000, onEvent: () => {} })
+    try { await probe.start(); return probe.commands } finally { probe.close() }
+  },
+  codexSkills: (cwd) => listCodexCliSkills(cwd, codexExtraRoots()),
+  onUpdated: () => notchController?.refresh(),
+})
+
+/** The slash menu for one conversation, or nothing when it has no composer we
+ *  own — an imported CLI session is somebody else's terminal. */
+function commandsFor(id: string): CommandItem[] | undefined {
+  const task = manager?.get(id)
+  if (!task || task.importedFromCli || !task.cwd) return undefined
+  if (!task.claudeSessionSettings && !task.codexSessionSettings) return undefined
+  const items = skillCatalog.commands(task.agent === 'codex' ? 'codex' : 'claude', task.cwd)
+  return items.length ? items : undefined
+}
+
 async function openChatArtifactPath(path: string): Promise<void> {
   const resolved = await fs.realpath(path)
   const stat = await fs.stat(resolved)
@@ -5215,6 +5246,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         env,
       }
     },
+    // The bridge directory this task's Claude must be launched with, so the
+    // skills only Codex had are discoverable by `/name` in this session.
+    claudeSkillDirs: (task) => skillCatalog.claudeAddDirs(task.cwd),
     claudeTaskFactory: (options, task) => new PersistentClaudeTaskSession(task.claudeResumeSessionAt ? claudeEditRuntime! : persistentRuntime!, options),
     groupRegistry,
     codexHub,
@@ -5498,6 +5532,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           finally { task.sending = false; notchController?.refresh() }
         },
         getChatConfig: chatConfig,
+        getCommands: commandsFor,
         configureChat: configureTaskChat,
         createChat: async options => {
           if (!manager) throw new Error('Task service is not ready')

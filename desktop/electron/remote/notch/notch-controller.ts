@@ -16,7 +16,7 @@ import type {
   NotchCommand, NotchEvent, NotchStateName, TaskStatusName,
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
   ScratchpadPayloadP, PocketP, PocketSlotP, PocketMode, TurnP, Block,
-  ChatConfigP, ChatConfigChangeP, DraftInsertionP,
+  ChatConfigP, ChatConfigChangeP, DraftInsertionP, CommandItemP,
 } from './notch-client'
 import type { TaskDraft } from '../task-draft'
 import { providerOf, type ProviderId } from '../providers'
@@ -135,6 +135,10 @@ export interface NotchControllerDeps {
   reserveDraftAttachment?(id: string, operationId: string, name: string, insertion: DraftInsertionP): void
   failDraftAttachment?(id: string, operationId: string, error: string): void
   getChatConfig?(id: string): ChatConfigP | undefined
+  /** The slash-command list for a task. Synchronous by contract: the payload
+   *  must never wait on a CLI handshake, so a cold list arrives on a later
+   *  refresh instead of stalling the card. */
+  getCommands?(id: string): CommandItemP[] | undefined
   configureChat?(id: string, change: ChatConfigChangeP): Promise<void> | void
   toggleDraftDictation?(id: string, insertion?: DraftInsertionP): void
   cancelDraftDictation?(id: string): void
@@ -2767,6 +2771,7 @@ export class NotchController {
       followup: this.deps.getFollowup?.(t.id),
       composerMode: this.deps.getComposerMode?.(t.id),
       chatConfig: this.deps.getChatConfig?.(t.id),
+      commands: this.deps.getCommands?.(t.id),
     }
   }
 

@@ -1590,6 +1590,17 @@ final class AppController: NSObject, NotchResizing {
             let fr = self.window.firstResponder
             let typing = (fr as? NSTextView)?.isEditable == true || fr is TerminalView
             if e.keyCode == 53 {
+                // THE COMPOSER'S SLASH MENU GETS ESCAPE FIRST, and it has to be
+                // asked here rather than in the text view: this monitor swallows
+                // keyCode 53 app-wide, so `cancelOperation:` never reaches the
+                // editor. Escape with the menu open closes the MENU and leaves
+                // the card open — closing the card under a completion list is
+                // the surprise this guard exists to prevent. One weak static
+                // read when no menu is open, which is the common case.
+                if SlashMenuState.closePresented() {
+                    NotchLog.log("esc: closed the composer's command menu")
+                    return nil
+                }
                 // Logged so a leak is DIAGNOSABLE rather than inferred: if this
                 // line is absent when Escape leaks, the local monitor never
                 // fired and the panel was not key (see NotchWindow).

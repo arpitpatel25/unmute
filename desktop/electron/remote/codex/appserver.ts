@@ -149,6 +149,122 @@ export async function listCodexModels(deps: ListModelsDeps = {}): Promise<CodexM
   })
 }
 
+/** One row of `skills/list`, as the composer's slash menu needs it. */
+export interface CodexSkill {
+  name: string
+  description: string
+  /** Absolute path to the skill's SKILL.md. */
+  path: string
+  /** "user" | "repo" | "system" | "admin". */
+  scope: string
+  enabled: boolean
+}
+
+export interface ListSkillsDeps extends ListModelsDeps {
+  /** Directories to read on top of Codex's own roots — how Claude's skills
+   *  become answerable to `$name`. Must match what CodexHub sets on the live
+   *  server, or the menu would offer what the real turn cannot run. */
+  extraRoots?: string[]
+}
+
+/**
+ * Ask Codex which skills it can see from `cwd`.
+ *
+ * Its own short-lived process, like `model/list`: the listing must work before
+ * any thread exists (a chat whose first turn has not been sent yet) and must
+ * never disturb the shared app-server that is carrying live turns.
+ *
+ * Resolves `[]` on any failure. An empty menu is honest; a stale or invented
+ * one produces a turn that silently does the wrong thing.
+ */
+export async function listCodexSkills(cwd: string, deps: ListSkillsDeps = {}): Promise<CodexSkill[]> {
+  const bin = deps.bin ?? BUNDLED_CODEX
+  const timeoutMs = deps.timeoutMs ?? 8000
+  const extraRoots = deps.extraRoots ?? []
+
+  return await new Promise<CodexSkill[]>((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(bin, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'], cwd })
+    } catch (e) {
+      log.warn('app-server spawn failed', { error: (e as Error).message })
+      return resolve([])
+    }
+
+    let settled = false
+    const done = (skills: CodexSkill[]) => {
+      if (settled) return
+      settled = true
+      try { child.kill() } catch { /* already gone */ }
+      resolve(skills)
+    }
+
+    const timer = setTimeout(() => {
+      log.warn('skills/list timed out', { timeoutMs })
+      done([])
+    }, timeoutMs)
+
+    child.stdin?.on('error', () => { /* the child is gone; nothing to say */ })
+    const send = (o: unknown) => {
+      try { child.stdin?.write(JSON.stringify(o) + '\n') } catch { done([]) }
+    }
+
+    let buf = ''
+    child.stdout?.on('data', (d: Buffer) => {
+      buf += d.toString()
+      let i: number
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i)
+        buf = buf.slice(i + 1)
+        if (!line.trim()) continue
+        let msg: { id?: number; result?: { data?: Array<{ skills?: RawSkill[] }> } }
+        try { msg = JSON.parse(line) } catch { continue }
+
+        if (msg.id === 1) {
+          send({ jsonrpc: '2.0', method: 'initialized' })
+          // Roots first: a list taken before them would miss exactly the
+          // cross-provider skills this menu exists to surface.
+          send({ jsonrpc: '2.0', id: 2, method: 'skills/extraRoots/set', params: { extraRoots } })
+        } else if (msg.id === 2) {
+          send({ jsonrpc: '2.0', id: 3, method: 'skills/list', params: { cwds: [cwd], forceReload: true } })
+        } else if (msg.id === 3) {
+          clearTimeout(timer)
+          done(parseSkills(msg.result?.data ?? []))
+        }
+      }
+    })
+    child.stderr?.on('data', () => { /* Codex is chatty; not our business */ })
+    child.on('error', (e) => { log.warn('app-server errored', { error: e.message }); clearTimeout(timer); done([]) })
+    child.on('exit', () => { clearTimeout(timer); done([]) })
+
+    send({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { clientInfo: { name: 'unmute', version: '1' } },
+    })
+  })
+}
+
+interface RawSkill { name?: string; description?: string; path?: string; scope?: string; enabled?: boolean }
+
+/** Disabled skills are Codex's own business — never offer them. */
+export function parseSkills(entries: Array<{ skills?: RawSkill[] }>): CodexSkill[] {
+  const out: CodexSkill[] = []
+  for (const entry of entries) {
+    for (const raw of entry?.skills ?? []) {
+      const name = String(raw?.name ?? '').trim()
+      if (!name || raw?.enabled === false) continue
+      out.push({
+        name,
+        description: String(raw?.description ?? ''),
+        path: String(raw?.path ?? ''),
+        scope: String(raw?.scope ?? ''),
+        enabled: true,
+      })
+    }
+  }
+  return out
+}
+
 /**
  * Protocol spelling → menu spelling. "GPT-5.6-Sol" → "5.6 Sol".
  *

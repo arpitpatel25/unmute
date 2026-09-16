@@ -84,7 +84,8 @@ struct TaskSurfaceView: View {
                         // composer, which is that, exactly.
                         StageComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
                                       modelLabel: t.modelLabel, sending: t.sending ?? false,
-                                      draft: t.draft, config: t.chatConfig, followup: t.followup, composerMode: t.composerMode, question: t.question)
+                                      draft: t.draft, config: t.chatConfig, followup: t.followup, composerMode: t.composerMode, question: t.question,
+                                      commands: t.commands ?? [])
                             .id(t.id)
                             .padding(.top, 9)
                     case .notRunning:
