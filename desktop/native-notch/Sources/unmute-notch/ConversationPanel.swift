@@ -38,7 +38,12 @@ struct ConversationPanel: View {
     var olderMessages: Int = 0
     var loadOlder: () -> Void = {}
 
-    private var visibleBlocks: [Block] { blocks.isEmpty ? ConversationPresentation.blocks(from: rows) : blocks }
+    private var visibleBlocks: [Block] {
+        BlockPresentation.preferredConversationBlocks(
+            rich: blocks,
+            fallback: ConversationPresentation.blocks(from: rows)
+        )
+    }
 
     var body: some View {
         if !visibleBlocks.isEmpty {

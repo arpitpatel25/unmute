@@ -58,6 +58,14 @@ public struct BlockTurn: Identifiable, Equatable, Sendable {
 }
 
 public enum BlockPresentation {
+    /// Prefer the provider's richer block stream only when this build can
+    /// actually draw something from it. A partial hydration may contain only
+    /// turn markers (or kinds from a newer helper); letting that non-empty
+    /// array win would hide a perfectly usable legacy transcript.
+    public static func preferredConversationBlocks(rich: [Block], fallback: [Block]) -> [Block] {
+        rich.contains(where: { BlockKind.isDrawable($0.kind) }) ? rich : fallback
+    }
+
     /// - Parameter running: whether the TASK is still working, which the task
     ///   manager knows for certain and the blocks often cannot say. Claude's
     ///   transcript carries no turn markers, so a turn whose last command had

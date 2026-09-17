@@ -2,6 +2,23 @@ import XCTest
 @testable import ConversationSupport
 
 final class BlockPresentationTests: XCTestCase {
+    func testPartialRichHistoryFallsBackToRenderableConversationRows() {
+        let rich = [
+            Block(kind: "turnStart", startedAt: 1),
+            Block(kind: "turnEnd", durationMs: 2, outcome: "completed"),
+        ]
+        let fallback = [
+            Block(kind: "message", role: "user", text: "Where did the messages go?"),
+            Block(kind: "message", role: "assistant", text: "They are still here."),
+        ]
+
+        XCTAssertEqual(
+            BlockPresentation.preferredConversationBlocks(rich: rich, fallback: fallback),
+            fallback,
+            "turn markers alone must not suppress a usable fallback transcript"
+        )
+    }
+
     func testSuccessfulTurnOverridesRecoverableToolFailure() {
         let blocks = [Block(kind: "command", status: "failed"),
                       Block(kind: "turnEnd", outcome: "completed")]
