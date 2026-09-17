@@ -107,6 +107,7 @@ import { buildHandoffPrompt, HandoffCapability } from './agent/capabilities/hand
 import { ProviderHealth } from './agent/providerHealth'
 import { HistoryCapability } from './agent/capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
+import { HelpCapability } from './agent/capabilities/help'
 import { SessionsCapability } from './agent/capabilities/sessions'
 import { locateSession } from './agent/sessions/locate'
 import { SessionTurnIndex } from './agent/sessions/turn-index'
@@ -297,6 +298,8 @@ interface KeyboardManagerLike {
    *  lane it is on. Returns false if nothing is recording. See the pill's
    *  `stop` dep below for why the tick needs this and not a widget event. */
   submitActiveCapture?(): boolean
+  getDictationKey?(): DictationKey
+  getActivationMode?(): ActivationMode
 }
 export interface RemoteInitDeps {
   sessionManager: SessionManagerLike
@@ -1384,6 +1387,10 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
     ])
     const registry = new CapabilityRegistry([
       new MemoryCapability(memory),
+      new HelpCapability(() => ({
+        dictationKey: deps.keyboardManager.getDictationKey?.() ?? settings.get('dictationKey'),
+        activationMode: deps.keyboardManager.getActivationMode?.() ?? 'tap-toggle',
+      })),
       // WHAT THE USER ACTUALLY SAID, LATELY. The one thing a coding session
       // cannot reach: it lives in Unmute's own archive, not on the filesystem.
       // Read-only, and pasting reuses copyHistoryToClipboard — the same call

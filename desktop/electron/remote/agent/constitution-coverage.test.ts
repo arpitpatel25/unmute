@@ -6,6 +6,7 @@ import { HistoryCapability } from './capabilities/history.ts'
 import { SessionsCapability } from './capabilities/sessions.ts'
 import { HandoffCapability } from './capabilities/handoff.ts'
 import { NotetakerCapability } from './capabilities/notetaker.ts'
+import { HelpCapability } from './capabilities/help.ts'
 import { DeliveryCapability } from './capabilities/delivery.ts'
 
 /**
@@ -31,6 +32,7 @@ const tools = [
   ...new SessionsCapability({} as never).tools,
   ...new HandoffCapability({} as never).tools,
   ...new NotetakerCapability({} as never).tools,
+  ...new HelpCapability(() => ({ dictationKey: 'fn', activationMode: 'tap-toggle' })).tools,
   ...new DeliveryCapability({} as never).tools,
 ].map(tool => tool.name)
 

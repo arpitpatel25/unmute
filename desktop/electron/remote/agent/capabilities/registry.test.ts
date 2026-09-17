@@ -5,6 +5,7 @@ import { CapabilityRegistry } from './registry.ts'
 import { MemoryCapability } from './memory.ts'
 import type { CapabilityModule, McpPrincipal } from '../types.ts'
 import type { MemoryCapabilityService } from './memory.ts'
+import { HelpCapability } from './help.ts'
 
 const task: McpPrincipal = { kind: 'task', taskId: 'task-1' }
 const agent: McpPrincipal = {
@@ -88,4 +89,13 @@ test('the real Memory capability remains invisible to ordinary task principals',
     'memory_forget', 'memory_restore', 'memory_keep_file', 'memory_open_attachment',
   ])
   await assert.rejects(registry.call(task, 'memory_get', { id: 'memory-1' }), /not available to task principals/)
+})
+
+test('product help is visible only to the Unmute Agent', () => {
+  const registry = new CapabilityRegistry([
+    tasks,
+    new HelpCapability(() => ({ dictationKey: 'fn', activationMode: 'tap-toggle' })),
+  ])
+  assert.deepEqual(registry.tools(task).map((tool) => tool.name), ['unmute_create_task'])
+  assert.deepEqual(registry.tools(agent).map((tool) => tool.name), ['unmute_help'])
 })
