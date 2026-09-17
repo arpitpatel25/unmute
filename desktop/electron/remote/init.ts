@@ -132,6 +132,7 @@ import { startCuaServer, CUA_MCP_PORT, CUA_MCP_PATH, type CuaServer } from './cu
 import { NotchClient } from './notch/notch-client'
 import { NotchController } from './notch/notch-controller'
 import { PillController, type PillStateP } from './notch/pill-controller'
+import { existingTaskModelLabel, resolveExistingTaskModelChange, type ExistingTaskModelPick } from './notch/existing-task-model'
 import { listCodexModels, matchCurrent, type CodexModel } from './codex/appserver'
 import { listCodexCliModels, resolveCodexCliChoice, codexCliChoiceLabel } from './codex/cli-models'
 import { listCodexCliSkills } from './codex/cli-models'
@@ -2795,13 +2796,22 @@ function chatConfig(id: string): ChatConfigP | undefined {
     const probe = new ClaudeTaskSession({ binary: 'claude', cwd: tmpdir(), controlTimeoutMs: 15_000, onEvent: () => {} })
     void probe.start().then(() => { chatClaudeModels = probe.models })
       .catch(error => log.warn('claude-chat-model-catalog', { error: (error as Error).message }))
-      .finally(() => { probe.close(); chatClaudeCatalogLoading = false; notchController?.refresh() })
+      .finally(() => {
+        probe.close()
+        chatClaudeCatalogLoading = false
+        notchController?.refresh()
+        void pushPillChips(id)
+      })
   }
   if (provider === 'codex' && !chatCodexModels.length && !chatCatalogLoading && Date.now() - chatCatalogAttemptAt > 30_000) {
     chatCatalogLoading = true
     chatCatalogAttemptAt = Date.now()
     void listCodexCliModels().then(models => { chatCodexModels = models }).catch(error => log.warn('chat-model-catalog', { error: (error as Error).message }))
-      .finally(() => { chatCatalogLoading = false; notchController?.refresh() })
+      .finally(() => {
+        chatCatalogLoading = false
+        notchController?.refresh()
+        void pushPillChips(id)
+      })
   }
   const codexModel = chatCodexModels.find(m => m.id === owned?.model)
   const claudeModel = chatClaudeModels.find(m => m.id === (owned?.model || 'default'))
@@ -2810,7 +2820,14 @@ function chatConfig(id: string): ChatConfigP | undefined {
     : task.codexSessionSettings?.sandbox === 'danger-full-access' ? 'full' : task.codexSessionSettings?.sandbox === 'read-only' ? 'read' : task.codexSessionSettings?.approvalPolicy === 'never' ? 'workspace' : 'ask'
   return {
     provider, providerLabel: providerOf(provider).label, providers: [], cwd: task.cwd,
-    model: owned?.model || (provider === 'claude' ? 'default' : ''), modelLabel: task.model ?? owned?.model ?? 'Provider default',
+    model: owned?.model || (provider === 'claude' ? 'default' : ''),
+    modelLabel: existingTaskModelLabel(
+      provider === 'codex'
+        ? chatCodexModels.map(model => ({ id: model.id, label: model.uiLabel }))
+        : chatClaudeModels.map(({ id: modelId, label }) => ({ id: modelId, label })),
+      owned?.model || (provider === 'claude' ? 'default' : undefined),
+      task.model ?? owned?.model,
+    ),
     models: provider === 'codex' ? chatCodexModels.map(m => ({ id: m.id, label: m.uiLabel, description: m.description }))
       : provider === 'claude' ? chatClaudeModels.map(({ id, label, description }) => ({ id, label, description })) : [],
     effort: owned?.effort,
@@ -2841,6 +2858,23 @@ async function configureTaskChat(id: string, change: { model?: string; effort?: 
   }
   if (change.model && config.provider === 'claude') change = { ...change, effort: '' }
   await manager.configureChat(id, change)
+}
+
+/** The composer and an addressed right-Option pill are two controls for the
+ * same conversation. Resolve the pill's display label through that task's own
+ * catalogue, apply it through the same configureChat path, then redraw both
+ * surfaces from the accepted state. */
+function configureTaskModelFromPill(id: string, pick: ExistingTaskModelPick): void {
+  const config = chatConfig(id)
+  if (!config) { notchController?.toast('Conversation unavailable'); return }
+  const resolution = resolveExistingTaskModelChange(config, pick)
+  if (!resolution.change) { notchController?.toast(resolution.error); return }
+  void configureTaskChat(id, resolution.change)
+    .then(() => {
+      notchController?.refresh()
+      return pushPillChips(id)
+    })
+    .catch(error => notchController?.toast(`Could not update chat settings: ${error instanceof Error ? error.message : String(error)}`))
 }
 
 /** Just the model id, for the places that record what a task ran on. */
@@ -3174,8 +3208,35 @@ async function pushPillChips(
       agentConnected: selected?.available ?? true,
       agentOptions,
     }
+    const taskConfig = addressed ? chatConfig(addressed.id) : undefined
 
-    if (isCodex) {
+    if (addressed && taskConfig && (agent === 'claude' || agent === 'codex')) {
+      // AN ADDRESSED PILL DESCRIBES THIS CONVERSATION, not the defaults for a
+      // future task. Use the exact same provider-owned catalogue and current
+      // values as ComposerControls. That makes the selected row update as soon
+      // as configureChat emits the accepted task state, and prevents a global
+      // model choice from masquerading as a per-thread switch.
+      chips.model = taskConfig.modelLabel
+      chips.modelOptions = []
+      chips.modelAxes = []
+      chips.raw = injectionDisabled()
+      if (!taskConfig.mutable) {
+        chips.modelEmpty = 'Settings are managed in the original application'
+      } else if (taskConfig.busy) {
+        chips.modelEmpty = 'Finish the current turn to change model'
+      } else if (agent === 'codex') {
+        const selectedModel = taskConfig.models.find(choice => choice.id === taskConfig.model)
+        const selectedEffort = taskConfig.efforts.find(choice => choice.id === taskConfig.effort)
+        chips.modelAxes = [
+          { axis: 'Model', values: taskConfig.models.map(choice => choice.label), current: selectedModel?.label ?? taskConfig.modelLabel },
+          { axis: 'Effort', values: taskConfig.efforts.map(choice => choice.label), current: selectedEffort?.label },
+        ].filter(axis => axis.values.length > 0)
+        chips.modelEmpty = taskConfig.error ?? 'No models available for this conversation'
+      } else {
+        chips.modelOptions = taskConfig.models.map(choice => ({ id: choice.id, label: choice.label, detail: choice.description }))
+        chips.modelEmpty = taskConfig.error ?? 'No models available for this conversation'
+      }
+    } else if (isCodex) {
       // Served from CACHE so the axes are there immediately — reading them live
       // walks Codex's menus (~3s) and a capture is often over before that
       // returns, which is exactly why the chip used to keep showing a Claude
@@ -5915,13 +5976,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
             })
             return
           }
-          // An addressed task is never silently converted into a new-task
-          // default. The receipt changes only after the provider-specific path
-          // above has accepted it; CLI providers retain their live session's
-          // model until their next provider-supported reconfiguration.
+          // EXISTING OWNED CONVERSATIONS USE THEIR REAL CONFIGURATION PATH.
+          // setModel() only changed the receipt printed on the card; the live
+          // Claude/Codex session kept running its previous model. The composer
+          // already calls configureTaskChat, so the pill now does exactly the
+          // same and redraws from the provider-accepted task update.
           if (addressed) {
-            manager?.setModel(addressed.id, m)
-            void pushPillChips(addressed.id)
+            configureTaskModelFromPill(addressed.id, { axis: 'Model', value: m })
             return
           }
           // EVERY OTHER BACKEND WRITES ITS OWN KEY, chosen by the registry.
@@ -5976,13 +6037,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // 'no-driver' and did nothing, which is the same dead control the
           // agent chip had.
           if (agent === 'codex' && addressed) {
-            void listCodexCliModels().then((models) => {
-              const current = models.find((m) => addressed.model?.startsWith(m.uiLabel)) ?? models[0]
-              const selected = axis === 'Model' ? models.find((m) => m.uiLabel === value) ?? current : current
-              const effort = axis === 'Effort' ? selected?.efforts.find((e) => effortLabelOf(selected, e) === value) : undefined
-              if (selected) manager?.setModel(addressed.id, codexCliChoiceLabel(selected, effort ?? selected.defaultEffort))
-              void pushPillChips(addressed.id)
-            }).catch(() => {})
+            configureTaskModelFromPill(addressed.id, { axis, value })
             return
           }
           if (agent === 'codex') {
