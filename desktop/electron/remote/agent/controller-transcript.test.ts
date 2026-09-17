@@ -66,7 +66,7 @@ test('the user request still travels verbatim', () => {
 })
 
 test('no sessions means no section, not an empty one', () => {
-  const text = providerTranscript(input, [], [], [], '   ')
+  const text = providerTranscript(input, [], [], [])
   assert.doesNotMatch(text, /Sessions the user has worked in/)
 })
 
