@@ -36,4 +36,10 @@ final class SurfaceInteractionStateTests: XCTestCase {
         XCTAssertFalse(state.terminalVisible)
     }
 
+    func testDictationPillAlwaysHasAWindowLevelAboveTheNotch() {
+        let notchLevel = 1_000
+        XCTAssertEqual(SurfaceWindowPriority.pillLevel(above: notchLevel), notchLevel + 1)
+        XCTAssertGreaterThan(SurfaceWindowPriority.pillLevel(above: notchLevel), notchLevel)
+    }
+
 }

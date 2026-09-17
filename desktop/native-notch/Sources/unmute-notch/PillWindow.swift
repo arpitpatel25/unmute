@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SurfaceStateSupport
 
 // THE WINDOW IS A FIXED WIDE CANVAS, and the cluster centres itself in it.
 //
@@ -29,7 +30,10 @@ final class PillWindow: NSPanel {
             defer: false
         )
         isFloatingPanel = true
-        level = .screenSaver
+        // The notch uses `.screenSaver`. A distinct, higher level makes the
+        // active input HUD win regardless of whether it or the notch was
+        // ordered front most recently.
+        level = NSWindow.Level(rawValue: SurfaceWindowPriority.pillLevel(above: NSWindow.Level.screenSaver.rawValue))
         // NO `.stationary` — IT STRANDS THE GLASS.
         //
         // `.stationary` means "do not take part in Space transitions". A window

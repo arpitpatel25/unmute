@@ -20,6 +20,17 @@ public struct SurfacePresentation: Equatable, Sendable {
     public let barHovered: Bool
 }
 
+/// The notch and dictation pill are independent panels. AppKit resolves two
+/// panels at the same level by their most recent ordering operation, so merely
+/// calling `orderFrontRegardless()` cannot preserve the pill when the notch is
+/// expanded afterwards. Give the active-input surface an invariantly higher
+/// level instead; presentation order can then no longer invert them.
+public enum SurfaceWindowPriority {
+    public static func pillLevel(above notchLevel: Int) -> Int {
+        notchLevel + 1
+    }
+}
+
 /// The native helper's sole authority for visit-scoped interaction.
 ///
 /// Domain truth remains in Electron. This value owns only what must react at
