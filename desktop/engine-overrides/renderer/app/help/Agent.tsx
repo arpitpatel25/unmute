@@ -19,7 +19,8 @@ export default function Agent({ onBack }: HelpProps) {
     >
       <Sec title="It has its own key">
         <P>
-          Hold <strong>right Command</strong> and speak. That is deliberately a
+          Double-tap <strong>Right Command</strong> and speak. Tap Right Command
+          once when you are ready to send. That is deliberately a
           different key from dictation and from Remote, so adding an agent could
           not change either — and so a sentence addressed to Unmute can never be
           mistaken for one addressed to a session.
@@ -34,6 +35,19 @@ export default function Agent({ onBack }: HelpProps) {
           When the answer is genuinely longer than a line — a summary you asked
           for rather than a confirmation — the caption is held open until you
           dismiss it instead of vanishing.
+        </Note>
+      </Sec>
+
+      <Sec title="It is your session manager">
+        <P>
+          A session does the work. The Unmute Agent helps you find and manage
+          sessions. Ask it when you cannot remember where some work lives, when
+          several sessions are involved, or when you want to resume or create
+          the right session without choosing it yourself.
+        </P>
+        <Note>
+          Try: “Find the session that was fixing checkout, resume it, and tell
+          it what we decided in today’s meeting.”
         </Note>
       </Sec>
 

@@ -251,7 +251,6 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
   const [widgetPosition, setWidgetPosition] = useState<'center' | 'right'>('center')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
-  const [instructionEnabled, setInstructionEnabled] = useState<boolean>(true)
   // The orchestrator trigger — the key OPPOSITE the dictation key. `locked` is
   // the plan gate (no Unmute plan → off and not togglable); `enabled` is the
   // live gate, which for a subscriber starts on every time the app opens.
@@ -444,11 +443,6 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
     window.electronAPI.getActivationMode().then((v: string) => {
       if (v === 'tap-toggle' || v === 'push-to-talk' || v === 'double-tap-push') setActivationMode(v)
     })
-    // Instruct on/off — falls back to true if the IPC isn't present
-    // (e.g., running against an older main process during dev).
-    window.electronAPI.paywallGetInstructionEnabled?.()
-      .then((v: boolean) => setInstructionEnabled(v !== false))
-      .catch(() => {})
     // The orchestrator's own settings snapshot. `!== false` mirrors main's own
     // reading of overlayAutoPresent, so an older main process (which returns
     // undefined) leaves the toggle on rather than silently flipping it off.
@@ -662,7 +656,7 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.04)_0%,transparent_50%)] pointer-events-none" />
           <div className="px-6 pt-5">
             <div className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/28 mb-1">Keyboard</div>
-            <div className="text-[16px] font-extrabold tracking-tight text-white/90">Three keys, three jobs</div>
+            <div className="text-[16px] font-extrabold tracking-tight text-white/90">Your voice keys</div>
           </div>
           <div className="p-5 pt-4 flex flex-col gap-2.5">
             {/* Dictate */}
@@ -707,37 +701,11 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
                 />
               </div>
             </div>
-            {/* Instruct */}
-            <div className="flex items-center justify-between px-4 py-3.5 bg-white/[0.055] border border-white/[0.08] rounded-[13px] hover:bg-white/[0.085] transition-colors">
-              <div>
-                <h4 className="text-[13px] font-medium text-white/88 mb-0.5">Instruct</h4>
-                <p className="text-[11px] text-white/36">
-                  {instructionEnabled
-                    ? 'Select something, then say what to do with it'
-                    : 'Off — Caps Lock works as a normal key'}
-                </p>
-              </div>
-              <div className="flex items-center gap-2.5">
-                {instructionEnabled && <MiniWave />}
-                {instructionEnabled ? (
-                  <HeroKey variant="red">Caps Lock</HeroKey>
-                ) : (
-                  <HeroKey>Off</HeroKey>
-                )}
-                <Toggle
-                  checked={instructionEnabled}
-                  onChange={(next) => {
-                    setInstructionEnabled(next)
-                    window.electronAPI.paywallSetInstructionEnabled?.(next)
-                  }}
-                />
-              </div>
-            </div>
-            {/* Orchestrate — the trigger on the key NOT used for dictation. */}
+            {/* Sessions — the trigger on the key NOT used for dictation. */}
             <div className="flex items-center justify-between px-4 py-3.5 bg-white/[0.055] border border-white/[0.08] rounded-[13px] hover:bg-white/[0.085] transition-colors">
               <div>
                 <h4 className="text-[13px] font-medium text-white/88 mb-0.5 flex items-center gap-1.5">
-                  Orchestrate
+                  Sessions
                   {remoteTrigger.locked && (
                     <span className="px-1.5 py-[1px] rounded-full bg-white/12 text-[10px] font-bold tracking-[0.08em] uppercase text-white/50">
                       Pro
@@ -746,9 +714,9 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
                 </h4>
                 <p className="text-[11px] text-white/36">
                   {remoteTrigger.locked
-                    ? 'On the Unmute plan — upgrade to hand spoken jobs to an agent'
+                    ? 'On the Unmute plan — upgrade to talk directly to sessions'
                     : remoteTrigger.enabled
-                      ? 'Hold, say what you want done, let go'
+                      ? 'Tap to start, tap again to send'
                       : `Off — ${remoteKeyLabel} works as a normal key. Back on when you reopen unmute.`}
                 </p>
               </div>
@@ -762,7 +730,7 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
                 <Toggle
                   checked={remoteTrigger.enabled}
                   disabled={remoteTrigger.locked}
-                  title={remoteTrigger.locked ? 'Orchestrate is part of the Unmute plan' : undefined}
+                  title={remoteTrigger.locked ? 'Sessions are part of the Unmute plan' : undefined}
                   onChange={handleRemoteTriggerChange}
                 />
               </div>
