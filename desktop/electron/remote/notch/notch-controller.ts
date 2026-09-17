@@ -1518,6 +1518,13 @@ export class NotchController {
     const opened = this.engaged === 'task' && this.focusedId ? this.deps.getTask(this.focusedId) : undefined
     const shown = front ?? opened
     if (shown) {
+      // AN EXPANDED TASK IS ITS OWN VOICE ADDRESS. A task can leave the
+      // attention queue while the expanded surface advances to the next card.
+      // dequeue() clears the old focus first; without repairing it here the UI
+      // visibly showed one conversation while Right Option remained
+      // unaddressed, so its model picker changed the defaults for a future task
+      // instead of the conversation on screen.
+      if (this.engaged === 'task' && this.focusedId !== shown.id) this.setFocus(shown.id)
       this.sendDetail('showTask', shown)
       // The task surface needs rail context too (tmux gate etc.).
       if (this.engaged === 'task') this.client.send({ type: 'setCockpit', data: this.buildCockpit() })

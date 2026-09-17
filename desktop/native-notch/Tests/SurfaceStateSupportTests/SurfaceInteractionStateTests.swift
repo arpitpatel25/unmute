@@ -1,3 +1,5 @@
+import AppKit
+import CoreGraphics
 import XCTest
 @testable import SurfaceStateSupport
 
@@ -37,9 +39,31 @@ final class SurfaceInteractionStateTests: XCTestCase {
     }
 
     func testDictationPillAlwaysHasAWindowLevelAboveTheNotch() {
-        let notchLevel = 1_000
-        XCTAssertEqual(SurfaceWindowPriority.pillLevel(above: notchLevel), notchLevel + 1)
-        XCTAssertGreaterThan(SurfaceWindowPriority.pillLevel(above: notchLevel), notchLevel)
+        _ = NSApplication.shared
+        let notch = NSPanel(contentRect: NSRect(x: 20, y: 20, width: 30, height: 30),
+                            styleMask: .borderless, backing: .buffered, defer: false)
+        let pill = NSPanel(contentRect: NSRect(x: 25, y: 25, width: 30, height: 30),
+                           styleMask: .borderless, backing: .buffered, defer: false)
+        defer { notch.orderOut(nil); pill.orderOut(nil) }
+        notch.level = .screenSaver
+        pill.level = NSWindow.Level(rawValue: SurfaceWindowPriority.pillLevel(above: notch.level.rawValue))
+        notch.orderFrontRegardless()
+        pill.orderFrontRegardless()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+
+        func serverLayer(_ window: NSWindow) -> Int? {
+            let info = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]]
+            return info?.first(where: {
+                ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == window.windowNumber
+            }).flatMap { ($0[kCGWindowLayer as String] as? NSNumber)?.intValue }
+        }
+
+        guard let notchLayer = serverLayer(notch), let pillLayer = serverLayer(pill) else {
+            XCTFail("the ordered test panels must be registered with WindowServer")
+            return
+        }
+        XCTAssertGreaterThan(pillLayer, notchLayer,
+                             "the WindowServer must keep the active pill above an expanded notch")
     }
 
 }

@@ -368,6 +368,18 @@ test('tap with a front task → task surface + focus; tap idle → cockpit', () 
   assert.ok(h2.client.last('setCockpit'))
 })
 
+test('when an expanded task leaves the queue, the next visible task becomes the voice target', () => {
+  const h = setup()
+  h.controller.setAutoExpand(true)
+  put(h, makeTask({ id: 'first', name: 'First', state: 'needs-user', updatedAt: T0 + 20 }))
+  put(h, makeTask({ id: 'next', name: 'Next', state: 'needs-user', updatedAt: T0 + 10 }))
+
+  put(h, makeTask({ id: 'first', name: 'First', state: 'done', updatedAt: T0 + 30 }))
+
+  assert.equal(h.client.last('showTask')?.task.id, 'next', 'the next waiting task is visibly expanded')
+  assert.deepEqual(h.calls.focus?.at(-1), ['next'], 'Right Option must address the task the panel displays')
+})
+
 test('next walks the crank and comes back around', () => {
   const h = setup()
   put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
