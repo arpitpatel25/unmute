@@ -229,3 +229,23 @@ test('Codex subagent interruption and Claude multi-result frames retain all expo
   assert.deepEqual(blocks.map(b => b.output), ['one', 'two'])
   assert.deepEqual(blocks.map(b => b.status), ['succeeded', 'succeeded'])
 })
+
+test('a durable history load marks the blocks durable so the card stops offering to reload them', async t => {
+  const baseDir = await fs.mkdtemp(join(tmpdir(), 'core-content-durable-'))
+  const manager = new TaskManager({ baseDir, executorFactory: () => { throw new Error('No provider launch') } })
+  t.after(async () => { manager.shutdown(); await Promise.all([...(manager as any).metaChains.values()]); await fs.rm(baseDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 10 }) })
+  const id = await manager.createChat({ provider: 'claude' }), task = manager.get(id)!
+  task.chatUnstarted = false; task.sessionId = undefined as any
+
+  await fs.writeFile(join(task.home, 'chat-frames.json'), JSON.stringify([{ type: 'system', unmuteHistoryIncomplete: true },
+    { type: 'user', uuid: 'partial', message: { content: [{ type: 'text', text: 'partial recovered prompt' }] } }]))
+  await manager.loadBlocksFor(id, true)
+  assert.equal(task.history?.phase, 'partial')
+  assert.notEqual((task as any).blocksDurable, true, 'an incomplete read is not the whole conversation')
+
+  await fs.writeFile(join(task.home, 'chat-frames.json'), JSON.stringify([
+    { type: 'user', uuid: 'u', message: { content: [{ type: 'text', text: 'the first prompt' }] } }]))
+  await manager.loadBlocksFor(id, true)
+  assert.equal(task.history?.phase, 'ready')
+  assert.equal((task as any).blocksDurable, true, 'a complete read is')
+})

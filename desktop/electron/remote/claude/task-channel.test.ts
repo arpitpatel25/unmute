@@ -254,3 +254,19 @@ test('a reattached tail never claims its history is complete, so opening the car
   assert.equal(patches.at(-1).history?.phase, 'ready')
   assert.ok(patches.at(-1).blocks.some((b: any) => b.text === 'first prompt'), 'the earlier conversation is back')
 })
+
+test('a tail marks its blocks non-durable, and merging history marks them durable', () => {
+  // The surface needs this to tell "there is nothing older" apart from "I am
+  // holding a fragment": both look like a short conversation from the blocks
+  // alone, and only the second one should offer to load earlier messages.
+  const patches: any[] = [], channel = new ClaudeTaskChannel(p => patches.push(p))
+  channel.suspendPersistence()
+  channel.event({ type: 'message', message: { type: 'user', uuid: 'tail-prompt', message: { content: [{ type: 'text', text: 'recent prompt' }] } } })
+  assert.equal(patches.at(-1).blocksDurable, false, 'a suspended tail is not the whole conversation')
+
+  channel.mergeHistory([
+    { type: 'user', uuid: 'first-prompt', message: { content: [{ type: 'text', text: 'first prompt' }] } },
+    { type: 'user', uuid: 'tail-prompt', message: { content: [{ type: 'text', text: 'recent prompt' }] } },
+  ])
+  assert.equal(patches.at(-1).blocksDurable, true, 'the merged conversation is complete')
+})

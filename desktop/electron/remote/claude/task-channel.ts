@@ -176,7 +176,10 @@ export class ClaudeTaskChannel {
     // loadBlocksFor() skip the durable merge on open, so the card kept just
     // the last reply and had no earlier messages to offer. mergeHistory()
     // re-enables persistence, and only then is the conversation complete.
-    this.patch({ blocks: parsed.blocks, ...(parsed.usage ? { usage: parsed.usage } : {}),
+    // Say WHICH of the two a short conversation is. Blocks alone cannot tell a
+    // complete short chat from a fragment of a long one, and the surface needs
+    // that to decide whether "Load earlier messages" is worth offering.
+    this.patch({ blocks: parsed.blocks, blocksDurable: this.persistenceEnabled, ...(parsed.usage ? { usage: parsed.usage } : {}),
       ...(this.persistenceEnabled && this.frames.some(f => f.type === 'user' || f.type === 'assistant') && !this.frames.some(f => f.unmuteHistoryIncomplete)
         ? { history: { phase: 'ready' as const } } : {}) })
   }

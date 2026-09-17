@@ -52,6 +52,11 @@ export interface TaskLite {
   conversation?: TurnP[] | null
   /** The chat view — see TaskDetailP.blocks. */
   blocks?: Block[] | null
+  /** True only once `blocks` came from the durable frame file rather than a
+   *  reattached channel's replay tail. A tail is a fragment that looks whole:
+   *  the window's own count is taken over what is loaded, so a one-turn tail
+   *  reports zero older and hides the control that would fetch the rest. */
+  blocksDurable?: boolean
   usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number } | null
   /** Last message that did not reach the agent (NOT a task failure). */
   deliveryError?: string
@@ -651,7 +656,10 @@ export class NotchController {
       if (id !== this.historyTask || (id !== this.focusedId && !(id === NotchController.AGENT_SLOT && this.agentOpen))) return
       this.historyLimit += 10
       const task = this.deps.getTask(id)
-      if (task && task.history?.phase !== 'ready') {
+      // A REATTACHED TAIL IS `ready` AND INCOMPLETE. Gating on the phase alone
+      // widened the page over a one-turn array and fetched nothing, so the card
+      // could never get past the last reply it happened to be holding.
+      if (task && (task.history?.phase !== 'ready' || !task.blocksDurable)) {
         // Enlarging a failed/partial cache cannot fetch its missing messages.
         // Read history independently of acquiring a provider writer.
         void this.deps.loadBlocks?.(id, true).catch(() => {}).finally(() => this.scheduleReconcile())
@@ -2686,6 +2694,9 @@ export class NotchController {
 
   private toDetail(t: TaskLite): TaskDetailP {
     const now = Date.now()
+    // Once: this runs on every reconcile, and the window is also what decides
+    // whether the remainder below is a known count or an unknown one.
+    const windowed = messageWindow(t.blocks ?? [], this.historyLimit)
     // ANY driver backend, not just Codex. This one line is why Claude Desktop
     // cards rendered with an empty body: `external` was false, so the branch
     // below — the branch that sends the CONVERSATION — never ran, and the card
@@ -2735,8 +2746,18 @@ export class NotchController {
       // THE CHAT VIEW. Read from the agent's own source, so an OLD thread shows
       // its full history the moment it is opened — the source file outlives the
       // card, and outlived the version of Unmute that could not read it.
-      ...messageWindow(t.blocks ?? [], this.historyLimit),
-      ...(!t.blocks?.length ? { olderMessages: Math.max(0, (t.conversation?.length ?? 0) - this.historyLimit) } : {}),
+      ...windowed,
+      ...(!t.blocks?.length ? { olderMessages: Math.max(0, (t.conversation?.length ?? 0) - this.historyLimit) }
+        // UNKNOWN IS NOT NONE, AND ONLY ZERO IS AMBIGUOUS.
+        //
+        // messageWindow counts what is LOADED. When that count is positive it
+        // is a true lower bound and worth keeping — the reader gets a number,
+        // and pressing the control fetches whatever lies beyond it anyway.
+        // When it is zero the two cases collapse: a conversation with nothing
+        // older looks exactly like a one-turn replay tail with a hundred turns
+        // still on disk. Only the durable mark separates them, and without it
+        // the honest answer is "more, count unknown" — which is -1 downstream.
+        : t.blocksDurable || windowed.olderMessages > 0 ? {} : { olderMessages: -1 }),
       ...(t.usage ? { usage: t.usage } : {}),
       // ALWAYS SENT — the same fix toCard needed, in the payload one surface
       // over. Driver-only meant a Codex CLI task's expansion arrived with no
