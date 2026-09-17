@@ -132,7 +132,7 @@ import { startCuaServer, CUA_MCP_PORT, CUA_MCP_PATH, type CuaServer } from './cu
 import { NotchClient } from './notch/notch-client'
 import { NotchController } from './notch/notch-controller'
 import { PillController, type PillStateP } from './notch/pill-controller'
-import { existingTaskModelLabel, resolveExistingTaskModelChange, type ExistingTaskModelPick } from './notch/existing-task-model'
+import { applyExistingTaskModelPick, existingTaskModelLabel, type ExistingTaskModelPick } from './notch/existing-task-model'
 import { listCodexModels, matchCurrent, type CodexModel } from './codex/appserver'
 import { listCodexCliModels, resolveCodexCliChoice, codexCliChoiceLabel } from './codex/cli-models'
 import { listCodexCliSkills } from './codex/cli-models'
@@ -2800,7 +2800,7 @@ function chatConfig(id: string): ChatConfigP | undefined {
         probe.close()
         chatClaudeCatalogLoading = false
         notchController?.refresh()
-        void pushPillChips(id)
+        if (pillController?.taskId === id && pillController.phase !== 'hidden') void pushPillChips(id)
       })
   }
   if (provider === 'codex' && !chatCodexModels.length && !chatCatalogLoading && Date.now() - chatCatalogAttemptAt > 30_000) {
@@ -2810,7 +2810,7 @@ function chatConfig(id: string): ChatConfigP | undefined {
       .finally(() => {
         chatCatalogLoading = false
         notchController?.refresh()
-        void pushPillChips(id)
+        if (pillController?.taskId === id && pillController.phase !== 'hidden') void pushPillChips(id)
       })
   }
   const codexModel = chatCodexModels.find(m => m.id === owned?.model)
@@ -2867,10 +2867,9 @@ async function configureTaskChat(id: string, change: { model?: string; effort?: 
 function configureTaskModelFromPill(id: string, pick: ExistingTaskModelPick): void {
   const config = chatConfig(id)
   if (!config) { notchController?.toast('Conversation unavailable'); return }
-  const resolution = resolveExistingTaskModelChange(config, pick)
-  if (!resolution.change) { notchController?.toast(resolution.error); return }
-  void configureTaskChat(id, resolution.change)
-    .then(() => {
+  void applyExistingTaskModelPick(config, pick, change => configureTaskChat(id, change))
+    .then(result => {
+      if (!result.change) { notchController?.toast(result.error); return }
       notchController?.refresh()
       return pushPillChips(id)
     })

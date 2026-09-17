@@ -46,3 +46,17 @@ export function resolveExistingTaskModelChange(
   if (!selected) return { error: `That ${pick.axis.toLowerCase()} is not offered for this conversation.` }
   return { change: pick.axis === 'Model' ? { model: selected.id } : { effort: selected.id } }
 }
+
+/** Apply a pill selection through the caller's authoritative conversation
+ * configuration operation. Keeping the callback explicit makes it impossible
+ * for this path to degrade into a receipt-only label update unnoticed. */
+export async function applyExistingTaskModelPick(
+  config: ExistingTaskModelConfig,
+  pick: ExistingTaskModelPick,
+  configure: (change: ChatConfigChangeP) => Promise<void>,
+): Promise<ExistingTaskModelResolution> {
+  const resolution = resolveExistingTaskModelChange(config, pick)
+  if (!resolution.change) return resolution
+  await configure(resolution.change)
+  return resolution
+}

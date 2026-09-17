@@ -171,6 +171,14 @@ describe('PillController.hide', () => {
     assert.equal(h.state()?.micStatus, undefined)
     assert.equal(h.state()?.model, undefined)
   })
+
+  test('clears the addressed task used by asynchronous chip refreshes', () => {
+    const h = harness()
+    h.c.push({ phase: 'recording', taskId: 'task-a' })
+    assert.equal(h.c.taskId, 'task-a')
+    h.c.hide()
+    assert.equal(h.c.taskId, undefined)
+  })
 })
 
 describe('PillController.phase', () => {

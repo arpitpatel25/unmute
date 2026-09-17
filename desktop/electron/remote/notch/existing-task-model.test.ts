@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existingTaskModelLabel, resolveExistingTaskModelChange } from './existing-task-model'
+import { applyExistingTaskModelPick, existingTaskModelLabel, resolveExistingTaskModelChange } from './existing-task-model'
 
 const config = {
   mutable: true,
@@ -42,4 +42,20 @@ test('an addressed conversation never accepts an unrelated global model value', 
 test('the accepted model id is presented with its provider label immediately', () => {
   assert.equal(existingTaskModelLabel(config.models, 'gpt-5.6-sol', 'gpt-5.6-sol'), '5.6 Sol')
   assert.equal(existingTaskModelLabel([], 'custom-model', 'Custom model'), 'Custom model')
+})
+
+test('an addressed pill applies its selection through conversation configuration', async () => {
+  const applied: unknown[] = []
+  const result = await applyExistingTaskModelPick(config, { axis: 'Model', value: '5.6 Sol' }, async change => {
+    applied.push(change)
+  })
+  assert.deepEqual(result, { change: { model: 'gpt-5.6-sol' } })
+  assert.deepEqual(applied, [{ model: 'gpt-5.6-sol' }])
+})
+
+test('a rejected addressed selection never reaches conversation configuration', async () => {
+  let applied = false
+  const result = await applyExistingTaskModelPick(config, { axis: 'Speed', value: 'Fast' }, async () => { applied = true })
+  assert.match(result.error ?? '', /not configurable/i)
+  assert.equal(applied, false)
 })

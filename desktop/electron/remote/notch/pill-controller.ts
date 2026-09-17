@@ -170,6 +170,9 @@ export class PillController {
    *  hide a live recording. */
   get phase(): PillPhase | undefined { return this.last.phase }
 
+  /** The conversation captured at key-down, if this pill is addressing one. */
+  get taskId(): string | null | undefined { return this.last.taskId }
+
   /** Tear the surface down. */
   hide(): void {
     this.last = { phase: 'hidden' }
