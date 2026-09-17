@@ -33,8 +33,6 @@
 // Three key names ARE written literally, and all three are correct to be:
 //   * the two options of the dictation-key picker ("Fn (Globe)", "Right
 //     Option") — a selector has to name what it is selecting;
-//   * Caps Lock, which is not user-selectable anywhere in the app (only its
-//     on/off state is, via paywallGetInstructionEnabled);
 //   * the macOS Globe/🌐 tip on the "Your keys" step, which is about a System
 //     Settings option rather than an unmute trigger, and is relevant either way
 //     round: unmute always holds the Fn key, as dictation or as orchestrate.
@@ -68,7 +66,6 @@ type OnboardingAPI = {
   openKeyboardSettings?: () => void
   getDictationKey?: () => Promise<string>
   setDictationKey?: (key: DictationKey) => void
-  paywallGetInstructionEnabled?: () => Promise<boolean>
   paywallGetSubscription?: () => Promise<{ active: boolean; plan: Plan | null } | null>
   paywallCreateSubscription?: (
     plan: Plan,
@@ -797,10 +794,8 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
 
   // ─── Keys, read live from settings ───
   const [dictationKey, setDictationKeyState] = useState<DictationKey>('fn')
-  const [instructionEnabled, setInstructionEnabled] = useState(true)
   const dictateLabel = KEY_LABELS[dictationKey]
   const orchestrateLabel = KEY_LABELS[otherKey(dictationKey)]
-  const instructLabel = 'Caps Lock'
 
   function chooseDictationKey(value: DictationKey) {
     setDictationKeyState(value)
@@ -906,9 +901,6 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
     api().getDictationKey?.().then((key) => {
       if (key === 'fn' || key === 'right-option') setDictationKeyState(key)
     }).catch(() => {})
-    api().paywallGetInstructionEnabled?.()
-      .then((on) => setInstructionEnabled(on !== false))
-      .catch(() => {})
     refreshMicStatus()
     refreshAccessibilityStatus()
     refreshSubscription()
@@ -966,20 +958,15 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
         <>
           <div style={{ ['--i' as string]: 0 }}>
             <span className="eyebrow">The idea</span>
-            <h2 className="d2" style={{ marginTop: 8 }}>Three things, three keys</h2>
+            <h2 className="d2" style={{ marginTop: 8 }}>Two ways to talk</h2>
             <p className="lead" style={{ marginTop: 12, maxWidth: 540 }}>
-              Hold a key. Talk. Let go. There is nothing to click and nothing to switch to.
+              Use Dictation for the app under your cursor, or speak directly to a session.
             </p>
           </div>
           <div className="card rows lead-key" style={{ marginTop: 20, ['--i' as string]: 1 }}>
             <div className="row"><kbd className="key">{dictateLabel}</kbd>
               <div><p className="rtitle">Dictate</p>
                 <p className="rsub">Tap it, speak, tap again. Raw text lands exactly where your cursor is, in any app.</p></div>
-              <span /></div>
-            <div className="row" style={{ opacity: instructionEnabled ? 1 : 0.55 }}>
-              <kbd className="key">{instructionEnabled ? instructLabel : 'Off'}</kbd>
-              <div><p className="rtitle">Instruct</p>
-                <p className="rsub">Select text and say what to change — “make this formal”, “turn into bullets”, “translate to Hindi”. unmute rewrites it in place.</p></div>
               <span /></div>
             <div className="row"><kbd className="key">{orchestrateLabel}</kbd>
               <div><p className="rtitle">Orchestrate</p>
@@ -1240,7 +1227,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
             <span className="eyebrow">Setup</span>
             <h2 className="d2" style={{ marginTop: 8 }}>Choose your dictation key</h2>
             <p className="lead" style={{ marginTop: 12, maxWidth: 540 }}>
-              Orchestrate takes the other. Caps Lock is always Instruct.
+              Sessions use the other key.
             </p>
           </div>
           <div style={{ marginTop: 18, ['--i' as string]: 1 }}>
@@ -1252,12 +1239,6 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
           <div className="card rows lead-key" style={{ marginTop: 16, ['--i' as string]: 2 }}>
             <div className="row"><kbd className="key">{dictateLabel}</kbd>
               <div><p className="rtitle">Dictate</p><p className="rsub">Speak, and the text lands at your cursor.</p></div><span /></div>
-            <div className="row" style={{ opacity: instructionEnabled ? 1 : 0.55 }}>
-              <kbd className="key">{instructionEnabled ? instructLabel : 'Off'}</kbd>
-              <div><p className="rtitle">Instruct</p>
-                <p className="rsub">{instructionEnabled
-                  ? 'Select text first, then say what to change.'
-                  : 'Switched off — you can turn it back on in Settings → Triggers.'}</p></div><span /></div>
             <div className="row"><kbd className="key">{orchestrateLabel}</kbd>
               <div><p className="rtitle">Orchestrate</p><p className="rsub">Describe a job and hand it to your agent.</p></div><span /></div>
           </div>
@@ -1399,7 +1380,7 @@ export function WhatsNew({ onComplete, onOpenAgentSetup }: OnboardingProps) {
             <p className="lead" style={{ marginTop: 12, maxWidth: 600 }}>
               Tap {orchestrateLabel} — whichever key dictation is not using — and describe a
               job out loud. A coding agent runs it on your Mac, under your own account, and
-              reports back. Dictation and Instruct work exactly as they did.
+              reports back. Dictation works exactly as it did.
             </p>
           </div>
           {onOpenAgentSetup && (

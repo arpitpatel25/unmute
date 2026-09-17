@@ -41,11 +41,6 @@ export default function Dictation({ onBack }: HelpProps) {
           A dictation is never sent to a language model. What you said is what
           you get — the transcript is delivered as-is, cleaned only by code.
         </P>
-        <P>
-          If you want something rewritten, that is Instruct, and it is a
-          different key. Keeping them apart is deliberate: dictation you cannot
-          trust to be verbatim is not dictation.
-        </P>
       </Sec>
 
       <Sec title="Cleanup">

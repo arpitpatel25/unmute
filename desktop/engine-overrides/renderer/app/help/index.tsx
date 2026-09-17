@@ -27,7 +27,6 @@
 
 import React from 'react'
 import Dictation from './Dictation'
-import Instruct from './Instruct'
 import Capture from './Capture'
 import Scratchpad from './Scratchpad'
 import Orchestrator from './Orchestrator'
@@ -38,7 +37,6 @@ import BrowserUse from './BrowserUse'
 
 export type HelpPageId =
   | 'dictation'
-  | 'instruct'
   | 'capture'
   | 'scratchpad'
   | 'orchestrator'
@@ -50,7 +48,6 @@ export type HelpPageId =
  *  three that belong to the agent. */
 export const HELP_PAGES: { id: HelpPageId; title: string; blurb: string }[] = [
   { id: 'dictation', title: 'Dictation', blurb: 'Speak, and the words arrive where your cursor is' },
-  { id: 'instruct', title: 'Instruct', blurb: 'Select something and say what to do with it' },
   { id: 'capture', title: 'Capture', blurb: 'What you copy while the mic is on lands in the text' },
   { id: 'scratchpad', title: 'Scratchpad', blurb: 'Hold what you dictate instead of delivering it' },
   { id: 'orchestrator', title: 'Orchestrator', blurb: 'Speak a task and an agent does it on this Mac' },
@@ -64,7 +61,6 @@ export const HELP_PAGES: { id: HelpPageId; title: string; blurb: string }[] = [
 export function HelpPage({ id, onBack }: { id: HelpPageId; onBack: () => void }) {
   switch (id) {
     case 'dictation': return <Dictation onBack={onBack} />
-    case 'instruct': return <Instruct onBack={onBack} />
     case 'capture': return <Capture onBack={onBack} />
     case 'scratchpad': return <Scratchpad onBack={onBack} />
     case 'orchestrator': return <Orchestrator onBack={onBack} />
