@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How to use Unmute — exact app-page review</title>
+  <style>
+    :root {
+      --cream: #f0ede4;
+      --cream-mid: #e6e1d6;
+      --cream-dark: #d9d3c6;
+      --ink: #1a1714;
+      --ink-60: rgba(26, 23, 20, .60);
+      --ink-35: rgba(26, 23, 20, .35);
+      --ink-12: rgba(26, 23, 20, .12);
+      --ink-07: rgba(26, 23, 20, .07);
+      --white: #fff;
+      --accent: #e03030;
+      --border: rgba(26, 23, 20, .09);
+    }
+
+    * { box-sizing: border-box; }
+    html { background: #d8d5cd; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .app {
+      width: min(900px, 100vw);
+      height: min(640px, 100vh);
+      display: flex;
+      position: relative;
+      overflow: hidden;
+      background: var(--cream);
+      box-shadow: 0 18px 70px rgba(45, 40, 32, .22), 0 0 0 1px rgba(0, 0, 0, .08);
+    }
+
+    .traffic-lights {
+      position: absolute;
+      z-index: 4;
+      top: 13px;
+      left: 14px;
+      display: flex;
+      gap: 8px;
+    }
+    .traffic-lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+    .traffic-lights i:nth-child(1) { background: #ff5f57; }
+    .traffic-lights i:nth-child(2) { background: #febc2e; }
+    .traffic-lights i:nth-child(3) { background: #28c840; }
+
+    aside {
+      width: 220px;
+      min-width: 220px;
+      padding: 48px 8px 16px;
+      overflow: hidden;
+      border-right: 1px solid var(--border);
+      background: var(--cream-mid);
+    }
+
+    .brand {
+      margin: 0 12px 20px;
+      padding: 0 0 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand img { width: 154px; height: 51px; object-fit: contain; }
+    .brand p { margin: -2px 0 0; color: var(--ink-60); font-size: 10px; font-weight: 500; }
+
+    nav { padding: 0 4px; display: grid; gap: 2px; }
+    .nav-item {
+      height: 36px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-radius: 10px;
+      color: var(--ink-60);
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .nav-item svg { width: 15px; height: 15px; color: var(--ink-35); flex: none; }
+    .nav-item.active { color: var(--ink); background: var(--white); box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+    .nav-item.active svg { color: var(--ink); }
+
+    main {
+      flex: 1;
+      min-width: 0;
+      overflow-y: auto;
+      scrollbar-gutter: stable;
+      padding: 40px 40px 48px;
+    }
+    .page { width: 100%; max-width: 672px; margin: 0 auto; }
+
+    .hero { padding-bottom: 23px; border-bottom: 1px solid var(--ink-12); }
+    h1 { margin: 0; font-size: 26px; line-height: 1.15; letter-spacing: -.025em; font-weight: 750; }
+    .intro { margin: 8px 0 0; color: var(--ink-60); font-size: 13.5px; line-height: 1.5; }
+    .roles {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: rgba(255,255,255,.48);
+    }
+    .role { padding: 11px 12px 12px; border-right: 1px solid var(--border); }
+    .role:last-child { border-right: 0; }
+    .role strong { display: block; font-size: 12.5px; line-height: 1.2; }
+    .role span { display: block; margin-top: 3px; color: var(--ink-60); font-size: 11.5px; line-height: 1.35; }
+
+    .jump {
+      position: sticky;
+      z-index: 2;
+      top: -40px;
+      margin: 0 -4px;
+      padding: 13px 4px 11px;
+      display: flex;
+      gap: 5px;
+      background: color-mix(in srgb, var(--cream) 94%, transparent);
+      backdrop-filter: blur(12px);
+    }
+    .jump a {
+      padding: 5px 9px;
+      border-radius: 999px;
+      color: var(--ink-60);
+      font-size: 11.5px;
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .jump a:hover { color: var(--ink); background: var(--ink-07); }
+
+    section { scroll-margin-top: 26px; padding: 21px 0 5px; border-top: 1px solid var(--ink-12); }
+    .jump + section { border-top: 0; padding-top: 6px; }
+    .section-head { display: grid; grid-template-columns: 138px 1fr; gap: 18px; padding-bottom: 8px; }
+    h2 { margin: 0; font-size: 17px; line-height: 1.25; letter-spacing: -.015em; font-weight: 720; }
+    .section-head p { margin: 1px 0 0; color: var(--ink-60); font-size: 12.5px; line-height: 1.45; }
+
+    .guide-row {
+      display: grid;
+      grid-template-columns: 138px minmax(0, 1fr);
+      gap: 18px;
+      padding: 13px 0;
+      border-top: 1px solid var(--border);
+    }
+    .guide-row h3 { margin: 0; font-size: 12.5px; line-height: 1.4; font-weight: 680; }
+    .guide-row .why { margin: 3px 0 0; color: var(--ink-60); font-size: 11.5px; line-height: 1.4; }
+    .action { min-width: 0; }
+    .instruction { margin: 0; font-size: 12.5px; line-height: 1.55; }
+    .example { margin: 5px 0 0; color: var(--ink-60); font-size: 11.5px; line-height: 1.45; }
+    .example::before { content: "Try: "; color: var(--ink-35); font-weight: 650; }
+
+    kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 22px;
+      margin: 0 2px;
+      padding: 2px 7px 3px;
+      border: 1px solid rgba(0,0,0,.52);
+      border-radius: 6px;
+      background: linear-gradient(#302d29, #1a1714);
+      box-shadow: 0 2px 0 rgba(0,0,0,.42), 0 1px 3px rgba(0,0,0,.18);
+      color: rgba(255,255,255,.94);
+      font-family: inherit;
+      font-size: 10.5px;
+      font-weight: 700;
+      line-height: 1;
+      vertical-align: 1px;
+      white-space: nowrap;
+    }
+    .then { color: var(--ink-35); padding: 0 2px; }
+    .mini-list { margin: 7px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+    .mini-list li { color: var(--ink-60); font-size: 11.5px; line-height: 1.5; }
+
+    .agent-note {
+      margin-top: 19px;
+      padding: 13px 15px;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      border-left: 3px solid var(--accent);
+      background: rgba(224,48,48,.055);
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+    .agent-note strong { flex: none; }
+
+    @media (max-width: 720px) {
+      aside { display: none; }
+      .app { width: 100vw; height: 100vh; }
+      main { padding: 32px 22px 44px; }
+      .traffic-lights { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app" role="application" aria-label="Unmute help page review">
+    <div class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+
+    <aside>
+      <div class="brand">
+        <img src="../../../desktop/engine-overrides/renderer/assets/unmute-logo.png" alt="unmute">
+        <p>Typing sucks. Just unmute.</p>
+      </div>
+      <nav aria-label="Unmute">
+        <div class="nav-item active">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M6.5 6a1.7 1.7 0 1 1 2.55 1.47C8.4 7.84 8 8.2 8 9"/><path d="M8 11.6h.01"/></svg>
+          <span>How to use Unmute</span>
+        </div>
+        <div class="nav-item">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><polyline points="8,5 8,8 10,10"/></svg>
+          <span>Dictation</span>
+        </div>
+        <div class="nav-item">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2" width="10" height="12" rx="1.5"/><line x1="5.5" y1="6" x2="10.5" y2="6"/><line x1="5.5" y1="9" x2="10.5" y2="9"/></svg>
+          <span>Notetaker</span>
+        </div>
+        <div class="nav-item">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.75v1.75M3.5 6.5A2.5 2.5 0 0 1 6 4h4a2.5 2.5 0 0 1 2.5 2.5v4A2.5 2.5 0 0 1 10 13H6a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M6 8h.01M10 8h.01M6.5 10.5h3"/></svg>
+          <span>Agent</span>
+        </div>
+        <div class="nav-item">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="1.75" y="2.25" width="5.25" height="5" rx="1.25"/><rect x="9" y="2.25" width="5.25" height="5" rx="1.25"/><rect x="1.75" y="8.75" width="5.25" height="5" rx="1.25"/><rect x="9" y="8.75" width="5.25" height="5" rx="1.25"/></svg>
+          <span>Orchestrator</span>
+        </div>
+        <div class="nav-item">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="8" cy="5.5" r="2.5"/><path d="M2.5 14a5.5 5.5 0 0 1 11 0"/></svg>
+          <span>Account</span>
+        </div>
+        <div class="nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>Settings</span>
+        </div>
+      </nav>
+    </aside>
+
+    <main>
+      <div class="page">
+        <header class="hero">
+          <h1>How to use Unmute</h1>
+          <p class="intro">Speak into the app in front of you, start a session for real work, or ask the Unmute Agent to manage work across sessions.</p>
+          <div class="roles" aria-label="What each part is for">
+            <div class="role"><strong>Dictation</strong><span>Writes where your cursor is.</span></div>
+            <div class="role"><strong>Session</strong><span>Does one task with you.</span></div>
+            <div class="role"><strong>Unmute Agent</strong><span>Finds and manages sessions.</span></div>
+          </div>
+        </header>
+
+        <div class="jump" aria-label="Jump to a section">
+          <a href="#dictation">Dictation</a>
+          <a href="#sessions">Sessions</a>
+          <a href="#notetaker">Notetaker</a>
+          <a href="#notch">Notch</a>
+        </div>
+
+        <section id="dictation">
+          <div class="section-head">
+            <h2>Dictation</h2>
+            <p>Say it once and Unmute types it into the app under your cursor.</p>
+          </div>
+          <div class="guide-row">
+            <div><h3>Talk where you type</h3><p class="why">Your current Dictation key is Fn.</p></div>
+            <div class="action"><p class="instruction">Tap <kbd>Fn</kbd> to start. Tap <kbd>Fn</kbd> again to finish.</p><p class="example">Click a message box, then say “Can we meet tomorrow morning?”</p></div>
+          </div>
+          <div class="guide-row">
+            <div><h3>Add context</h3><p class="why">Show Unmute what “this” means while you talk.</p></div>
+            <div class="action"><p class="instruction">Copy text, a link, a file, or an image while Dictation is listening. Screenshots work too: <kbd>⌘ ⇧ 3</kbd> full screen, <kbd>⌘ ⇧ 4</kbd> region.</p><p class="example">Say “Explain this error,” copy the error, then keep talking.</p></div>
+          </div>
+          <div class="guide-row">
+            <div><h3>Use Scratchpad</h3><p class="why">Keep several pieces together before sending.</p></div>
+            <div class="action"><p class="instruction">Collect dictation, copied material, and screenshots in Scratchpad, then send the whole request to a session.</p></div>
+          </div>
+        </section>
+
+        <section id="sessions">
+          <div class="section-head">
+            <h2>Sessions</h2>
+            <p>A session does the work. The Unmute Agent is the session manager.</p>
+          </div>
+          <div class="guide-row">
+            <div><h3>Start one directly</h3><p class="why">Best when you already know the task.</p></div>
+            <div class="action"><p class="instruction">Tap <kbd>Right Option</kbd> to start. Tap it again to send.</p><p class="example">“Open the checkout code and fix the failing test.”</p></div>
+          </div>
+          <div class="guide-row">
+            <div><h3>Ask the Unmute Agent</h3><p class="why">Use it when the right session or next step is unclear.</p></div>
+            <div class="action"><p class="instruction">Double-tap <kbd>Right Command</kbd> to start. Tap <kbd>Right Command</kbd> once to send.</p><p class="example">“Find the checkout session, resume it, and give it today’s meeting notes.”</p></div>
+          </div>
+          <div class="guide-row">
+            <div><h3>Open the session pocket</h3><p class="why">Glance at active sessions without leaving your app.</p></div>
+            <div class="action">
+              <p class="instruction">Hold <kbd>Right Command</kbd> first <span class="then">then</span> press <kbd>Right Option</kbd>. Press the same combination again to expand.</p>
+              <ul class="mini-list"><li><kbd>←</kbd> <kbd>→</kbd> move</li><li><kbd>Return</kbd> open</li><li><kbd>Esc</kbd> shrink</li></ul>
+            </div>
+          </div>
+        </section>
+
+        <section id="notetaker">
+          <div class="section-head">
+            <h2>Notetaker</h2>
+            <p>Keep a meeting transcript, notes, and useful screenshots together.</p>
+          </div>
+          <div class="guide-row">
+            <div><h3>Start or stop notes</h3><p class="why">Works while you stay in the meeting app.</p></div>
+            <div class="action"><p class="instruction">Double-tap <kbd>Left Control</kbd> to start. Double-tap it again to stop.</p></div>
+          </div>
+          <div class="guide-row">
+            <div><h3>Save what is on screen</h3><p class="why">The image stays beside that meeting.</p></div>
+            <div class="action"><p class="instruction">Double-tap <kbd>Left Command</kbd> for the full screen. Hold it for about 600 ms to choose a region.</p><p class="example">Capture the roadmap slide so it stays with the transcript.</p></div>
+          </div>
+        </section>
+
+        <section id="notch">
+          <div class="section-head">
+            <h2>Inside the notch</h2>
+            <p>The notch keeps your current sessions close while you work elsewhere.</p>
+          </div>
+          <div class="guide-row">
+            <div><h3>Move or close</h3><p class="why">The nearest open layer closes first.</p></div>
+            <div class="action"><p class="instruction"><kbd>←</kbd> <kbd>→</kbd> moves between sessions. <kbd>Return</kbd> opens one. <kbd>Esc</kbd> closes a menu first, then shrinks the surface.</p></div>
+          </div>
+        </section>
+
+        <div class="agent-note"><strong>Still unsure?</strong><span>Ask the Unmute Agent “How do I…?” It knows this guide and can help manage your sessions.</span></div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

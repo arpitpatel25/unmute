@@ -8,7 +8,7 @@
     "build:fast": "./build/wire-into-engine.sh build --no-sign",
     "dev": "./build/wire-into-engine.sh dev",
     "engine:sync": "./build/wire-into-engine.sh sync",
-    "test": "node --import tsx --import ./electron/remote/test-setup.ts --import ./engine-overrides/electron/wired-tree-setup.mjs --test 'electron/remote/**/*.test.ts' 'engine-overrides/renderer/widget/**/*.test.ts' 'engine-overrides/electron/**/*.test.ts' 'engine-overrides/renderer/remote/**/*.test.ts'",
+    "test": "node --import tsx --import ./electron/remote/test-setup.ts --import ./engine-overrides/electron/wired-tree-setup.mjs --test 'electron/remote/**/*.test.ts' 'engine-overrides/renderer/widget/**/*.test.ts' 'engine-overrides/electron/**/*.test.ts' 'engine-overrides/renderer/remote/**/*.test.ts' 'engine-overrides/renderer/app/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.typecheck.json && tsc -p tsconfig.renderer.json",
     "eval:agent": "node --import tsx electron/remote/agent/evals/run.ts",
     "test:keyboard": "node --import tsx --import ./electron/remote/test-setup.ts --import ./engine-overrides/electron/wired-tree-setup.mjs --test 'engine-overrides/electron/keyboard.*.test.ts'"
@@ -27,6 +27,8 @@
     "@xterm/xterm": "^5.5.0",
     "electron-store": "^8.2.0",
     "node-pty": "^1.1.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
