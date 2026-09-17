@@ -29,6 +29,8 @@ import { TaskPanel } from '../remote/TaskPanel'
 import { NotetakerTab } from '../notetaker/NotetakerTab'
 import { AgentSettings } from '../remote/AgentSettings'
 import AgentHelp from './help/Agent'
+import HowToUseUnmute from './HowToUseUnmute'
+import type { GuideData } from './HowToUseUnmute'
 
 /**
  * Five destinations:
@@ -45,7 +47,7 @@ import AgentHelp from './help/Agent'
  * to place in the Instruct explainer. That is an obligation, not something
  * already done: on this branch no explainer page exists yet.
  */
-type Tab = 'history' | 'notetaker' | 'agent' | 'orchestrator' | 'account' | 'settings'
+type Tab = 'guide' | 'history' | 'notetaker' | 'agent' | 'orchestrator' | 'account' | 'settings'
 
 /** Sub-pages of the Orchestrator tab. Setup is NOT one-time — a user may add a
  *  second agent months later, and Codex loses its connection whenever its app
@@ -136,6 +138,8 @@ function markOnboardingSeen(): void {
  *  error; migrating them is not this pack's to do.) */
 type AppAPI = {
   getDictationKey?: () => Promise<string>
+  getActivationMode?: () => Promise<string>
+  remoteGetHelpGuide?: (input: { dictationKey: 'fn' | 'right-option'; activationMode: 'tap-toggle' | 'push-to-talk' | 'double-tap-push' }) => Promise<GuideData>
   paywallGetLanguageAutoDetect?: () => Promise<boolean>
   paywallGetLanguage?: () => Promise<string>
   onUpdateDownloaded?: (cb: (version: string) => void) => void
@@ -160,6 +164,8 @@ function AppInner() {
   const [view, setView] = useState<AppView>('loading')
   const [activeTab, setActiveTab] = useState<Tab>('history')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
+  const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
+  const [helpGuide, setHelpGuide] = useState<GuideData | null>(null)
   const [pendingUpdate, setPendingUpdate] = useState<string | null>(null)
   // Language sub-item badge — "Auto" or the ISO code (uppercased). Re-read
   // whenever the sidebar is not sitting on the Language section, since the
@@ -192,6 +198,9 @@ function AppInner() {
     api().getDictationKey?.().then((key: string) => {
       if (key === 'fn' || key === 'right-option') setDictationKey(key)
     }).catch(() => {})
+    api().getActivationMode?.().then((mode: string) => {
+      if (mode === 'tap-toggle' || mode === 'push-to-talk' || mode === 'double-tap-push') setActivationMode(mode)
+    }).catch(() => {})
 
     // Onboarding gate — no sign-in in local BYO-key mode
     const seen = readOnboardingVersion()
@@ -215,6 +224,12 @@ function AppInner() {
     refreshLanguageBadge()
     return () => unsubscribeOpenRequested?.()
   }, [])
+
+  useEffect(() => {
+    api().remoteGetHelpGuide?.({ dictationKey, activationMode })
+      .then(setHelpGuide)
+      .catch(() => setHelpGuide(null))
+  }, [dictationKey, activationMode])
 
   // Re-read on any navigation that does not land on the Language section. One
   // or two IPC calls (the second only when auto-detect is off), which is cheap
@@ -324,6 +339,12 @@ function AppInner() {
         {/* Nav items — five destinations, one glyph each. */}
         <div className="flex flex-col gap-0.5 px-1">
           <SidebarButton
+            icon={<HelpGuideIcon />}
+            label="How to use Unmute"
+            active={activeTab === 'guide'}
+            onClick={() => setActiveTab('guide')}
+          />
+          <SidebarButton
             icon={<HistoryIcon />}
             label="Dictation"
             active={activeTab === 'history'}
@@ -394,6 +415,7 @@ function AppInner() {
       {/* Content */}
       <main className="flex-1 pt-10 px-10 overflow-y-auto">
         <div className="max-w-2xl mx-auto pb-8">
+          {activeTab === 'guide' && <HowToUseUnmute guide={helpGuide} loading={!helpGuide} />}
           {activeTab === 'history' && <History />}
           {activeTab === 'notetaker' && (
             <NotetakerTab
@@ -415,7 +437,11 @@ function AppInner() {
             // prop is unknown to Settings.tsx — an expected, deliberate broken
             // link between the two packs, NOT something to fix by editing a file
             // this pack does not own.
-            <Settings onDictationKeyChange={setDictationKey} section={settingsSection} />
+            <Settings
+              onDictationKeyChange={setDictationKey}
+              onActivationModeChange={setActivationMode}
+              section={settingsSection}
+            />
           )}
         </div>
       </main>
@@ -630,6 +656,16 @@ function HistoryIcon() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="8" cy="8" r="6" />
       <polyline points="8,5 8,8 10,10" />
+    </svg>
+  )
+}
+
+function HelpGuideIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M6.5 6a1.7 1.7 0 1 1 2.55 1.47C8.4 7.84 8 8.2 8 9" />
+      <path d="M8 11.6h.01" />
     </svg>
   )
 }

@@ -72,6 +72,7 @@ interface AudioDevice {
 
 interface SettingsProps {
   onDictationKeyChange?: (key: 'fn' | 'right-option') => void
+  onActivationModeChange?: (mode: 'tap-toggle' | 'push-to-talk' | 'double-tap-push') => void
   /** Which of the seven sections the sidebar has selected. Optional so the
    *  component still renders standalone; defaults to the first section. */
   section?: SettingsSection
@@ -237,7 +238,7 @@ const KILL_SWITCHES_WIRED = false
 // not present choices while the product has one supported surface: Glass + Fixed.
 const SURFACE_STYLE_CONTROLS_VISIBLE = false
 
-export default function Settings({ onDictationKeyChange, section = 'triggers' }: SettingsProps = {}) {
+export default function Settings({ onDictationKeyChange, onActivationModeChange, section = 'triggers' }: SettingsProps = {}) {
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([])
   const [selectedDevice, setSelectedDevice] = useState<string>(AUTOMATIC_DEVICE_ID)
   const [outputMode, setOutputMode] = useState<'paste' | 'clipboard'>('paste')
@@ -629,6 +630,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
     const mode = value as 'tap-toggle' | 'push-to-talk' | 'double-tap-push'
     setActivationMode(mode)
     window.electronAPI.setActivationMode(mode)
+    onActivationModeChange?.(mode)
   }
 
   // The orchestrator always sits on whichever trigger dictation isn't using.

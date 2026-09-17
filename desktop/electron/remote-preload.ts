@@ -7,6 +7,7 @@ import { ipcRenderer } from 'electron'
 import type { Proposal } from './remote/curator-store'
 // Type-only: erased at compile, so the preload bundle gains no dependency.
 import type { ProviderId } from './remote/providers'
+import type { ActivationMode, DictationKey, HelpGuide } from './remote/help-guide'
 
 export interface RemoteTaskSnapshot {
   id: string
@@ -213,6 +214,8 @@ export interface NotetakerScreenshot {
 }
 
 export const remotePreloadExtensions = {
+  remoteGetHelpGuide: (input: { dictationKey: DictationKey; activationMode: ActivationMode }): Promise<HelpGuide> =>
+    ipcRenderer.invoke('remote:get-help-guide', input),
   // ── Unmute Agent ──
   remoteGetAgentSettings: (): Promise<UnmuteAgentSettingsSnapshot> =>
     ipcRenderer.invoke('remote:get-agent-settings'),

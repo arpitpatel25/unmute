@@ -79,6 +79,7 @@ import { provisionalName } from './provisional-name'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput, type McpServer } from './mcp-server'
 import { CapabilityRegistry } from './agent/capabilities/registry'
+import { resolveHelpGuide, type ActivationMode, type DictationKey } from './help-guide'
 import { MemoryCapability } from './agent/capabilities/memory'
 import {
   DeliveryCapability,
@@ -6591,6 +6592,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
 
   // ── IPC: actions the renderer (or a future menu) can trigger ──
+  ipcMain.handle('remote:get-help-guide', async (_e, input: { dictationKey?: string; activationMode?: string }) => {
+    const dictationKey: DictationKey = input?.dictationKey === 'right-option' ? 'right-option' : 'fn'
+    const activationMode: ActivationMode = input?.activationMode === 'push-to-talk' || input?.activationMode === 'double-tap-push'
+      ? input.activationMode
+      : 'tap-toggle'
+    return resolveHelpGuide({ dictationKey, activationMode })
+  })
   ipcMain.handle('remote:dispatch', async (_e, intent: string) => dispatchFromCapture(intent))
   // The wall reports its focused session here; null clears it. Focus = the voice
   // address (§6.2). Additive: clearing it restores pure router behaviour.
