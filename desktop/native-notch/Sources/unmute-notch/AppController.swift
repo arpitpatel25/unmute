@@ -372,9 +372,17 @@ final class AppController: NSObject, NotchResizing {
                         window.present()
                         NotchLog.log("departure settled by a suppressed banner — showing dormant")
                     case .applyHidden, .applyNormally:
-                        // Put it down rather than merely declining to re-arm: a
-                        // repeat arriving while the bar is up must settle too.
-                        if model.state != .dormant, !isExpanded(model.state) { applyState(.dormant) }
+                        // Put it down rather than merely declining to re-arm.
+                        // WHICH SURFACES THAT COVERS IS NOT THIS HANDLER'S CALL
+                        // — see BannerRepeat. It used to be decided inline, as
+                        // `!isExpanded(model.state)`, and that quietly vetoed
+                        // the collapse the user had just asked for.
+                        switch BannerRepeat.landing(current: surfaceRung()) {
+                        case .stayPut:
+                            break
+                        case .restSilently:
+                            applyState(.dormant)
+                        }
                     }
                     return
                 }
@@ -919,6 +927,12 @@ final class AppController: NSObject, NotchResizing {
     }
 
     private func isExpanded(_ s: NotchState) -> Bool { s == .task || s == .cockpit }
+
+    /// The six states as the three rungs that rules actually care about.
+    private func surfaceRung() -> SurfaceRung {
+        if model.state == .dormant { return .dormant }
+        return isExpanded(model.state) ? .expanded : .bar
+    }
 
     /// AN OPEN POCKET IS NOT A CLAIM ON THE KEYBOARD.
     ///
