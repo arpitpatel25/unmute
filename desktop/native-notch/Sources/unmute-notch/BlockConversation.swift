@@ -108,12 +108,15 @@ struct BlockConversation: View {
                 ZStack(alignment: .bottom) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 22) {
-                            if olderMessages > 0 {
+                            // Three meanings, not two — see LoadEarlierControl.
+                            // A negative remainder is UNKNOWN-but-more, which
+                            // still offers, just without a count it cannot know.
+                            if let earlierLabel = LoadEarlierControl.label(olderMessages: olderMessages) {
                                 // Centred: it belongs to the transcript as a
                                 // whole rather than to the first message, and
                                 // left-aligned it read as a stray line of text
                                 // tucked under the title.
-                                Button("Load earlier messages (\(olderMessages))") {
+                                Button(earlierLabel) {
                                     olderAnchor = turns.first
                                     loadingOlder = true
                                     loadOlder()

@@ -2884,3 +2884,42 @@ test('an Agent chat with no earlier session shows no divider', async () => {
   await new Promise<void>(resolve => setImmediate(resolve))
   assert.deepEqual(h.client.last('showTask')!.task.blocks!.map(b => b.kind), ['message', 'message'])
 })
+
+// A REATTACHED CHANNEL IS A TAIL, AND THE CARD MUST NOT CALL IT THE WHOLE CHAT.
+// After a relaunch the channel replays only the daemon's recent events, so
+// `blocks` holds one turn while the durable frame file holds hundreds. The
+// window's own count is computed over the loaded blocks, so it says 0 older —
+// which hides the one control that could fetch the rest, and the conversation
+// is stranded at its last reply with no way back. Unknown-but-more is -1.
+test('a non-durable tail reports older messages as unknown rather than none', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'tail', kind: 'session', history: { phase: 'ready' },
+    blocks: [{ kind: 'message', role: 'user', text: 'the only turn the daemon still held' },
+             { kind: 'message', role: 'assistant', text: 'the last reply' }] }))
+  h.client.fire({ type: 'focusTask', id: 'tail' }); h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.olderMessages, -1)
+})
+
+test('a durable history under one page reports no older messages', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'whole', kind: 'session', history: { phase: 'ready' }, blocksDurable: true,
+    blocks: [{ kind: 'message', role: 'user', text: 'all of it' },
+             { kind: 'message', role: 'assistant', text: 'really all of it' }] }))
+  h.client.fire({ type: 'focusTask', id: 'whole' }); h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.olderMessages, 0)
+})
+
+// The suspended-tail case is `ready` AND incomplete, so gating the fetch on the
+// phase alone widened a one-turn array and returned nothing.
+test('load earlier fetches durable history for a ready but non-durable card', async () => {
+  const loads: Array<[string, boolean | undefined]> = []
+  const h = setup({ deps: { loadBlocks: async (id, retry) => { loads.push([id, retry]) } } })
+  put(h, makeTask({ id: 'tail-ready', kind: 'session', history: { phase: 'ready' },
+    blocks: [{ kind: 'message', role: 'user', text: 'one turn' },
+             { kind: 'message', role: 'assistant', text: 'one reply' }] }))
+  h.client.fire({ type: 'focusTask', id: 'tail-ready' }); h.flush()
+  loads.length = 0
+  h.client.fire({ type: 'loadOlderMessages', id: 'tail-ready' }); h.flush()
+  await Promise.resolve()
+  assert.deepEqual(loads, [['tail-ready', true]])
+})

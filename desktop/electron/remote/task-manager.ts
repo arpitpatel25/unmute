@@ -362,6 +362,10 @@ export interface Task {
    *  vocabulary — spec 2026-08-16-chat-view-blocks. `conversation` above stays
    *  only for tasks rehydrated from a meta.json written before the upgrade. */
   blocks?: Block[]
+  /** Runtime-only, never persisted: whether `blocks` is the durable
+   *  conversation or a reattached channel's replay tail. A tail is
+   *  indistinguishable from a short chat by its blocks alone. */
+  blocksDurable?: boolean
   /** An empty GUI conversation has not submitted a provider turn yet. */
   chatUnstarted?: boolean
   claudeForkFromSessionId?: string
@@ -2379,6 +2383,9 @@ export class TaskManager extends EventEmitter {
     // Full blocks hydrate reconnect/history. Live events update only changed
     // indices so a long transcript is not serialized for every streamed token.
     if (p.blocks) task.blocks = p.blocks
+    // Travels WITH the blocks it describes: a producer that replaces the
+    // array also replaces what is known about how complete it is.
+    if (p.blocks && p.blocksDurable !== undefined) task.blocksDurable = p.blocksDurable
     else if (p.blockUpdates?.length) task.blocks = applyBlockUpdates(task.blocks, p.blockUpdates)
     if (p.usage) task.usage = p.usage
     if (p.history) task.history = p.history
@@ -3256,6 +3263,9 @@ export class TaskManager extends EventEmitter {
           // Keep it intact until complete history can replace it; partial raw
           // recovery remains available for the next exact-session retry.
           if (recovered.history.phase === 'ready' || !task.blocks?.length && !task.conversation?.length) task.blocks = parsed.blocks
+          // Only a COMPLETE read earns the mark. A partial one still leaves
+          // earlier messages on disk, so the card must keep offering to fetch.
+          if (recovered.history.phase === 'ready') task.blocksDurable = true
           if (parsed.usage) task.usage = parsed.usage
         }
       }
@@ -3267,6 +3277,8 @@ export class TaskManager extends EventEmitter {
       // writer ownership first, so an existing writer turned a fully readable
       // rollout into “Conversation history is unavailable.”
       await this.refreshCodexBlocks(task, undefined, undefined, true)
+      // The rollout IS the durable record; a Codex card has no replay tail.
+      task.blocksDurable = true
       return
     }
     if (task.agent === 'codex' || isExternalAgent(task.agent)) {

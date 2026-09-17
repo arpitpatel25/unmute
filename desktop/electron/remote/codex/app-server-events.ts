@@ -44,6 +44,8 @@ export function approvalCapReason(method: string, params: Record<string, unknown
  *  a state, so a stream of events can be applied in order without each one
  *  having to restate everything it did not touch. */
 export interface CodexPatch {
+  /** Whether `blocks` is the durable conversation or a replay tail. */
+  blocksDurable?: boolean
   turnOutcome?: TurnOutcome | null
   history?: HistoryState
   mcpStatus?: McpStatus
