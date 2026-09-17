@@ -16,17 +16,16 @@ This feature adds a permanent, human-sounding guide that a person can revisit at
 3. **Action, key, example.** Each explanation says what the action is for, how to invoke it, and gives one short example.
 4. **The current product is the authority.** The guide reflects the actual keyboard and notch state machines. Existing stale help copy is corrected as part of this work; this project does not silently change gestures.
 5. **One source of truth.** The same catalog drives Electron, the notch, and Agent answers. No surface keeps an independent prose copy of shortcuts.
-6. **Configured keys are shown as configured.** Dictation may use Fn or Right Option. Session work uses the other key. Every rendered guide resolves those names from current settings.
+6. **Configured keys are shown as configured.** The guide never presents “Fn or Right Option.” It reads Settings and names only the key and activation the person actually uses. Session work uses the complementary key, and that exact key is shown too.
 7. **Permanent, not interruptive.** Help is always available but is not another onboarding tour, modal sequence, or first-run gate.
 
 ## The mental model
 
-The overview teaches five ideas:
+The overview teaches four ideas:
 
 - **Dictation** puts the words you say into the app under your cursor.
-- **Instruct** changes selected text or reshapes something you just said.
 - **A session** is one ongoing piece of work. Speak directly to it with the session key.
-- **The Unmute Agent** finds and manages sessions, meetings, and remembered information. It is not the coding session doing the work.
+- **The Unmute Agent** is the session manager. It finds, compares, resumes, creates, and routes between sessions using what it knows from sessions, meetings, and remembered information. It is not the coding session doing the work.
 - **Notetaker** records a meeting and prepares its transcript and notes.
 
 The load-bearing distinction is:
@@ -39,14 +38,12 @@ The load-bearing distinction is:
 
 Add **How to use Unmute** as a top-level sidebar destination. It appears first in the main navigation, above Dictation, matching the placement requested in the supplied sidebar reference. It is not nested under Settings, Agent, or Orchestrator.
 
-The page has a short introduction followed by six compact sections:
+The page has a short introduction followed by four compact sections:
 
-1. **The quick version** — five short rows for Dictation, Instruct, sessions, the Unmute Agent, and Notetaker. Each row has a keycap/action, one plain sentence, and one example where helpful.
-2. **Talking to a session** — what a session is; starting work; sending a follow-up; leaving it running; returning later.
-3. **The pocket** — collapsing without stopping, opening the pocket, switching cards, expanding the selected card, and what Escape does.
-4. **The Unmute Agent** — when to use it, what it can find or manage, and examples such as “Find the session where we changed billing and continue it.”
-5. **Meetings and captures** — starting/stopping Notetaker, meeting screenshots, and attaching copied material or ordinary macOS screenshots while speaking.
-6. **Every shortcut** — the complete reference, grouped by Voice, Sessions and pocket, Meetings and screenshots, and Inside the notch.
+1. **Dictation** — what it does; the exact configured key and activation; Capture; ordinary screenshots; copied text, links, paths, and images; output behavior; and Scratchpad.
+2. **Sessions and the Unmute Agent** — what a session is; using the exact session key to create or talk directly to one; why the Unmute Agent is the session manager; when to ask it to find, compare, resume, create, or route work; and what it knows from sessions, Notetaker, and memory.
+3. **Notetaker** — starting/stopping it, what is recorded, where notes appear, meeting screenshots, and asking the Unmute Agent about a recorded meeting.
+4. **Every shortcut** — the complete verified reference, grouped by Dictation, Sessions and pocket, Unmute Agent, Meetings and screenshots, and Inside the notch.
 
 The first section is fully visible and glanceable. Later sections use compact cards or disclosure rows; they are not long articles. Existing detailed Help pages remain available for specialist details, but the new guide becomes the primary explanation and links to those pages only where useful.
 
@@ -56,10 +53,10 @@ Add a small Help button to the expanded dashboard/session chrome and an entry on
 
 The notch sheet exposes four compact destinations:
 
-- **Quick keys**
-- **This session**
+- **Dictation**
+- **Sessions and Agent**
 - **Pocket and navigation**
-- **Meetings and captures**
+- **Notetaker**
 
 It uses the same guide entries as Electron, but shows only their short form. Its footer says, in plain language, that the person can ask the Unmute Agent any “How do I…?” question.
 
@@ -98,6 +95,8 @@ The canonical content is structured data rather than free-standing UI copy. Each
 
 The catalog supports tokens for configured values such as the current dictation key and the complementary session key. Resolution happens before content is rendered or returned to the Agent.
 
+The resolved guide contains one dictation key and one session key. It never renders both possibilities or says “depending on Settings.” Activation copy is resolved the same way: a tap-toggle user sees tap instructions, a push-to-talk user sees hold/release instructions, and a dual-mode user sees the dual gesture.
+
 A Markdown reference is generated from or kept as a checked representation of this catalog for product review. Markdown is not independently edited by each UI surface.
 
 Catalog validation fails tests for duplicate ids, missing summaries, unresolved tokens, unknown section ids, or shortcuts without a behavior source.
@@ -108,10 +107,9 @@ The implementation starts from this code-backed inventory and extends it only wh
 
 ### Voice
 
-- **Dictation key:** Fn or Right Option, according to Settings.
-- **Dictation activation:** tap to start/tap to stop, hold/release, or dual mode, according to Settings.
+- **Dictation key:** show only the exact key selected in Settings.
+- **Dictation activation:** show only the exact activation selected in Settings: tap to start/tap to stop, hold/release, or dual mode.
 - **Session key:** the key not assigned to Dictation; the current state machine taps once to start and taps again to submit.
-- **Caps Lock:** start/stop Instruct. Pressing the other voice key during a live capture changes the destination according to the existing lane rules.
 - **Right Command:** the current state machine double-taps to start the Unmute Agent and single-taps to submit.
 - **Escape during a voice capture:** cancel the current utterance; do not discard held Scratchpad work.
 
@@ -124,9 +122,6 @@ The implementation starts from this code-backed inventory and extends it only wh
 - **Return or Enter in the pocket:** expand the selected card.
 - **Escape:** close the command menu first when present; otherwise step the visible Help/pocket/session surface down according to the existing surface ladder.
 - **Left/Right Arrow in the expanded task/dashboard surface:** move through sessions when a text field is not active.
-- **Tab in the expanded task/dashboard surface:** advance through the crank.
-- **F in the cockpit with a focused task:** toggle the fuller task presentation.
-- **1–9 while a visible task asks a multiple-choice question:** choose the corresponding answer.
 
 ### Meetings and screenshots
 
@@ -141,6 +136,7 @@ When Capture is enabled and an ordinary voice capture is live:
 
 - Copying text, a link, a path, or an image attaches it at that point in the spoken request.
 - macOS full-screen and region screenshots (`Command-Shift-3` and `Command-Shift-4`) are added at that point in the request.
+- **Scratchpad** holds dictation and captured material instead of delivering it when the mic stops, so the person can build something across several captures and send it when ready.
 
 ### Notch composer
 
@@ -172,17 +168,21 @@ If any of those gestures are meant to change, that is a separate behavior decisi
 
 Example copy:
 
-> **Talk to this session**  
-> Tap Right Option, say what you want, then tap it again.  
+> **Talk to this session**
+>
+> Tap your session key, say what you want, then tap it again.
+>
 > “Now add keyboard navigation.”
 
-> **Can’t remember which session?**  
-> Ask the Unmute Agent. It can find the work and bring it back.  
+> **Can’t remember which session?**
+>
+> Ask the Unmute Agent. It can find the work and bring it back.
+>
 > “Find the session where we changed Google login.”
 
 ## Data flow
 
-1. Main owns the canonical guide catalog and resolves current trigger settings.
+1. Main owns the canonical guide catalog and resolves the current Dictation key, Dictation activation, and complementary session key.
 2. The Electron renderer requests or imports the resolved guide and renders the full page.
 3. Main sends the resolved short-form guide to the native notch through its existing JSON IPC command stream.
 4. The Agent Help capability searches the same resolved catalog and returns matching entries.
@@ -196,6 +196,8 @@ The guide remains usable if the notch is unavailable. The notch remains usable i
 
 - Catalog schema and unique-id validation.
 - Dynamic dictation/session key resolution in both configurations.
+- Dynamic activation copy for tap-toggle, push-to-talk, and dual mode.
+- No resolved entry contains the unused Dictation key or “depending on Settings.”
 - Query matching for common natural-language questions and key names.
 - Markdown/reference generation has no unresolved tokens.
 
@@ -228,9 +230,9 @@ The guide remains usable if the notch is unavailable. The notch remains usable i
 ## Scope boundaries
 
 - No new onboarding step or forced tour.
+- No Instruct explanation or shortcut; that feature is being removed.
 - No keyboard behavior changes unless separately approved.
 - No analytics or remote documentation service.
 - No web-hosted help center.
 - No duplication of the entire existing detailed Help library in the notch.
 - No autonomous Agent action from a help question; Help is read-only.
-

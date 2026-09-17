@@ -132,10 +132,9 @@
       <p class="intro">A new user should understand the shape of Unmute in about twenty seconds. The first screen is short. Everything else is there when they come back looking for a particular key or action.</p>
       <div class="rule">A session does the work. The Unmute Agent helps you find and manage sessions.</div>
       <div class="grid">
-        <div class="card"><h3>Dictation</h3><p>Puts the words you say into the app under your cursor.</p><p class="small">Uses <span class="key">Fn</span> or <span class="key">Right Option</span>, depending on Settings.</p></div>
-        <div class="card"><h3>Instruct</h3><p>Changes selected text, or reshapes something you just said.</p><p class="small">Press <span class="key">Caps Lock</span>, say what to do, then press it again.</p></div>
+        <div class="card"><h3>Dictation</h3><p>Puts the words you say into the app under your cursor.</p><p class="small">The product reads Settings and shows only the key and activation the person actually uses.</p></div>
         <div class="card"><h3>A session</h3><p>One ongoing piece of work with its own conversation and context.</p><p class="small">Speak directly to it with the session key.</p></div>
-        <div class="card"><h3>The Unmute Agent</h3><p>Finds and manages sessions, meetings, and things you asked Unmute to remember.</p><p class="small">It is not the coding session doing the work.</p></div>
+        <div class="card"><h3>The Unmute Agent</h3><p>Your session manager. It finds, compares, resumes, creates, and routes between sessions.</p><p class="small">It knows about sessions, Notetaker meetings, and things you asked Unmute to remember.</p></div>
         <div class="card"><h3>Notetaker</h3><p>Records a meeting and prepares its transcript and notes.</p><p class="small">Double-tap <span class="key">Left Control</span> to start or stop.</p></div>
         <div class="card"><h3>The pocket</h3><p>Keeps sessions within reach without stopping them.</p><p class="small">Hold <span class="key">Right Command</span> first, then tap <span class="key">Right Option</span>.</p></div>
       </div>
@@ -151,7 +150,7 @@
       </div>
       <div class="steps">
         <div class="step"><b>Open the guide</b><span>It is always in the sidebar.</span></div>
-        <div class="step"><b>Get the quick version</b><span>Five plain explanations first.</span></div>
+        <div class="step"><b>Start with Dictation</b><span>Your real key and activation, not every possibility.</span></div>
         <div class="step"><b>Look up a key</b><span>The full shortcut list is lower down.</span></div>
         <div class="step"><b>Or just ask</b><span>The Unmute Agent can answer it.</span></div>
       </div>
@@ -160,26 +159,23 @@
     <section id="sections">
       <h2>What the full guide covers</h2>
       <div class="grid">
-        <div class="card"><h3>1. The quick version</h3><p>Dictation, Instruct, sessions, the Unmute Agent, and Notetaker in short rows.</p></div>
-        <div class="card"><h3>2. Talking to a session</h3><p>Start work, send a follow-up, leave it working, and return later.</p></div>
-        <div class="card"><h3>3. The pocket</h3><p>Collapse without stopping, move between cards, expand one, and understand Escape.</p></div>
-        <div class="card"><h3>4. The Unmute Agent</h3><p>When to use it, what it can find, and why it is different from a work session.</p></div>
-        <div class="card"><h3>5. Meetings and captures</h3><p>Start Notetaker, take meeting screenshots, and attach copied things while speaking.</p></div>
-        <div class="card"><h3>6. Every shortcut</h3><p>The complete reference, grouped by where and when each key works.</p></div>
+        <div class="card"><h3>1. Dictation</h3><p>The person’s exact key and activation, plus Capture, screenshots, copied material, output, and Scratchpad.</p></div>
+        <div class="card"><h3>2. Sessions and the Unmute Agent</h3><p>Talk directly to a session, or ask the session manager to find, compare, resume, or create the right one.</p></div>
+        <div class="card"><h3>3. Notetaker</h3><p>Start and stop notes, save meeting screenshots, find the result, and ask the Agent about it later.</p></div>
+        <div class="card"><h3>4. Every shortcut</h3><p>The complete verified reference, grouped by where and when each key works.</p></div>
       </div>
     </section>
 
     <section id="shortcuts">
       <h2>Every product shortcut</h2>
-      <p class="intro">The guide shows the person’s configured Dictation and session keys. The defaults below are only examples.</p>
+      <p class="intro">The real guide reads Settings and shows only the person’s configured Dictation key, its activation, and the complementary session key. This design document names the gestures conceptually where the value is dynamic.</p>
 
       <span class="group-label">Voice</span>
       <table>
         <thead><tr><th>Shortcut</th><th>What it does</th></tr></thead>
         <tbody>
-          <tr><td>Fn or Right Option</td><td>Dictation. It can use tap-toggle, hold/release, or dual mode.</td></tr>
-          <tr><td>The other voice key</td><td>Talk to a session. The current behavior is tap once to start, tap again to send.</td></tr>
-          <tr><td>Caps Lock</td><td>Start or stop Instruct.</td></tr>
+          <tr><td>Your Dictation key</td><td>Dictate with the exact activation chosen in Settings. The guide shows only that key and that gesture.</td></tr>
+          <tr><td>Your session key</td><td>Create or talk directly to a session. Tap once to start, then tap again to send.</td></tr>
           <tr><td>Double-tap Right Command</td><td>Start talking to the Unmute Agent. A single tap sends once it is listening.</td></tr>
           <tr><td>Escape while speaking</td><td>Cancel this utterance. Held Scratchpad work stays safe.</td></tr>
         </tbody>
@@ -194,9 +190,16 @@
           <tr><td>Left / Right Arrow</td><td>Move between pocket cards or sessions when the notch owns the keyboard.</td></tr>
           <tr><td>Return or Enter</td><td>Expand the selected pocket card.</td></tr>
           <tr><td>Escape</td><td>Close the command menu first, then shrink or close the current notch surface.</td></tr>
-          <tr><td>Tab</td><td>Advance through the expanded session crank.</td></tr>
-          <tr><td>F</td><td>Toggle the fuller view for a focused task.</td></tr>
-          <tr><td>1–9</td><td>Answer the matching visible multiple-choice option.</td></tr>
+        </tbody>
+      </table>
+
+      <span class="group-label">Dictation extras</span>
+      <table>
+        <thead><tr><th>Action</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td>Copy text, a link, path, or image</td><td>When Capture is on, add it at that point in the spoken request.</td></tr>
+          <tr><td>Command-Shift-3 / 4</td><td>While dictating, add the screenshot at that point in the request.</td></tr>
+          <tr><td>Scratchpad</td><td>Hold dictation and captured material instead of delivering it when the mic stops. Add more, then send when ready.</td></tr>
         </tbody>
       </table>
 
@@ -207,8 +210,6 @@
           <tr><td>Double-tap Left Control</td><td>Start Notetaker. Double-tap it again to stop.</td></tr>
           <tr><td>Double-tap Left Command</td><td>During a meeting, save a full-screen reference with the notes.</td></tr>
           <tr><td>Hold Left Command</td><td>During a meeting, choose a region to save with the notes.</td></tr>
-          <tr><td>Command-Shift-3 / 4</td><td>While an ordinary voice capture is live, add the screenshot at that point in the request.</td></tr>
-          <tr><td>Copy text, a link, path, or image</td><td>When Capture is on, add it at that point in the spoken request.</td></tr>
         </tbody>
       </table>
 
@@ -234,7 +235,7 @@
         <div class="card"><h3>Why not one Markdown file?</h3><p>Markdown is useful for review, but it cannot safely keep dynamic key settings, native notch rendering, and Agent search in sync by itself.</p></div>
         <div class="card"><h3>Where Markdown still helps</h3><p>A readable Markdown reference is generated from the catalog. Humans can review it without creating another copy to maintain.</p></div>
         <div class="card"><h3>How the Agent uses it</h3><p>A read-only Help tool searches the catalog. The core prompt carries only one short instruction to use Help for product questions.</p></div>
-        <div class="card"><h3>What happens when Settings change</h3><p>Fn and Right Option are resolved again, so every surface shows the keys the person actually uses.</p></div>
+        <div class="card"><h3>What happens when Settings change</h3><p>The exact Dictation key, activation, and session key are resolved again. The unused alternatives are never shown.</p></div>
       </div>
       <div class="warning">
         <h3>Copy drift already exists</h3>
@@ -246,7 +247,7 @@
       <h2>How it should sound</h2>
       <p class="intro">Short, warm, and specific. No “routing,” “lanes,” “principals,” or implementation language. One useful example beats another paragraph.</p>
       <div class="quote-grid">
-        <blockquote><strong>Talk to this session</strong><p>Tap Right Option, say what you want, then tap it again.</p><p><em>“Now add keyboard navigation.”</em></p></blockquote>
+        <blockquote><strong>Talk to this session</strong><p>Tap your session key, say what you want, then tap it again. In the product, “your session key” is replaced with the exact key.</p><p><em>“Now add keyboard navigation.”</em></p></blockquote>
         <blockquote><strong>Can’t remember which session?</strong><p>Ask the Unmute Agent. It can find the work and bring it back.</p><p><em>“Find the session where we changed Google login.”</em></p></blockquote>
       </div>
     </section>
