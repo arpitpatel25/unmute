@@ -1218,10 +1218,11 @@ export class NotchController {
         && now - this.engagedAt(t) < POCKET_IDLE_MS)
       .sort(this.byAddressed)
 
-    return [...demanding, ...rest].sort((a, b) => {
-      const urgent = (t: TaskLite) => this.demanding(t) && ['needs-user', 'stuck', 'failed'].includes(t.state) ? 1 : 0
-      return urgent(b) - urgent(a) || this.byAddressed(a, b)
-    })
+    // RECENCY IS ABSOLUTE. Demand changes how loudly a card is drawn and
+    // whether it contributes to the badge; it must not put an older failure or
+    // question ahead of the task the person just spoke to. The user-message
+    // clock is the one answer to "what should be first?".
+    return [...demanding, ...rest].sort(this.byAddressed)
   }
 
   /**

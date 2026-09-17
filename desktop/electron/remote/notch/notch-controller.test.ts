@@ -2756,14 +2756,11 @@ test('persisted last user input controls recency after restart', () => {
   assert.deepEqual(taskSlots(h).map(s => s.id), ['old', 'new'])
 })
 
-test('unseen error leads temporarily, then returns to user-message order when opened', () => {
+test('the most recently addressed task leads even when an older task has an unseen error', () => {
  const h = setup(); const now = Date.now()
  put(h, makeTask({ id: 'old-error', kind: 'session', state: 'failed', createdAt: now - 50000, lastUserInputAt: now - 50000 }))
  put(h, makeTask({ id: 'recent', kind: 'session', state: 'done', createdAt: now - 1000, lastUserInputAt: now - 1000 }))
  h.client.fire({ type: 'pocketOpen' })
- assert.deepEqual(taskSlots(h).map(s => s.id), ['old-error', 'recent'])
- h.client.fire({ type: 'pocketExpand' }); h.flush()
- h.client.fire({ type: 'closeStage' }); h.flush()
  assert.deepEqual(taskSlots(h).map(s => s.id), ['recent', 'old-error'])
 })
 
