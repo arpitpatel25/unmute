@@ -187,6 +187,9 @@ struct TaskSurfaceView: View {
             // Spacers with the counter to its right, which floated it into the
             // middle of the header — nowhere near where a close control belongs.
             if model.canGoBack { BackButton { model.onBack() } }
+            if model.helpGuide != nil {
+                HelpButton { model.helpGuidePresented = true }
+            }
             // THE CARD'S OWN ACTIONS, on the card.
             //
             // This header had none: closing it collapsed the surface and left

@@ -445,6 +445,27 @@ struct ProposalDetail: Codable {
 
 // MARK: - Commands (main → helper)
 
+struct HelpGuideEntryP: Codable, Identifiable {
+    let id: String
+    let title: String
+    let summary: String
+    let shortcut: String?
+    let steps: [String]?
+    let example: String?
+}
+
+struct HelpGuideSectionP: Codable, Identifiable {
+    let id: String
+    let title: String
+    let intro: String
+    let entries: [HelpGuideEntryP]
+}
+
+struct HelpGuideP: Codable {
+    let title: String
+    let sections: [HelpGuideSectionP]
+}
+
 enum Command {
     /// Complete preferences applied atomically before the helper presents any
     /// window. Also replayed after a supervised restart.
@@ -504,6 +525,7 @@ enum Command {
     /// so a partial or older push still draws instead of being dropped.
     case scratchpad(ScratchpadPayload)
     case agentActivity(AgentActivityP)
+    case helpGuide(HelpGuideP)
     case collapse
     case quit
     case unknown
@@ -567,6 +589,9 @@ enum Command {
         case "agentActivity":
             guard let activity = sub("activity", AgentActivityP.self) else { return .unknown }
             return .agentActivity(activity)
+        case "helpGuide":
+            guard let guide = sub("guide", HelpGuideP.self) else { return .unknown }
+            return .helpGuide(guide)
         case "appearance":
             // An unknown value falls back to `.system` rather than being
             // dropped: a malformed preference must never leave the surface

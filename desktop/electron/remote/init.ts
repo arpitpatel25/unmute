@@ -79,7 +79,7 @@ import { provisionalName } from './provisional-name'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput, type McpServer } from './mcp-server'
 import { CapabilityRegistry } from './agent/capabilities/registry'
-import { resolveHelpGuide, type ActivationMode, type DictationKey } from './help-guide'
+import { compactHelpGuide, resolveHelpGuide, type ActivationMode, type DictationKey } from './help-guide'
 import { MemoryCapability } from './agent/capabilities/memory'
 import {
   DeliveryCapability,
@@ -5570,6 +5570,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           autoPresent: settings.get('overlayAutoPresent') !== false,
         }),
       })
+      notchClient.send({ type: 'helpGuide', guide: compactHelpGuide(resolveHelpGuide({
+        dictationKey: deps.keyboardManager.getDictationKey?.() ?? settings.get('dictationKey'),
+        activationMode: deps.keyboardManager.getActivationMode?.() ?? 'tap-toggle',
+      })) })
       // Auto-expand is controller state, not a helper command — the decision to
       // open the task surface is made here, before anything is sent.
       const applyAutoExpand = () => notchController?.setAutoExpand(settings.get('notchAutoExpand') !== false)
@@ -6604,7 +6608,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const activationMode: ActivationMode = input?.activationMode === 'push-to-talk' || input?.activationMode === 'double-tap-push'
       ? input.activationMode
       : 'tap-toggle'
-    return resolveHelpGuide({ dictationKey, activationMode })
+    const guide = resolveHelpGuide({ dictationKey, activationMode })
+    notchClient?.send({ type: 'helpGuide', guide: compactHelpGuide(guide) })
+    return guide
   })
   ipcMain.handle('remote:dispatch', async (_e, intent: string) => dispatchFromCapture(intent))
   // The wall reports its focused session here; null clears it. Focus = the voice

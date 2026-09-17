@@ -389,6 +389,25 @@ export interface UnmuteAgentActivityP {
   provider?: 'claude' | 'codex'
 }
 
+export interface HelpGuideEntryP {
+  id: string
+  title: string
+  summary: string
+  shortcut?: string
+  steps?: string[]
+  example?: string
+}
+
+export interface HelpGuideP {
+  title: string
+  sections: Array<{
+    id: 'dictation' | 'sessions' | 'notetaker' | 'notch'
+    title: string
+    intro: string
+    entries: HelpGuideEntryP[]
+  }>
+}
+
 // ── Commands (main → helper) ────────────────────────────────────────────────
 
 export type NotchCommand =
@@ -407,6 +426,7 @@ export type NotchCommand =
   | { type: 'pill'; state: PillStateP }
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
   | { type: 'agentActivity'; activity: UnmuteAgentActivityP }
+  | { type: 'helpGuide'; guide: HelpGuideP }
   /**
    * The Agent's conclusion. Empty text takes it down.
    *
@@ -555,7 +575,7 @@ export class NotchClient extends EventEmitter {
   private generation = 0
   private replay = new Map<NotchCommand['type'], NotchCommand>()
   private static readonly replayOrder: NotchCommand['type'][] = [
-    'showTask', 'setCockpit', 'stageDetail', 'pocket', 'scratchpad', 'pill', 'capturePhase', 'setState',
+    'helpGuide', 'showTask', 'setCockpit', 'stageDetail', 'pocket', 'scratchpad', 'pill', 'capturePhase', 'setState',
   ]
 
   constructor(private opts: NotchClientOpts) {
@@ -649,7 +669,7 @@ export class NotchClient extends EventEmitter {
     return cmd.type === 'setState' || cmd.type === 'showTask' || cmd.type === 'setCockpit'
       || cmd.type === 'stageDetail'
       || cmd.type === 'pocket' || cmd.type === 'pill' || cmd.type === 'scratchpad'
-      || cmd.type === 'capturePhase'
+      || cmd.type === 'capturePhase' || cmd.type === 'helpGuide'
   }
 
   /** Ask the helper to quit, then hard-kill after a grace period. */

@@ -32,6 +32,15 @@ export interface HelpGuide {
 }
 
 export type HelpGuideSearchResult = HelpGuideEntry & { section: HelpSectionId }
+export interface CompactHelpGuide {
+  title: string
+  sections: Array<{
+    id: HelpSectionId
+    title: string
+    intro: string
+    entries: Array<Pick<HelpGuideEntry, 'id' | 'title' | 'summary' | 'shortcut' | 'steps' | 'example'>>
+  }>
+}
 
 function keyLabel(key: DictationKey): string {
   return key === 'fn' ? 'Fn' : 'Right Option'
@@ -189,4 +198,16 @@ export function searchHelpGuide(guide: HelpGuide, query: string): HelpGuideSearc
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score)
     .map(({ score: _score, ...entry }) => entry)
+}
+
+export function compactHelpGuide(guide: HelpGuide): CompactHelpGuide {
+  return {
+    title: guide.title,
+    sections: guide.sections.map((section) => ({
+      id: section.id,
+      title: section.title,
+      intro: section.intro,
+      entries: section.entries.map(({ keywords: _keywords, source: _source, ...entry }) => entry),
+    })),
+  }
 }

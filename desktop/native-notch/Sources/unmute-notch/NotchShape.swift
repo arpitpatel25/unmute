@@ -307,6 +307,25 @@ struct CloseButton: View {
     }
 }
 
+struct HelpButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "questionmark")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(hovering ? Theme.text : Theme.textFaint)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(hovering ? 0.10 : 0.05)))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("How to use Unmute")
+        .animation(Theme.hover, value: hovering)
+    }
+}
+
 // MARK: - Scroll edge effect
 //
 // The macOS-leaning HARD style: a stronger, more opaque boundary that keeps

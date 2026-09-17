@@ -72,6 +72,24 @@ test('commands sent before ready are restored only after helper bootstrap', asyn
   client.dispose()
 })
 
+test('the compact help guide is replayed before visual state', async () => {
+  const client = makeSupervisedClient()
+  const guide = {
+    title: 'How to use Unmute',
+    sections: [{ id: 'dictation' as const, title: 'Dictation', intro: 'Talk instead of type.', entries: [{ id: 'dictation-talk', title: 'Talk', summary: 'Voice into text.', shortcut: 'Hold Right Option while you talk. Let go to finish.' }] }],
+  }
+  client.send({ type: 'helpGuide', guide })
+  client.send({ type: 'setState', state: 'active', attention: 0, working: 1 })
+  await waitFor(client, 'ready')
+  const dump = waitFor(client, '__calls' as NotchEvent['type'])
+  client.send({ type: '__dump' } as unknown as NotchCommand)
+  const commands = ((await dump) as unknown as { commands: NotchCommand[] }).commands
+  assert.equal(commands[0]?.type, 'bootstrap')
+  assert.deepEqual(commands[1], { type: 'helpGuide', guide })
+  assert.equal(commands[2]?.type, 'setState')
+  client.dispose()
+})
+
 test('surfaces helper→main events (tap, next, chooseOption)', async () => {
   const client = makeClient()
   await waitFor(client, 'ready')

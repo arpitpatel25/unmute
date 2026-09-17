@@ -669,6 +669,9 @@ final class AppController: NSObject, NotchResizing {
             scratchModel.state = payload
             reconcileSurfaces()
 
+        case let .helpGuide(guide):
+            model.helpGuide = guide
+
         case .collapse:
             model.focusedId = nil
             model.stageTask = nil
@@ -1775,6 +1778,10 @@ final class AppController: NSObject, NotchResizing {
     }
 
     private func stepDown() {
+        if model.helpGuidePresented {
+            model.helpGuidePresented = false
+            return
+        }
         // Only a VISIBLE popup gets to swallow the Escape. It is drawn on the
         // expanded surface only, so a stale one at bar level must not consume a
         // keystroke the user aimed at the surface itself. (Belt and braces: it

@@ -110,6 +110,9 @@ struct WallView: View {
                 }
             }
             if model.canGoBack { BackButton { model.onBack() } }
+            if model.helpGuide != nil {
+                HelpButton { model.helpGuidePresented = true }
+            }
             CloseButton { model.emit(.collapsed) }
         }
         .padding(.horizontal, Theme.gutter)

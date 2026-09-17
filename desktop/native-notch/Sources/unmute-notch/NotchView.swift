@@ -44,6 +44,12 @@ struct NotchView: View {
             // arrive with nowhere to go (see showToast) rather than leaving a
             // message that simply never appeared.
             if expanded {
+                if model.helpGuidePresented, let guide = model.helpGuide {
+                    HelpGuideView(guide: guide, close: { model.helpGuidePresented = false })
+                        .padding(.top, topInset)
+                        .transition(.opacity)
+                        .zIndex(20)
+                }
                 if model.proposal != nil || model.proposalLoadingId != nil {
                     // CLEARS THE CUTOUT LIKE EVERY OTHER LARGE SURFACE. This is
                     // drawn OUTSIDE `plane`, so it never received the inset the
