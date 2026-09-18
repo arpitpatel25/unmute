@@ -789,6 +789,45 @@ test('a managed machine that forbids full access gets the highest allowed postur
     const p = calls.find(c => c.method === method)!.params as any
     assert.deepEqual([p.approvalPolicy, p.sandbox], ['on-request', 'workspace-write'], method)
   }
-  assert.equal(calls.filter(c => c.method === 'configRequirements/read').length, 1, 'read once per server')
+  // Once at server start, then again for each new session (start, fork,
+  // resume) so a policy change reaches the next session. Never per turn.
+  assert.equal(calls.filter(c => c.method === 'configRequirements/read').length, 4)
+  hub.stop()
+})
+
+test('a policy the query missed is learned from the turn refusal and the turn retried at the highest allowed level', async () => {
+  const { hub, srv, calls, patches } = makeHub()
+  const base = srv.request.bind(srv)
+  const refusals = {
+    'danger-full-access': 'invalid thread settings override: invalid value for `sandbox_mode`: `DangerFullAccess` is not in the allowed set [ReadOnly, WorkspaceWrite] (set by cloud requirements)',
+    never: 'invalid thread settings override: invalid value for `approval_policy`: `Never` is not in the allowed set [UnlessTrusted, OnRequest] (set by cloud requirements)',
+  }
+  srv.request = async (method: string, params: any) => {
+    if (method === 'configRequirements/read') { calls.push({ method, params }); return { requirements: null } as any }
+    if (method === 'thread/start') { calls.push({ method, params }); return { thread: { id: 'th_1' }, approvalPolicy: 'untrusted', sandbox: { type: 'readOnly' } } as any }
+    if (method === 'turn/start') {
+      calls.push({ method, params })
+      if (params.sandboxPolicy?.type === 'dangerFullAccess') throw new Error(`-32600: ${refusals['danger-full-access']}`)
+      if (params.approvalPolicy === 'never') throw new Error(`-32600: ${refusals.never}`)
+      return { turn: { id: 'turn-1' } } as any
+    }
+    return base(method, params)
+  }
+  await hub.startThread('task', { cwd: '/project', approvalPolicy: 'never', sandbox: 'danger-full-access' })
+  assert.equal(await hub.send('task', 'hi'), true)
+
+  const turns = calls.filter(c => c.method === 'turn/start').map(c => c.params as any)
+  assert.equal(turns.length, 3, 'one retry per dial')
+  assert.deepEqual([turns[2].approvalPolicy, turns[2].sandboxPolicy.type], ['on-request', 'workspaceWrite'])
+  const limit = patches.filter(p => 'permissionLimit' in p).at(-1)?.permissionLimit
+  assert.equal(limit?.effective, 'Workspace access, asks for approval')
+  assert.ok(!patches.some(p => p.state === 'failed'), 'the task never failed')
+  hub.stop()
+})
+
+test('an unmanaged machine reports no limit', async () => {
+  const { hub, patches } = makeHub()
+  await hub.startThread('task', { cwd: '/project', approvalPolicy: 'never', sandbox: 'danger-full-access' })
+  assert.equal(patches.find(p => 'permissionLimit' in p)?.permissionLimit, null)
   hub.stop()
 })

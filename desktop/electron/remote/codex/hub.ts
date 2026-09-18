@@ -35,7 +35,8 @@ import type { TaskInput } from '../task-input'
 import type { FollowupGate, FollowupTurnEnded, NewTurnOutcome } from '../task-followup'
 import { randomUUID } from 'node:crypto'
 import { codexExtraRoots } from '../skill-catalog'
-import { clampPosture, requirementsFrom, type CodexRequirements } from './requirements'
+import { appliedPosture, clampPosture, learnFromRejection, mergeRequirements, requirementsFrom, type CodexRequirements } from './requirements'
+import { codexLimit } from '../permission-ceiling'
 
 const log = createLogger('codex-hub')
 
@@ -162,6 +163,8 @@ interface ThreadState {
   stopping?: boolean
   completedTurns?: Set<string>
   options?: StartThreadOpts
+  /** What Unmute asked for before this machine's policy lowered it. */
+  asked?: { approvalPolicy: string; sandbox: string }
   /** The chat view for this thread, built as the notifications arrive. This is
    *  the RICHEST source any lane has — reasoning, commands with exit codes,
    *  diffs and a live plan, streamed rather than read back off disk. */
@@ -224,9 +227,12 @@ export class CodexHub {
   private mcpStatuses = new Map<string, import('./app-server-events').McpStatus>()
   private planWrites = new Map<string, Promise<void>>()
   private starting: Promise<CodexAppServer> | null = null
-  /** What this machine's administrator allows (codex/requirements.ts). Read
-   *  once per server; null when unmanaged or unknown. */
-  private requirements: CodexRequirements | null = null
+  /** What this machine's administrator allows (codex/requirements.ts): the
+   *  last `configRequirements/read` answer, narrowed by anything Codex has
+   *  refused on this server. Both null when unmanaged. */
+  private readRequirements: CodexRequirements | null = null
+  private learnedRequirements: CodexRequirements | null = null
+  private get requirements(): CodexRequirements | null { return mergeRequirements(this.readRequirements, this.learnedRequirements) }
   private registrations = 0
   private earlyNotifications: Array<{ method: string; params?: Record<string, unknown> }> = []
   private earlyRequests: Array<{ req: ServerRequest; source: CodexAppServer | null; resolve: (value: unknown) => void; reject: (reason: unknown) => void }> = []
@@ -271,11 +277,18 @@ export class CodexHub {
       // A MANAGED MACHINE REFUSES, IT DOES NOT DOWNGRADE. Every request below
       // is clamped to these, so full access on a company laptop becomes the
       // most that laptop allows instead of a session that never starts.
-      try { this.requirements = requirementsFrom(await srv.request('configRequirements/read', {})) }
-      catch (error) { this.requirements = null; log.warn('codex requirements not read', { error: (error as Error).message }) }
+      this.learnedRequirements = null
+      await this.refreshRequirements(srv)
       return srv
     })().finally(() => { this.starting = null })
     return this.starting
+  }
+
+  /** Re-read on every new session, not once per server: an administrator can
+   *  change the policy while Unmute runs, and the query is cheap. */
+  private async refreshRequirements(srv: CodexAppServer): Promise<void> {
+    try { this.readRequirements = requirementsFrom(await srv.request('configRequirements/read', {})) }
+    catch (error) { log.warn('codex requirements not read', { error: (error as Error).message }) }
   }
 
   /** Lower a requested posture to what this machine allows. */
@@ -286,6 +299,37 @@ export class CodexHub {
   }
 
   /**
+   * Send a thread request at the most this machine allows. If Codex refuses it
+   * anyway — a policy the up-front query did not show — learn the allowed set
+   * from the refusal and retry. At most one retry per dial, and only for a
+   * refusal, which Codex returns before creating anything.
+   */
+  private async withPolicy<T>(taskId: string, asked: StartThreadOpts, send: (o: StartThreadOpts) => Promise<T>): Promise<{ res: T; o: StartThreadOpts }> {
+    for (let attempt = 0; ; attempt++) {
+      const o = this.allowed(taskId, asked)
+      try { return { res: await send(o), o } }
+      catch (error) {
+        if (!this.learn(taskId, error, attempt) || this.allowed(taskId, asked).sandbox === o.sandbox && this.allowed(taskId, asked).approvalPolicy === o.approvalPolicy) throw error
+      }
+    }
+  }
+
+  private learn(taskId: string, error: unknown, attempt: number): boolean {
+    const learned = attempt < 2 ? learnFromRejection((error as Error)?.message ?? '', this.learnedRequirements) : null
+    if (!learned) return false
+    this.learnedRequirements = learned
+    log.event('codex-policy-learned', { taskId, allowedSandboxModes: learned.allowedSandboxModes ?? null, allowedApprovalPolicies: learned.allowedApprovalPolicies ?? null })
+    return true
+  }
+
+  /** Tell the task what Codex actually applied when it is less than asked, so
+   *  no surface claims a level this machine does not allow. */
+  private reportPosture(taskId: string, asked: { approvalPolicy: string; sandbox: string }, applied: { approvalPolicy: string; sandbox: string }): void {
+    const lower = applied.sandbox !== asked.sandbox || applied.approvalPolicy !== asked.approvalPolicy
+    this.deps.onPatch({ taskId, permissionLimit: lower ? codexLimit(asked, applied) : null })
+  }
+
+  /**
    * Create a thread for a task and return its id plus the URL a terminal can
    * attach to.
    *
@@ -293,9 +337,10 @@ export class CodexHub {
    * full-access errand and a fenced session at the same time, and it is why
    * unmute never has to write a profile into the user's ~/.codex.
    */
-  async startThread(taskId: string, o: StartThreadOpts): Promise<{ threadId: string; url: string }> {
+  async startThread(taskId: string, asked: StartThreadOpts): Promise<{ threadId: string; url: string }> {
     const srv = await this.ensure()
-    o = this.allowed(taskId, o)
+    await this.refreshRequirements(srv)
+    let o = asked
     const config = { ...o.config, ...await this.deps.threadConfig?.(taskId) }
     // A MODEL ID IS NEVER A SENTENCE.
     //
@@ -314,20 +359,27 @@ export class CodexHub {
     }
     this.registrations++
     try {
-    const res = await srv.request<Record<string, unknown>>('thread/start', {
-      cwd: o.cwd,
-      approvalPolicy: o.approvalPolicy,
-      sandbox: o.sandbox,
+    const sent = await this.withPolicy(taskId, asked, next => srv.request<Record<string, unknown>>('thread/start', {
+      cwd: next.cwd,
+      approvalPolicy: next.approvalPolicy,
+      sandbox: next.sandbox,
       config,
       ...(model ? { model } : {}),
-    })
+    }))
+    const res = sent.res
+    // Keep what we ASKED (already clamped): if Codex quietly applied less at
+    // thread start, the next turn's refusal teaches the real allowed set
+    // instead of this thread settling below it. Show what was applied.
+    o = sent.o
+    const applied = appliedPosture(res, sent.o)
     const threadId = String(res?.threadId ?? (res?.thread as { id?: string } | undefined)?.id ?? res?.id ?? '')
     if (!threadId) throw new Error('thread/start returned no thread id')
     await this.deps.onThreadConfirmed?.(taskId, threadId)
     const { config: _config, ...options } = o
-    const st: ThreadState = { taskId, threadId, pending: null, blocks: new CodexBlockStream(), options: { ...options, model } }
+    const st: ThreadState = { taskId, threadId, pending: null, blocks: new CodexBlockStream(), options: { ...options, model }, asked }
     this.byThread.set(threadId, st)
     this.byTask.set(taskId, st)
+    this.reportPosture(taskId, asked, applied)
     log.event('codex-thread-started', { taskId, threadId, cwd: o.cwd, model: o.model ?? null, effort: o.effort ?? null, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox })
     return { threadId, url: srv.url }
     } finally { this.finishRegistration() }
@@ -340,19 +392,23 @@ export class CodexHub {
     forkedFromId: string
   }> {
     const srv = await this.ensure()
-    o = this.allowed(taskId, o)
+    await this.refreshRequirements(srv)
+    const asked = o
     const config = { ...o.config, ...await this.deps.threadConfig?.(taskId) }
     const model = o.model && /\s/.test(o.model) ? undefined : o.model
     this.registrations++
     try {
-      const result = await srv.request<ResumeHistory>('thread/fork', {
+      const sent = await this.withPolicy(taskId, asked, next => srv.request<ResumeHistory>('thread/fork', {
         threadId: sourceThreadId,
-        cwd: o.cwd,
-        approvalPolicy: o.approvalPolicy,
-        sandbox: o.sandbox,
+        cwd: next.cwd,
+        approvalPolicy: next.approvalPolicy,
+        sandbox: next.sandbox,
         config,
         ...(model ? { model } : {}),
-      })
+      }))
+      const result = sent.res
+      o = sent.o
+      const applied = appliedPosture(result, sent.o)
       const threadId = String(result.thread?.id ?? '')
       if (!threadId) throw new Error('thread/fork returned no child thread id')
       if (threadId === sourceThreadId) throw new Error('Codex fork returned the same thread as its source')
@@ -379,7 +435,7 @@ export class CodexHub {
       const { config: _config, ...options } = o
       const st: ThreadState = {
         taskId, threadId, pending: null, pendingQueue: [], blocks,
-        options: { ...options, model },
+        options: { ...options, model }, asked,
         completedTurns: new Set(turns
           .filter(turn => ['completed', 'interrupted', 'failed'].includes(turn.status ?? ''))
           .map(turn => turn.id)),
@@ -394,6 +450,7 @@ export class CodexHub {
       if (snapshot.blocks.length) this.deps.onPatch({ taskId, blocks: snapshot.blocks })
       this.deps.onPatch({ taskId, history: historyError
         ? { phase: 'partial', reason: historyError, canRetry: true } : { phase: 'ready' } })
+      this.reportPosture(taskId, asked, applied)
       log.event('codex-thread-forked', { taskId, threadId, forkedFromId: sourceThreadId })
       return { threadId, forkedFromId: sourceThreadId }
     } finally {
@@ -438,20 +495,20 @@ export class CodexHub {
       }
       if (st.pending || st.pendingQueue?.length || st.disconnected || st.stopping || this.byTask.get(taskId) !== st) return { kind: 'not-sent', reason: 'Codex changed before submission.' }
       submissionAttempted = true
-      const result = await this.server!.request<{ turn?: { id?: string } }>('turn/start', {
-        threadId: st.threadId,
-        input: opts.ordered?.map(p => p.type === 'image' ? { type: 'localImage', path: p.path } : { type: 'text', text: p.text }) ?? [
-          ...(text ? [{ type: 'text', text }] : []),
-          ...(opts.attachments ?? []).map((path) => ({ type: 'localImage', path })),
-        ],
-        ...(opts.effort ? { effort: opts.effort } : {}),
-        ...(st.options?.model ? { model: st.options.model } : {}),
-        ...(st.options ? { approvalPolicy: st.options.approvalPolicy,
-          sandboxPolicy: st.options.sandbox === 'danger-full-access' ? { type: 'dangerFullAccess' }
-            : st.options.sandbox === 'read-only' ? { type: 'readOnly' }
-            : { type: 'workspaceWrite', writableRoots: [st.options.cwd, ...(st.options.writableRoots ?? [])], networkAccess: true },
-        } : {}),
-      })
+      // A TURN CARRIES THE POSTURE TOO, and a managed Codex refuses a
+      // disallowed one here even after quietly lowering it at thread start —
+      // the exact failure on a company laptop. A refusal is returned before a
+      // turn exists, so learning from it and retrying cannot send twice.
+      let result!: { turn?: { id?: string } }
+      for (let attempt = 0; ; attempt++) {
+        try { result = await this.turnStart(st, text, opts); break }
+        catch (error) {
+          const next = st.options && this.learn(taskId, error, attempt) ? clampPosture(st.options, this.requirements) : undefined
+          if (!next || next === st.options) throw error
+          st.options = next
+          this.reportPosture(taskId, st.asked ?? next, next)
+        }
+      }
       if (typeof result.turn?.id !== 'string' || !result.turn.id) {
         st.disconnected = true
         throw new Error('turn/start returned no turn id; acceptance is uncertain. Reconnect before sending again')
@@ -470,6 +527,24 @@ export class CodexHub {
       this.deps.onPatch({ taskId, state: 'failed', errorReason: `Could not confirm Codex submission: ${(e as Error).message}. Check the conversation before retrying.` })
       return { kind: submissionAttempted ? 'uncertain' : 'not-sent', reason: submissionAttempted ? 'Codex acceptance is uncertain. Check the conversation before sending again.' : 'Codex did not start this turn.' }
     } finally { st.submitting = false; finishSubmission(); this.followupChanged(taskId, !!st.disconnected) }
+  }
+
+  /** One `turn/start`, carrying the thread's CURRENT posture. */
+  private turnStart(st: ThreadState, text: string, opts: { effort?: string; attachments?: readonly string[]; ordered?: TaskInput[] }): Promise<{ turn?: { id?: string } }> {
+    return this.server!.request<{ turn?: { id?: string } }>('turn/start', {
+      threadId: st.threadId,
+      input: opts.ordered?.map(p => p.type === 'image' ? { type: 'localImage', path: p.path } : { type: 'text', text: p.text }) ?? [
+        ...(text ? [{ type: 'text', text }] : []),
+        ...(opts.attachments ?? []).map((path) => ({ type: 'localImage', path })),
+      ],
+      ...(opts.effort ? { effort: opts.effort } : {}),
+      ...(st.options?.model ? { model: st.options.model } : {}),
+      ...(st.options ? { approvalPolicy: st.options.approvalPolicy,
+        sandboxPolicy: st.options.sandbox === 'danger-full-access' ? { type: 'dangerFullAccess' }
+          : st.options.sandbox === 'read-only' ? { type: 'readOnly' }
+          : { type: 'workspaceWrite', writableRoots: [st.options.cwd, ...(st.options.writableRoots ?? [])], networkAccess: true },
+      } : {}),
+    })
   }
 
   /** Answer a blocking approval. Returns false if nothing was waiting. */
@@ -668,13 +743,17 @@ export class CodexHub {
     this.registrations++
     try {
     const srv = await this.ensure()
-    o = this.allowed(taskId, o)
+    await this.refreshRequirements(srv)
+    const asked = o
     const config = { ...o.config, ...await this.deps.threadConfig?.(taskId) }
-    const result = await srv.request<ResumeHistory>('thread/resume', {
-      threadId, cwd: o.cwd, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox,
-      ...(o.model ? { model: o.model } : {}),
+    const sent = await this.withPolicy(taskId, asked, next => srv.request<ResumeHistory>('thread/resume', {
+      threadId, cwd: next.cwd, approvalPolicy: next.approvalPolicy, sandbox: next.sandbox,
+      ...(next.model ? { model: next.model } : {}),
       config,
-    })
+    }))
+    const result = sent.res
+    o = sent.o
+    const applied = appliedPosture(result, sent.o)
     if (result.thread?.id && result.thread.id !== threadId) throw new Error('Codex resumed a different thread')
     await this.deps.onThreadConfirmed?.(taskId, threadId)
     const blocks = new CodexBlockStream()
@@ -696,12 +775,13 @@ export class CodexHub {
     const { config: _config, ...options } = o
     const preservePending = previous?.threadId === threadId
     const st: ThreadState = { taskId, threadId, pending: preservePending ? previous.pending : null,
-      pendingQueue: preservePending ? previous.pendingQueue : [], blocks, options,
+      pendingQueue: preservePending ? previous.pendingQueue : [], blocks, options, asked,
       completedTurns: new Set([...(preservePending ? previous.completedTurns ?? [] : []), ...turns.filter(t => ['completed', 'interrupted', 'failed'].includes(t.status ?? '')).map(t => t.id)]) }
     this.retireCompletedRequests(st)
     st.turnId = turns.find(turn => turn.status === 'inProgress')?.id
     this.byThread.set(threadId, st)
     this.byTask.set(taskId, st)
+    this.reportPosture(taskId, asked, applied)
     const snapshot = blocks.snapshot()
     blocks.takeBlockUpdates()
     if (snapshot.blocks.length) this.deps.onPatch({ taskId, blocks: snapshot.blocks })

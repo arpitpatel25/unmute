@@ -27,6 +27,7 @@ import { homedir, tmpdir } from 'node:os'
 import { existsSync, writeFileSync, mkdirSync, statSync, watch, constants as fsConstants, promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
+import { claudeUnattendedArgs, refreshManagedPolicy } from './permission-ceiling'
 import { draftInput } from './task-input'
 import { safeArtifactURL, artifactPathAction } from './artifact-url'
 import { ClaudeTaskSession, type ClaudeTaskModel } from './claude/task-session'
@@ -147,6 +148,8 @@ import { CompatibleCodexRuntime } from './runtime/codex-routing'
 import { fileOwnershipStore } from './runtime/codex-ownership'
 import { CompatibleAgentRuntime, recoverAgentRuntime } from './runtime/agent-routing'
 import { runtimeBuild } from './runtime/build'
+import { runtimeIdle, type RuntimeService } from './runtime/idle'
+import type { RuntimeRpcClient } from './runtime/rpc'
 import { agentRuntimeRoot } from './runtime/agent-schema'
 import { PersistentClaudeTaskSession } from './runtime/claude-client'
 import { AgentRuntimeClient } from './runtime/agent-client'
@@ -2205,13 +2208,24 @@ function pruneGroups(): void {
 }
 
 
+/** The "Full access" choice, honest about this machine. It still means "the
+ *  most allowed" — on a Mac whose organization forbids full access it names
+ *  what the provider actually runs with instead of claiming full access. */
+function fullAccessChoice(task: Task, provider: string): { id: string; label: string; description: string } {
+  const limit = task.permissionLimit
+  const forbidden = manager?.machineForbidsFullAccess(provider) === true
+  if (limit && limit.asked === 'Full access') return { id: 'full', label: `${limit.effective} (organization limit)`, description: limit.reason }
+  if (forbidden) return { id: 'full', label: 'Most this Mac allows', description: `Your organization does not allow full access for ${provider === 'codex' ? 'Codex' : 'Claude'} on this Mac. Unmute uses the highest level it allows.` }
+  return { id: 'full', label: 'Full access', description: 'This Unmute session: filesystem, commands and network without provider approval prompts. macOS consent still applies.' }
+}
+
 /** A minimal, tool-less classifier session for the router: no --chrome, no tmux;
  *  --dangerously-skip-permissions so it can write its decision file unprompted.
  *  Pinned to a light, fast model — classification is thin and must answer in
  *  ~1-2s, and we must NOT inherit the CLI default (the user can change it to
  *  Opus, which is heavy and slow for a one-line judgement). */
 function routerExecutorFactory() {
-  return new ClaudeCodeExecutor({ model: getModels().router, extraArgs: ['--dangerously-skip-permissions'], chrome: false })
+  return new ClaudeCodeExecutor({ model: getModels().router, extraArgs: claudeUnattendedArgs(), chrome: false })
 }
 
 /** Build the router's task snapshot from Unmute's live map (Unmute is the hub —
@@ -2843,11 +2857,11 @@ function chatConfig(id: string): ChatConfigP | undefined {
       : claudeModel ? claudeModel.efforts.map(id => ({ id, label: ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum' } as Record<string, string>)[id] ?? id })) : [],
     permission, permissions: owned ? [
       ...(provider === 'codex' ? [{ id: 'workspace', label: 'Workspace access', description: 'Work without approval prompts within the configured sandbox.' }] : []),
-      ...(manager?.chatFullAccessAllowed(id) ? [{ id: 'full', label: 'Full access', description: 'This Unmute session: filesystem, commands and network without provider approval prompts. macOS consent still applies.' }] : []),
+      ...(manager?.chatFullAccessAllowed(id) ? [fullAccessChoice(task, provider)] : []),
       { id: 'ask', label: 'Ask for approval', description: 'Keep provider approval requests actionable in chat.' },
       ...(provider === 'claude' ? [{ id: 'plan', label: 'Plan mode', description: 'Plan without executing changes.' }] : [{ id: 'read', label: 'Read only', description: 'No workspace writes without permission.' }]),
     ] : [],
-    permissionScope: owned ? `This conversation only · global defaults unchanged${task.permissionReason ? ` · ${task.permissionReason}` : ''}` : 'Managed by the original application',
+    permissionScope: owned ? `This conversation only · global defaults unchanged${task.permissionReason ? ` · ${task.permissionReason}` : ''}${task.permissionLimit ? ` · ${task.permissionLimit.reason}` : ''}` : 'Managed by the original application',
     mutable: !!owned, busy: task.state === 'processing' || task.state === 'needs-user',
     ...(provider === 'codex' && !chatCodexModels.length ? { error: chatCatalogLoading ? 'Loading model choices…' : 'Model choices unavailable. Check Codex installation and sign-in.' } : {}),
     ...(provider === 'claude' && !chatClaudeModels.length ? { error: chatClaudeCatalogLoading ? 'Loading model choices…' : 'Model choices unavailable. Check Claude installation and sign-in.' } : {}),
@@ -3048,7 +3062,9 @@ function executorFactory(resume = false, forTask?: AgentKind, factoryOpts?: Exec
   // full prior context (no session-id tracking needed). Claude's resume is
   // scoped to the working dir, which is exactly our per-task isolation.
   const resumeArgs = resume ? ['--continue'] : []
-  const extraArgs = [...resumeArgs, ...(!sandboxed && mode === 'auto-approve' ? ['--dangerously-skip-permissions'] : [])]
+  // The most this machine allows: bypass where permitted, else the highest
+  // mode its managed policy leaves (permission-ceiling.ts).
+  const extraArgs = [...resumeArgs, ...(!sandboxed && mode === 'auto-approve' ? claudeUnattendedArgs() : [])]
   // Run inside tmux when available so the live terminal can be popped out to a
   // real terminal app as the SAME session (private socket keeps env stripped).
   const tmux = tmuxBin ? { bin: tmuxBin, confPath: tmuxConfPath, cols: 120, rows: 40 } : undefined
@@ -5065,9 +5081,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.warn('legacy Codex writer cleanup failed; persistent runtime remains gated', { error: (error as Error).message })
     throw error
   })
-  persistentRuntime = new PersistentRuntimeClient(runtimeRoot, join(__dirname, 'unmute-runtime.js'))
+  // TASK DAEMONS OUTLIVE INSTALLS. Each replaces an older build of itself when
+  // idle, so fixes that live in the daemon — every Codex and Claude session —
+  // reach the user on the next launch instead of the next reboot.
+  const runtimeScript = join(__dirname, 'unmute-runtime.js')
+  const upgradeWhenIdle = (services: RuntimeService[]) => ({ build: runtimeBuild(runtimeScript), idle: (rpc: RuntimeRpcClient) => runtimeIdle(rpc, services) })
+  persistentRuntime = new PersistentRuntimeClient(runtimeRoot, runtimeScript).replaceStaleBuild(upgradeWhenIdle(['codex', 'claude', 'agent']))
   // Checkpoint forks need the updated CLI adapter; existing live sessions keep their owner.
-  claudeEditRuntime = new PersistentRuntimeClient(join(runtimeRoot, 'claude-edits-v1'), join(__dirname, 'unmute-runtime.js'))
+  claudeEditRuntime = new PersistentRuntimeClient(join(runtimeRoot, 'claude-edits-v1'), runtimeScript).replaceStaleBuild(upgradeWhenIdle(['claude']))
   claudeEditRuntime.on('reconnected', () => {
     void (async () => {
       const sessions = await claudeEditRuntime!.call<Array<{ sessionId: string; alive: boolean }>>('claude.list')
@@ -5130,6 +5151,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const runId = String(Date.now())
   const logFile = configureRemoteLogging({ dir: logDir, runId })
   log.event('init-remote', { logFile, permissionMode: settings.get('permissionMode') })
+  // What this Mac's managed policies allow each provider. Read off the main
+  // path (child processes, cached) and refreshed, since MDM can change it.
+  const refreshPolicy = () => void refreshManagedPolicy().then(policy => {
+    if (policy.codexFullAccessForbidden || policy.claudeBypassForbidden || policy.claudeAutoForbidden) log.event('managed-policy', { ...policy })
+  })
+  refreshPolicy()
+  setInterval(refreshPolicy, 10 * 60_000).unref()
   if (fixedSurfacePreferenceChanges.surfaceTone || fixedSurfacePreferenceChanges.surfaceAppearance) {
     log.event('surface-preferences-normalized', fixedSurfacePreferenceChanges)
   }
@@ -5186,7 +5214,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const tmux = tmuxBin ? { bin: tmuxBin, confPath: tmuxConfPath, cols: 120, rows: 40 } : undefined
     log.event('librarian-executor-factory', { model })
     return new ClaudeCodeExecutor({
-      extraArgs: ['--dangerously-skip-permissions'],
+      extraArgs: claudeUnattendedArgs(),
       model,
       chrome: false,
       tmux,
@@ -5228,11 +5256,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   codexRuntimeRouting = new CompatibleCodexRuntime(
     new CompatibleCodexRuntime(
       new CompatibleCodexRuntime(persistentRuntime!,
-        new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v2'), join(__dirname, 'unmute-runtime.js')),
+        new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v2'), runtimeScript).replaceStaleBuild(upgradeWhenIdle(['codex'])),
         fileOwnershipStore(runtimeRoot, 'continuity-v2')),
-      new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v3'), join(__dirname, 'unmute-runtime.js')),
+      new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v3'), runtimeScript).replaceStaleBuild(upgradeWhenIdle(['codex'])),
       fileOwnershipStore(runtimeRoot, 'continuity-v3')),
-    new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v4'), join(__dirname, 'unmute-runtime.js')),
+    new PersistentRuntimeClient(join(runtimeRoot, 'continuity-v4'), runtimeScript).replaceStaleBuild(upgradeWhenIdle(['codex'])),
     fileOwnershipStore(runtimeRoot, 'continuity-v4'))
   codexHub = new PersistentCodexHub(codexRuntimeRouting, {
     approvalCap: taskId => ({ fullAccessAllowed: manager?.chatFullAccessAllowed(taskId) === true, roots: settings.get('sandboxRoots') ?? [] }),

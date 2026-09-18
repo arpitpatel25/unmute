@@ -65,6 +65,9 @@ export interface CodexPatch {
   clearQuestion?: boolean
   /** Set on a failed turn. */
   errorReason?: string
+  /** The level the provider actually applied when this machine's policy
+   *  made it lower than what Unmute asked for; null when it got what it asked. */
+  permissionLimit?: import('../permission-ceiling').PermissionLimit | null
   /** Codex's own name for the thread — a real task title instead of the first
    *  sixty characters of what you said. */
   name?: string

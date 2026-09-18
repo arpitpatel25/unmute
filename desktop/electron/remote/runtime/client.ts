@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RuntimeRpcClient } from './rpc'
+import { diagnostic } from '../diagnostics'
 
 export function runtimeSocket(root: string): string {
   const key = createHash('sha256').update(root).digest('hex').slice(0, 20)
@@ -24,17 +25,71 @@ export function runtimeExecutable(mainExecutable: string): string {
   return existsSync(helper) ? helper : mainExecutable
 }
 
+/** How to tell whether a running daemon is an older build, and whether it may
+ *  be replaced right now. */
+export interface RuntimeUpgrade {
+  /** Fingerprint of the script this app would spawn (runtime/build.ts). */
+  build?: string
+  /** True when the daemon holds nothing a restart would interrupt. */
+  idle: (rpc: RuntimeRpcClient) => Promise<boolean>
+}
+
 /** A per-user-data daemon; dev worktrees do not attach to production runtimes. */
 export class PersistentRuntimeClient extends RuntimeRpcClient {
   private starting?: Promise<void>
   private disposed = false
   private retry?: ReturnType<typeof setTimeout>
+  private upgrade?: RuntimeUpgrade
+  private buildChecked = false
+  private replacing = false
   constructor(private root: string, private entry: string, private executable = runtimeExecutable(process.execPath)) {
     super(runtimeSocket(root))
     this.on('disconnected', () => this.scheduleReconnect())
   }
+  /**
+   * REPLACE A DAEMON LEFT OVER FROM AN OLDER BUILD, once, on first connect.
+   *
+   * Task daemons survive quits and reinstalls, and a new app used to attach to
+   * whatever was running — so a fix inside the daemon (every Codex and Claude
+   * session runs there) never reached the user until a reboot. Measured
+   * 2026-09-18: Codex daemons from Sep 16 still serving after a Sep 18
+   * install, which is why the managed-laptop fix in 1.5.29 did nothing.
+   *
+   * Only an idle daemon is replaced; a turn in flight finishes on the build
+   * that started it and the next launch checks again. Conversations live on
+   * disk, so the fresh daemon resumes them exactly as after a reboot — and
+   * this runs before anything attaches. The Agent's own router does the same
+   * for its process (runtime/agent-routing.ts).
+   */
+  replaceStaleBuild(upgrade: RuntimeUpgrade): this { this.upgrade = upgrade; return this }
+
+  private async replacedStale(): Promise<boolean> {
+    const upgrade = this.upgrade
+    if (!upgrade?.build || this.buildChecked) return false
+    this.buildChecked = true
+    const hello = await this.call<{ build?: string; pid?: number }>('hello').catch(() => ({} as { build?: string; pid?: number }))
+    if (hello.build === upgrade.build) return false
+    const fields = { root: this.root, running: hello.build ?? 'unreported', expected: upgrade.build }
+    if (!(await upgrade.idle(this).catch(() => false))) { diagnostic('runtime-stale-build-deferred', fields); return false }
+    diagnostic('runtime-stale-build-replaced', fields)
+    this.replacing = true
+    try {
+      try { await this.call('runtime.shutdown') }
+      catch { if (hello.pid && hello.pid > 0 && hello.pid !== process.pid) { try { process.kill(hello.pid, 'SIGTERM') } catch { /* already gone */ } } }
+      // Wait for the PROCESS, not just the socket: a daemon still exiting
+      // holds the listening socket, and a fresh one would fail to bind.
+      for (let i = 0; i < 100; i++) {
+        const alive = hello.pid ? (() => { try { process.kill(hello.pid!, 0); return true } catch { return false } })() : this.connected
+        if (!alive) break
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+      super.disconnect()
+    } finally { this.replacing = false }
+    return true
+  }
+
   private scheduleReconnect(): void {
-    if (this.disposed || this.retry) return
+    if (this.disposed || this.retry || this.replacing) return
     this.retry = setTimeout(() => {
       this.retry = undefined
       void this.connect().then(() => { if (!this.disposed) this.emit('reconnected') })
@@ -54,7 +109,10 @@ export class PersistentRuntimeClient extends RuntimeRpcClient {
     return this.starting ??= this.ensure().finally(() => { this.starting = undefined })
   }
   private async ensure(): Promise<void> {
-    try { await super.connect(); return } catch (error) {
+    try {
+      await super.connect()
+      if (!(await this.replacedStale())) return
+    } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
       if (code !== 'ENOENT' && code !== 'ECONNREFUSED') throw error
     }

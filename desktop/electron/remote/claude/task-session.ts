@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { TaskInput } from '../task-input'
+import { CLAUDE_LADDER, claudeLadderMode } from '../permission-ceiling'
 
 type Json = Record<string, any>
 export interface ClaudeTaskModel { id: string; label: string; description?: string; efforts: string[] }
@@ -18,6 +19,8 @@ export type ClaudeTaskEvent =
   | { type: 'error'; message: string }
   | { type: 'request'; requestId: string; kind: 'permission' | 'question'; tool: string; input: Json; payload: Json }
   | { type: 'request-resolved'; requestId: string }
+  /** The mode Claude is actually in, reported once it is settled. */
+  | { type: 'permission-mode'; requested: string; effective: string }
   | { type: 'closed' }
 
 export interface ClaudeTaskOptions {
@@ -86,6 +89,8 @@ export class ClaudeTaskSession {
    *  therefore authoritative for THIS cwd, plugins and add-dirs included —
    *  which a directory scan of our own could only approximate. */
   commands: ClaudeTaskCommand[] = []
+  /** The mode Claude confirmed at startup, after any step-up. */
+  permissionMode?: string
   private child?: ChildProcessWithoutNullStreams
   private starting?: Promise<void>
   private closed = false
@@ -158,11 +163,37 @@ export class ClaudeTaskSession {
           description: typeof c.description === 'string' ? c.description : '',
           argumentHint: typeof c.argumentHint === 'string' ? c.argumentHint : '',
         }] : []) : []
+      await this.settlePermissionMode(initialized.current_permission_mode)
       this.ready = true
     } catch (error) {
       this.fail(error instanceof Error ? error : new Error(String(error)))
       throw error
     }
+  }
+
+  /**
+   * CLAUDE DOWNGRADES SILENTLY where a policy forbids the mode we asked for —
+   * and not to the best mode left: with bypass AND auto disabled it lands on
+   * `default`, though `acceptEdits` was allowed (measured on 2.1.273). The
+   * initialize reply says which mode it really is in, so step back up the
+   * ladder until Claude accepts one; a refused step names the policy
+   * ("disabled by settings"), which is exactly the signal to try lower.
+   */
+  private async settlePermissionMode(reported: unknown): Promise<void> {
+    const requested = this.options.permissionMode ?? 'manual'
+    const asked = claudeLadderMode(requested)
+    let current = claudeLadderMode(reported)
+    if (!asked || !current) { this.permissionMode = typeof reported === 'string' ? reported : requested; return }
+    const rank = (m: string) => CLAUDE_LADDER.indexOf(m as typeof CLAUDE_LADDER[number])
+    // bypassPermissions cannot be set mid-session at all, so never try it.
+    for (let i = rank(asked); i > rank(current); i--) {
+      const candidate = CLAUDE_LADDER[i]
+      if (candidate === 'bypassPermissions') continue
+      try { await this.control({ subtype: 'set_permission_mode', mode: candidate }); current = candidate; break }
+      catch { /* forbidden here; try the next one down */ }
+    }
+    this.permissionMode = current
+    this.emit({ type: 'permission-mode', requested, effective: current })
   }
 
   async send(text: string, imagePaths: string[] = [], submissionId: string = randomUUID(), ordered?: TaskInput[], newTurnOnly = false): Promise<{ submissionId: string; sessionId: string }> {

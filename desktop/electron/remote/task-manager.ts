@@ -135,6 +135,7 @@ import type { CodexDesktopDriver } from './codex/driver'
 import type { CodexHub, HubPatch, StartThreadOpts } from './codex/hub'
 import type { Activity } from './activity'
 import { codexPosture } from './codex/posture'
+import { managedPolicy } from './permission-ceiling'
 import { ManagedProjects, validateProject, type NewChatOptions, type ChatPreview } from './managed-project'
 import { sameQuestion, type QuestionReference, type AnswerContext } from './question-reference'
 import type { ClaudeDesktopDriver } from './claude-desktop/driver'
@@ -260,6 +261,10 @@ export interface Task {
   codexSessionSettings?: StartThreadOpts
   managedProjectId?: string
   permissionReason?: string
+  /** What the provider actually applied when this machine's policy made it
+   *  lower than asked. Reported by the provider on every session start, so it
+   *  is never persisted — a stale one would outlive a policy change. */
+  permissionLimit?: import('./permission-ceiling').PermissionLimit
   history?: import('./codex/app-server-events').HistoryState
   turnOutcome?: import('./blocks').TurnOutcome
   /** Codex reports its final assistant item before the separate turn-completed
@@ -1176,6 +1181,18 @@ export class TaskManager extends EventEmitter {
     }
   }
 
+  /** Providers whose own report showed this machine forbids full access. */
+  private fullAccessForbiddenOnMachine = new Set<'codex' | 'claude'>()
+  /** True when THIS MACHINE (not Unmute's consent or fence) forbids full access
+   *  for a provider: its managed policy files say so, or the provider already
+   *  applied less than full access here. Asking for full access still asks for
+   *  the most allowed; this only decides what the controls may claim. */
+  machineForbidsFullAccess(provider: string): boolean {
+    const policy = managedPolicy()
+    if (provider === 'codex') return policy.codexFullAccessForbidden || this.fullAccessForbiddenOnMachine.has('codex')
+    if (provider === 'claude') return policy.claudeBypassForbidden || this.fullAccessForbiddenOnMachine.has('claude')
+    return false
+  }
   private managedProjects?: ManagedProjects
   private projects(): ManagedProjects {
     return this.managedProjects ??= new ManagedProjects(join(this.opts.baseDir, '.managed-projects', this.opts.userKey ?? 'local'))
@@ -1188,9 +1205,11 @@ export class TaskManager extends EventEmitter {
     if (permission === 'full' && !fullAllowed) throw new Error('Full access exceeds the configured roots or Codex consent cap')
     const maximum = !permission || permission === 'maximum' || permission === 'full'
     const posture = codexPosture({ permissionMode: maximum ? 'auto-approve' : 'prompt', sandboxRoots: roots, fullAccessAllowed: this.opts.codexFullAccess?.() === true })
+    const machineCapped = maximum && fullAllowed && this.machineForbidsFullAccess(provider)
     return {
       permission: maximum ? fullAllowed ? 'full' : provider === 'codex' ? 'workspace' : 'ask' : permission!,
-      permissionReason: maximum && !fullAllowed ? roots.length ? 'Full access is limited by the configured sandbox roots.' : 'Full filesystem access requires Codex full-access consent; this session can work in its workspace without approval prompts.' : undefined,
+      permissionReason: maximum && !fullAllowed ? roots.length ? 'Full access is limited by the configured sandbox roots.' : 'Full filesystem access requires Codex full-access consent; this session can work in its workspace without approval prompts.'
+        : machineCapped ? `Your organization does not allow full access for ${provider === 'codex' ? 'Codex' : 'Claude'} on this Mac; the session uses the most it allows.` : undefined,
       claude: { permissionMode: (permission === 'plan' ? 'plan' : maximum && fullAllowed ? 'bypassPermissions' : 'manual') as NonNullable<Task['claudeSessionSettings']>['permissionMode'], addDirs: roots },
       codex: { approvalPolicy: posture.approvalPolicy, sandbox: permission === 'read' ? 'read-only' : posture.sandbox, writableRoots: posture.addDirs },
     }
@@ -2391,6 +2410,13 @@ export class TaskManager extends EventEmitter {
     if (p.history) task.history = p.history
     if ('turnOutcome' in p) task.turnOutcome = p.turnOutcome ?? undefined
     if (p.mcpStatus) task.mcpStatuses = [...(task.mcpStatuses ?? []).filter(s => s.name !== p.mcpStatus!.name), p.mcpStatus]
+    if ('permissionLimit' in p) {
+      task.permissionLimit = p.permissionLimit ?? undefined
+      // Learned from the provider itself, so it covers policies no file on
+      // this Mac shows (a ChatGPT or claude.ai workspace policy).
+      if (p.permissionLimit && p.permissionLimit.asked === 'Full access' && !p.permissionLimit.effective.startsWith('Full access')) this.fullAccessForbiddenOnMachine.add(p.permissionLimit.provider)
+      if (p.permissionLimit) log.child({ taskId: task.id }).event('permission-limited', { ...p.permissionLimit })
+    }
     if ('activity' in p) task.codexActivity = p.activity ?? undefined
     if (p.clearQuestion) task.question = undefined
     if (p.errorReason !== undefined) {
@@ -2434,7 +2460,7 @@ export class TaskManager extends EventEmitter {
         // diff landing changes nothing about the task's STATE, and everything
         // about what an open chat view should be showing. Emit without
         // transitioning, so the card updates and the wall does not re-sort.
-        if (p.blocks || p.errorReason !== undefined || 'activity' in p || 'turnOutcome' in p || p.history || p.mcpStatus) this.emit('updated', task)
+        if (p.blocks || p.errorReason !== undefined || 'activity' in p || 'turnOutcome' in p || p.history || p.mcpStatus || 'permissionLimit' in p) this.emit('updated', task)
         if (learnedRolloutId) void this.persistState(task)
         return
       }

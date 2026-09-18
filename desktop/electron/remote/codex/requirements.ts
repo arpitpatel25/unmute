@@ -57,3 +57,64 @@ export function clampPosture<T extends { approvalPolicy: string; sandbox: string
   return sandbox === o.sandbox && approvalPolicy === o.approvalPolicy ? o : { ...o, sandbox, approvalPolicy }
 }
 
+
+/** Codex names its enums in Rust in its error text. */
+const SANDBOX_NAMES: Record<string, string> = { ReadOnly: 'read-only', WorkspaceWrite: 'workspace-write', DangerFullAccess: 'danger-full-access' }
+const APPROVAL_NAMES: Record<string, string> = { UnlessTrusted: 'untrusted', OnFailure: 'on-failure', OnRequest: 'on-request', Never: 'never' }
+
+/**
+ * LEARN THE LIMIT FROM THE REFUSAL. The up-front query can miss a policy — a
+ * ChatGPT workspace policy fetched later, a Codex too old to answer, a policy
+ * pushed after startup — but the refusal always names what is allowed.
+ * Measured on codex-cli 0.153.2; one dial per refusal, so a machine that caps
+ * both is learned in two rounds:
+ *
+ *   invalid value for `sandbox_mode`: `DangerFullAccess` is not in the allowed set [ReadOnly, WorkspaceWrite]
+ *   invalid value for `approval_policy`: `Never` is not in the allowed set [UnlessTrusted, OnRequest]
+ *   `approval_policy = "never"` cannot be used because requirements do not allow `sandbox_mode = "danger-full-access"`
+ *
+ * Returns the requirements with what was learned folded in, or null when the
+ * error is not a policy refusal.
+ */
+export function learnFromRejection(message: string, known: CodexRequirements | null): CodexRequirements | null {
+  const set = (field: string, names: Record<string, string>): string[] | undefined => {
+    const m = new RegExp('invalid value for `' + field + '`: `\\w+` is not in the allowed set \\[([^\\]]*)\\]').exec(message)
+    return m ? m[1].split(',').map(s => names[s.trim()]).filter(Boolean) : undefined
+  }
+  const sandbox = set('sandbox_mode', SANDBOX_NAMES)
+  const approval = set('approval_policy', APPROVAL_NAMES)
+  const forbidden = /requirements do not allow `sandbox_mode = "([a-z-]+)"`/.exec(message)?.[1]
+  if (!sandbox && !approval && !forbidden) return null
+  const next: CodexRequirements = { ...known }
+  if (sandbox?.length) next.allowedSandboxModes = sandbox
+  if (approval?.length) next.allowedApprovalPolicies = approval
+  if (forbidden) {
+    const base = Array.isArray(next.allowedSandboxModes) ? next.allowedSandboxModes : SANDBOX_ORDER
+    next.allowedSandboxModes = base.filter(m => m !== forbidden)
+  }
+  return next
+}
+
+/** A read answer overrides nothing learned from a refusal: learned limits are
+ *  what Codex actually enforced, so they narrow whatever the query said. */
+export function mergeRequirements(read: CodexRequirements | null, learned: CodexRequirements | null): CodexRequirements | null {
+  if (!learned) return read
+  if (!read) return learned
+  const narrow = (a: unknown[] | null | undefined, b: unknown[] | null | undefined) =>
+    Array.isArray(a) && Array.isArray(b) ? a.filter(v => b.includes(v)) : Array.isArray(b) ? b : a
+  return { ...read,
+    allowedSandboxModes: narrow(read.allowedSandboxModes, learned.allowedSandboxModes),
+    allowedApprovalPolicies: narrow(read.allowedApprovalPolicies, learned.allowedApprovalPolicies) }
+}
+
+/** What Codex says it applied, from a thread/start|resume|fork response. */
+export function appliedPosture(response: unknown, fallback: { approvalPolicy: string; sandbox: string }): { approvalPolicy: string; sandbox: string } {
+  const r = response as { approvalPolicy?: unknown; sandbox?: { type?: unknown } | unknown } | null
+  const type = typeof r?.sandbox === 'object' && r.sandbox ? (r.sandbox as { type?: unknown }).type : r?.sandbox
+  const sandbox = ({ dangerFullAccess: 'danger-full-access', workspaceWrite: 'workspace-write', readOnly: 'read-only',
+    'danger-full-access': 'danger-full-access', 'workspace-write': 'workspace-write', 'read-only': 'read-only' } as Record<string, string>)[String(type)]
+  return {
+    approvalPolicy: typeof r?.approvalPolicy === 'string' ? r.approvalPolicy : fallback.approvalPolicy,
+    sandbox: sandbox ?? fallback.sandbox,
+  }
+}

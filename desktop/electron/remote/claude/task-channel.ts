@@ -6,6 +6,7 @@ import { basename, extname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { sameQuestion, type QuestionReference } from '../question-reference'
 import { mergeClaudeHistory } from './chat-history'
+import { claudeLadderMode, claudeLimit } from '../permission-ceiling'
 
 type Frame = Record<string, any>
 type Request = Extract<ClaudeTaskEvent, { type: 'request' }> & { index: number; answers: Record<string, string> }
@@ -137,6 +138,9 @@ export class ClaudeTaskChannel {
       this.persistFrames(); this.render()
       this.patch({ state: cancelled ? 'done' : event.message.is_error ? 'failed' : 'done', turnOutcome: outcome, activity: null, clearQuestion: true,
         ...(cancelled ? { errorReason: '' } : event.message.is_error ? { errorReason: this.resultError } : { assistantText: event.message.result || undefined }) })
+    } else if (event.type === 'permission-mode') {
+      const lower = claudeLadderMode(event.effective) !== claudeLadderMode(event.requested)
+      this.patch({ permissionLimit: lower ? claudeLimit(event.requested, event.effective) : null })
     } else if (event.type === 'error') {
       if (this.ended && event.message === this.resultError) return
       this.ended = true
