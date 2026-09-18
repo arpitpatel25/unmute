@@ -41,26 +41,68 @@ public enum SuppressedBannerLanding: Equatable, Sendable {
     /// `restedFrom`, so hovering still answers the only question a quiet notch
     /// raises: is anything waiting on me?
     case restSilently
+    /// Come down out of the expanded surface, and STOP AT THE BAR. The
+    /// dismissal is honoured; the open pocket below it is not swallowed on the
+    /// way past. See `SurfaceRest`.
+    case settleAtBar
+}
+
+/// MAY THE SURFACE PUT *ITSELF* DOWN?
+///
+/// Every self-initiated rest asks this — the two-second banner clock, a
+/// suppressed repeat, the hover ladder — and until now each answered it on its
+/// own, which is why they disagreed. `HoverSleepPolicy` knew an explicitly open
+/// pocket must never sleep; the other two did not, and on a notched Mac that is
+/// not a subtle difference:
+///
+///   DORMANT IS THE CUTOUT. `NotchGeometry.dormantFrame()` is the hole itself
+///   (183x32 on a 14" MBP), so a surface resting with the pocket open does not
+///   go quiet — it is posted BEHIND THE CAMERA HOUSING, where there is no
+///   screen. The card the user just clicked for is simply gone about a second
+///   later, and the only way back is to click again. Field log 18 Sep 20:20:41:
+///   click, `state -> attention w=348 h=150`, one second, `rest: attention ->
+///   dormant w=183 h=32`, then `hover-reveal: dormant -> attention` when the
+///   user went back for it. Off-notch the same command lands on `.idle`
+///   (applyState maps it, there being no cutout to hide in) and the pocket
+///   stays visible — which is exactly why this only ever happened on the Macs
+///   with a notch.
+///
+/// The engine COMMANDING dormant is a different question and not this one: main
+/// pairs `pocket open` with `setState dormant` on Escape, and an explicit
+/// command outranks anything the surface decides for itself.
+///
+/// So this answers ONE question: is anything HOLDING THE SURFACE UP? Whether
+/// there is anything to move (there is not, at `.dormant`) stays the caller's
+/// own business — the stand-down clock still has bookkeeping to do down there.
+public enum SurfaceRest {
+    public static func mayRest(current: SurfaceRung, pocketOpen: Bool) -> Bool {
+        // An explicit pocket is USER STATE, not hover state, and never
+        // participates in the dormant ladder — the same rule HoverSleepPolicy
+        // applies to the pointer, stated once for every caller.
+        guard !pocketOpen else { return false }
+        // A panel the user opened is not ours to collapse. (The engine
+        // RELAYING a dismissal is a different matter — see BannerRepeat.)
+        return current != .expanded
+    }
 }
 
 public enum BannerRepeat {
-    public static func landing(current: SurfaceRung) -> SuppressedBannerLanding {
-        switch current {
-        case .dormant:
-            return .stayPut
-        case .bar:
-            // A flap arriving while the bar is up must settle, rather than
-            // merely declining to re-arm the clock.
-            return .restSilently
-        case .expanded:
-            // THE LINE THIS RULE EXISTED WITHOUT.
-            //
-            // A compact rung arriving while a task or the cockpit is open is
-            // the engine reporting that nothing is engaged any more — which it
-            // only ever says because the user dismissed the surface. Honour it.
-            // Suppression may keep the bar quiet on the way down; it may not
-            // keep the panel open.
-            return .restSilently
-        }
+    public static func landing(current: SurfaceRung, pocketOpen: Bool) -> SuppressedBannerLanding {
+        // THE LINE THIS RULE EXISTED WITHOUT.
+        //
+        // A compact rung arriving while a task or the cockpit is open is the
+        // engine reporting that nothing is engaged any more — which it only
+        // ever says because the user dismissed the surface. Honour it.
+        // Suppression may keep the bar quiet on the way down; it may not keep
+        // the panel open.
+        //
+        // How FAR down is the pocket's call, not suppression's: with one open,
+        // the dismissal is spent the moment the panel is gone.
+        if current == .dormant { return .stayPut }  // nothing to move
+        if current == .expanded { return pocketOpen ? .settleAtBar : .restSilently }
+        // Everything still up settles rather than merely declining to re-arm
+        // the clock — unless resting would hide something the user asked for.
+        return SurfaceRest.mayRest(current: current, pocketOpen: pocketOpen)
+            ? .restSilently : .stayPut
     }
 }

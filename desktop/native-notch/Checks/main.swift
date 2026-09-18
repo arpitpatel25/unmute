@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import SurfaceStateSupport
 
 func check(_ name: String, _ ok: Bool) {
     print("\(ok ? "PASS" : "FAIL")  \(name)")
@@ -307,5 +308,31 @@ check("active never glows", act.alarm == nil)
 let att = BarContent.make(for: vm, state: .attention, hovering: false)
 check("attention says what it needs", att.left == "Needs you" && att.dot == .needsUser)
 check("attention is the ONLY state that glows", att.alarm != nil)
+
+// ── WHEN THE SURFACE MAY PUT ITSELF DOWN ──
+//
+// Dormant is the CUTOUT on a notched Mac, so "rest" and "hide behind the
+// camera" are the same instruction. Anything the user explicitly asked to see
+// must therefore survive every self-initiated rest, and the pocket is the one
+// that did not: click the notch, watch the card for one second, and the
+// stand-down clock posted it into the hole (field log 18 Sep 20:20:41).
+check("an open pocket is never rested away",
+      !SurfaceRest.mayRest(current: .bar, pocketOpen: true)
+          && !SurfaceRest.mayRest(current: .expanded, pocketOpen: true)
+          && !SurfaceRest.mayRest(current: .dormant, pocketOpen: true))
+check("a bar with nothing holding it up still rests",
+      SurfaceRest.mayRest(current: .bar, pocketOpen: false))
+check("a panel the user opened is not ours to collapse",
+      !SurfaceRest.mayRest(current: .expanded, pocketOpen: false))
+check("...but a dormant surface still records the sentence as said",
+      SurfaceRest.mayRest(current: .dormant, pocketOpen: false))
+check("a suppressed repeat leaves an open pocket exactly where it is",
+      BannerRepeat.landing(current: .bar, pocketOpen: true) == .stayPut)
+check("a dismissal with the pocket open comes down to the BAR, not the cutout",
+      BannerRepeat.landing(current: .expanded, pocketOpen: true) == .settleAtBar)
+check("and without one it still settles all the way",
+      BannerRepeat.landing(current: .expanded, pocketOpen: false) == .restSilently
+          && BannerRepeat.landing(current: .bar, pocketOpen: false) == .restSilently)
+check("already dormant stays put", BannerRepeat.landing(current: .dormant, pocketOpen: false) == .stayPut)
 
 print("\nALL DECODE CHECKS PASSED")
