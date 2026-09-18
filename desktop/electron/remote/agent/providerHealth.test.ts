@@ -83,3 +83,13 @@ test('the snapshot reports the cooldown deadline for the UI, and drops it once l
 test('the cooldown is hours, not minutes — a spent allowance outlives a short window', () => {
   assert.ok(PROVIDER_COOLDOWN_MS >= 60 * 60_000, 'at least an hour')
 })
+
+test('with switching allowed, installed usable providers follow the chosen one', async () => {
+  const { ProviderHealth } = await import('./providerHealth')
+  const h = new ProviderHealth(() => 0)
+  assert.deepEqual(h.order('claude', () => true), ['claude'], 'still the chosen one alone by default')
+  assert.deepEqual(h.order('claude', () => true, true), ['claude', 'codex'])
+  assert.deepEqual(h.order('claude', p => p === 'claude', true), ['claude'], 'never an uninstalled one')
+  h.markFailed('claude')
+  assert.deepEqual(h.order('claude', () => true, true), ['codex', 'claude'], 'a cooling-down choice goes last')
+})

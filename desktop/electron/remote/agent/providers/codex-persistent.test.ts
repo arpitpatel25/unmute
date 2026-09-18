@@ -76,3 +76,75 @@ test('private Codex home shares only login and native history, leaving user conf
     assert.equal(await fs.readFile(join(originalHome, '.codex/config.toml'), 'utf8'), 'unrelated = true')
   } finally { await isolated?.dispose(); await fs.rm(originalHome, { recursive: true, force: true }) }
 })
+
+function fallbackDriver(opts: { available?: string[]; failFor?: Record<string, { codexErrorInfo: unknown; message: string }> }) {
+  const requests: Array<{ method: string; params: any }> = []
+  let notification!: (method: string, params: any) => void
+  let turns = 0
+  const driver = new CodexPersistentProcess({ readSystemPrompt: async () => 'C', connect: async (_launch, notify) => {
+    notification = notify
+    return { request: async (method, params: any) => {
+      requests.push({ method, params })
+      if (method === 'model/list') return { data: (opts.available ?? []).map(id => ({ id, model: id, displayName: id })) } as any
+      if (method === 'thread/start') return { thread: { id }, model: params.model, approvalPolicy: 'never', sandbox: { type: 'readOnly' } } as any
+      if (method === 'turn/start') {
+        const turnId = `turn-${++turns}`
+        const model = params.model ?? requests.find(r => r.method === 'thread/start')!.params.model
+        const failure = opts.failFor?.[model]
+        queueMicrotask(() => failure
+          ? notification('turn/completed', { threadId: id, turn: { id: turnId, status: 'failed', error: failure } })
+          : (notification('item/completed', { threadId: id, turnId, item: { type: 'agentMessage', text: `answer from ${model}` } }),
+             notification('turn/completed', { threadId: id, turn: { id: turnId, status: 'completed' } })))
+        return { turn: { id: turnId } } as any
+      }
+      return {} as any
+    }, notify() {}, close: async () => {} }
+  } })
+  return { driver, requests }
+}
+
+async function oneTurn(driver: CodexPersistentProcess, l: AgentProcessLaunch) {
+  const events: AgentProcessEvent[] = []
+  await driver.start(l)
+  const collecting = (async () => { for await (const e of driver.events) { events.push(e); if (e.type === 'completion') break } })()
+  await driver.submitUserTurn('hello')
+  await collecting; await driver.close()
+  return events
+}
+
+test('an unavailable model is answered by the next one on the same thread, and the answer says so', async () => {
+  const f = fallbackDriver({ failFor: { 'gpt-5.6-sol': { codexErrorInfo: 'usageLimitExceeded', message: 'You have hit your usage limit' } } })
+  const events = await oneTurn(f.driver, { ...launch, model: 'gpt-5.6-sol', fallbackModels: ['gpt-6-astra', 'gpt-5.5'] })
+  const done = events.find(e => e.type === 'completion') as Extract<AgentProcessEvent, { type: 'completion' }>
+  assert.equal(done.outcome, 'completed')
+  assert.equal(done.finalText, 'answer from gpt-6-astra')
+  assert.match(done.notice ?? '', /GPT-5\.6 Sol was unavailable \(usage limit reached\), so this answer is from GPT-6 Astra/)
+  const turnStarts = f.requests.filter(r => r.method === 'turn/start')
+  assert.deepEqual(turnStarts.map(r => r.params.model), [undefined, 'gpt-6-astra'])
+  assert.equal(new Set(turnStarts.map(r => r.params.threadId)).size, 1, 'same thread')
+})
+
+test('a default the account cannot use is swapped before the first turn', async () => {
+  const f = fallbackDriver({ available: ['gpt-6-astra', 'gpt-5.5'] })
+  const events = await oneTurn(f.driver, { ...launch, model: 'gpt-5.6-sol', fallbackModels: ['gpt-5.5', 'gpt-6-astra'] })
+  assert.equal(f.requests.find(r => r.method === 'thread/start')!.params.model, 'gpt-5.5', 'first fallback the account has')
+  const done = events.find(e => e.type === 'completion') as Extract<AgentProcessEvent, { type: 'completion' }>
+  assert.match(done.notice ?? '', /not available on this account/)
+})
+
+test('when every model is unavailable the failure is marked, so the Agent can switch provider', async () => {
+  const limit = { codexErrorInfo: 'usageLimitExceeded', message: 'limit' }
+  const f = fallbackDriver({ failFor: { 'gpt-5.6-sol': limit, 'gpt-5.5': limit } })
+  const events = await oneTurn(f.driver, { ...launch, model: 'gpt-5.6-sol', fallbackModels: ['gpt-5.5'] })
+  const done = events.find(e => e.type === 'completion') as Extract<AgentProcessEvent, { type: 'completion' }>
+  assert.equal(done.outcome, 'failed')
+  assert.equal(done.failure?.kind, 'model-unavailable')
+})
+
+test('a failure no model would fix is not retried', async () => {
+  const f = fallbackDriver({ failFor: { 'gpt-5.6-sol': { codexErrorInfo: 'unauthorized', message: 'log in' } } })
+  const events = await oneTurn(f.driver, { ...launch, model: 'gpt-5.6-sol', fallbackModels: ['gpt-5.5'] })
+  assert.equal(f.requests.filter(r => r.method === 'turn/start').length, 1)
+  const done = events.find(e => e.type === 'completion') as Extract<AgentProcessEvent, { type: 'completion' }>
+  assert.equal(done.failure?.kind, undefined)
+})

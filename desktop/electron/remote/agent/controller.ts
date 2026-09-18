@@ -63,6 +63,7 @@ export interface AgentInteractionError {
     | 'invalid-request'
     | 'provider-unavailable'
     | 'provider-crashed'
+    | 'model-unavailable'
     | 'resource-pressure'
     | 'run-unavailable'
     | 'run-busy'
@@ -86,6 +87,8 @@ export interface AgentInteractionResult {
   text?: string
   memory?: { id: string; title: string }
   error?: AgentInteractionError
+  /** Said alongside the answer — e.g. that it came from a fallback model. */
+  notice?: string
   /**
    * The provider's own conversation id — for Claude, the session whose
    * transcript sits in ~/.claude/projects. Surfaced purely so a run can be
@@ -294,6 +297,7 @@ export class UnmuteAgentController {
           outcome: 'completed',
           presentation,
           text: completion.finalText,
+          ...(completion.notice ? { notice: completion.notice } : {}),
           ...(session.handle?.opaqueId ? { providerSessionId: session.handle.opaqueId } : {}),
         }
       }
@@ -627,6 +631,7 @@ function publicError(
     'invalid-request': 'The Agent request is invalid.',
     'provider-unavailable': 'The selected Agent provider is unavailable.',
     'provider-crashed': 'The Agent provider stopped unexpectedly. Retry this request in a fresh turn.',
+    'model-unavailable': 'No model of this provider is available right now (usage limit, rate limit or not on this account).',
     'resource-pressure': 'The Agent is busy. Try again after an active run finishes.',
     'run-unavailable': 'That Agent run is unavailable.',
     'run-busy': 'That Agent run already has active work.',
@@ -647,6 +652,11 @@ function completionError(
 ): AgentInteractionError {
   switch (completion.errorCode) {
     case 'provider-crashed': return publicError('provider-crashed')
+    case 'model-unavailable': {
+      const reason = completion.failure?.reason
+      const base = publicError('model-unavailable')
+      return reason ? { ...base, message: `No ${reason === 'not available on this account' ? 'available' : 'working'} model right now (${reason}).` } : base
+    }
     case 'interaction-expired': return publicError('interaction-expired')
     case 'journal-unavailable': return publicError('journal-unavailable')
     case 'shutdown': return publicError('agent-shutdown')

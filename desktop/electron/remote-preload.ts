@@ -49,8 +49,20 @@ export type UnmuteAgentProvider = 'claude' | 'codex'
 
 export interface UnmuteAgentSettingsSnapshot {
   agentProvider: UnmuteAgentProvider
+  /** The user's default model per provider (absent = built-in default). */
+  agentModels: Partial<Record<UnmuteAgentProvider, string>>
+  /** Continue on another model, then provider, when the chosen one cannot answer. */
+  switchWhenUnavailable: boolean
   unmuteAgentAvailable: boolean
   unmuteAgentMaxProcesses: number
+}
+
+/** One installed provider's models, as that provider reports them. */
+export interface UnmuteAgentModelChoices {
+  id: UnmuteAgentProvider
+  label: string
+  selected: string
+  models: Array<{ id: string; label: string }>
 }
 
 export interface UnmuteAgentAvailabilitySnapshot {
@@ -223,6 +235,12 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-unmute-agent-provider', provider),
   remoteGetAgentAvailability: (): Promise<UnmuteAgentAvailabilitySnapshot> =>
     ipcRenderer.invoke('remote:get-agent-availability'),
+  remoteGetAgentModelChoices: (): Promise<UnmuteAgentModelChoices[]> =>
+    ipcRenderer.invoke('remote:get-agent-model-choices'),
+  remoteSetUnmuteAgentModel: (provider: UnmuteAgentProvider, model: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-unmute-agent-model', provider, model),
+  remoteSetUnmuteAgentSwitch: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-unmute-agent-switch', on),
   remoteAgentSubmit: (input: UnmuteAgentInteractionInput): Promise<UnmuteAgentInteractionResult> =>
     ipcRenderer.invoke('remote:agent-submit', input),
   remoteAgentCancel: (runId: string): Promise<boolean> =>

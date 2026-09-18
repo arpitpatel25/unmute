@@ -19,6 +19,9 @@ interface Options {
   pin(ids: string[]): void
   close(id: string): Promise<void>
   onView?(view: AgentConversationView): void
+  /** Another installed, usable provider to continue on when this one cannot
+   *  answer at all — or undefined when switching is off or impossible. */
+  alternateProvider?(current: AgentProviderId): AgentProviderId | undefined
 }
 interface Waiting { promise: Promise<AgentInteractionResult>; resolve(result: AgentInteractionResult): void }
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
@@ -36,6 +39,29 @@ export class AgentConversationLifecycle {
   private pendingSettlement: AgentPendingSettlement | null = null
   private rotationDue = false
   constructor(private readonly options: Options) {}
+  /** Submissions re-sent to another provider, with why — said with the answer
+   *  and never re-sent a second time. */
+  private readonly switched = new Map<string, string>()
+
+  /**
+   * WHEN A PROVIDER CANNOT ANSWER, THE CHAT MUST NOT STAY BLOCKED.
+   *
+   * Model fallback inside the provider comes first (its drivers try the next
+   * model). This is the step after: every model of that provider unavailable,
+   * or the provider itself missing. If switching is allowed and another
+   * provider works, the message goes there — a new conversation with the usual
+   * handoff, exactly as a manual provider switch — and the answer says why.
+   * The user's provider setting is never changed.
+   */
+  private switchTarget(result: AgentInteractionResult, from: AgentProviderId, submissionId: string): { to: AgentProviderId; why: string } | undefined {
+    if (result.outcome !== 'failed' || this.switched.has(submissionId)) return undefined
+    const code = result.error?.code
+    if (code !== 'model-unavailable' && code !== 'provider-unavailable') return undefined
+    const to = this.options.alternateProvider?.(from)
+    if (!to || to === from) return undefined
+    const detail = code === 'provider-unavailable' ? 'is unavailable' : `could not answer${/\(([^)]+)\)/.exec(result.error?.message ?? '')?.[1] ? ` (${/\(([^)]+)\)/.exec(result.error!.message)![1]})` : ''}`
+    return { to, why: `${providerName(from)} ${detail}, so ${providerName(to)} answered. This conversation continues on ${providerName(to)}; your default is unchanged.` }
+  }
 
   initialize(): Promise<void> {
     return this.initialization ??= this.restore().catch(error => { this.initialization = undefined; throw error })
@@ -367,12 +393,37 @@ export class AgentConversationLifecycle {
         const submission = record.accepted.find(a => a.submissionId === prepared.submissionId)
         if (!submission || submission.outcome) return
         result = { ...result, provider: record.provider!, model: record.model }
+        const why = this.switched.get(prepared.submissionId)
+        if (why && result.outcome === 'completed') result = { ...result, notice: [why, result.notice].filter(Boolean).join(' ') }
         this.pendingSettlement = { generation: record.generation, runId: record.runId!, submissionId: prepared.submissionId, at: this.now(), result }
         try { await this.settlePending() } catch { this.options.onView?.(this.view()) }
         this.finish(prepared.submissionId, result)
+        // Accepted and then failed: the message is in the chat as a failed
+        // turn, so it is sent again, as a new submission, to the other provider.
+        const target = this.switchTarget(result, provider, prepared.submissionId)
+        if (target && !this.pendingSettlement) {
+          const retry = randomUUID()
+          this.switched.set(retry, target.why)
+          const next = structuredClone(this.record), queued = structuredClone(this.snapshot)
+          next.pendingProvider = target.to
+          queued.queued.push({ submissionId: retry, input: { ...input, submissionId: retry } })
+          diagnostic('agent-provider-switched', { from: provider, to: target.to, reason: result.error?.code, accepted: true })
+          await this.publish(next, queued)
+        }
         return
       } else {
         this.assertPrepared(prepared)
+        // Not accepted: the message is still queued, so it simply goes to the
+        // other provider next instead of stopping on an error.
+        const target = this.switchTarget(result, provider, prepared.submissionId)
+        if (target) {
+          this.switched.set(prepared.submissionId, target.why)
+          record.pendingProvider = target.to
+          delete record.prepared; record.phase = 'ready'
+          diagnostic('agent-provider-switched', { from: provider, to: target.to, reason: result.error?.code, accepted: false })
+          await this.publish(record, snapshot)
+          return
+        }
         snapshot.error = result.error?.message ?? 'The Agent could not initialize. Input has been retained.'
         if (result.error?.code === 'acceptance-uncertain' || result.error?.code === 'journal-unavailable') record.phase = 'recovery-required'
         else { delete record.prepared; record.phase = record.accepted.length >= record.ceiling ? 'reset-due' : 'ready' }
@@ -431,7 +482,7 @@ function applySettlement(view: AgentConversationView, pending: AgentPendingSettl
   const accepted = view.record.accepted.find(a => a.submissionId === pending.submissionId)
   if (!accepted || view.record.generation !== pending.generation || view.record.runId !== pending.runId) throw new Error('Pending Agent settlement identity is invalid.')
   if (!view.snapshot.results?.[pending.submissionId]) {
-    view.snapshot.chat.turns.push({ role: 'agent', text: pending.result.text ?? pending.result.error?.message ?? 'Done.', at: pending.at, ...(pending.result.outcome !== 'completed' ? { failed: true } : {}) })
+    view.snapshot.chat.turns.push({ role: 'agent', text: pending.result.text ?? pending.result.error?.message ?? 'Done.', at: pending.at, ...(pending.result.outcome !== 'completed' ? { failed: true } : {}), ...(pending.result.notice ? { notice: pending.result.notice } : {}) })
   }
   view.snapshot.results = { ...view.snapshot.results, [pending.submissionId]: pending.result }
   accepted.outcome = pending.result.outcome

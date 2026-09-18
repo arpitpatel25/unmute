@@ -20,7 +20,7 @@ import {
   type AppendExchangeInput,
   type JournalAgentRun,
 } from './journal'
-import { agentModel } from './modelPolicy'
+import { agentFallbackModels, agentModel } from './modelPolicy'
 
 const DEFAULT_IDLE_MS = 15 * 60 * 1_000
 const DEFAULT_SWEEP_MS = 60_000
@@ -63,6 +63,8 @@ export interface SupervisedAgentSession extends AgentSession {
 
 export type AgentTurnFailureCode =
   | 'provider-crashed'
+  /** Every model of this provider was unavailable (modelAvailability.ts). */
+  | 'model-unavailable'
   | 'interaction-expired'
   | 'journal-unavailable'
   | 'shutdown'
@@ -431,6 +433,7 @@ export class AgentRunSupervisor {
     const providerInput: AgentStartInput = {
       requireObservedAcceptance: input.requireObservedAcceptance,
       model: agentModel(run.provider),
+      fallbackModels: agentFallbackModels(run.provider),
       runId: run.id,
       interactionId: input.interactionId,
       cwd: input.cwd,
@@ -541,8 +544,9 @@ export class AgentRunSupervisor {
         subtype: completion.failure?.subtype,
         message: completion.failure?.message,
         exitCode: completion.failure?.exitCode,
+        kind: completion.failure?.kind,
       })
-      completion = { outcome: 'failed', errorCode: 'provider-crashed' }
+      completion = { ...completion, outcome: 'failed', errorCode: completion.failure?.kind === 'model-unavailable' ? 'model-unavailable' : 'provider-crashed' }
     }
 
     const at = this.now()

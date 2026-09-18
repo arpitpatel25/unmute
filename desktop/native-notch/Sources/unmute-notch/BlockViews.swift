@@ -95,6 +95,9 @@ struct BlockTurnView: View {
                 case "error":      NoticeRow(text: b.message ?? "Error", tone: .error)
                 case "compaction": NoticeRow(text: compactionText(b), tone: .quiet)
                 case "sessionBoundary": NoticeRow(text: b.text ?? "New conversation", tone: .quiet)
+                // Said about the answer, not by it — e.g. that it came from a
+                // fallback model because the chosen one was unavailable.
+                case "notice":     NoticeRow(text: b.text ?? "", tone: .quiet)
                 default:           EmptyView()
                 }
             }
@@ -154,7 +157,7 @@ struct BlockTurnView: View {
         turn.work.filter { $0.kind == "attachment" && $0.role == "assistant" }
     }
 
-    private static let surfacedKinds: Set<String> = ["fileChange", "denied", "error", "compaction", "sessionBoundary"]
+    private static let surfacedKinds: Set<String> = ["fileChange", "denied", "error", "compaction", "sessionBoundary", "notice"]
     private var surfaced: [Block] { turn.work.filter { Self.surfacedKinds.contains($0.kind) } }
     private var workSteps: [Block] {
         turn.work.filter { !Self.surfacedKinds.contains($0.kind) && $0.kind != "plan"
@@ -320,7 +323,7 @@ private struct WorkGroup: View {
 
     /// Consequences and the plan are drawn outside the group — see the turn
     /// view — so they are not repeated inside it.
-    private static let outside: Set<String> = ["fileChange", "denied", "error", "compaction", "sessionBoundary", "plan", "attachment"]
+    private static let outside: Set<String> = ["fileChange", "denied", "error", "compaction", "sessionBoundary", "notice", "plan", "attachment"]
     private var runs: [WorkRun] {
         WorkRun.runs(of: turn.work.filter { !Self.outside.contains($0.kind) }, id: turn.id)
     }

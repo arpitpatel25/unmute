@@ -811,3 +811,26 @@ test('the provider builds the driver the mode names', () => {
   assert.ok(new ClaudeCodeProvider({ runtime: 'repl' }).createProcess()
     instanceof ExecutorBackedAgentProcess)
 })
+
+test('Claude announces its own model switch; the answer carries it as a notice', async () => {
+  const { headlessEvents } = await import('./claude-headless')
+  const state = {}
+  const progress = headlessEvents({ type: 'system', subtype: 'model_fallback', trigger: 'model_not_found', original_model: 'opus', fallback_model: 'claude-haiku-4-5-20251001', content: 'Switched to Haiku 4.5 because opus is not available' }, state)
+  assert.equal(progress[0].type, 'activity')
+  const [done] = headlessEvents({ type: 'result', subtype: 'success', result: 'ok' }, state) as any[]
+  assert.equal(done.notice, 'Opus 5 was not available, so this answer is from Haiku 4.5.')
+  const [next] = headlessEvents({ type: 'result', subtype: 'success', result: 'ok' }, state) as any[]
+  assert.equal(next.notice, undefined, 'said once, with the answer it belongs to')
+})
+
+test('what Claude could not route around is marked model-unavailable', async () => {
+  const { headlessEvents } = await import('./claude-headless')
+  const [done] = headlessEvents({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'API Error: 529 overloaded_error' }) as any[]
+  assert.equal(done.failure.kind, 'model-unavailable')
+})
+
+test('the rest of the model chain is handed to Claude as --fallback-model', () => {
+  const argv = headlessArgv({ ...launch({ kind: 'fresh', id: FRESH }), model: 'opus', fallbackModels: ['sonnet', 'haiku'] }, 'C')
+  assert.deepEqual(argv.slice(argv.indexOf('--fallback-model'), argv.indexOf('--fallback-model') + 2), ['--fallback-model', 'sonnet,haiku'])
+  assert.ok(!headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'C').includes('--fallback-model'))
+})

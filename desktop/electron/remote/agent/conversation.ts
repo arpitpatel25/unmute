@@ -31,6 +31,9 @@ export interface AgentChatTurn {
   /** Set on a turn that failed, so the view can render it as an error rather
    *  than as something the Agent claimed. */
   failed?: boolean
+  /** Said about this answer — e.g. that it came from a fallback model or
+   *  another provider because the chosen one was unavailable. */
+  notice?: string
 }
 
 /**

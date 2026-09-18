@@ -87,13 +87,21 @@ export class ProviderHealth {
     return false
   }
 
-  /** The only provider a user request may use. Availability is reported to the
-   * caller; it is never repaired by silently substituting another identity. */
+  /**
+   * Which providers a request may use, in order. The chosen one alone, unless
+   * the user allowed switching when it cannot answer (Unmute Agent settings,
+   * on by default) — then every other installed provider after it, and the
+   * chosen one moves behind them while it is cooling down. Never silent: the
+   * caller logs the switch, and the setting itself is never rewritten.
+   */
   order(
     preferred: AgentProviderId,
-    _installed: (provider: AgentProviderId) => boolean = () => true,
+    installed: (provider: AgentProviderId) => boolean = () => true,
+    allowSwitch = false,
   ): AgentProviderId[] {
-    return [preferred]
+    if (!allowSwitch) return [preferred]
+    const others = PROVIDER_IDS.filter(p => p !== preferred && installed(p) && this.isUsable(p))
+    return this.isUsable(preferred) ? [preferred, ...others] : [...others, preferred]
   }
 
   /** For logging and the availability payload the UI reads. */

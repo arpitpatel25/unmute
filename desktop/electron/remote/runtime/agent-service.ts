@@ -1,3 +1,4 @@
+import { setAgentModelChoices, type AgentModelChoices } from '../agent/modelPolicy'
 import { mkdir, stat, access, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join, dirname, basename, isAbsolute } from 'node:path'
@@ -32,7 +33,11 @@ import { startMcpServer, MCP_PATH, type McpServer } from '../mcp-server'
 import { createLogger } from '../log'
 import { diagnostic } from '../diagnostics'
 
-export type AgentRuntimeConfig = { masterKey: string; selectedProvider: AgentProviderId; maxActiveProcesses?: number; conversationCeiling?: number; notetaker?: boolean }
+export type AgentRuntimeConfig = { masterKey: string; selectedProvider: AgentProviderId; maxActiveProcesses?: number; conversationCeiling?: number; notetaker?: boolean
+  /** Per-provider default model and fallbacks (agent/modelPolicy.ts). */
+  models?: AgentModelChoices
+  /** Continue on another provider when this one cannot answer. Default on. */
+  switchWhenUnavailable?: boolean }
 export type AgentRuntimeEvent = { kind: 'view'; view: AgentConversationView } | { kind: 'activity'; activity: AgentInteractionActivity }
   | { kind: 'completion'; submissionId: string; result: AgentInteractionResult }
 export type AgentHostCall = (method: string, args: unknown[]) => Promise<any>
@@ -58,7 +63,10 @@ export class AgentRuntimeService {
     ])
   }
   private async configure(input: AgentRuntimeConfig): Promise<unknown> {
+    setAgentModelChoices(input.models)
     if (this.lifecycle) {
+      this.config!.models = input.models
+      this.config!.switchWhenUnavailable = input.switchWhenUnavailable
       const providerChanged = this.config!.selectedProvider !== input.selectedProvider
       this.config!.selectedProvider = input.selectedProvider
       this.config!.conversationCeiling = input.conversationCeiling
@@ -150,6 +158,8 @@ export class AgentRuntimeService {
         controller: this.controller, selectedProvider, ceiling: () => this.config?.conversationCeiling ?? 20, prepareFresh,
         pin: ids => this.supervisor!.pinConversation(ids), close: id => this.supervisor!.closeRun(id),
         onView: view => { if (view.record.phase === 'ready') this.activity = undefined; this.emit({ kind: 'view', view }) },
+        alternateProvider: current => this.config?.switchWhenUnavailable === false ? undefined
+          : this.probes.find(p => p.available && p.provider !== current)?.provider,
       })
       await this.lifecycle.initialize()
       this.probes = await Promise.all([...this.providers.values()].map(provider => provider.probe()))
@@ -171,6 +181,8 @@ export class AgentRuntimeService {
       if (!this.lifecycle || !this.config) throw new Error('Agent runtime is not configured')
       const update = args[0] as Partial<Omit<AgentRuntimeConfig, 'masterKey'>>
       if (update.conversationCeiling !== undefined) this.config.conversationCeiling = update.conversationCeiling
+      if (update.models !== undefined) { this.config.models = update.models; setAgentModelChoices(update.models) }
+      if (update.switchWhenUnavailable !== undefined) this.config.switchWhenUnavailable = update.switchWhenUnavailable
       if (update.selectedProvider) {
         this.config.selectedProvider = update.selectedProvider
         await this.lifecycle.requestProvider(update.selectedProvider)

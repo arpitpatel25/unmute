@@ -2208,9 +2208,12 @@ export class NotchController {
     if (snapshot.draft.revision >= this.agentDraftRevision) {
       this.agentDraft = snapshot.draft.text; this.agentDraftRevision = snapshot.draft.revision
     }
-    const toBlock = (turn: AgentConversationView['snapshot']['chat']['turns'][number]): Block => turn.failed
-      ? { kind: 'error' as const, message: turn.text }
-      : { kind: 'message' as const, role: turn.role === 'user' ? 'user' as const : 'assistant' as const, text: turn.text, at: turn.at }
+    const toBlocks = (turn: AgentConversationView['snapshot']['chat']['turns'][number]): Block[] => [
+      ...(turn.notice ? [{ kind: 'notice' as const, text: turn.notice }] : []),
+      turn.failed
+        ? { kind: 'error' as const, message: turn.text }
+        : { kind: 'message' as const, role: turn.role === 'user' ? 'user' as const : 'assistant' as const, text: turn.text, at: turn.at },
+    ]
     // WHAT YOU SEE STOPS WHERE THE MODEL'S MEMORY STOPS. A fresh provider
     // session — a switch, a rotation — keeps every earlier message on screen,
     // but the model only has its own session plus a short handoff. 130 messages
@@ -2225,9 +2228,9 @@ export class NotchController {
     const current = split === -1 ? [] : turns.slice(split)
     const freshNotice = !!snapshot.notice && /^(Switched to|Started a fresh conversation)/.test(snapshot.notice)
     this.agentBlocks = [
-      ...earlier.map(toBlock),
+      ...earlier.flatMap(toBlocks),
       ...(earlier.length && sessionStart !== undefined ? [{ kind: 'sessionBoundary' as const, text: sessionDivider(sessionStart, snapshot.notice) }] : []),
-      ...current.map(toBlock),
+      ...current.flatMap(toBlocks),
     ]
     // Opens on the current session alone; earlier ones sit behind "Load earlier".
     this.agentSessionMessages = earlier.length ? Math.max(1, current.filter(turn => !turn.failed).length) : 0

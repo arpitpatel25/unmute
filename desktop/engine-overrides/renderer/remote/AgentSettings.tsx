@@ -7,6 +7,8 @@ type AgentProvider = 'claude' | 'codex'
 
 interface AgentSettingsSnapshot {
   agentProvider: AgentProvider
+  agentModels?: Partial<Record<AgentProvider, string>>
+  switchWhenUnavailable?: boolean
   unmuteAgentAvailable: boolean
   unmuteAgentMaxProcesses: number
 }
@@ -22,7 +24,17 @@ interface AgentAvailabilitySnapshot {
   }>
 }
 
+interface AgentModelChoices {
+  id: AgentProvider
+  label: string
+  selected: string
+  models: Array<{ id: string; label: string }>
+}
+
 type AgentSettingsAPI = {
+  remoteGetAgentModelChoices?: () => Promise<AgentModelChoices[]>
+  remoteSetUnmuteAgentModel?: (provider: AgentProvider, model: string) => Promise<boolean>
+  remoteSetUnmuteAgentSwitch?: (on: boolean) => Promise<boolean>
   remoteGetAgentSettings?: () => Promise<AgentSettingsSnapshot>
   remoteSetUnmuteAgentProvider?: (provider: AgentProvider) => Promise<boolean>
   remoteGetAgentAvailability?: () => Promise<AgentAvailabilitySnapshot>
@@ -48,7 +60,7 @@ const AVAILABILITY_COPY: Record<NonNullable<AgentAvailabilitySnapshot['reason']>
   // that defaults to false, so two Macs on the identical version disagree —
   // and this copy sent people looking at version numbers. Say where the switch
   // actually lives.
-  disabled: 'The Agent is switched off on this Mac. Turn it on above — the setting is per-machine, so each Mac starts off.',
+  disabled: 'The Agent is switched off on this Mac. Turn it on above — the setting is per-machine.',
   initializing: 'Unmute Agent is preparing its encrypted memory and checking local providers.',
   'keychain-unavailable': 'Encrypted memory is unavailable because macOS Keychain protection could not be opened.',
   'storage-unavailable': 'Encrypted memory could not be opened. Existing memory was left untouched.',
@@ -58,6 +70,7 @@ const AVAILABILITY_COPY: Record<NonNullable<AgentAvailabilitySnapshot['reason']>
 export function AgentSettings() {
   const [settings, setSettings] = useState<AgentSettingsSnapshot | null>(null)
   const [availability, setAvailability] = useState<AgentAvailabilitySnapshot | null>(null)
+  const [modelChoices, setModelChoices] = useState<AgentModelChoices[] | null>(null)
 
   const load = useCallback(() => {
     void api().remoteGetAgentSettings?.().then((value) => value && setSettings(value)).catch(() => {})
@@ -69,6 +82,14 @@ export function AgentSettings() {
     const refresh = window.setInterval(load, 5_000)
     return () => window.clearInterval(refresh)
   }, [load])
+
+  // Read from the providers themselves, once per visit — spawning a model
+  // probe every five seconds would cost more than the list is worth.
+  const loadModels = useCallback(() => {
+    void api().remoteGetAgentModelChoices?.().then((value) => value && setModelChoices(value)).catch(() => {})
+  }, [])
+  const installedKey = availability?.providers.filter(p => p.available).map(p => p.id).join(',') ?? ''
+  useEffect(() => { loadModels() }, [loadModels, installedKey])
 
   if (!settings) return null
 
@@ -91,6 +112,18 @@ export function AgentSettings() {
     load()
   }
 
+  const selectModel = async (provider: AgentProvider, model: string) => {
+    setModelChoices((current) => current?.map(c => c.id === provider ? { ...c, selected: model } : c) ?? current)
+    await api().remoteSetUnmuteAgentModel?.(provider, model)
+    loadModels()
+  }
+
+  const setSwitch = async (on: boolean) => {
+    setSettings((current) => current ? { ...current, switchWhenUnavailable: on } : current)
+    await api().remoteSetUnmuteAgentSwitch?.(on)
+    load()
+  }
+
   const enabled = settings.unmuteAgentAvailable
 
   return (
@@ -106,7 +139,7 @@ export function AgentSettings() {
       <div className="bg-white border border-border rounded-[12px] overflow-hidden mb-3">
         <SettingRow
           label="Unmute Agent"
-          description="Hold right Command and talk to Unmute itself — what it remembers, what you have been working on, and what to pick back up. Off on every Mac until you turn it on here."
+          description="Hold right Command and talk to Unmute itself — what it remembers, what you have been working on, and what to pick back up."
         >
           <Toggle checked={enabled} onChange={(on) => void setEnabled(on)} />
         </SettingRow>
@@ -166,6 +199,58 @@ export function AgentSettings() {
             <p className="text-[11px] text-success mt-3">Ready for new Agent conversations.</p>
           )}
         </div>
+      </div>
+
+      {/* THE MODEL, PER INSTALLED PROVIDER. Only what is installed is shown —
+          a Mac with just Codex chooses among Codex's models and nothing else —
+          and the list is each provider's own, so it holds what this account
+          can actually use. */}
+      {modelChoices && modelChoices.length > 0 && (
+        <div className="bg-white border border-border rounded-[12px] overflow-hidden mt-3">
+          <div className="px-5 py-4">
+            <p className="text-[13px] font-medium text-ink">Default model</p>
+            <p className="text-[11px] text-ink-35 mt-0.5 mb-3 leading-relaxed">
+              What the Agent uses first. If it is unavailable — out of usage, rate-limited, or not on
+              your plan — the Agent answers with the next model instead of stopping, and says so.
+            </p>
+            <div className="space-y-3">
+              {modelChoices.map((choice) => (
+                <div key={choice.id}>
+                  <span className="flex items-center gap-2 mb-1.5">
+                    <ProviderGlyph backend={choice.id} terminal title={choice.label} />
+                    <span className="text-[12px] font-medium text-ink">{choice.label}</span>
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {choice.models.map((model) => {
+                      const selected = model.id === choice.selected
+                      return (
+                        <button
+                          key={model.id}
+                          type="button"
+                          onClick={() => { void selectModel(choice.id, model.id) }}
+                          className={`px-3 py-1.5 rounded-[8px] border text-[12px] transition-colors ${
+                            selected ? 'border-ink bg-cream-mid text-ink font-medium' : 'border-border bg-white text-ink-60 hover:bg-cream-mid'
+                          }`}
+                        >
+                          {model.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white border border-border rounded-[12px] overflow-hidden mt-3">
+        <SettingRow
+          label="Switch when unavailable"
+          description="If every model of your provider is unavailable, continue on another installed provider instead of blocking the chat. The answer says which one replied; your choices above stay as they are."
+        >
+          <Toggle checked={settings.switchWhenUnavailable !== false} onChange={(on) => void setSwitch(on)} />
+        </SettingRow>
       </div>
     </div>
   )

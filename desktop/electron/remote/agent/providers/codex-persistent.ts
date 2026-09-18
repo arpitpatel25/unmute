@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
 import type { AgentProcessDriver, AgentProcessEvent, AgentProcessLaunch } from '../provider'
 import { diagnostic, type DiagnosticSink } from '../../diagnostics'
+import { parseModels } from '../../codex/appserver'
+import { codexModelUnavailable } from '../modelAvailability'
+import { agentModelName, markModelUnavailable, markModelWorking } from '../modelPolicy'
 
 /** The app-server lacks exec's ignore-user-config/ignore-rules loader flags.
  * Give it a private, empty home instead. Only auth and native conversation
@@ -74,6 +77,16 @@ export class CodexPersistentProcess implements AgentProcessDriver {
   private startingTurn = false
   private buffered: Array<{ method: string; params: any }> = []
   private closed = false
+  /** What the current turn said, kept so an unavailable model can be retried. */
+  private lastText = ''
+  /** Models this turn has already tried. */
+  private tried = new Set<string>()
+  /** The last terminal error Codex reported for this turn. */
+  private turnError?: { codexErrorInfo?: unknown; message?: string }
+  /** Told to the user with this turn's answer. */
+  private turnNotice?: string
+  /** Learned before the first turn (the default was not on this account). */
+  private pendingNotice?: string
 
   constructor(private readonly options: Options = {}) {}
   async start(launch: AgentProcessLaunch): Promise<void> { this.launch = launch }
@@ -82,18 +95,57 @@ export class CodexPersistentProcess implements AgentProcessDriver {
     if (!this.launch || this.closed || this.turnId || this.startingTurn) throw new Error('Codex session unavailable')
     this.hasDispatched = false
     if (!this.connection) await this.initialize()
+    this.lastText = text
+    this.tried = new Set(this.model ? [this.model] : [])
+    this.turnNotice = this.pendingNotice
+    this.pendingNotice = undefined
+    this.hasDispatched = true
+    await this.startTurn(text)
+    this.queue.emit({ type: 'handle', sessionId: this.threadId!, observed: true, model: this.model })
+    for (const { method, params } of this.buffered.splice(0)) this.notification(method, params)
+  }
+
+  /** One `turn/start`. A `model` override sticks to the thread for later turns. */
+  private async startTurn(text: string, model?: string): Promise<void> {
     this.startingTurn = true
     this.finalText = ''
-    this.hasDispatched = true
+    this.turnError = undefined
     try {
       const response = await this.connection!.request<{ turn: { id: string } }>('turn/start', {
         threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }], effort: 'medium',
+        ...(model ? { model } : {}),
       })
       if (!response.turn?.id) throw new Error('Missing accepted turn')
       this.turnId = response.turn.id
-      this.queue.emit({ type: 'handle', sessionId: this.threadId!, observed: true, model: this.model })
     } finally { this.startingTurn = false }
+  }
+
+  /**
+   * THE CHOSEN MODEL IS UNAVAILABLE — answer with the next one instead of
+   * blocking the chat. Same thread, so the conversation is intact; Codex keeps
+   * the override for later turns, and the next session tries the default again
+   * once its cooldown lapses.
+   */
+  private async retryOn(next: string, failed: string, reason: string): Promise<void> {
+    this.tried.add(next)
+    this.queue.emit({ type: 'activity', kind: 'progress', summary: `${agentModelName('codex', failed)} is unavailable (${reason}); trying ${agentModelName('codex', next)}` })
+    const original = this.launch?.model ?? failed
+    this.turnNotice = `${agentModelName('codex', original)} was unavailable (${reason}), so this answer is from ${agentModelName('codex', next)}.`
+    this.model = next
+    try { await this.startTurn(this.lastText, next) }
+    catch (error) {
+      this.queue.emit({ type: 'completion', outcome: 'failed', failure: { kind: 'model-unavailable', reason, message: (error as Error).message } })
+      return
+    }
     for (const { method, params } of this.buffered.splice(0)) this.notification(method, params)
+  }
+
+  /** Models this account can use, from Codex itself; empty if it cannot say. */
+  private async availableModels(): Promise<string[]> {
+    try {
+      const result = await this.connection!.request<{ data?: unknown[] }>('model/list', {})
+      return parseModels((result?.data ?? []) as Parameters<typeof parseModels>[0]).map(m => m.id)
+    } catch { return [] }
   }
 
   private async initialize(): Promise<void> {
@@ -104,12 +156,24 @@ export class CodexPersistentProcess implements AgentProcessDriver {
     })
     await this.connection.request('initialize', { clientInfo: { name: 'unmute-agent', version: '1' } })
     this.connection.notify('initialized', {})
+    // CHECK BEFORE ASKING. A default this account cannot use (not on the plan,
+    // retired) fails every turn; the model list says so up front.
+    let model = launch.model
+    if (model) {
+      const available = await this.availableModels()
+      if (available.length && !available.includes(model)) {
+        const next = (launch.fallbackModels ?? []).find(m => available.includes(m)) ?? available[0]
+        markModelUnavailable('codex', model)
+        this.pendingNotice = `${agentModelName('codex', model)} is not available on this account, so this answer is from ${agentModelName('codex', next)}.`
+        model = next
+      }
+    }
     const resumePath = launch.session.id && launch.environment.HOME
       ? await (this.options.resolveResumePath ?? findResumePath)(launch.session.id, launch.environment.HOME) : undefined
     const response = await this.connection.request('thread/' + (launch.session.kind === 'resume' ? 'resume' : 'start'), {
       ...(launch.session.id ? { threadId: launch.session.id } : {}),
       ...(resumePath ? { path: resumePath } : {}),
-      cwd: launch.cwd, ...(launch.model ? { model: launch.model } : {}),
+      cwd: launch.cwd, ...(model ? { model } : {}),
       approvalPolicy: 'never', sandbox: 'read-only', developerInstructions: prompt,
       config: {
         model_reasoning_effort: 'medium',
@@ -142,6 +206,7 @@ export class CodexPersistentProcess implements AgentProcessDriver {
         itemType: item?.type, server: item?.server, tool: item?.tool, status: item?.status,
         isError: !!item?.error })
     }
+    if (method === 'error' && params.willRetry !== true) this.turnError = params.error
     if (method === 'item/completed' && item?.type === 'agentMessage' && typeof item.text === 'string') {
       this.finalText = item.text
       this.queue.emit({ type: 'activity', kind: 'message', summary: item.text })
@@ -150,8 +215,26 @@ export class CodexPersistentProcess implements AgentProcessDriver {
     } else if (method === 'turn/completed') {
       const status = params.turn.status
       this.turnId = undefined
+      const model = this.model ?? this.launch?.model
+      if (status === 'failed') {
+        const error = params.turn.error ?? this.turnError
+        const reason = codexModelUnavailable(error)
+        if (reason && !this.finalText) {
+          if (model) { markModelUnavailable('codex', model); this.tried.add(model) }
+          const next = (this.launch?.fallbackModels ?? []).find(m => !this.tried.has(m))
+          if (next && model) { void this.retryOn(next, model, reason); return }
+        }
+        this.queue.emit({ type: 'completion', outcome: 'failed', failure: {
+          ...(reason ? { kind: 'model-unavailable' as const, reason } : {}),
+          ...(typeof error?.message === 'string' ? { message: error.message.slice(0, 600) } : {}),
+          ...(error?.codexErrorInfo ? { subtype: typeof error.codexErrorInfo === 'string' ? error.codexErrorInfo : Object.keys(error.codexErrorInfo)[0] } : {}),
+        } })
+        return
+      }
+      if (status === 'completed' && model) markModelWorking('codex', model)
       this.queue.emit({ type: 'completion', outcome: status === 'completed' ? 'completed' : status === 'interrupted' ? 'interrupted' : 'failed',
-        ...(this.finalText ? { finalText: this.finalText } : {}) })
+        ...(this.finalText ? { finalText: this.finalText } : {}),
+        ...(status === 'completed' && this.turnNotice ? { notice: this.turnNotice } : {}) })
     }
   }
 

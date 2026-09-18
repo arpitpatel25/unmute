@@ -86,6 +86,9 @@ export type Block =
   /** Where a fresh Agent session began. Everything above it is on screen but
    *  not in the model's memory, beyond the handoff it was given. */
   | { kind: 'sessionBoundary'; text: string }
+  /** A quiet line about a turn — e.g. that its answer came from a fallback
+   *  model. Drawn with the turn, before the answer. */
+  | { kind: 'notice'; text: string }
   /**
    * A turn boundary, carrying its clock.
    *

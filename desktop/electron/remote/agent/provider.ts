@@ -26,6 +26,8 @@ export interface AgentMcpContext {
 export interface AgentStartInput {
   requireObservedAcceptance?: boolean
   model?: string
+  /** Models to fall back to, in order, if `model` is unavailable. */
+  fallbackModels?: string[]
   runId: string
   interactionId: string
   cwd: string
@@ -56,7 +58,17 @@ export interface AgentCompletion {
    * explained itself on the way out. Optional because a clean turn has nothing
    * to say and older drivers do not set it.
    */
-  failure?: { subtype?: string; message?: string; exitCode?: number }
+  failure?: {
+    subtype?: string; message?: string; exitCode?: number
+    /** Set when another model would likely have answered (modelAvailability.ts):
+     *  the signal for switching provider once every model of this one failed. */
+    kind?: 'model-unavailable'
+    /** Short human reason, e.g. "usage limit reached". */
+    reason?: string
+  }
+  /** Said to the user alongside the answer, e.g. that the turn switched
+   *  models because the chosen one was unavailable. */
+  notice?: string
 }
 
 export interface AgentSession {
@@ -107,7 +119,7 @@ function publicErrorMessage(code: AgentProviderErrorCode): string {
 export type AgentProcessEvent =
   | { type: 'handle'; sessionId: string; observed?: boolean; model?: string }
   | { type: 'activity'; kind: AgentActivityKind; summary: string }
-  | { type: 'completion'; outcome: AgentCompletion['outcome']; finalText?: string; failure?: AgentCompletion['failure'] }
+  | { type: 'completion'; outcome: AgentCompletion['outcome']; finalText?: string; failure?: AgentCompletion['failure']; notice?: string }
   | { type: 'observer-failure' }
   | { type: 'terminal-output'; chunk: string }
   /** `stderrTail` is the process's last words. Optional because only the
@@ -116,6 +128,8 @@ export type AgentProcessEvent =
 
 export interface AgentProcessLaunch {
   model?: string
+  /** Tried in order when `model` is unavailable. */
+  fallbackModels?: string[]
   provider: AgentProviderId
   binary: string
   argv: string[]
@@ -357,6 +371,7 @@ export class CliProviderRuntime implements AgentProvider {
       : { kind: 'fresh' }
     const launch: AgentProcessLaunch = {
       ...(input.model ? { model: input.model } : {}),
+      ...(input.fallbackModels?.length ? { fallbackModels: input.fallbackModels } : {}),
       provider: this.id,
       binary: this.options.binary,
       argv: this.options.argv(sessionShape),
@@ -474,6 +489,7 @@ export class CliProviderRuntime implements AgentProvider {
               // The last link. Everything above carried the reason this far and
               // it was dropped here, one hop from the supervisor that needed it.
               ...(event.failure ? { failure: event.failure } : {}),
+              ...(event.notice ? { notice: event.notice } : {}),
             })
           }
           continue

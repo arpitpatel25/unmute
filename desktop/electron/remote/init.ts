@@ -31,6 +31,7 @@ import { claudeUnattendedArgs, refreshManagedPolicy } from './permission-ceiling
 import { draftInput } from './task-input'
 import { safeArtifactURL, artifactPathAction } from './artifact-url'
 import { ClaudeTaskSession, type ClaudeTaskModel } from './claude/task-session'
+import { agentModelName, defaultAgentModel, setAgentModelChoices, type AgentModelChoices } from './agent/modelPolicy'
 import { writeFileAtomic } from './atomic-file'
 import { TaskDraftStore } from './task-draft'
 import { stageTaskDraftAttachment, persistTaskDraftFile } from './task-draft-attachment'
@@ -477,6 +478,15 @@ interface RemoteSettings {
   /** Maximum concurrently owned Agent CLI processes. */
   unmuteAgentMaxProcesses: number
   unmuteAgentConversationCeiling: number
+  /** The Agent's default model per provider; absent = the built-in default
+   *  (agent/modelPolicy.ts). Only ever written by the user. */
+  unmuteAgentModels: Partial<Record<AgentProviderId, string>>
+  /** Continue on another model, then another provider, when the chosen one
+   *  cannot answer — instead of blocking the chat. */
+  unmuteAgentSwitchWhenUnavailable: boolean
+  /** True once the user has set the Agent on/off themselves; until then the
+   *  default (on) applies, including on installs from before it was on. */
+  unmuteAgentAvailableUserSet: boolean
 }
 
 const settings = new Store<RemoteSettings>({
@@ -523,11 +533,22 @@ const settings = new Store<RemoteSettings>({
     agentTasksEnabled: true,
     computerUse: { enabled: false, screenshotEnabled: true, allowAll: true, allowed: [] },
     unmuteAgentProvider: 'claude',
-    unmuteAgentAvailable: false,
+    unmuteAgentAvailable: true,
     unmuteAgentMaxProcesses: 2,
     unmuteAgentConversationCeiling: 20,
+    unmuteAgentModels: {},
+    unmuteAgentSwitchWhenUnavailable: true,
+    unmuteAgentAvailableUserSet: false,
   },
 })
+
+// THE AGENT IS ON BY DEFAULT. It used to be an internal rollout gate that
+// shipped off, and electron-store writes defaults into the file, so installs
+// from before this carry an explicit `false` the user never chose. Turn those
+// on — but never over a choice the user made in Settings.
+if (settings.get('unmuteAgentAvailableUserSet') !== true && settings.get('unmuteAgentAvailable') !== true) {
+  settings.set('unmuteAgentAvailable', true)
+}
 
 // Computer Use (ax-mcp) server handle + a lightweight activity broadcaster the
 // menu-bar / overlay can subscribe to (shows what's being driven — the live
@@ -922,6 +943,68 @@ function agentProviderInstalled(id: AgentProviderId): boolean {
 }
 
 /**
+ * WHAT EACH PROVIDER OFFERS THE AGENT, from the provider itself: Codex's
+ * `model/list`, Claude's initialize. The user's default comes from these, and
+ * everything else in them is the fallback chain, in the provider's own order.
+ * Empty until read; modelPolicy.ts has a small static chain for that window.
+ */
+const agentModelCatalog: Partial<Record<AgentProviderId, Array<{ id: string; label: string }>>> = {}
+let agentCatalogLoading: Promise<void> | null = null
+
+function refreshAgentModelCatalog(): Promise<void> {
+  return agentCatalogLoading ??= (async () => {
+    const reads: Array<Promise<void>> = []
+    if (agentProviderInstalled('codex')) {
+      reads.push(listCodexCliModels().then(models => {
+        if (models.length) agentModelCatalog.codex = models.map(m => ({ id: m.id, label: m.label }))
+      }).catch(error => log.warn('agent-model-catalog', { provider: 'codex', error: (error as Error).message })))
+    }
+    if (agentProviderInstalled('claude')) {
+      reads.push((async () => {
+        if (!chatClaudeModels.length) {
+          const probe = new ClaudeTaskSession({ binary: 'claude', cwd: tmpdir(), controlTimeoutMs: 15_000, onEvent: () => {} })
+          try { await probe.start(); chatClaudeModels = probe.models } finally { probe.close() }
+        }
+        // `default` is the CLI's own alias for whatever it picks, not a model
+        // anyone chooses, and it cannot be a --fallback-model.
+        const models = chatClaudeModels.filter(m => m.id !== 'default')
+        if (models.length) agentModelCatalog.claude = models.map(m => ({ id: m.id, label: m.label }))
+      })().catch(error => log.warn('agent-model-catalog', { provider: 'claude', error: (error as Error).message })))
+    }
+    await Promise.all(reads)
+    pushAgentModelSettings()
+  })().finally(() => { agentCatalogLoading = null })
+}
+
+/** The model settings every Agent process needs: the user's defaults, the
+ *  fallback chains, and whether switching is allowed. */
+function agentModelSettings(): { models: AgentModelChoices; switchWhenUnavailable: boolean } {
+  const chosen = settings.get('unmuteAgentModels') ?? {}
+  const models: AgentModelChoices = {}
+  for (const provider of ['codex', 'claude'] as const) {
+    const catalog = agentModelCatalog[provider] ?? []
+    const model = chosen[provider]
+    const primary = (model || defaultAgentModel(provider)).replace(/\[.*\]$/, '')
+    models[provider] = {
+      ...(model ? { model } : {}),
+      ...(catalog.length ? {
+        fallbacks: catalog.map(m => m.id).filter(id => id.replace(/\[.*\]$/, '') !== primary),
+        labels: Object.fromEntries(catalog.map(m => [m.id, m.label])),
+      } : {}),
+    }
+  }
+  setAgentModelChoices(models)
+  return { models, switchWhenUnavailable: settings.get('unmuteAgentSwitchWhenUnavailable') !== false }
+}
+
+/** Hand changed model settings to the running Agent and the notch label. */
+function pushAgentModelSettings(): void {
+  const update = agentModelSettings()
+  void agentRuntimeRouting?.call('agent.update', update).catch(() => { /* not configured yet: configure carries it */ })
+  notchController?.refresh()
+}
+
+/**
  * The provider the Agent should USE right now.
  *
  * Distinct from `settings.get('unmuteAgentProvider')`, which is the provider
@@ -930,7 +1013,7 @@ function agentProviderInstalled(id: AgentProviderId): boolean {
  */
 function resolveAgentProvider(): AgentProviderId {
   const preferred = settings.get('unmuteAgentProvider')
-  const [effective] = agentProviderHealth.order(preferred, agentProviderInstalled)
+  const [effective] = agentProviderHealth.order(preferred, agentProviderInstalled, settings.get('unmuteAgentSwitchWhenUnavailable') !== false)
   if (effective !== preferred) {
     log.event('agent-provider-fallback', {
       chosen: preferred,
@@ -953,7 +1036,7 @@ async function runAgentHeadless(
   const run = runHeadlessSummary
   if (!run) return { ok: false, error: 'headless agent is not wired in this build' }
   const preferred = settings.get('unmuteAgentProvider')
-  const order = agentProviderHealth.order(preferred, agentProviderInstalled)
+  const order = agentProviderHealth.order(preferred, agentProviderInstalled, settings.get('unmuteAgentSwitchWhenUnavailable') !== false)
   let last: { ok: false; error: string } = { ok: false, error: 'no agent provider available' }
   for (const provider of order) {
     const result = await run(provider, input)
@@ -1696,8 +1779,10 @@ async function initializeUnmuteAgent(): Promise<void> {
       maxActiveProcesses: settings.get('unmuteAgentMaxProcesses'),
       conversationCeiling: settings.get('unmuteAgentConversationCeiling') ?? 20,
       notetaker: !!notetakerAdapters,
+      ...agentModelSettings(),
     })
     if (generation !== unmuteAgentGeneration) { client.dispose(); return }
+    void refreshAgentModelCatalog()
     const raw = client.availability as { available?: boolean; providers?: Array<{ id: AgentProviderId; available: boolean }> }
     const providers = (raw.providers ?? []).map(provider => ({
       id: provider.id,
@@ -5115,7 +5200,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           if (settings.get('unmuteAgentAvailable') !== true || unmuteAgentLifecycle !== client) return false as const
           await client.configure({ masterKey: key.toString('base64'), selectedProvider: settings.get('unmuteAgentProvider'),
             maxActiveProcesses: settings.get('unmuteAgentMaxProcesses'), conversationCeiling: settings.get('unmuteAgentConversationCeiling') ?? 20,
-            notetaker: !!notetakerAdapters })
+            notetaker: !!notetakerAdapters, ...agentModelSettings() })
         } finally { key.fill(0) }
       }, () => client.reconnect())).catch(error => log.warn('Agent runtime recovery failed', { error: (error as Error).message }))
     }
@@ -6672,6 +6757,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     settings.get('unmuteAgentAvailable') === true)
   ipcMain.handle('remote:set-unmute-agent-available', async (_e, on: boolean) => {
     settings.set('unmuteAgentAvailable', on === true)
+    settings.set('unmuteAgentAvailableUserSet', true)
     // Keep the keyboard's copy in step, so its refusal happens before the lane
     // latches rather than after — see initRemote's own push of this.
     deps.keyboardManager.setUnmuteAgentAvailable?.(on === true)
@@ -7383,6 +7469,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // ── Unmute Agent — independent provider, availability, and memory IPC ──
   ipcMain.handle('remote:get-agent-settings', async () => ({
     agentProvider: settings.get('unmuteAgentProvider'),
+    agentModels: settings.get('unmuteAgentModels') ?? {},
+    switchWhenUnavailable: settings.get('unmuteAgentSwitchWhenUnavailable') !== false,
     unmuteAgentAvailable: settings.get('unmuteAgentAvailable') === true,
     unmuteAgentMaxProcesses: settings.get('unmuteAgentMaxProcesses'),
     unmuteAgentConversationCeiling: settings.get('unmuteAgentConversationCeiling'),
@@ -7398,6 +7486,33 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return true
   })
   ipcMain.handle('remote:get-agent-availability', async () => structuredClone(unmuteAgentAvailability))
+  // THE MODEL CHOICES, per INSTALLED provider only — a Mac with just Codex is
+  // offered just Codex's models. Read from each provider, so the list is what
+  // this account can actually use.
+  ipcMain.handle('remote:get-agent-model-choices', async () => {
+    await refreshAgentModelCatalog().catch(() => {})
+    const chosen = settings.get('unmuteAgentModels') ?? {}
+    return (['codex', 'claude'] as const).filter(agentProviderInstalled).map(id => ({
+      id,
+      label: id === 'claude' ? 'Claude' : 'Codex',
+      selected: chosen[id] || defaultAgentModel(id),
+      models: agentModelCatalog[id] ?? [{ id: defaultAgentModel(id), label: agentModelName(id, defaultAgentModel(id)) }],
+    }))
+  })
+  ipcMain.handle('remote:set-unmute-agent-model', async (_e, provider: unknown, model: unknown) => {
+    if (provider !== 'claude' && provider !== 'codex') return false
+    if (typeof model !== 'string' || !/^[\w.[\]:-]{1,80}$/.test(model)) return false
+    settings.set('unmuteAgentModels', { ...(settings.get('unmuteAgentModels') ?? {}), [provider]: model })
+    pushAgentModelSettings()
+    log.event('unmute-agent-model-set', { provider, model })
+    return true
+  })
+  ipcMain.handle('remote:set-unmute-agent-switch', async (_e, on: unknown) => {
+    settings.set('unmuteAgentSwitchWhenUnavailable', on === true)
+    pushAgentModelSettings()
+    log.event('unmute-agent-switch-set', { on: on === true })
+    return true
+  })
   ipcMain.handle('remote:agent-retry', async () => unmuteAgentLifecycle?.retry())
   ipcMain.handle('remote:get-agent-conversation', async () => unmuteAgentLifecycle?.view())
   ipcMain.handle('remote:set-agent-conversation-ceiling', async (_event, ceiling: unknown) => {

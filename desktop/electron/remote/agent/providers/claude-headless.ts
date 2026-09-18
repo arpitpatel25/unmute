@@ -6,6 +6,8 @@ import type {
   AgentProcessLaunch,
 } from '../provider'
 import { traceStreamLine, type AgentTrace } from '../trace'
+import { claudeFallbackReason, claudeModelUnavailable } from '../modelAvailability'
+import { agentModelName } from '../modelPolicy'
 
 /**
  * Headless Claude driver — the Agent as one thing, not as a session.
@@ -195,6 +197,11 @@ export function headlessArgv(
     ...(streamingInput ? ['--input-format', 'stream-json', '--replay-user-messages'] : []),
     '--verbose',
     ...(launch.model ? ['--model', launch.model] : []),
+    // THE REST OF THE CHAIN, handled by Claude itself: when the chosen model is
+    // unavailable or overloaded it switches within the same turn and says so
+    // with a `model_fallback` event (measured on 2.1.273), which becomes the
+    // notice under the answer. No retry of ours, so nothing is sent twice.
+    ...(launch.fallbackModels?.length ? ['--fallback-model', launch.fallbackModels.join(',')] : []),
     '--append-system-prompt', systemPrompt,
     '--allowedTools', allowedTools,
     '--disallowedTools', AGENT_TOOL_DENYLIST,
@@ -226,9 +233,22 @@ interface ContentBlock {
  * because a single assistant message can carry prose *and* a tool call, and
  * collapsing that to one event silently drops the second.
  */
-export function headlessEvents(value: unknown): AgentProcessEvent[] {
+/** What a driver remembers between stream lines: a model switch announced
+ *  mid-turn, to be said with that turn's answer. */
+export interface HeadlessTurnState { notice?: string }
+
+export function headlessEvents(value: unknown, state: HeadlessTurnState = {}): AgentProcessEvent[] {
   if (!value || typeof value !== 'object') return []
   const record = value as Record<string, unknown>
+
+  if (record.type === 'system' && record.subtype === 'model_fallback') {
+    const original = typeof record.original_model === 'string' ? record.original_model : 'The chosen model'
+    const switched = typeof record.content === 'string' ? /Switched to (.+?) because/.exec(record.content)?.[1] : undefined
+    const to = switched ?? (typeof record.fallback_model === 'string' ? record.fallback_model : 'another model')
+    const reason = claudeFallbackReason(record.trigger)
+    state.notice = `${agentModelName('claude', original)} was ${reason === 'not available' ? 'not available' : `unavailable (${reason})`}, so this answer is from ${to}.`
+    return [{ type: 'activity', kind: 'progress', summary: `Switched to ${to}` }]
+  }
 
   if (record.type === 'system' && record.subtype === 'init') {
     return typeof record.session_id === 'string'
@@ -264,6 +284,10 @@ export function headlessEvents(value: unknown): AgentProcessEvent[] {
       const message = typeof record.result === 'string' && record.result
         ? record.result
         : (typeof record.error === 'string' ? record.error : undefined)
+      // Claude already tried its fallbacks; this is what it could not route
+      // around. Marked so the Agent can switch provider if that is allowed.
+      const reason = claudeModelUnavailable(message)
+      state.notice = undefined
       return [{
         type: 'completion',
         outcome: 'failed',
@@ -271,14 +295,18 @@ export function headlessEvents(value: unknown): AgentProcessEvent[] {
           ? { failure: {
               ...(typeof record.subtype === 'string' ? { subtype: record.subtype } : {}),
               ...(message ? { message: message.slice(0, 600) } : {}),
+              ...(reason ? { kind: 'model-unavailable' as const, reason } : {}),
             } }
           : {}),
       }]
     }
+    const notice = state.notice
+    state.notice = undefined
     return [{
       type: 'completion',
       outcome: 'completed',
       ...(typeof record.result === 'string' && record.result ? { finalText: record.result } : {}),
+      ...(notice ? { notice } : {}),
     }]
   }
 
@@ -359,6 +387,7 @@ class EventQueue implements AsyncIterable<AgentProcessEvent> {
 }
 
 export class HeadlessAgentProcess implements AgentProcessDriver {
+  private readonly turnState: HeadlessTurnState = {}
   hasDispatched = false
   private readonly queue = new EventQueue()
   readonly events: AsyncIterable<AgentProcessEvent> = this.queue
@@ -436,7 +465,7 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
         // TRACE FIRST. If a line both explains the turn and ends it, the
         // explanation must already be written down when the end is announced.
         for (const trace of traceStreamLine(parsed)) this.onTrace(trace)
-        for (const event of headlessEvents(parsed)) {
+        for (const event of headlessEvents(parsed, this.turnState)) {
           if (event.type === 'completion') this.completed = true
           this.queue.emit(event)
         }
@@ -493,6 +522,7 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
  * the session id is.
  */
 export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
+  private readonly turnState: HeadlessTurnState = {}
   readonly persistent = true
   hasDispatched = false
   private pendingText: string | null = null
@@ -633,7 +663,7 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
           this.pendingText = null
         }
         for (const trace of traceStreamLine(parsed)) this.onTrace(trace)
-        for (const event of headlessEvents(parsed)) {
+        for (const event of headlessEvents(parsed, this.turnState)) {
           // Learn the id once and keep it for the life of the conversation —
           // a resumed process re-announces the same one, and taking it again is
           // harmless. What must not happen is losing it on a respawn.
