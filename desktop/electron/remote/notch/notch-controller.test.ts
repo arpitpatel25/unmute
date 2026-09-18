@@ -2151,6 +2151,25 @@ test('the Agent offers only installed providers and refuses a switch to one that
   assert.deepEqual(switched, [])
 })
 
+test('the Agent picker offers every model of every installed provider, and a model change is sent back', async () => {
+  const set: string[] = []
+  const h = setup({ deps: {
+    agentInstalledProviders: async () => ['codex'],
+    agentModelsFor: () => ({ models: [{ id: 'gpt-6-astra', label: 'GPT-6-Astra' }, { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' }, { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna' }], selected: 'gpt-5.6-sol' }),
+    agentSetModel: async (provider, model) => { set.push(`${provider}:${model}`) },
+  } })
+  h.controller.restoreAgentConversation({ selectedProvider: 'codex', record: { generation: 1, phase: 'ready', provider: 'codex', model: 'gpt-5.6-sol', runId: 'r', effort: 'medium', ceiling: 20, accepted: [], snapshotId: 's' }, snapshot: { generation: 1, chat: { runId: 'r', turns: [{ role: 'agent', text: 'hi', at: 1 }] }, draft: { text: '', revision: 0 }, queued: [] } })
+  h.client.fire({ type: 'pocketOpen' }); h.client.fire({ type: 'pocketExpand' }); h.flush()
+  await new Promise<void>(resolve => setImmediate(resolve))
+  const [codex] = h.client.last('showTask')!.task.chatConfig!.providers
+  assert.deepEqual(codex.models?.map(m => m.id), ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-luna'])
+  assert.equal(codex.selected, 'gpt-5.6-sol')
+  h.client.fire({ type: 'agentSetModel', provider: 'codex', model: 'gpt-5.6-luna' } as never)
+  h.client.fire({ type: 'agentSetModel', provider: 'claude', model: 'opus' } as never)
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.deepEqual(set, ['codex:gpt-5.6-luna'], 'never for a provider that is not installed')
+})
+
 test('opening a task takes the surface from the chat, and keeps it', () => {
   // The other half: a stale agentOpen must not bring the chat back over the
   // task you switched to, nor when you then close that task.

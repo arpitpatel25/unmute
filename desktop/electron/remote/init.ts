@@ -997,11 +997,23 @@ function agentModelSettings(): { models: AgentModelChoices; switchWhenUnavailabl
   return { models, switchWhenUnavailable: settings.get('unmuteAgentSwitchWhenUnavailable') !== false }
 }
 
+/** The Agent's model for one provider — from Settings or the notch picker,
+ *  one setting, so the two never disagree. Takes effect on the next message;
+ *  the conversation continues (the provider resumes it on the new model). */
+function setUnmuteAgentModel(provider: AgentProviderId, model: unknown, via: 'settings' | 'notch'): boolean {
+  if (typeof model !== 'string' || !/^[\w.[\]:-]{1,80}$/.test(model)) return false
+  settings.set('unmuteAgentModels', { ...(settings.get('unmuteAgentModels') ?? {}), [provider]: model })
+  pushAgentModelSettings()
+  log.event('unmute-agent-model-set', { provider, model, via })
+  return true
+}
+
 /** Hand changed model settings to the running Agent and the notch label. */
 function pushAgentModelSettings(): void {
   const update = agentModelSettings()
   void agentRuntimeRouting?.call('agent.update', update).catch(() => { /* not configured yet: configure carries it */ })
   notchController?.refresh()
+  notchController?.refreshAgent()
 }
 
 /**
@@ -5835,6 +5847,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         }),
         agentDraftChanged: (text, revision) => unmuteAgentLifecycle?.setDraft(text, revision) ?? Promise.reject(new Error('Agent unavailable')),
         agentRetry: async () => { await unmuteAgentLifecycle?.retry() },
+        agentModelsFor: (provider) => {
+          if (!agentModelCatalog[provider]) void refreshAgentModelCatalog()
+          return {
+            models: agentModelCatalog[provider] ?? [{ id: defaultAgentModel(provider), label: agentModelName(provider, defaultAgentModel(provider)) }],
+            selected: settings.get('unmuteAgentModels')?.[provider] || defaultAgentModel(provider),
+          }
+        },
+        agentSetModel: async (provider, model) => { setUnmuteAgentModel(provider, model, 'notch') },
         agentSwitchProvider: async (provider) => {
           if (!unmuteAgentLifecycle) throw new Error('Agent unavailable')
           await unmuteAgentLifecycle.requestProvider(provider)
@@ -7501,11 +7521,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
   ipcMain.handle('remote:set-unmute-agent-model', async (_e, provider: unknown, model: unknown) => {
     if (provider !== 'claude' && provider !== 'codex') return false
-    if (typeof model !== 'string' || !/^[\w.[\]:-]{1,80}$/.test(model)) return false
-    settings.set('unmuteAgentModels', { ...(settings.get('unmuteAgentModels') ?? {}), [provider]: model })
-    pushAgentModelSettings()
-    log.event('unmute-agent-model-set', { provider, model })
-    return true
+    return setUnmuteAgentModel(provider, model, 'settings')
   })
   ipcMain.handle('remote:set-unmute-agent-switch', async (_e, on: unknown) => {
     settings.set('unmuteAgentSwitchWhenUnavailable', on === true)

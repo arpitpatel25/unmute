@@ -160,7 +160,11 @@ struct CommandP: Codable {
     }
 }
 
-struct ChatChoiceP: Codable { let id: String; let label: String; let description: String? }
+struct ChatChoiceP: Codable {
+    let id: String; let label: String; let description: String?
+    /// A provider's own models, for the Agent's picker; nil everywhere else.
+    let models: [ChatChoiceP]?; let selected: String?
+}
 struct ChatConfigP: Codable {
     let provider: String; let providerLabel: String; let model: String; let modelLabel: String
     let providers: [ChatChoiceP]; let models: [ChatChoiceP]; let efforts: [ChatChoiceP]; let effort: String?
@@ -728,6 +732,7 @@ enum Event {
     case agentSend(submissionId: String, revision: Int)
     case agentRetry
     case agentSwitchProvider(provider: String)
+    case agentSetModel(provider: String, model: String)
     /// End the Agent conversation and keep nothing; the next turn starts clean.
     case agentNewConversation
     case cancelTaskFollowup(id: String, queueId: String)
@@ -859,6 +864,7 @@ enum Event {
             return ["type": "agentSend", "submissionId": submissionId, "revision": revision]
         case .agentRetry: return ["type": "agentRetry"]
         case .agentSwitchProvider(let provider): return ["type": "agentSwitchProvider", "provider": provider]
+        case .agentSetModel(let provider, let model): return ["type": "agentSetModel", "provider": provider, "model": model]
         case .agentNewConversation: return ["type": "agentNewConversation"]
         case .cancelTaskFollowup(let id, let queueId): return ["type": "cancelTaskFollowup", "id": id, "queueId": queueId]
         case .restoreTaskFollowup(let id, let queueId): return ["type": "restoreTaskFollowup", "id": id, "queueId": queueId]

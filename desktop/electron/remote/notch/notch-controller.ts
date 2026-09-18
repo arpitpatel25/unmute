@@ -181,6 +181,9 @@ export interface NotchControllerDeps {
   agentDraftChanged?(text: string, revision: number): Promise<void>
   agentRetry?(): Promise<void>
   agentSwitchProvider?(provider: 'claude' | 'codex'): Promise<void>
+  /** Every model a provider offers the Agent, and the one chosen. */
+  agentModelsFor?(provider: 'claude' | 'codex'): { models: Array<{ id: string; label: string }>; selected: string }
+  agentSetModel?(provider: 'claude' | 'codex', model: string): Promise<void>
   /** Which Agent providers have their CLI installed. Only these are offered. */
   agentInstalledProviders?(): Promise<Array<'claude' | 'codex'>>
   /** End the Agent conversation and keep nothing. */
@@ -623,6 +626,12 @@ export class NotchController {
       if (provider !== 'claude' && provider !== 'codex') return
       if (!this.agentInstalled.includes(provider)) return
       void this.deps.agentSwitchProvider?.(provider).catch(error => this.agentUnavailable((error as Error).message))
+    })
+    on('agentSetModel', e => {
+      const { provider, model } = e as { provider?: unknown; model?: unknown }
+      if (provider !== 'claude' && provider !== 'codex') return
+      if (typeof model !== 'string' || !model || !this.agentInstalled.includes(provider)) return
+      void this.deps.agentSetModel?.(provider, model).catch(error => this.agentUnavailable((error as Error).message))
     })
     on('agentNewConversation', () => { void this.deps.agentNewConversation?.().catch(error => this.agentUnavailable((error as Error).message)) })
     on('surfaceFillChanged', e => {
@@ -1859,7 +1868,14 @@ export class NotchController {
         modelLabel: agentModelLabel(selected),
         // A provider whose CLI is not installed would only fail on the next
         // message, so it is not offered at all.
-        providers: this.agentInstalled.map(id => ({ id, label: providerLabel(id), description: agentModelLabel(id) })),
+        // EVERY CHOICE, per installed provider: its models under it. Choosing a
+        // model of the current provider keeps the conversation; one of another
+        // provider is also a provider switch.
+        providers: this.agentInstalled.map(id => {
+          const choice = this.deps.agentModelsFor?.(id)
+          return { id, label: providerLabel(id), description: agentModelLabel(id),
+            ...(choice?.models.length ? { models: choice.models.map(m => ({ id: m.id, label: m.label })), selected: choice.selected } : {}) }
+        }),
         models: [], efforts: [], permissions: [], cwd: '', mutable: true, busy: this.agentBusy,
         ...(pendingMessage ? { error: pendingMessage } : {}),
       },
@@ -2274,6 +2290,8 @@ export class NotchController {
   /** Re-publish the currently visible detail after main-owned draft state
    * changes outside a native UI event (for example, Right Option capture). */
   refresh(): void { this.reconcile() }
+  /** Re-send the open Agent chat — its model choices changed. */
+  refreshAgent(): void { if (this.agentOpen) this.sendAgentDetail() }
   openTask(id: string): void { this.onFocusTask(id) }
 
   private setFocus(id: string | null): void {

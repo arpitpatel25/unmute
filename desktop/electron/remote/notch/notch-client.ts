@@ -111,7 +111,9 @@ export interface ErrorP { reason: string; detail?: string }
 export interface McpGapP { message: string; fixCommand: string }
 export interface DraftAttachmentP { id: string; path: string; mimeType: string; name: string; reservationOrder?: number }
 export interface TaskDraftP { text: string; attachments: DraftAttachmentP[]; clientRevision?: number; stagingCount?: number; error?: string; operations?: { id: string; name: string; phase: string; error?: string; order?: number }[] }
-export interface ChatChoiceP { id: string; label: string; description?: string }
+export interface ChatChoiceP { id: string; label: string; description?: string
+  /** A provider's own models, for a picker that chooses both (the Agent's). */
+  models?: ChatChoiceP[]; selected?: string }
 export interface ChatConfigChangeP { model?: string; effort?: string; permission?: string }
 export interface DraftInsertionP { insertionOffset?: number; selectedLength?: number; clientRevision?: number; insertionText?: string; operationId?: string }
 export interface ChatConfigP {
@@ -510,6 +512,8 @@ export type NotchEvent =
   | { type: 'agentSend'; submissionId: string; revision: number }
   | { type: 'agentRetry' }
   | { type: 'agentSwitchProvider'; provider: 'claude' | 'codex' }
+  /** The Agent's model for a provider. Same provider: the conversation continues. */
+  | { type: 'agentSetModel'; provider: 'claude' | 'codex'; model: string }
   /** End this Agent conversation and keep nothing; the next turn starts clean. */
   | { type: 'agentNewConversation' }
   | { type: 'cancelTaskFollowup' | 'restoreTaskFollowup' | 'queueSavedTaskFollowup' | 'recoverUncertainFollowup'; id: string; queueId: string }
