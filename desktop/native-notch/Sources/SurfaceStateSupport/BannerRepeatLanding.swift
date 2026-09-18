@@ -88,24 +88,35 @@ public enum SurfaceRest {
 
 public enum BannerRepeat {
     public static func landing(current: SurfaceRung, pocketOpen: Bool) -> SuppressedBannerLanding {
+        // AN OPEN POCKET ENDS UP WHERE IT CAN BE SEEN, wherever it is now.
+        //
+        // The bar is the only rung that can show it: the cutout has no room and
+        // a panel outranks it. So from dormant that means coming UP, from a
+        // panel it means coming DOWN, and at the bar it is already there.
+        //
+        // The up direction is the one this rule was missing, and the chord is
+        // how you meet it: Right Command + Right Option is pressed with the
+        // surface at rest — you press it to go and look, not because something
+        // called you. The pocket opens into the cutout, the engine commands the
+        // compact rung that would lift it out, that rung is a repeat, and
+        // suppression said "already dormant, nothing to move". Field log 19 Sep
+        // 03:26:47: four and a half seconds in the hole, until the pointer went
+        // looking for it.
+        if pocketOpen { return current == .bar ? .stayPut : .settleAtBar }
+        // Nothing to move, and nothing being hidden by staying put.
+        if current == .dormant { return .stayPut }
         // THE LINE THIS RULE EXISTED WITHOUT.
         //
         // A compact rung arriving while a task or the cockpit is open is the
         // engine reporting that nothing is engaged any more — which it only
         // ever says because the user dismissed the surface. Honour it.
         // Suppression may keep the bar quiet on the way down; it may not keep
-        // the panel open.
-        //
-        // How FAR down is the pocket's call, not suppression's: with one open,
-        // the dismissal is spent the moment the panel is gone.
-        if current == .dormant { return .stayPut }  // nothing to move
-        if current == .expanded { return pocketOpen ? .settleAtBar : .restSilently }
-        // Everything still up settles rather than merely declining to re-arm
-        // the clock — unless resting would hide something the user asked for.
-        return SurfaceRest.mayRest(current: current, pocketOpen: pocketOpen)
-            ? .restSilently : .stayPut
+        // the panel open. Everything still up settles, rather than merely
+        // declining to re-arm the clock.
+        return .restSilently
     }
 }
+
 
 /// IS `.dormant` A STATE THIS SURFACE MAY ACTUALLY OCCUPY?
 ///

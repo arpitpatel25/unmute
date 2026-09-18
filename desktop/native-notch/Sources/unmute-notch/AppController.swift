@@ -586,7 +586,18 @@ final class AppController: NSObject, NotchResizing {
             // next slot and a data-only update are all just "the surface says
             // something else now", which is a refit like any other. There is no
             // second size to sequence against.
-            if pocketIsVisible { refit(animated: true) }
+            //
+            // AND A POCKET OPENING AT REST HAS TO COME UP FIRST. `refit`
+            // re-resolves the state the surface is ALREADY in, and at rest that
+            // is `.dormant` — the cutout. So the card the chord just asked for
+            // was laid out 183x32 behind the camera, and stayed there until
+            // something else moved the surface. Re-commanding the rung runs it
+            // through DormantAvailability, which will not hand back a cutout
+            // with a pocket in it.
+            if p.isOpen, model.state == .dormant {
+                NotchLog.log("pocket opened at rest — lifting out of the cutout")
+                applyState(commandedState)
+            } else if pocketIsVisible { refit(animated: true) }
 
         case let .toast(text):
             showToast(text)

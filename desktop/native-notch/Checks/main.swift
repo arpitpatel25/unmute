@@ -348,4 +348,13 @@ check("...on either display kind", !DormantAvailability.available(hasNotch: fals
 check("an empty cutout is dormant's one home",
       DormantAvailability.available(hasNotch: true, pocketOpen: false))
 
+// THE CHORD. Pressed at rest — which is how it is normally used — the pocket
+// opens inside the cutout, and the compact rung that would lift it out arrives
+// as a suppressed repeat. "Already dormant, nothing to move" was wrong: there
+// was. Field log 19 Sep 03:26:47, four and a half seconds in the hole.
+check("a suppressed repeat lifts an open pocket OUT of the cutout",
+      BannerRepeat.landing(current: .dormant, pocketOpen: true) == .settleAtBar)
+check("...and leaves it alone once it is up",
+      BannerRepeat.landing(current: .bar, pocketOpen: true) == .stayPut)
+
 print("\nALL DECODE CHECKS PASSED")

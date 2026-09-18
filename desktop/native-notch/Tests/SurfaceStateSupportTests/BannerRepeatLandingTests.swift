@@ -84,4 +84,32 @@ final class BannerRepeatLandingTests: XCTestCase {
         XCTAssertFalse(DormantAvailability.available(hasNotch: false, pocketOpen: true))
         XCTAssertTrue(DormantAvailability.available(hasNotch: true, pocketOpen: false))
     }
+
+    /// THE CHORD, AND THE CASE `.stayPut` GOT WRONG.
+    ///
+    /// Right Command + Right Option is pressed with the surface already at
+    /// rest, which is the ordinary way to use it — you press it to go and look.
+    /// The pocket opens INSIDE the cutout (refit resolves the state it is in),
+    /// and the engine immediately commands the compact rung that would lift it
+    /// out. That banner is a repeat, so it was suppressed — and suppression
+    /// answered "already dormant, nothing to move".
+    ///
+    /// There was something to move. Field log 19 Sep 03:26:47: `CMD pocket
+    /// mode=open`, `refit dormant window=x=666 w=183 h=32`, `CMD setState
+    /// attention`, `banner: SUPPRESS`, and the surface sat in the hole for four
+    /// and a half seconds until the pointer went looking for it.
+    func testASuppressedBannerStillLiftsAnOpenPocketOutOfTheCutout() {
+        XCTAssertEqual(BannerRepeat.landing(current: .dormant, pocketOpen: true), .settleAtBar)
+    }
+
+    /// The whole rule in one line: wherever the surface is, an open pocket ends
+    /// up at the bar, because the bar is the only rung it can be seen on.
+    func testAnOpenPocketAlwaysEndsUpWhereItCanBeSeen() {
+        XCTAssertEqual(BannerRepeat.landing(current: .bar, pocketOpen: true), .stayPut,
+                       "already there")
+        for rung in [SurfaceRung.dormant, .expanded] {
+            XCTAssertEqual(BannerRepeat.landing(current: rung, pocketOpen: true), .settleAtBar,
+                           "rung=\(rung)")
+        }
+    }
 }
