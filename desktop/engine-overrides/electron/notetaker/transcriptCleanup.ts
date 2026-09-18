@@ -21,6 +21,7 @@
 // a per-user prompt edit should be able to loosen.
 
 import { runHeadlessAgent, type HeadlessProvider } from './headlessAgent'
+import { timeoutMsForSegments } from './pipelineTimeout'
 import type { TranscriptSegment } from './transcriptMerge'
 import { createNotetakerLogger } from './notetakerLog'
 import { extractJson } from './extractJson'
@@ -147,13 +148,15 @@ export type CleanupProvider = HeadlessProvider
 type CleanupRunner = (
   provider: CleanupProvider,
   input: string,
+  timeoutMs?: number,
 ) => Promise<{ ok: true; output: string } | { ok: false; error: string }>
 
 async function runCleanupAgent(
   provider: CleanupProvider,
   input: string,
+  timeoutMs?: number,
 ): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
-  return runHeadlessAgent(provider, input)
+  return runHeadlessAgent(provider, input, timeoutMs === undefined ? {} : { timeoutMs })
 }
 
 /**
@@ -173,7 +176,9 @@ export async function cleanupTranscript(
   runAgent: CleanupRunner = runCleanupAgent,
 ): Promise<CleanupResult> {
   const input = buildCleanupInput(segments)
-  const result = await runAgent(provider, input)
+  // A 9h meeting's 286 segments were still being cleaned when the flat 300s
+  // budget killed the stage (2026-09-09). Scale it with the transcript.
+  const result = await runAgent(provider, input, timeoutMsForSegments(segments.length))
   if (!result.ok) {
     log.error('cleanup call failed', { provider, error: result.error })
     return { ok: false, error: result.error }
