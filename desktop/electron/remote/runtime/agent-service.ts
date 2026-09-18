@@ -18,6 +18,8 @@ import { HistoryCapability } from '../agent/capabilities/history'
 import { SessionsCapability } from '../agent/capabilities/sessions'
 import { PocketCapability } from '../agent/capabilities/pocket'
 import { HelpCapability } from '../agent/capabilities/help'
+import { IndexSearchCapability } from '../agent/capabilities/index-search'
+import { warmTurnSearch } from '../agent/sessions/turn-search'
 import { HandoffCapability } from '../agent/capabilities/handoff'
 import { NotetakerCapability } from '../agent/capabilities/notetaker'
 import { DeliveryCapability, type AttachmentDeliveryTransaction, type DeliveryAttachmentMetadata } from '../agent/capabilities/delivery'
@@ -115,6 +117,7 @@ export class AgentRuntimeService {
         await writeFile(constitutionPath, agentConstitution(SESSION_PREAMBLE, persona.text), { mode: 0o600 })
       }
       await prepareFresh()
+      warmTurnSearch()
       const registry = new CapabilityRegistry([
         new MemoryCapability(memory),
         new HistoryCapability({ recent: ms => this.host('history.recent', [ms]), copy: id => this.host('history.copy', [id]) }),
@@ -138,6 +141,9 @@ export class AgentRuntimeService {
         // The constitution sends every how-do-I question here; it was only
         // ever registered on the retired in-process path.
         new HelpCapability(() => this.host('help.settings', [])),
+        // Reads the index file directly: it is on this machine, and a host
+        // round-trip would only copy 28 MB across a socket.
+        new IndexSearchCapability(),
         new HandoffCapability({ createTask: input => this.host('handoff.createTask', [input]), taskStatus: id => this.host('handoff.taskStatus', [id]), cardForSession: id => this.host('handoff.cardForSession', [id]) }),
         ...(config.notetaker ? [new NotetakerCapability({ list: limit => this.host('notetaker.list', [limit]), search: (q, limit) => this.host('notetaker.search', [q, limit]), read: id => this.host('notetaker.read', [id]), open: id => this.host('notetaker.open', [id]) })] : []),
         new DeliveryCapability({ resolveAttachment: (principal, handle) => attachments.resolveForDelivery(principal, handle),

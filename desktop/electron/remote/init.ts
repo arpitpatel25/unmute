@@ -112,6 +112,8 @@ import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilitie
 import { HelpCapability } from './agent/capabilities/help'
 import { SessionsCapability } from './agent/capabilities/sessions'
 import { PocketCapability } from './agent/capabilities/pocket'
+import { IndexSearchCapability } from './agent/capabilities/index-search'
+import { warmTurnSearch } from './agent/sessions/turn-search'
 import { locateSession } from './agent/sessions/locate'
 import { SessionTurnIndex } from './agent/sessions/turn-index'
 import { AgentContinuationService } from './agent/sessions/service'
@@ -1591,6 +1593,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
       ['claude', claude],
       ['codex', codex],
     ])
+    warmTurnSearch()
     const registry = new CapabilityRegistry([
       new MemoryCapability(memory),
       new HelpCapability(helpSettings),
@@ -1625,10 +1628,10 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
       // the Grep and Read it already holds; this is only the part it cannot
       // do — spawning a process that carries the conversation, and giving it
       // a card, seeing which cards are open, and taking one back. Retrieval is
-      // Grep and Read over the transcripts and over the verbatim user-turn
-      // index SessionTurnIndex maintains — a FILE, deliberately not a tool,
-      // because a tool over readable data caps the Agent at the queries its
-      // schema author imagined. That is what sessions_search did.
+      // the verbatim user-turn index SessionTurnIndex maintains, searched whole
+      // by IndexSearchCapability below, with Grep and Read over the same files
+      // for anything it cannot express. sessions_search is not coming back: it
+      // read a sliver of each transcript and failed silently.
       new SessionsCapability({
         createWorkspace: createAgentWorkspace,
         workspaces: async () => (groupRegistry?.list() ?? []).map(({ id, label }) => ({ id, label })),
@@ -1639,6 +1642,10 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
         send: input => relayIntoSession(input),
       }),
       new PocketCapability({ list: async () => listPocketTasks(), ...pocketActions }),
+      // The same index, searched whole: every turn, every spelling the Agent
+      // can think of, ranked by session and paged with a count of what is
+      // left. Grep stays for anything it cannot express.
+      new IndexSearchCapability(),
       // What the user recorded. Optional: only present when the notetaker
       // feature wired its adapters in via RemoteInitDeps.notetaker — a build
       // without it simply never registers this capability, the same as any

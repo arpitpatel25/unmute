@@ -24,9 +24,11 @@ import { requireAgentMetadata, requireWorkspaceLabel } from '../metadata'
  * middle — 0.369% of a real 33.9 MB session — then required every token of the
  * query to match, so "opened" or "wrong" discarded a session outright. It
  * returned a confident nothing, 22 times, for a session that was on disk the
- * whole time. What replaces it is not a better search: it is a file. The
- * user's own turns, verbatim, at ~/.unmute/remote/session-index/, read with
- * the Grep the Agent already holds.
+ * whole time. What replaced it is a file: the user's own turns, verbatim, at
+ * ~/.unmute/remote/session-index/. Grepping that file by hand then failed in
+ * its own way (2026-09-18: a capped grep in file order never reached the
+ * sessions that mattered), so it is now also searched whole by index_search
+ * in index-search.ts — complete on every call, and never in place of Grep.
  *
  * Resume and fork are here because they are provider identity operations the
  * Agent cannot perform through filesystem tools. They remain separate so one

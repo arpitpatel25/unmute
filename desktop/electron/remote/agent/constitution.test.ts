@@ -31,6 +31,30 @@ test('no tool stands between the Agent and the transcripts', () => {
   assert.doesNotMatch(AGENT_PRINCIPLES, /Start with mcp__unmute__/)
 })
 
+/**
+ * FIELD FAILURE (2026-09-18). The file alone was not enough either: the Agent
+ * grepped it as `rg -m 50 'Tanmay|WhatsApp'` under a 12,000-token output cap.
+ * The file is in indexing order, not time order, so the cap stopped at line
+ * 3,186 of 15,855; the output then lost its middle, and 44 turns naming the
+ * person never arrived. index_search is allowed only because it has neither
+ * property sessions_search had — it reads the whole index and says what it has
+ * not shown — and it sits BESIDE Grep, which the test above keeps named.
+ */
+test('the index can be searched whole, in every spelling, and a capped grep is not silence', () => {
+  assert.match(AGENT_PRINCIPLES, /mcp__unmute__index_search reads the WHOLE index/)
+  // Speech is transcribed; one person is spelled five ways in a real index.
+  assert.match(AGENT_PRINCIPLES, /give it every spelling/)
+  // A common word beside a name widens the search, it does not narrow it.
+  assert.match(AGENT_PRINCIPLES, /a common word beside it/)
+  // A page with more after it is not the answer.
+  assert.match(AGENT_PRINCIPLES, /When `remaining` is not zero you have not seen everything/)
+  // And the hand-written grep keeps its warning.
+  assert.match(AGENT_PRINCIPLES, /never cap it by count/)
+  assert.match(AGENT_PRINCIPLES, /not a capped or truncated one/)
+  // It finds WHICH sessions; the transcript still says what happened.
+  assert.match(AGENT_PRINCIPLES, /the transcript at `o` is how you find out what happened/)
+})
+
 test('the verbatim turn index is described, with its limits, and never mandated', () => {
   assert.match(AGENT_PRINCIPLES, /session-index/)
   assert.match(AGENT_PRINCIPLES, /turns\.jsonl/)

@@ -568,7 +568,7 @@ function redactedActivity(activity: AgentActivity): string {
   // Retrieval is now the FIRST thing every turn does, so without this the bar
   // says "Using an authorized capability" for the most common act there is.
   // Grep/Read against the session index, and the tools that open what it finds.
-  if (/session-index|turns\.jsonl|sessions\.jsonl/u.test(raw)) return 'Looking through your past sessions'
+  if (/index_search|session-index|turns\.jsonl|sessions\.jsonl/u.test(raw)) return 'Looking through your past sessions'
   if (/mcp__unmute__sessions_open|sessions_open/u.test(raw)) return 'Checking what is already open'
   if (activity.kind === 'waiting') return 'Waiting for confirmation'
   if (activity.kind === 'tool') return 'Using an authorized capability'

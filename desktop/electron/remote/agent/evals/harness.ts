@@ -29,6 +29,7 @@ import { HistoryCapability, type HistoryService } from '../capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from '../capabilities/notetaker'
 import { SessionsCapability, type SessionAdapters } from '../capabilities/sessions'
 import { PocketCapability, type PocketAdapters } from '../capabilities/pocket'
+import { IndexSearchCapability } from '../capabilities/index-search'
 import { AGENT_PRINCIPLES } from '../constitution'
 import { providerTranscript } from '../controller'
 
@@ -90,6 +91,7 @@ function realTools(): Array<Record<string, unknown>> {
     new NotetakerCapability({} as NotetakerAdapters),
     new SessionsCapability({} as SessionAdapters),
     new PocketCapability({} as PocketAdapters),
+    new IndexSearchCapability(),
   ]
   return modules.flatMap((module) => module.tools.map((tool) => ({
     name: tool.name,
