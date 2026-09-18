@@ -760,3 +760,35 @@ test('editing rolls back the fork rather than the original thread', async () => 
  await hub.rollbackLatestTurn('edited', options)
  assert.deepEqual(calls.find(c => c.method === 'thread/rollback')?.params, { threadId: fork.threadId, numTurns: 1 })
 })
+
+test('a managed machine that forbids full access gets the highest allowed posture on every request', async () => {
+  const { hub, srv, calls } = makeHub()
+  const base = srv.request.bind(srv)
+  srv.request = async (method: string, params: any) => {
+    if (method === 'configRequirements/read') {
+      calls.push({ method, params })
+      return { requirements: { allowedSandboxModes: ['read-only', 'workspace-write'], allowedApprovalPolicies: ['untrusted', 'on-request'] } } as any
+    }
+    if (method === 'thread/resume') { calls.push({ method, params }); return { thread: { id: params.threadId, turns: [] } } as any }
+    return base(method, params)
+  }
+  const options = { cwd: '/project', approvalPolicy: 'never', sandbox: 'danger-full-access' }
+
+  await hub.startThread('task', options)
+  await hub.send('task', 'hi')
+  await hub.forkThread('child', 'th_1', options)
+  await hub.resumeThread('other', 'th_9', options)
+
+  const start = calls.find(c => c.method === 'thread/start')!.params as any
+  assert.equal(start.sandbox, 'workspace-write')
+  assert.equal(start.approvalPolicy, 'on-request')
+  const turn = calls.find(c => c.method === 'turn/start')!.params as any
+  assert.equal(turn.approvalPolicy, 'on-request')
+  assert.equal(turn.sandboxPolicy.type, 'workspaceWrite')
+  for (const method of ['thread/fork', 'thread/resume']) {
+    const p = calls.find(c => c.method === method)!.params as any
+    assert.deepEqual([p.approvalPolicy, p.sandbox], ['on-request', 'workspace-write'], method)
+  }
+  assert.equal(calls.filter(c => c.method === 'configRequirements/read').length, 1, 'read once per server')
+  hub.stop()
+})

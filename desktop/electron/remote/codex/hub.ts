@@ -35,6 +35,7 @@ import type { TaskInput } from '../task-input'
 import type { FollowupGate, FollowupTurnEnded, NewTurnOutcome } from '../task-followup'
 import { randomUUID } from 'node:crypto'
 import { codexExtraRoots } from '../skill-catalog'
+import { clampPosture, requirementsFrom, type CodexRequirements } from './requirements'
 
 const log = createLogger('codex-hub')
 
@@ -223,6 +224,9 @@ export class CodexHub {
   private mcpStatuses = new Map<string, import('./app-server-events').McpStatus>()
   private planWrites = new Map<string, Promise<void>>()
   private starting: Promise<CodexAppServer> | null = null
+  /** What this machine's administrator allows (codex/requirements.ts). Read
+   *  once per server; null when unmanaged or unknown. */
+  private requirements: CodexRequirements | null = null
   private registrations = 0
   private earlyNotifications: Array<{ method: string; params?: Record<string, unknown> }> = []
   private earlyRequests: Array<{ req: ServerRequest; source: CodexAppServer | null; resolve: (value: unknown) => void; reject: (reason: unknown) => void }> = []
@@ -264,9 +268,21 @@ export class CodexHub {
       // to know the method still has to carry the user's work.
       try { await srv.request('skills/extraRoots/set', { extraRoots: codexExtraRoots() }) }
       catch (error) { log.warn('skill roots not set', { error: (error as Error).message }) }
+      // A MANAGED MACHINE REFUSES, IT DOES NOT DOWNGRADE. Every request below
+      // is clamped to these, so full access on a company laptop becomes the
+      // most that laptop allows instead of a session that never starts.
+      try { this.requirements = requirementsFrom(await srv.request('configRequirements/read', {})) }
+      catch (error) { this.requirements = null; log.warn('codex requirements not read', { error: (error as Error).message }) }
       return srv
     })().finally(() => { this.starting = null })
     return this.starting
+  }
+
+  /** Lower a requested posture to what this machine allows. */
+  private allowed(taskId: string, o: StartThreadOpts): StartThreadOpts {
+    const next = clampPosture(o, this.requirements)
+    if (next !== o) log.event('codex-posture-clamped', { taskId, asked: { approvalPolicy: o.approvalPolicy, sandbox: o.sandbox }, allowed: { approvalPolicy: next.approvalPolicy, sandbox: next.sandbox } })
+    return next
   }
 
   /**
@@ -279,6 +295,7 @@ export class CodexHub {
    */
   async startThread(taskId: string, o: StartThreadOpts): Promise<{ threadId: string; url: string }> {
     const srv = await this.ensure()
+    o = this.allowed(taskId, o)
     const config = { ...o.config, ...await this.deps.threadConfig?.(taskId) }
     // A MODEL ID IS NEVER A SENTENCE.
     //
@@ -323,6 +340,7 @@ export class CodexHub {
     forkedFromId: string
   }> {
     const srv = await this.ensure()
+    o = this.allowed(taskId, o)
     const config = { ...o.config, ...await this.deps.threadConfig?.(taskId) }
     const model = o.model && /\s/.test(o.model) ? undefined : o.model
     this.registrations++
@@ -650,6 +668,7 @@ export class CodexHub {
     this.registrations++
     try {
     const srv = await this.ensure()
+    o = this.allowed(taskId, o)
     const config = { ...o.config, ...await this.deps.threadConfig?.(taskId) }
     const result = await srv.request<ResumeHistory>('thread/resume', {
       threadId, cwd: o.cwd, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox,
