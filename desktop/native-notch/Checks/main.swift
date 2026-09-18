@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import SurfaceStateSupport
 
 func check(_ name: String, _ ok: Bool) {
     print("\(ok ? "PASS" : "FAIL")  \(name)")
@@ -307,5 +308,53 @@ check("active never glows", act.alarm == nil)
 let att = BarContent.make(for: vm, state: .attention, hovering: false)
 check("attention says what it needs", att.left == "Needs you" && att.dot == .needsUser)
 check("attention is the ONLY state that glows", att.alarm != nil)
+
+// ── WHEN THE SURFACE MAY PUT ITSELF DOWN ──
+//
+// Dormant is the CUTOUT on a notched Mac, so "rest" and "hide behind the
+// camera" are the same instruction. Anything the user explicitly asked to see
+// must therefore survive every self-initiated rest, and the pocket is the one
+// that did not: click the notch, watch the card for one second, and the
+// stand-down clock posted it into the hole (field log 18 Sep 20:20:41).
+check("an open pocket is never rested away",
+      !SurfaceRest.mayRest(current: .bar, pocketOpen: true)
+          && !SurfaceRest.mayRest(current: .expanded, pocketOpen: true)
+          && !SurfaceRest.mayRest(current: .dormant, pocketOpen: true))
+check("a bar with nothing holding it up still rests",
+      SurfaceRest.mayRest(current: .bar, pocketOpen: false))
+check("a panel the user opened is not ours to collapse",
+      !SurfaceRest.mayRest(current: .expanded, pocketOpen: false))
+check("...but a dormant surface still records the sentence as said",
+      SurfaceRest.mayRest(current: .dormant, pocketOpen: false))
+check("a suppressed repeat leaves an open pocket exactly where it is",
+      BannerRepeat.landing(current: .bar, pocketOpen: true) == .stayPut)
+check("a dismissal with the pocket open comes down to the BAR, not the cutout",
+      BannerRepeat.landing(current: .expanded, pocketOpen: true) == .settleAtBar)
+check("and without one it still settles all the way",
+      BannerRepeat.landing(current: .expanded, pocketOpen: false) == .restSilently
+          && BannerRepeat.landing(current: .bar, pocketOpen: false) == .restSilently)
+check("already dormant stays put", BannerRepeat.landing(current: .dormant, pocketOpen: false) == .stayPut)
+
+// ── AND WHETHER DORMANT IS SOMEWHERE THE SURFACE MAY GO AT ALL ──
+//
+// Dormant is a PLACE, not a rung: the cutout. It needs a cutout to exist, and
+// it needs to be empty. The pocket chord opens the card at exactly the moment
+// no task is running, which is the moment the engine's reconcile calls the
+// surface empty — so the card went into the hole and the gesture did nothing
+// visible (field log 19 Sep 03:16:13).
+check("no cutout, no dormant", !DormantAvailability.available(hasNotch: false, pocketOpen: false))
+check("an open pocket occupies it", !DormantAvailability.available(hasNotch: true, pocketOpen: true))
+check("...on either display kind", !DormantAvailability.available(hasNotch: false, pocketOpen: true))
+check("an empty cutout is dormant's one home",
+      DormantAvailability.available(hasNotch: true, pocketOpen: false))
+
+// THE CHORD. Pressed at rest — which is how it is normally used — the pocket
+// opens inside the cutout, and the compact rung that would lift it out arrives
+// as a suppressed repeat. "Already dormant, nothing to move" was wrong: there
+// was. Field log 19 Sep 03:26:47, four and a half seconds in the hole.
+check("a suppressed repeat lifts an open pocket OUT of the cutout",
+      BannerRepeat.landing(current: .dormant, pocketOpen: true) == .settleAtBar)
+check("...and leaves it alone once it is up",
+      BannerRepeat.landing(current: .bar, pocketOpen: true) == .stayPut)
 
 print("\nALL DECODE CHECKS PASSED")

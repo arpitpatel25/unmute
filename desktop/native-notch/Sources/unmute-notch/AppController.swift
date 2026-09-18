@@ -377,11 +377,18 @@ final class AppController: NSObject, NotchResizing {
                         // — see BannerRepeat. It used to be decided inline, as
                         // `!isExpanded(model.state)`, and that quietly vetoed
                         // the collapse the user had just asked for.
-                        switch BannerRepeat.landing(current: surfaceRung()) {
+                        switch BannerRepeat.landing(current: surfaceRung(),
+                                                    pocketOpen: model.pocket.isOpen) {
                         case .stayPut:
                             break
                         case .restSilently:
                             applyState(.dormant)
+                        case .settleAtBar:
+                            // Down out of the panel, no further. `state` is the
+                            // compact rung the engine just commanded, and it is
+                            // where the open pocket is visible — dormant would
+                            // carry it on into the cutout.
+                            applyState(state)
                         }
                     }
                     return
@@ -579,7 +586,18 @@ final class AppController: NSObject, NotchResizing {
             // next slot and a data-only update are all just "the surface says
             // something else now", which is a refit like any other. There is no
             // second size to sequence against.
-            if pocketIsVisible { refit(animated: true) }
+            //
+            // AND A POCKET OPENING AT REST HAS TO COME UP FIRST. `refit`
+            // re-resolves the state the surface is ALREADY in, and at rest that
+            // is `.dormant` — the cutout. So the card the chord just asked for
+            // was laid out 183x32 behind the camera, and stayed there until
+            // something else moved the surface. Re-commanding the rung runs it
+            // through DormantAvailability, which will not hand back a cutout
+            // with a pocket in it.
+            if p.isOpen, model.state == .dormant {
+                NotchLog.log("pocket opened at rest — lifting out of the cutout")
+                applyState(commandedState)
+            } else if pocketIsVisible { refit(animated: true) }
 
         case let .toast(text):
             showToast(text)
@@ -716,7 +734,16 @@ final class AppController: NSObject, NotchResizing {
         // orchestrator. An indicator may hide when there is nothing to say; a
         // control may not. So off-notch, dormant collapses into idle: quiet,
         // small, never glowing, but always there and always a target.
-        if state == .dormant && !geometry.hasNotch { state = .idle }
+        //
+        // AND NOT WHILE THE POCKET IS OPEN, for the same reason one step on:
+        // the card is drawn at bar level and the cutout has no room for it.
+        // Both conditions are DormantAvailability now, so neither can be
+        // answered without the other.
+        if state == .dormant,
+           !DormantAvailability.available(hasNotch: geometry.hasNotch,
+                                          pocketOpen: model.pocket.isOpen) {
+            state = .idle
+        }
         let wasExpanded = isExpanded(model.state)
         let expandingFromPocket = !wasExpanded && isExpanded(state) && model.pocket.isOpen
         let preserveContentHandoff = SurfaceContentHandoff.shouldPreserve(
@@ -1031,7 +1058,12 @@ final class AppController: NSObject, NotchResizing {
         // say nothing, so they have nothing to stop saying. Hovering is a
         // question being asked and must not be answered with silence — the
         // clock re-arms on exit, because exiting redraws the bar.
-        guard !isExpanded(model.state), !model.hovering, !c.isEmpty, !c.resting else { return }
+        // The pocket is in this guard as well as in standDown's: the clock can
+        // be armed BEFORE the pocket opens and fire after (which is how this
+        // shipped), so the firing end is the one that must refuse — but there
+        // is no reason to keep re-arming a clock that will.
+        guard !isExpanded(model.state), !model.pocket.isOpen,
+              !model.hovering, !c.isEmpty, !c.resting else { return }
         // Already said. `make` is drawing the quiet form; there is nothing to
         // take down and no clock to start. The set is emptied when the engine
         // says nothing is happening — see the `.dormant` branch in receive().
@@ -1491,15 +1523,18 @@ final class AppController: NSObject, NotchResizing {
     /// were busiest, so it is gone, along with `restDeadline`/`restMaxDefer`.
     private func standDown(_ signature: String) {
         restSignature = nil
-        // AN EXPANDED SURFACE IS NOT OURS TO COLLAPSE — the user opened it.
+        // WHETHER THIS CLOCK MAY FIRE AT ALL IS NOT THIS FUNCTION'S CALL — see
+        // SurfaceRest, which every self-initiated rest now shares.
         //
-        // This guard was `model.state == state`: if the surface had moved to
-        // any other rung the clock was ABANDONED and the new rung's content sat
-        // there unclocked (3 such abandonments in the sampled session). The rule
-        // is about the bar, not about one rung of it, so anything still at bar
-        // level stands down.
-        guard !isExpanded(model.state) else {
-            NotchLog.log("banner: clock dropped — surface is expanded (\(model.state.rawValue))")
+        // An expanded surface is not ours to collapse (the user opened it); the
+        // guard used to read `model.state == state`, which ABANDONED the clock
+        // whenever the surface moved to another rung and left the new rung's
+        // content sitting there unclocked — 3 such abandonments in the sampled
+        // session. And an open pocket is not ours to rest either: dormant is
+        // the cutout, so resting one hides it behind the camera a second after
+        // the click that asked for it.
+        guard SurfaceRest.mayRest(current: surfaceRung(), pocketOpen: model.pocket.isOpen) else {
+            NotchLog.log("banner: clock dropped — rung=\(model.state.rawValue) pocketOpen=\(model.pocket.isOpen)")
             return
         }
         model.silenced.insert(signature)
