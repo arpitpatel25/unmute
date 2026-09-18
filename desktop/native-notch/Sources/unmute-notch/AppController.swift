@@ -723,7 +723,16 @@ final class AppController: NSObject, NotchResizing {
         // orchestrator. An indicator may hide when there is nothing to say; a
         // control may not. So off-notch, dormant collapses into idle: quiet,
         // small, never glowing, but always there and always a target.
-        if state == .dormant && !geometry.hasNotch { state = .idle }
+        //
+        // AND NOT WHILE THE POCKET IS OPEN, for the same reason one step on:
+        // the card is drawn at bar level and the cutout has no room for it.
+        // Both conditions are DormantAvailability now, so neither can be
+        // answered without the other.
+        if state == .dormant,
+           !DormantAvailability.available(hasNotch: geometry.hasNotch,
+                                          pocketOpen: model.pocket.isOpen) {
+            state = .idle
+        }
         let wasExpanded = isExpanded(model.state)
         let expandingFromPocket = !wasExpanded && isExpanded(state) && model.pocket.isOpen
         let preserveContentHandoff = SurfaceContentHandoff.shouldPreserve(

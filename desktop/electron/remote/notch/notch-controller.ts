@@ -1556,11 +1556,29 @@ export class NotchController {
     // whichever task had last been opened even after it finished.
     const activeTask = this.soleWorking()
     if (activeTask) this.sendDetail('showTask', activeTask)
+    // AN OPEN POCKET IS NOT AN EMPTY SURFACE, and this line used to say it was.
+    //
+    // "Nothing is processing" is a fact about TASKS. Whether anything is on
+    // screen is a different fact, and the pocket is the case where they come
+    // apart: the chord (and a tap) opens it precisely when nothing is running,
+    // then reconcile ran and commanded `dormant` on top of it. On a notched Mac
+    // dormant is the CUTOUT — dormantFrame() is the hole itself — so the card
+    // was posted behind the camera housing, where there is no screen to draw
+    // on. Press the chord, nothing appears. Field log 19 Sep 03:16:13:
+    // `CMD pocket mode=open at=0 slots=5`, then `CMD setState dormant`, then
+    // `state -> dormant window=x=666 y=950 w=183 h=32`.
+    //
+    // `idle` is the quiet bar rung the pocket already rides on — the same rung
+    // the surface itself falls back to on a display with no cutout to hide in.
+    const quiet = this.pocketMode === 'open' ? 'idle' : 'dormant'
+    const state = working > 0 ? 'active' : quiet
     // The native receiver unconditionally drops model.task on dormant. Its
     // copy is gone, so our dedupe record must go with it; otherwise an
     // unchanged task returning later gets only setState and opens empty.
-    if (working === 0) this.lastDetailJson.delete('showTask')
-    this.client.send({ type: 'setState', state: working > 0 ? 'active' : 'dormant', attention: 0, working })
+    // Gated on what we actually SEND: `idle` tears nothing down, so dropping
+    // the record there would only cost a redundant resend.
+    if (state === 'dormant') this.lastDetailJson.delete('showTask')
+    this.client.send({ type: 'setState', state, attention: 0, working })
   }
 
   // ── gestures ───────────────────────────────────────────────────────────────

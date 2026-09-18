@@ -106,3 +106,30 @@ public enum BannerRepeat {
             ? .restSilently : .stayPut
     }
 }
+
+/// IS `.dormant` A STATE THIS SURFACE MAY ACTUALLY OCCUPY?
+///
+/// Dormant is not a rung like the others. It is a PLACE — the camera cutout —
+/// and the surface only gets to use it when that place exists and is empty.
+/// Two conditions, and they used to live apart: one inline in `applyState`, the
+/// other nowhere at all.
+///
+///   NO CUTOUT, NO DORMANT. On a display without a notch, dormant reserved a
+///   2pt strip at dead centre, findable only by accident. The notch is a
+///   CONTROL as well as an indicator; an indicator may hide when it has nothing
+///   to say, a control may not. Off-notch, dormant is `.idle`: quiet, small,
+///   never glowing, but always there and always a target.
+///
+///   AN OPEN POCKET OCCUPIES IT. The card the user just asked for is drawn at
+///   bar level, and dormant would post it behind the housing where there is no
+///   screen. This is not the surface's own rest decision (see `SurfaceRest`) —
+///   it is a rung the ENGINE commands, from the one line in reconcile that says
+///   "nothing is processing". That is a fact about tasks, not about whether
+///   anything is on screen, and the pocket is exactly where the two come apart.
+///   The engine no longer conflates them; this is the surface refusing to be
+///   hidden even if something else ever does.
+public enum DormantAvailability {
+    public static func available(hasNotch: Bool, pocketOpen: Bool) -> Bool {
+        hasNotch && !pocketOpen
+    }
+}

@@ -2236,6 +2236,56 @@ test('the chord opens the pocket, then expands the card it is on', () => {
   assert.equal(h.client.last('showTask')!.task.id, 'a', 'rung two expands the card you are on')
 })
 
+/// AN OPEN POCKET IS NOT AN EMPTY SURFACE.
+///
+/// reconcile's fall-through sends `dormant` whenever no task is processing —
+/// and it said that with the pocket standing open. On a notched Mac dormant IS
+/// the cutout (dormantFrame() is the hole itself), so the card the chord just
+/// opened was drawn behind the camera housing, where there is no screen: press
+/// the chord, nothing appears. The click path hit the same line; it only looked
+/// different because a click has to reveal the bar first.
+test('the chord never lands the pocket in the cutout', () => {
+  // NOTHING DEMANDING, which is the ordinary case for this gesture: you press
+  // the chord to go and look, not because something called you. reconcile then
+  // falls through to its "nothing is running" line — and used to say `dormant`
+  // with the pocket standing open.
+  const h = setup()
+  h.controller.pocketChord()
+  h.flush()
+  assert.equal(pocketOf(h)!.mode, 'open')
+  assert.notEqual(h.client.last('setState')!.state, 'dormant',
+    'dormant is the notch cutout — the card would open where there is no screen')
+})
+
+test('tapping the pocket open does not command dormant either', () => {
+  const h = setup()
+  h.client.fire({ type: 'pocketOpen' })
+  h.flush()
+  assert.notEqual(h.client.last('setState')!.state, 'dormant')
+})
+
+/// The other half, so the rule above cannot be satisfied by never resting at
+/// all: close the pocket and the quiet surface goes back down.
+test('closing the pocket lets the surface rest again', () => {
+  const h = setup()
+  h.controller.pocketChord()
+  h.flush()
+  assert.notEqual(h.client.last('setState')!.state, 'dormant', 'open')
+  h.client.fire({ type: 'pocketRelease' })
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'dormant', 'closed again')
+})
+
+/// A working task still outranks the pocket: `active` carries the count, and
+/// the pocket rides on it exactly as it rides on the quiet rung.
+test('a working task still reports active with the pocket open', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'w', state: 'processing' }))
+  h.controller.pocketChord()
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'active')
+})
+
 test('the chord does nothing once you are already expanded', () => {
   // Going deeper again would mean guessing, and the way out is Escape.
   const h = setup()

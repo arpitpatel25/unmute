@@ -70,4 +70,18 @@ final class BannerRepeatLandingTests: XCTestCase {
         // that, and a banner that is never recorded as said blinks back.
         XCTAssertTrue(SurfaceRest.mayRest(current: .dormant, pocketOpen: false))
     }
+
+    /// DORMANT IS A PLACE, NOT A RUNG — the camera cutout — so it is available
+    /// only when that place exists and is empty. The pocket chord opens the
+    /// card at exactly the moment nothing is running, which is the moment the
+    /// engine calls the surface empty, so the card went into the hole and the
+    /// gesture did nothing you could see.
+    func testDormantNeedsACutoutAndAnEmptyOne() {
+        XCTAssertFalse(DormantAvailability.available(hasNotch: false, pocketOpen: false),
+                       "off-notch there is nothing to aim at; idle is the resting state there")
+        XCTAssertFalse(DormantAvailability.available(hasNotch: true, pocketOpen: true),
+                       "the open pocket is drawn at bar level; the cutout has no room for it")
+        XCTAssertFalse(DormantAvailability.available(hasNotch: false, pocketOpen: true))
+        XCTAssertTrue(DormantAvailability.available(hasNotch: true, pocketOpen: false))
+    }
 }

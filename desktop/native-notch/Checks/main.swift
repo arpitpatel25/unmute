@@ -335,4 +335,17 @@ check("and without one it still settles all the way",
           && BannerRepeat.landing(current: .bar, pocketOpen: false) == .restSilently)
 check("already dormant stays put", BannerRepeat.landing(current: .dormant, pocketOpen: false) == .stayPut)
 
+// ── AND WHETHER DORMANT IS SOMEWHERE THE SURFACE MAY GO AT ALL ──
+//
+// Dormant is a PLACE, not a rung: the cutout. It needs a cutout to exist, and
+// it needs to be empty. The pocket chord opens the card at exactly the moment
+// no task is running, which is the moment the engine's reconcile calls the
+// surface empty — so the card went into the hole and the gesture did nothing
+// visible (field log 19 Sep 03:16:13).
+check("no cutout, no dormant", !DormantAvailability.available(hasNotch: false, pocketOpen: false))
+check("an open pocket occupies it", !DormantAvailability.available(hasNotch: true, pocketOpen: true))
+check("...on either display kind", !DormantAvailability.available(hasNotch: false, pocketOpen: true))
+check("an empty cutout is dormant's one home",
+      DormantAvailability.available(hasNotch: true, pocketOpen: false))
+
 print("\nALL DECODE CHECKS PASSED")
