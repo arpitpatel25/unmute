@@ -30,6 +30,7 @@
     "engine-overrides/renderer/notetaker/**/*.ts"
   ],
   "exclude": [
-    "engine-overrides/renderer/remote/**/*.test.ts"
+    "engine-overrides/renderer/remote/**/*.test.ts",
+    "engine-overrides/renderer/notetaker/**/*.test.ts"
   ]
 }

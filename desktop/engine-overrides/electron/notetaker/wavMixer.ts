@@ -23,9 +23,29 @@ function readPcmWav(filePath: string): PcmWav | null {
 
 type AlignedLanes = { mic: PcmWav; system: PcmWav; micOffset: number; systemOffset: number; length: number }
 
+/** Both lanes are started by the same capture-start call; in practice the mic
+ * trails the native tap by ~100-300ms (permission grant + worklet attach). A
+ * skew beyond this is a broken clock, not a real offset. */
+const MAX_LANE_START_SKEW_MS = 60_000
+
+/**
+ * The native system tap reports host time; the mic lane's start comes from the
+ * renderer's audio clock. When the two disagree by more than any capture could,
+ * trust the native clock. On 2026-09-15 a sleep-lagged renderer clock put the
+ * mic lane 9h early, and aligning to that padded a one-hour meeting with 9h of
+ * silence — enough to throw, which left the meeting stuck processing forever.
+ */
+export function reconcileRecordingStarts(starts: RecordingStartTimes): RecordingStartTimes {
+  const { micStartMs, systemStartMs } = starts
+  if (micStartMs == null || systemStartMs == null) return starts
+  if (Math.abs(micStartMs - systemStartMs) <= MAX_LANE_START_SKEW_MS) return starts
+  return { micStartMs: systemStartMs, systemStartMs }
+}
+
 /** The two capture paths start independently, so align their files to the
  * shared capture timeline before making any audio decision. */
-function alignLanes(mic: PcmWav, system: PcmWav, starts: RecordingStartTimes): AlignedLanes {
+function alignLanes(mic: PcmWav, system: PcmWav, recordedStarts: RecordingStartTimes): AlignedLanes {
+  const starts = reconcileRecordingStarts(recordedStarts)
   const fallbackStart = starts.micStartMs ?? starts.systemStartMs ?? 0
   const micStart = starts.micStartMs ?? fallbackStart
   const systemStart = starts.systemStartMs ?? fallbackStart
@@ -111,8 +131,23 @@ function writeMonoWav(outputPath: string, samples: Float32Array, sampleRate: num
   }
 }
 
-/** Produces the sole user-facing, mono meeting recording. */
+/** Produces the sole user-facing, mono meeting recording. Never throws: it
+ * runs synchronously inside the capture stop path, ahead of transcript
+ * persistence, so an exception here would strand the meeting. */
 export function createMeetingRecording(
+  micPath: string | null,
+  systemPath: string | null,
+  outputPath: string,
+  starts: RecordingStartTimes = {},
+): boolean {
+  try {
+    return composeMeetingRecording(micPath, systemPath, outputPath, starts)
+  } catch {
+    return false
+  }
+}
+
+function composeMeetingRecording(
   micPath: string | null,
   systemPath: string | null,
   outputPath: string,

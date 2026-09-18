@@ -18,6 +18,7 @@ import fs from 'fs'
 // because dictation is push-to-talk — one in-flight at a time.
 import { popLastEngine } from './paywall/main-extensions'
 import { createNotetakerLogger } from './notetaker/notetakerLog'
+import { meetingAudioIsExpired, recoverableAudioPaths } from './notetaker/meetingRecovery'
 
 const notetakerLog = createNotetakerLogger('db')
 
@@ -175,6 +176,21 @@ export function initDB(): void {
   // No capture or note pipeline survives an Electron process restart. Turn
   // abandoned in-flight rows into explicit retryable failures instead of
   // leaving the UI spinning forever after a crash or quit during processing.
+  // Retryable means their lane files must be attached first: a row that never
+  // reached persistSession() has NULL audio paths, which disables "Regenerate
+  // from audio" and leaves retry nothing to read.
+  const abandoned = db.prepare(
+    "SELECT id, audio_mic_path, audio_system_path FROM meetings WHERE status IN ('recording', 'transcribing')"
+  ).all() as { id: string; audio_mic_path: string | null; audio_system_path: string | null }[]
+  for (const row of abandoned) {
+    const recovered = recoverableAudioPaths(path.join(app.getPath('userData'), 'meetings', row.id), row)
+    db.prepare('UPDATE meetings SET audio_mic_path = ?, audio_system_path = ? WHERE id = ?')
+      .run(recovered.audio_mic_path, recovered.audio_system_path, row.id)
+    notetakerLog.child({ meetingId: row.id }).event('abandoned-meeting-marked-retryable', {
+      hasMicAudio: !!recovered.audio_mic_path,
+      hasSystemAudio: !!recovered.audio_system_path,
+    })
+  }
   db.prepare(`
     UPDATE meetings
     SET status = 'failed', cleanup_status = 'failed', summary_status = 'failed'
@@ -492,12 +508,16 @@ function sweepExpiredMeetingAudio(): void {
   // (see notetakerInit.ts's makeChunkHandler). Sweeping every row past the
   // cutoff regardless of path columns, and always attempting the fixed
   // filenames in addition to any DB-recorded paths, means that orphaned
-  // audio is reclaimed on the same 24h schedule as normal audio instead of
-  // living forever. The placeholder row seeds ended_at to the session's
-  // start time (not 0), so a crashed meeting's cutoff still fires correctly.
-  const expired = db.prepare(
-    'SELECT id, audio_mic_path, audio_system_path FROM meetings WHERE ended_at < ?'
-  ).all(cutoff) as { id: string; audio_mic_path: string | null; audio_system_path: string | null }[]
+  // audio is reclaimed on the normal 24h schedule once its meeting has a
+  // transcript. The placeholder row seeds ended_at to the session's start
+  // time (not 0), so a crashed meeting's cutoff still fires correctly.
+  //
+  // Rows with no transcript yet (recording/transcribing/failed) are skipped
+  // regardless of age — see meetingAudioIsExpired().
+  const expired = (db.prepare(
+    'SELECT id, ended_at, status, audio_mic_path, audio_system_path FROM meetings WHERE ended_at < ?'
+  ).all(cutoff) as { id: string; ended_at: number; status: string; audio_mic_path: string | null; audio_system_path: string | null }[])
+    .filter((row) => meetingAudioIsExpired(row, cutoff))
 
   if (expired.length > 0) {
     notetakerLog.event('audio-sweep-started', { cutoff, candidateCount: expired.length })

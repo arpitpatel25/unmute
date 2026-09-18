@@ -63,7 +63,8 @@ import { encodeChunk, transcribeEncodedChunk, persistSession, newMeetingId } fro
 import { cleanChunkText } from './notetaker/chunkStitcher'
 import { mergeChannelChunks, mergeAdjacentSpeakerTurns, removeMicEchoDuplicates, type TimedChunkText, type SpeakerSample, type TranscriptSegment } from './notetaker/transcriptMerge'
 import { WavAppender } from './notetaker/wavAppender'
-import { createMeetingRecording } from './notetaker/wavMixer'
+import { createMeetingRecording, reconcileRecordingStarts } from './notetaker/wavMixer'
+import { recoverableAudioPaths } from './notetaker/meetingRecovery'
 import { readRetryWavChunks } from './notetaker/wavRetry'
 import { pollZoomSpeaker } from './notetaker/zoomSpeaker'
 import { ZOOM_BUNDLE_ID } from './meetingApps'
@@ -1096,7 +1097,11 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
         const micPath = mic.audioFileName ? path.join(meetingDir, mic.audioFileName) : null
         const systemPath = system.audioFileName ? path.join(meetingDir, system.audioFileName) : null
-        const recordingStarts = { micStartMs: mic.audioStartTimestampMs, systemStartMs: system.audioStartTimestampMs }
+        const capturedStarts = { micStartMs: mic.audioStartTimestampMs, systemStartMs: system.audioStartTimestampMs }
+        const recordingStarts = reconcileRecordingStarts(capturedStarts)
+        if (recordingStarts !== capturedStarts) {
+          mlog.warn('lane start times disagree beyond any real capture skew — re-anchored mic on the system clock', capturedStarts)
+        }
         try {
           writeMeetingJsonFile(meetingId, 'audio-timing.json', recordingStarts)
         } catch (e) {
@@ -1824,16 +1829,21 @@ async function retryMeetingTranscription(meetingId: string): Promise<void> {
   if (!meeting) throw new Error('Meeting not found.')
   const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
   const previous = readTranscriptSegments(meetingId)
-  const rawMicPath = meeting.audio_mic_path ? path.join(meetingDir, meeting.audio_mic_path) : null
-  const rawSystemPath = meeting.audio_system_path ? path.join(meetingDir, meeting.audio_system_path) : null
-  const recordingStarts = readRecordingStartTimes(meetingDir)
+  // A meeting that crashed before persistSession() has NULL paths on its row
+  // but its lanes on disk under their fixed names.
+  const audioPaths = recoverableAudioPaths(meetingDir, meeting)
+  const rawMicPath = audioPaths.audio_mic_path ? path.join(meetingDir, audioPaths.audio_mic_path) : null
+  const rawSystemPath = audioPaths.audio_system_path ? path.join(meetingDir, audioPaths.audio_system_path) : null
+  // Also used below as each lane's transcript origin, so a bad mic clock must
+  // not survive into the retry either.
+  const recordingStarts = reconcileRecordingStarts(readRecordingStartTimes(meetingDir))
   // Rebuild the user-facing mix for older recordings. STT deliberately uses
   // the two raw source lanes: muting mic whenever system audio is active can
   // erase genuine local speech during overlap and corrupt speaker ownership.
   createMeetingRecording(rawMicPath, rawSystemPath, path.join(meetingDir, 'audio-meeting.wav'), recordingStarts)
   const inputs: Array<{ channel: 'mic' | 'system'; relPath: string | null }> = [
-    { channel: 'mic', relPath: meeting.audio_mic_path },
-    { channel: 'system', relPath: meeting.audio_system_path },
+    { channel: 'mic', relPath: audioPaths.audio_mic_path },
+    { channel: 'system', relPath: audioPaths.audio_system_path },
   ]
   const retried = await Promise.all(inputs.map(async ({ channel, relPath }): Promise<RetriedChannel> => {
     if (!relPath) return { channel, retried: false, text: '', durationMs: 0, segments: [] }

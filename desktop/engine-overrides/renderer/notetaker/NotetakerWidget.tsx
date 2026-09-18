@@ -14,6 +14,7 @@
 // per this task's file budget.
 
 import { useEffect, useRef, useState } from 'react'
+import { micChunkWallClockMs } from './micChunkClock'
 
 // ELEVEN BARS, 3px on a 2.5px gap — the dictation pill's proportions exactly
 // (Waveform.swift). The two surfaces are the same instrument doing the same
@@ -260,19 +261,9 @@ async function attachMicChunkTap(
   workletRegistered: boolean,
 ): Promise<(() => void) | null> {
   const chunkDurationMs = Math.round((MIC_CHUNK_SAMPLES / ctx.sampleRate) * 1000)
-  // `Date.now()` in a port-message handler measures IPC scheduling, not when
-  // the microphone samples existed. Map the AudioContext's sample clock to
-  // wall time once, then timestamp every chunk from its real audio frame.
-  // The native Core Audio tap already reports host-time timestamps; using
-  // audio clocks on both paths is what makes transcript and playback order
-  // comparable.
-  const outputTimestamp = ctx.getOutputTimestamp?.()
-  const outputContextTime = outputTimestamp?.contextTime
-  const outputPerformanceTime = outputTimestamp?.performanceTime
-  const contextToWallMs = typeof outputContextTime === 'number' && typeof outputPerformanceTime === 'number'
-    && Number.isFinite(outputContextTime) && Number.isFinite(outputPerformanceTime)
-    ? performance.timeOrigin + outputPerformanceTime - outputContextTime * 1000
-    : Date.now() - ctx.currentTime * 1000
+  // The native Core Audio tap reports host-time timestamps; dating each mic
+  // chunk from its real first frame (see micChunkWallClockMs) is what keeps
+  // transcript and playback order comparable across the two lanes.
   // Renderer-side proof the audio graph is actually PRODUCING samples, distinct
   // from main's own 'mic-chunk heartbeat' (which only proves the IPC message
   // arrived) — logging both sides of the same handoff is what makes "the tap
@@ -283,9 +274,12 @@ async function attachMicChunkTap(
     if (chunksSent === 1) {
       wlog('debug', 'first mic chunk sent to main over IPC', { sampleBytes: samples.byteLength })
     }
-    const timestampMs = typeof contextTime === 'number'
-      ? contextToWallMs + contextTime * 1000
-      : Date.now() - chunkDurationMs
+    const timestampMs = micChunkWallClockMs({
+      nowMs: Date.now(),
+      contextNowSeconds: ctx.currentTime,
+      chunkContextSeconds: contextTime,
+      chunkDurationMs,
+    })
     api().notetakerMicChunk?.(samples, ctx.sampleRate, timestampMs)
   }
 
