@@ -2192,22 +2192,34 @@ export class NotchController {
     this.holdOrder()
     // Move in the SAME index space the native carousel renders. The Agent can
     // occupy slot zero while unread; indexing the task-only order made the UI
-    // show task B while voice focus silently moved to task C. Footer arrows
-    // remain task navigation, so step across the Agent rather than opening it.
+    // show task B while voice focus silently moved to task C.
     const slots = this.pocketSlots()
     const n = slots.length
     if (!n) return
     this.anchorPocket(slots)
-    const current = slots.findIndex(slot => slot.id === this.focusedId)
+    // WHERE THE CRANK IS STANDING. The Agent holds no `focusedId` — it is
+    // addressed as itself, not as a task — so its own chat is found by kind.
+    // Without this, cranking out of the Agent restarted from wherever the
+    // index happened to be rather than from the card on screen.
+    const current = this.agentOpen
+      ? slots.findIndex(slot => slot.kind === 'agent')
+      : slots.findIndex(slot => slot.id === this.focusedId)
     if (current >= 0) this.pocketAt = current
     for (let walked = 0; walked < n; walked++) {
       this.pocketAt = (this.pocketAt + delta + n * 2) % n
       const slot = slots[this.pocketAt]
-      if (slot?.kind === 'agent') continue
+      // THE AGENT IS A CARD LIKE THE OTHERS. Stepping across it made the one
+      // card you talk to most the only one the arrows could not reach, and
+      // the pocket carousel — the same index space — stops on it happily.
+      // Landing on it opens its chat, which is also what reading it means.
+      if (slot?.kind === 'agent') { this.openAgent(); return }
       if (slot?.id) {
         const opened = this.deps.getTask(slot.id)
         if (opened) this.attentionAcknowledged.set(slot.id, opened.state)
       }
+      // Cranking OUT of the Agent hands the surface to a task: the chat must
+      // let go, or `agentOpen` would outlive the card it describes.
+      this.leaveAgent()
       this.setFocus(slot?.id ?? null)
       this.reconcile()
       return

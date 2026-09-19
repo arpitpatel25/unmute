@@ -405,8 +405,11 @@ test('next walks the crank and comes back around', () => {
   h.client.fire({ type: 'next' })
   const second = h.client.last('showTask')!.task.id
   assert.notEqual(first, second)
+  // THE AGENT IS ON THE RING TOO, so a two-task pocket is a three-stop crank.
   h.client.fire({ type: 'next' })
-  assert.equal(h.client.last('showTask')!.task.id, first) // came back around
+  assert.equal(h.client.last('showTask')!.task.id, 'unmute-agent')
+  h.client.fire({ type: 'next' })
+  assert.deepEqual(h.calls.focus?.at(-1), [first]) // came back around
 })
 
 test('expanded next keeps the visible task and voice focus aligned when the Agent is first', () => {
@@ -425,6 +428,57 @@ test('expanded next keeps the visible task and voice focus aligned when the Agen
   assert.equal(visible, 'b')
   assert.deepEqual(h.calls.focus?.at(-1), [visible],
     'Right Option must address the same task the expanded surface shows')
+})
+
+/**
+ * FIELD REPORT (2026-09-20). The arrows and the Prev/Next buttons walked every
+ * card in the pocket EXCEPT the Agent's — `crankStep` stepped across it on the
+ * grounds that the footer arrows are "task navigation". The Agent is the card
+ * you talk to most, and the pocket carousel — the same index space — stops on
+ * it happily, so the expanded surface was the only place it could not be
+ * reached without going back out to the pocket.
+ */
+test('the crank stops on the Agent card and opens its chat', () => {
+  const h = setup()
+  h.controller.agentAnswered('An unread Agent response')
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B' }))
+
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketMove', delta: 1 }) // Agent → A
+  h.client.fire({ type: 'pocketExpand' })
+  assert.equal(h.client.last('showTask')!.task.id, 'a')
+
+  h.client.fire({ type: 'prev' }) // back onto the Agent, rather than past it
+  assert.equal(h.client.last('showTask')!.task.id, 'unmute-agent',
+    'the Agent is a card like the others — the crank must land on it')
+  assert.deepEqual(h.calls.focus?.at(-1), [null],
+    'the Agent is addressed as itself, never as a task id')
+})
+
+test('the crank leaves the Agent chat for the task beside it', () => {
+  const h = setup()
+  h.controller.agentAnswered('An unread Agent response')
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B' }))
+
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketExpand' })   // the Agent sits first while unread
+  assert.equal(h.client.last('showTask')!.task.id, 'unmute-agent')
+
+  // Focus is the assertion, not the payload: the surface only re-sends a
+  // detail that CHANGED, and these cards were drawn on the way in.
+  h.client.fire({ type: 'next' })
+  assert.deepEqual(h.calls.focus?.at(-1), ['a'],
+    'cranking out of the chat lands on the card beside it, voice and all')
+
+  // And the crank carried on from THERE — proof the chat let go rather than
+  // staying open behind a task.
+  h.client.fire({ type: 'next' })
+  assert.deepEqual(h.calls.focus?.at(-1), ['b'])
+
+  h.client.fire({ type: 'next' })
+  assert.deepEqual(h.calls.focus?.at(-1), [null], 'round again onto the Agent')
 })
 
 test('prev cranks backward (reverse rotation of next)', () => {
@@ -606,6 +660,9 @@ test('moving between expanded tasks silently opens each selected task', () => {
   put(h, makeTask({ id: 'a', state: 'done', kind: 'session', alive: false }))
   put(h, makeTask({ id: 'b', state: 'done', kind: 'session', alive: false }))
   h.client.fire({ type: 'focusTask', id: 'a' })
+  // Two stops, because the Agent's own card sits on the ring between them and
+  // opening a chat is not opening a task.
+  h.client.fire({ type: 'next' })
   h.client.fire({ type: 'next' })
   assert.deepEqual(h.calls.opened, [['a'], ['b']])
 })
@@ -750,8 +807,12 @@ test('a blocked task CAN still be hidden, but only by asking for it', () => {
   put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
   h.client.fire({ type: 'mute', id: 'b1' })
   assert.equal(h.client.last('setState')!.state, 'dormant')
-  h.client.fire({ type: 'next' })   // the crank must skip it too
-  assert.notEqual(h.client.last('setState')!.state, 'task')
+  // The crank must skip it too. It can still land on the Agent's own card —
+  // that one is always reachable — so the assertion is about the hidden task,
+  // not about whether anything at all is on screen.
+  h.client.fire({ type: 'next' })
+  assert.notEqual(h.client.last('showTask')?.task.id, 'b1')
+  assert.deepEqual(h.calls.focus?.at(-1), [null], 'nothing but the Agent is left to crank to')
 })
 
 // ── forwarded notifications ─────────────────────────────────────────────────
