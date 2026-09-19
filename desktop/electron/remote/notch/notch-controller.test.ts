@@ -368,7 +368,11 @@ test('tap with a front task → task surface + focus; tap idle → cockpit', () 
   assert.ok(h2.client.last('setCockpit'))
 })
 
-test('when an expanded task leaves the queue, the next visible task becomes the voice target', () => {
+// CHANGED 2026-09-19 (focus-stealing fix). This used to expect the surface to
+// jump to 'next' as soon as the open task FINISHED — the task you were reading
+// was replaced, and the voice went with it, without you doing anything. An open
+// task now stays open until you move; only its REMOVAL advances the surface.
+test('an expanded task that finishes stays open and addressed; removing it advances to the next', () => {
   const h = setup()
   h.controller.setAutoExpand(true)
   put(h, makeTask({ id: 'first', name: 'First', state: 'needs-user', updatedAt: T0 + 20 }))
@@ -376,6 +380,12 @@ test('when an expanded task leaves the queue, the next visible task becomes the 
 
   put(h, makeTask({ id: 'first', name: 'First', state: 'done', updatedAt: T0 + 30 }))
 
+  assert.equal(h.client.last('showTask')?.task.id, 'first', 'the open task is still the one on screen')
+  assert.deepEqual(h.calls.focus?.at(-1), ['first'], 'and still the voice address')
+
+  h.tasks.delete('first')
+  h.events.emit('removed', { id: 'first' })
+  h.flush()
   assert.equal(h.client.last('showTask')?.task.id, 'next', 'the next waiting task is visibly expanded')
   assert.deepEqual(h.calls.focus?.at(-1), ['next'], 'Right Option must address the task the panel displays')
 })
@@ -2904,22 +2914,190 @@ test('a momentary processing blip does not reset the demand clock', () => {
 /**
  * FIELD FAILURE, 2026-09-08. Auto-expand was guarded on `engaged === 'none'`,
  * which asks "is anyone being shown something", not "is the person busy" — and
- * dequeue() clears it the instant the attention queue empties. A card that kept
+ * dequeue() cleared it whenever the attention queue emptied. A card that kept
  * re-entering the queue therefore took the surface every few seconds, which put
  * a card switch between the person typing and pressing send.
+ *
+ * REWRITTEN 2026-09-19: the old version ran with auto-expand OFF, fired a
+ * `pocketClose` event that does not exist and looked for a `surface` message
+ * that is never sent — it could not fail. The `userTouchedAt` guard it named
+ * was written and never read; it is gone, and the guarantees are tested below.
  */
-test('a card that arrives while you are working does not take the surface', () => {
+test('a card that arrives while the pocket is open does not take the surface or the card', () => {
   const h = setup()
-  // The person opens the pocket: a deliberate act on the surface.
+  h.controller.setAutoExpand(true)
+  put(h, makeTask({ id: 'mine', state: 'processing', kind: 'session', name: 'Mine' }))
   h.client.fire({ type: 'pocketOpen' })
-  h.client.fire({ type: 'pocketClose' })
+  h.flush()
+  const at = pocketOf(h)!.at
+  assert.equal(pocketOf(h)!.slots[at].id, 'mine')
 
-  // Something finishes and starts demanding, right now.
-  put(h, makeTask({ id: 'arriver', state: 'needs-user', kind: 'session', name: 'Arriver', alive: true }))
+  put(h, makeTask({ id: 'arriver', state: 'needs-user', kind: 'session', name: 'Arriver', alive: true,
+                    lastUserInputAt: Date.now() + 1000, question: { text: 'which?' } }))
 
-  // It joins the rail, and it waits. It does not yank the surface open.
-  const expanded = h.client.sent.filter((m: { type: string }) => m.type === 'surface')
-  assert.equal(expanded.some((m: { id?: string }) => m.id === 'arriver'), false)
+  assert.notEqual(h.client.last('setState')!.state, 'task', 'it does not yank the surface open')
+  const p = pocketOf(h)!
+  assert.equal(p.slots[p.at].id, 'mine', 'the card on screen is still the one you were on')
+  assert.deepEqual(h.calls.focus?.at(-1), ['mine'], 'and it is still the voice address')
+})
+
+// ── FOCUS STEALING (2026-09-19) ─────────────────────────────────────────────
+//
+// When a task is open, nothing but the person may change which task is shown
+// or where the voice goes. Every clause below is a path that used to.
+
+function expandX(h: Harness): void {
+  put(h, makeTask({ id: 'x', state: 'processing', kind: 'session', name: 'X' }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.flush()
+  h.client.fire({ type: 'pocketExpand', id: 'x' } as unknown as NotchEvent)
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'task')
+  assert.equal(h.client.last('showTask')!.task.id, 'x')
+}
+
+function assertStillX(h: Harness, why: string): void {
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'task', `${why}: still expanded`)
+  assert.equal(h.client.last('showTask')!.task.id, 'x', `${why}: still showing X`)
+  assert.deepEqual(h.calls.focus?.at(-1), ['x'], `${why}: voice still on X`)
+}
+
+test('an open task stays shown and addressed when another task starts needing you', () => {
+  const h = setup()
+  h.controller.setAutoExpand(true)
+  expandX(h)
+  put(h, makeTask({ id: 'y', state: 'needs-user', name: 'Y', question: { text: 'Allow?' } }))
+  assertStillX(h, 'needs-user')
+})
+
+test('an open task stays shown when the Agent creates or sends to another task', () => {
+  const h = setup()
+  h.controller.setAutoExpand(true)
+  expandX(h)
+  // Agent-created / session_send: both stamp the user's clock, which sorts first.
+  put(h, makeTask({ id: 'agent-made', state: 'needs-user', kind: 'session', name: 'Made by Agent',
+                    createdAt: Date.now(), lastUserInputAt: Date.now() + 5000, question: { text: 'go?' } }))
+  h.events.emit('created', h.tasks.get('agent-made'))
+  assertStillX(h, 'agent task_create')
+  put(h, makeTask({ id: 'agent-made', state: 'done', kind: 'session', name: 'Made by Agent',
+                    createdAt: Date.now(), lastUserInputAt: Date.now() + 9000 }))
+  assertStillX(h, 'agent session_send wake')
+})
+
+test('an open task stays shown when another task fails or gets stuck', () => {
+  const h = setup()
+  h.controller.setAutoExpand(true)
+  expandX(h)
+  put(h, makeTask({ id: 'f', state: 'failed', name: 'F', lastUserInputAt: Date.now() + 1000 }))
+  assertStillX(h, 'failed')
+  put(h, makeTask({ id: 's', state: 'stuck', name: 'S', lastUserInputAt: Date.now() + 2000 }))
+  assertStillX(h, 'stuck')
+})
+
+test('removing an unrelated task does not collapse the open one', () => {
+  const h = setup()
+  expandX(h)
+  put(h, makeTask({ id: 'gone', state: 'processing', name: 'Gone' }))
+  h.tasks.delete('gone')
+  h.events.emit('removed', { id: 'gone' })
+  assertStillX(h, 'unrelated removal')
+})
+
+test('the pocket card stays put when the Agent answers (and jumps to the front)', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', name: 'A' }))
+  put(h, makeTask({ id: 'b', state: 'processing', kind: 'session', name: 'B' }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketMove', to: 1 } as unknown as NotchEvent)
+  const before = pocketOf(h)!
+  const shown = before.slots[before.at].id
+  const focus = h.calls.focus?.at(-1)
+
+  h.controller.agentAnswered('Something for you')
+
+  const after = pocketOf(h)!
+  assert.equal(after.slots[0].kind, 'agent', 'unread Agent moved to the front')
+  assert.equal(after.slots[after.at].id, shown, 'but the card on screen is the same card')
+  assert.deepEqual(h.calls.focus?.at(-1), focus, 'and the voice did not move')
+  assert.equal(h.controller.agentAddressed(), false, 'the Agent is not addressed just by jumping forward')
+})
+
+test('the pocket card stays put when a new task sorts first', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', name: 'A' }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.flush()
+  assert.equal(pocketOf(h)!.slots[pocketOf(h)!.at].id, 'a')
+
+  put(h, makeTask({ id: 'fresh', state: 'processing', kind: 'session', name: 'Fresh',
+                    createdAt: Date.now(), lastUserInputAt: Date.now() + 5000 }))
+
+  const p = pocketOf(h)!
+  assert.equal(p.slots[0].id, 'fresh', 'the new task does sort first')
+  assert.equal(p.slots[p.at].id, 'a', 'the card on screen did not change')
+  assert.deepEqual(h.calls.focus?.at(-1), ['a'])
+})
+
+test('while a capture is recording nothing auto-expands, and it applies once the capture ends', () => {
+  let capturing = true
+  const h = setup({ deps: { isCapturing: () => capturing } })
+  h.controller.setAutoExpand(true)
+  const focusCalls = h.calls.focus?.length ?? 0
+
+  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Q', question: { text: 'Allow?' } }))
+
+  assert.notEqual(h.client.last('setState')!.state, 'task', 'no auto-expand mid-utterance')
+  assert.equal(h.calls.focus?.length ?? 0, focusCalls, 'no focus change mid-utterance')
+
+  capturing = false
+  h.controller.notifyCapturePhase('idle', null)
+  assert.equal(h.client.last('setState')!.state, 'task', 'the held expand applies after the capture')
+  assert.equal(h.client.last('showTask')!.task.id, 'q')
+  assert.deepEqual(h.calls.focus?.at(-1), ['q'])
+  h.controller.dispose()
+})
+
+test('while a capture is recording, removing the open task does not hand the voice to another', () => {
+  let capturing = false
+  const h = setup({ deps: { isCapturing: () => capturing } })
+  expandX(h)
+  put(h, makeTask({ id: 'y', state: 'needs-user', name: 'Y', question: { text: 'Allow?' } }))
+  capturing = true
+  h.tasks.delete('x')
+  h.events.emit('removed', { id: 'x' })
+  h.flush()
+  assert.notEqual(h.client.last('setState')!.state, 'task', 'collapses rather than advancing')
+  assert.notDeepEqual(h.calls.focus?.at(-1), ['y'], 'the voice is not handed to Y')
+  h.controller.dispose()
+})
+
+test('an answer that lands mid-capture does not advance the open task', () => {
+  let capturing = false
+  const h = setup({ deps: { isCapturing: () => capturing } })
+  h.controller.setAutoExpand(true)
+  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Q', question: { text: 'Allow?', choices: ['Yes'] } }))
+  put(h, makeTask({ id: 'y', state: 'needs-user', name: 'Y', question: { text: 'Other?' } }))
+  assert.equal(h.client.last('showTask')!.task.id, 'q')
+  capturing = true
+  h.client.fire({ type: 'chooseOption', id: 'q', index: 0 } as unknown as NotchEvent)
+  h.flush()
+  assert.equal(h.client.last('showTask')!.task.id, 'q', 'still on the answered task')
+  assert.deepEqual(h.calls.focus?.at(-1), ['q'], 'the voice did not jump to Y')
+  h.controller.dispose()
+})
+
+test('leaving the app mid-capture keeps the open task until the capture ends', () => {
+  let capturing = false
+  const h = setup({ deps: { isCapturing: () => capturing } })
+  expandX(h)
+  capturing = true
+  h.client.fire({ type: 'userLeft', reason: 'blur' } as unknown as NotchEvent)
+  assertStillX(h, 'blur mid-capture')
+  capturing = false
+  h.controller.notifyCapturePhase('transcribing', null)
+  assert.notEqual(h.client.last('setState')!.state, 'task', 'the held leave applies afterwards')
+  h.controller.dispose()
 })
 
 /**
