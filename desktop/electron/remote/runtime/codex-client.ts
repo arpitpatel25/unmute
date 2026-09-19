@@ -100,6 +100,7 @@ export class PersistentCodexHub extends CodexHub {
     return this.rpc.connected ? this.mirrors.get(id)?.gate ?? { kind: 'unavailable', reason: 'Codex is connecting.' } : { kind: 'unavailable', reason: 'Background runtime disconnected.' }
   }
   override threadIdFor(id: string): string | undefined { return this.mirrors.get(id)?.threadId }
+  override turnActive(id: string): boolean { return this.mirrors.get(id)?.gate.kind === 'active' }
   override validationErrorFor(id: string): string | undefined { return this.mirrors.get(id)?.validationError }
   override async startThread(id: string, options: StartThreadOpts): Promise<{ threadId: string; url: string }> {
     await this.prepare(id)

@@ -247,6 +247,9 @@ struct TaskDetail: Codable {
     /// Did Unmute spawn the process? Decides Kill (ours to stop) versus Remove
     /// (forget the card, leave the user's app alone).
     let owned: Bool?
+    /// Offer Stop — the engine's answer from the runtime's busy flag (see
+    /// `stopAvailable`). Absent from an older engine.
+    var canStop: Bool? = nil
     /// The CLI process is being restored for this conversation.
     let resuming: Bool?
     /// Why the latest restore attempt failed, when it did.

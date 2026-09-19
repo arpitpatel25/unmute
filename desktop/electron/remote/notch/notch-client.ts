@@ -166,6 +166,9 @@ export interface TaskDetailP {
   resumable?: boolean
   /** Did Unmute spawn the process? Decides Kill versus Remove. */
   owned?: boolean
+  /** Offer Stop: owned, and work is in flight by the runtime's account or
+   *  the task's state (notch-controller canStopTask). */
+  canStop?: boolean
   /** The CLI process is currently being restored for this conversation. */
   resuming?: boolean
   /** Visible reason when restoring the CLI process failed. */

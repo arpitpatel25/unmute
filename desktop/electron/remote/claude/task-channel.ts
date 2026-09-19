@@ -31,6 +31,10 @@ export class ClaudeTaskChannel {
   private answeringReference?: QuestionReference
   private generation = randomUUID()
   private ended = false
+  /** `ended` was set by a transport/driver error rather than by a result.
+   *  That is a guess about the turn, not a fact: the daemon may still be
+   *  running it (an rpc disconnect says nothing about the provider). */
+  private endedByError = false
   private compacting = false
   private cancelling = false
   private resultError?: string
@@ -57,6 +61,22 @@ export class ClaudeTaskChannel {
   }
   get pending(): boolean { return this.requests.length > 0 }
   requestStop(): void { this.cancelling = true; this.patch({ activity: { kind: 'lifecycle', label: 'Cancelling' } }) }
+  /**
+   * THE RUNTIME SAYS A TURN IS IN FLIGHT — believe it.
+   *
+   * A reattach replays only the daemon's recent tail, so the turn-start that
+   * would have presented `processing` is usually not in it; and a disconnect
+   * before the reattach latched `ended` + failed. Either way the card read as
+   * idle (and offered no Stop) while the model kept streaming. The driver's
+   * own busy flag is the fact; this re-presents it without inventing a turn
+   * marker in the persisted frames.
+   */
+  resumeTurn(): void {
+    this.ended = false
+    this.endedByError = false
+    this.patch({ turnOutcome: null, errorReason: '' })
+    this.present()
+  }
   mergeHistory(frames: Frame[]): void {
     // Keep the checkpoint at its original boundary. Moving a fresh checkpoint
     // past newly recovered results would hide those results again.
@@ -71,6 +91,9 @@ export class ClaudeTaskChannel {
   event(event: ClaudeTaskEvent): void {
     if (event.type === 'message') {
       let f = normalizeFrame(event.message)
+      // WORK AFTER AN ERROR MEANS THE ERROR DID NOT END THE TURN. Output only
+      // arrives from a turn that is still running, so un-latch the guess.
+      if (this.endedByError && (f.type === 'stream_event' || f.type === 'assistant')) this.resumeTurn()
       if ((f.type === 'user' || f.type === 'assistant') && !f.timestamp) f = { ...f, timestamp: new Date().toISOString() }
       if (f.type === 'system' && Array.isArray(f.mcp_servers)) {
         for (const server of f.mcp_servers) if (typeof server.name === 'string' && typeof server.status === 'string') {
@@ -113,6 +136,7 @@ export class ClaudeTaskChannel {
       }
     } else if (event.type === 'turn-start') {
       this.ended = false
+      this.endedByError = false
       this.cancelling = false; this.resultError = undefined
       this.frames.push({ type: 'system', uuid: `unmute-start:${event.submissionId}`, unmuteTurnStart: Date.now() })
       this.serializedFrames = ClaudeTaskChannel.displayTranscript(this.frames)
@@ -127,6 +151,7 @@ export class ClaudeTaskChannel {
       this.present()
     } else if (event.type === 'result') {
       this.ended = true
+      this.endedByError = false
       this.requests = []
       this.finishPartial()
       this.resultError = event.message.is_error ? (event.message.errors ?? [event.message.result ?? 'Claude failed']).join('\n') : undefined
@@ -143,6 +168,7 @@ export class ClaudeTaskChannel {
       this.patch({ permissionLimit: lower ? claudeLimit(event.requested, event.effective) : null })
     } else if (event.type === 'error') {
       if (this.ended && event.message === this.resultError) return
+      if (!this.ended) this.endedByError = true
       this.ended = true
       this.requests = []
       this.finishPartial()

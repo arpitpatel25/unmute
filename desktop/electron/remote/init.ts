@@ -2767,6 +2767,8 @@ function serializeTask(t: Task) {
     // PTY still alive (running or parked-warm) → the live terminal can repaint
     // it clean instead of replaying stale-width history (PRD §13.4 #8).
     alive: manager?.isAlive(t.id) ?? false,
+    // A turn in flight by the runtime's own account — what Stop keys off.
+    turnActive: manager?.turnActive(t.id) ?? false,
   }
 }
 

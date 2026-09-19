@@ -99,6 +99,7 @@ import type { Block } from './blocks'
 import { blocksFromClaudeTranscript } from './blocks-claude'
 import { ClaudeTaskSession, type ClaudeTaskOptions } from './claude/task-session'
 import { ClaudeTaskChannel } from './claude/task-channel'
+import { CLAUDE_RUNTIME_RELEASED } from './runtime/claude-service'
 import { CLAUDE_HISTORY_STALE_MARKER, readClaudeHistory, retainClaudeHistoryDisplay } from './claude/chat-history'
 import { isDeepStrictEqual } from 'node:util'
 import type { TaskInput } from './task-input'
@@ -1481,6 +1482,9 @@ export class TaskManager extends EventEmitter {
       this.claudeTasks.set(task.id, { driver, channel })
       if (restoredFrames) channel.restore(restoredFrames)
       await driver.start()
+      // Reattached mid-turn: the replay tail rarely holds the turn-start, so
+      // the channel would otherwise sit idle (no Stop) while Claude streams.
+      if (driver.busy && this.claudeTasks.get(task.id)?.channel === channel) channel.resumeTurn()
     })().finally(() => this.claudeStarting.delete(task.id))
     this.claudeStarting.set(task.id, starting)
     return starting
@@ -4233,15 +4237,30 @@ export class TaskManager extends EventEmitter {
     if (task?.claudeSessionSettings) {
       this.chatStopVersion.set(id, (this.chatStopVersion.get(id) ?? 0) + 1)
       const runtime = this.claudeTasks.get(id)
-      runtime?.channel.requestStop()
+      const noSession = () => this.transition(id, 'failed', { state: 'failed', error: { reason: 'Stopped before the session connected' } })
+      if (!runtime) { noSession(); return }
+      runtime.channel.requestStop()
       task.codexActivity = { kind: 'lifecycle', label: 'Cancelling' }
       this.emit('updated', task)
-      if (runtime?.driver.busy) void runtime.driver.interrupt().catch(error => {
+      // ALWAYS ASK THE RUNTIME. `driver.busy` is this process's projection of
+      // the daemon and reads false across a reconnect (or before the replay
+      // lands) while the daemon's turn keeps running — which is exactly when
+      // the user is pressing Stop. The daemon's interrupt is a no-op on an
+      // idle session, so asking costs nothing.
+      void runtime.driver.interrupt().then(() => {
+        if (this.claudeTasks.get(id) !== runtime || runtime.driver.busy) return // the result event settles it
+        // Nothing was running (or it already ended): settle, never leave the
+        // card saying "Cancelling" over an idle session.
+        if (task.state === 'processing' || task.state === 'needs-user') {
+          this.applyHubPatch({ taskId: id, state: 'done', activity: null, turnOutcome: 'cancelled', clearQuestion: true, errorReason: '' })
+        } else if (task.codexActivity?.label === 'Cancelling') { task.codexActivity = undefined; this.emit('updated', task) }
+      }, error => {
         task.codexActivity = undefined
+        // The daemon holds no session at all: nothing is running to stop.
+        if ((error as Error).message === CLAUDE_RUNTIME_RELEASED) { noSession(); return }
         task.deliveryError = `Could not stop Claude: ${(error as Error).message}`
         this.emit('updated', task)
       })
-      else this.transition(id, 'failed', { state: 'failed', error: { reason: 'Stopped before the session connected' } })
       return
     }
     // A stopped task must stop asking. Leaving the request on disk would keep
@@ -4249,7 +4268,21 @@ export class TaskManager extends EventEmitter {
     // waiting for an answer that is never coming.
     if (task?.codexThreadId) { this.surfacedApprovals.delete(task.codexThreadId); void clearApproval(task.codexThreadId) }
     if (task?.codexSessionSettings) {
-      void this.opts.codexHub?.interrupt(id).then((ok) => {
+      const hub = this.opts.codexHub
+      void (async () => {
+        if (!hub) return false
+        if (await hub.interrupt(id)) return true
+        // NO TURN ID IS NOT "NOTHING RUNNING" — the projection may simply be
+        // stale. Re-read the runtime's view once and try again before erroring.
+        try { await hub.refreshTask(id) } catch { /* keep the stale view */ }
+        if (hub.turnActive(id)) return hub.interrupt(id)
+        // Genuinely no turn: there is nothing to stop, so settle the card
+        // instead of reporting a failure to stop it.
+        if (task.state === 'processing' || task.state === 'needs-user') {
+          this.applyHubPatch({ taskId: id, state: 'done', activity: null, turnOutcome: 'cancelled', clearQuestion: true, errorReason: '' })
+        } else if (task.codexActivity) { task.codexActivity = undefined; this.emit('updated', task) }
+        return true
+      })().catch(() => false).then((ok) => {
         if (!ok) {
           task.deliveryError = 'Could not stop Codex. Reconnect and try again.'
           task.codexActivity = undefined
@@ -6804,6 +6837,22 @@ export class TaskManager extends EventEmitter {
    *  repaints itself at the new width; xterm reflows its own buffer). */
   resize(id: string, cols: number, rows: number): void {
     this.executors.get(id)?.resize(cols, rows)
+  }
+
+  /**
+   * Is a turn in flight RIGHT NOW, by the runtime's own account? Drives the
+   * Stop affordance. `state` is the wrong source for that: a reattach that
+   * lost the turn-start, or a mid-turn transport error, leaves the task
+   * reading idle/failed while the provider keeps streaming.
+   */
+  turnActive(id: string): boolean {
+    const task = this.tasks.get(id)
+    if (task?.claudeSessionSettings) {
+      const driver = this.claudeTasks.get(id)?.driver
+      return !!driver && (driver.busy || !!driver.activeSubmissionId)
+    }
+    if (task?.codexSessionSettings) return this.opts.codexHub?.turnActive(id) === true
+    return false
   }
 
   /** Is the task's PTY still alive (running or parked-warm)? */
