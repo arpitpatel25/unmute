@@ -2665,7 +2665,14 @@ function focusTarget(task: Task): void {
  *  Honors the auto-present toggle (off ⇒ user opens the app manually). */
 function maybePresent(task: Task): void {
   if (settings.get('overlayAutoPresent') === false) return
-  if (task.state === 'done' && (task.category === 'navigate' || task.category === 'watch')) { focusTarget(task); return }
+  // NOTHING TAKES THE SCREEN WHILE THE USER IS SPEAKING — raising Chrome or
+  // opening a file mid-dictation moves the cursor the words are pasted into.
+  if (liveCaptureRoute() != null) { log.event('present-held', { taskId: task.id, why: 'capture in progress' }); return }
+  if (task.state === 'done' && (task.category === 'navigate' || task.category === 'watch')) {
+    // Nor over a task (or chat, or dashboard) the user has open in the notch.
+    if (notchController?.holdsSurface()) { log.event('present-held', { taskId: task.id, why: 'notch surface open' }); return }
+    focusTarget(task); return
+  }
   if (task.state === 'done' && task.category === 'consume') return
   presentOrExpand(task.id)
 }
@@ -5807,6 +5814,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         // task runtime — same calls as remote:list/answer/kill/remove/resume/…
         listTasks: () => mgr.list().map(serializeTask),
         getTask: (id) => { const t = mgr.get(id); return t ? serializeTask(t) : undefined },
+        // A getter read, nothing more — it is consulted while the mic is hot.
+        isCapturing: () => liveCaptureRoute() != null,
         answer: (id, text) => mgr.answer(id, text),
         ...(deps.backgroundAudio ? {
           holdBackgroundAudio: () => deps.backgroundAudio!.hold(),

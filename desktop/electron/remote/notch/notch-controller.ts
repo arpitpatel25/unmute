@@ -193,6 +193,11 @@ export interface NotchControllerDeps {
    *  an id the task runtime cannot resolve. Optional: a host that does not wire
    *  it simply keeps the Agent on its own key. */
   addressAgent?(on: boolean): void
+  /** A capture is recording (any lane: dictation, Remote, Agent). While it is,
+   *  nothing automatic may move the surface or the voice — the destination is
+   *  read at submit, so a mid-utterance switch sends the words elsewhere. Must
+   *  be a cheap read: it is consulted while the mic is hot. */
+  isCapturing?(): boolean
   /** The user opened this card (tap / cockpit stage). Revives a persistent
    *  session whose PTY the quit switch closed — see TaskManager.opened. Optional
    *  so a host that doesn't wire it simply keeps the manual Resume button. */
@@ -477,8 +482,21 @@ export class NotchController {
   // there on its own. So there is one sequence now, `crankSlots()`, and the
   // pocket is a window onto it.
   private pocketMode: PocketMode = 'closed'
-  /** Index into `crankSlots()`. Whatever sits here is the voice's address. */
-  private pocketAt = 0
+  /** Index into `pocketSlots()`. Whatever sits here is the voice's address. */
+  private pocketIndex = 0
+  /**
+   * THE POCKET IS ANCHORED ON A CARD, NOT A POSITION.
+   *
+   * The slots re-sort under the index — the Agent jumps to the front when it
+   * answers, a new or re-addressed task sorts first — and a bare index then
+   * points at a different card than the one the person was looking at (and
+   * speaking to). `anchorPocket()` re-finds this id before every read, so only
+   * an explicit move (the setter below) or the card going away moves the pocket.
+   */
+  private pocketAnchor: string | null = null
+  private get pocketAt(): number { return this.pocketIndex }
+  /** An EXPLICIT move. The anchor re-forms on whatever sits at the new index. */
+  private set pocketAt(i: number) { this.pocketIndex = i; this.pocketAnchor = null }
   /** WHEN YOU LAST TALKED TO IT — your clock, not the agent's.
    *
    *  This is what orders the pocket. `updatedAt` cannot: it is stamped by a
@@ -545,8 +563,13 @@ export class NotchController {
   private demandStamp = new Map<string, number>()
   /** When a task entered `processing`, to tell a real turn from a blip. */
   private processingSince = new Map<string, number>()
-  /** When the person last acted on the surface — see USER_HOLDS_SURFACE_MS. */
-  private userTouchedAt = 0
+  /** A task whose auto-expand was held back because a capture was recording.
+   *  Applied (if it still needs you, and nothing else is open) once it ends. */
+  private deferredExpand: string | null = null
+  /** Polls the (cheap) capture flag only while something is being held back. */
+  private captureWait: ReturnType<typeof setInterval> | null = null
+  /** A leave (blur/space/screenshot) held back for the same reason. */
+  private deferredLeave: 'blur' | 'screenshot' | 'space' | null = null
   /** id → the state we last stamped for, so a change restarts the window. */
   private stateSeen = new Map<string, TaskStatusName>()
   /** Set when leaving collapsed an expanded task; a return inside this window
@@ -675,12 +698,12 @@ export class NotchController {
       }
       this.reconcile()
     })
-    on('focusTask', (e) => { this.touch(); this.onFocusTask((e as { id: string }).id) })
+    on('focusTask', (e) => { this.onFocusTask((e as { id: string }).id) })
     on('closeStage', () => { this.seenThenClose() })
     on('userLeft', (e) => this.onUserLeft((e as { reason: 'blur' | 'screenshot' | 'space' }).reason))
     on('userReturned', () => this.onUserReturned())
     on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
-    on('pocketOpen', () => { this.touch(); this.pocketAt = 0; this.setPocketMode('open'); this.reconcile() })
+    on('pocketOpen', () => { this.pocketAt = 0; this.setPocketMode('open'); this.reconcile() })
     on('pocketRelease', () => {
       // CLOSING THE POCKET RELEASES ITS ORDER — the next open re-sorts to
       // whatever has actually moved since. Expanding a card out of the pocket
@@ -710,7 +733,6 @@ export class NotchController {
       this.reconcile()
     })
     on('pocketExpand', (e) => {
-      this.touch()
       this.onPocketExpand((e as { id?: string }).id)
     })
     on('importSession', (e) => void this.onImportSession((e as { sessionId: string }).sessionId))
@@ -734,7 +756,6 @@ export class NotchController {
       this.submitAnswer(id, text, wasBlocking, reference)
     })
     on('setDraftText', (e) => {
-      this.touch()
       const draft = e as { id: string; text: string }
       // THE AGENT'S DRAFT IS THE CONTROLLER'S, not the task runtime's. Handing
       // a draft store keyed by task id something that is not a task is how a
@@ -753,7 +774,6 @@ export class NotchController {
       this.scheduleReconcile()
     })
     on('setDraftTool', (e) => {
-      this.touch()
       const { id, tool } = e as { id: string; tool: string | null }
       // THE AGENT SLOT HAS NO DRAFT STORE. Same rule as setDraftText above: the
       // Agent is not a task, and its composer is the controller's own. Rather
@@ -1007,6 +1027,7 @@ export class NotchController {
     if (this.railsTimer) clearInterval(this.railsTimer)
     if (this.reconcileTimer) clearTimeout(this.reconcileTimer)
     if (this.demandTimer) clearInterval(this.demandTimer)
+    if (this.captureWait) clearInterval(this.captureWait)
   }
 
   // ── queue ──────────────────────────────────────────────────────────────────
@@ -1033,8 +1054,32 @@ export class NotchController {
    * agent's closing line ended in a question mark; it is now decided by what
    * the task IS, which is known at creation and never re-guessed.
    */
-  /** Any deliberate act on the surface. See USER_HOLDS_SURFACE_MS. */
-  private touch(): void { this.userTouchedAt = Date.now() }
+  /** A capture is recording. A plain boolean read — safe while the mic is hot. */
+  private capturing(): boolean { return this.deps.isCapturing?.() === true }
+
+  /** Something was held back for the capture; apply it once the capture ends.
+   *  `notifyCapturePhase` checks immediately; the poll covers lanes (plain
+   *  dictation) that never announce a phase. */
+  private deferUntilCaptureEnds(): void {
+    if (this.captureWait) return
+    this.captureWait = setInterval(() => this.afterCapture(), 400)
+    this.captureWait.unref?.()
+  }
+
+  private afterCapture(): void {
+    if (!this.captureWait || this.capturing()) return
+    clearInterval(this.captureWait)
+    this.captureWait = null
+    const leave = this.deferredLeave
+    this.deferredLeave = null
+    if (leave) { this.deferredExpand = null; this.onUserLeft(leave); return }
+    const id = this.deferredExpand
+    this.deferredExpand = null
+    const t = id ? this.deps.getTask(id) : undefined
+    if (t && this.autoExpand && this.engaged === 'none' && this.pocketMode !== 'open'
+      && this.queue.includes(t.id) && this.demanding(t)) this.autoExpandTo(t, true)
+    this.reconcile()
+  }
 
   private demanding(t: TaskLite): boolean {
     if (t.shelved) return false
@@ -1275,9 +1320,9 @@ export class NotchController {
     // An accepted voice/provider input can arrive outside this controller.
     // Its persisted clock releases a browsing hold just like a composer send.
     if (this.frozenOrder && live.some(t => this.frozenInputTimes.has(t.id) && this.frozenInputTimes.get(t.id) !== this.addressedAt(t))) {
+      // The card on screen stays on screen: the pocket is anchored on its id
+      // (anchorPocket), so the re-sort moves the index, not the card.
       this.frozenOrder = null
-      const at = liveIds.indexOf(this.focusedId ?? '')
-      if (at >= 0) this.pocketAt = at
     }
     if (!this.frozenOrder) return liveIds
     const alive = new Set(liveIds)
@@ -1332,6 +1377,23 @@ export class NotchController {
     const tasks = this.crankSlots()
     const agent = this.agentSlot()
     return this.agentUnread ? [agent, ...tasks] : [...tasks, agent]
+  }
+
+  /**
+   * WHERE THE POCKET IS, after whatever re-sorted it. Every reader of the index
+   * goes through here: the card being shown keeps being shown (and addressed)
+   * until the person moves or it disappears — then the index stays put and
+   * lands on whatever took its place.
+   */
+  private anchorPocket(slots: PocketSlotP[] = this.pocketSlots()): number {
+    if (this.pocketAnchor) {
+      const at = slots.findIndex((sl) => sl.id === this.pocketAnchor)
+      if (at >= 0) this.pocketIndex = at
+    }
+    const n = slots.length
+    this.pocketIndex = n <= 0 ? 0 : Math.max(0, Math.min(this.pocketIndex, n - 1))
+    this.pocketAnchor = slots[this.pocketIndex]?.id ?? null
+    return this.pocketIndex
   }
 
   /**
@@ -1417,28 +1479,42 @@ export class NotchController {
       // dismissed, and the NEXT thing that needs them opens it again.
       // An open pocket is an explicit voice address. New attention can join its
       // rail, but must not replace the card (or the address) under the user.
+      //
+      // NOR WHILE THE PERSON IS SPEAKING. The voice's destination is read at
+      // submit, so opening a task mid-utterance would send the words there.
+      // Held back instead, and applied when the capture ends if it still needs
+      // them and nothing else has been opened meanwhile.
       if (this.autoExpand && this.engaged === 'none' && this.pocketMode !== 'open') {
-        // WHY THE SURFACE OPENED, on the record.
-        //
-        // Four clauses can make a task demanding, and from the outside they are
-        // indistinguishable — the panel simply appears. A Codex task reported as
-        // "popping up again and again while the model is still working" cost an
-        // afternoon of reasoning that ruled out three suspects and found none,
-        // because nothing said which clause fired. One line ends that.
-        log.event('auto-expanded', {
-          taskId: t.id, state: t.state, kind: t.kind ?? 'oneoff',
-          agent: t.agent ?? 'claude',
-          why: t.state === 'needs-user' ? 'needs-user'
-            : t.state === 'stuck' ? 'stuck'
-            : t.state === 'failed' ? 'failed-fresh'
-            : 'done-session-fresh',
-        })
-        this.engaged = 'task'
-        this.setFocus(t.id)
+        if (this.capturing()) {
+          this.deferredExpand = t.id
+          log.event('auto-expand-deferred', { taskId: t.id, why: 'capture in progress' })
+          this.deferUntilCaptureEnds()
+        } else this.autoExpandTo(t)
       }
     }
     else if (!eligible && queued) this.queue = this.queue.filter((id) => id !== t.id)
     this.scheduleReconcile()
+  }
+
+  private autoExpandTo(t: TaskLite, deferred = false): void {
+    // WHY THE SURFACE OPENED, on the record.
+    //
+    // Four clauses can make a task demanding, and from the outside they are
+    // indistinguishable — the panel simply appears. A Codex task reported as
+    // "popping up again and again while the model is still working" cost an
+    // afternoon of reasoning that ruled out three suspects and found none,
+    // because nothing said which clause fired. One line ends that.
+    log.event('auto-expanded', {
+      taskId: t.id, state: t.state, kind: t.kind ?? 'oneoff',
+      agent: t.agent ?? 'claude',
+      ...(deferred ? { deferred } : {}),
+      why: t.state === 'needs-user' ? 'needs-user'
+        : t.state === 'stuck' ? 'stuck'
+        : t.state === 'failed' ? 'failed-fresh'
+        : 'done-session-fresh',
+    })
+    this.engaged = 'task'
+    this.setFocus(t.id)
   }
 
   private trackKind(t: TaskLite): void {
@@ -1450,7 +1526,12 @@ export class NotchController {
 
   private dequeue(id: string): void {
     this.queue = this.queue.filter((x) => x !== id)
-    if (this.focusedId === id) this.setFocus(null)
+    if (this.deferredExpand === id) this.deferredExpand = null
+    // ONLY THE OPEN TASK GOING AWAY TOUCHES THE SURFACE. This dropped the
+    // engagement whenever the queue emptied, so removing an unrelated task
+    // collapsed whatever you had open (a tapped working task, the Agent chat).
+    if (this.focusedId !== id) return
+    this.setFocus(null)
     if (this.queue.length === 0 && this.engaged === 'task') this.engaged = 'none'
   }
 
@@ -1460,7 +1541,8 @@ export class NotchController {
     // so `→` changed the pocket and nothing else. Reads the SAME slots the
     // payload was built from when reconcile hands them over.
     if (this.frozenOrder) {
-      const id = (slots ? slots.map((sl) => sl.id) : this.pocketOrder())[this.pocketAt]
+      const all = slots ?? this.pocketSlots()
+      const id = all[this.anchorPocket(all)]?.id
       const t = id ? this.deps.getTask(id) : undefined
       if (t) return t
     }
@@ -1541,11 +1623,26 @@ export class NotchController {
     // user tapped a merely-working one. Without this the surface would open and
     // then immediately collapse back to `active` on the next reconcile.
     const opened = this.engaged === 'task' && this.focusedId ? this.deps.getTask(this.focusedId) : undefined
-    const shown = front ?? opened
+    // THE OPEN TASK WINS OVER THE QUEUE. This was `front ?? opened`, so any
+    // task that began demanding — a fresh one, a failure, one the Agent created
+    // or sent to (both stamp the user's clock and sort first) — replaced the
+    // task you had open on the very next reconcile, and took the voice with it.
+    // Only the open task going away (dequeue clears the focus) lets the surface
+    // move on to the front of the queue.
+    //
+    // …and not even that while the person is speaking: handing the voice to a
+    // task they never chose, mid-utterance, is the same steal. Collapse to the
+    // compact bar instead (the voice goes back to the router, which is what the
+    // cleared focus already says) and leave the choice to them.
+    if (this.engaged === 'task' && !opened && this.capturing()) {
+      this.engaged = 'none'
+      if (this.focusedId) this.setFocus(null)
+    }
+    const shown = opened ?? front
     if (shown) {
-      // AN EXPANDED TASK IS ITS OWN VOICE ADDRESS. A task can leave the
-      // attention queue while the expanded surface advances to the next card.
-      // dequeue() clears the old focus first; without repairing it here the UI
+      // AN EXPANDED TASK IS ITS OWN VOICE ADDRESS. When the open task is
+      // removed, the expanded surface advances to the next card. dequeue()
+      // clears the old focus first; without repairing it here the UI
       // visibly showed one conversation while Right Option remained
       // unaddressed, so its model picker changed the defaults for a future task
       // instead of the conversation on screen.
@@ -1633,11 +1730,6 @@ export class NotchController {
    * is on screen. Putting it in the ring made it look like a task, gave it a
    * name to argue about, and needed a rule about where it sat.
    */
-  /** Keep `pocketAt` inside the ring — a shrinking crank must never leave the
-   *  voice aimed at a slot that no longer exists. */
-  private clampPocket(n: number): void {
-    this.pocketAt = n <= 0 ? 0 : Math.max(0, Math.min(this.pocketAt, n - 1))
-  }
 
   /**
    * YOU ROUTE TO WHAT YOU CAN SEE.
@@ -1667,7 +1759,8 @@ export class NotchController {
     // through a separate channel rather than through focus because focus means
     // a TASK, and handing the task runtime an id it cannot resolve is how a
     // surface ends up addressing nothing at all.
-    const slot = this.pocketMode === 'open' ? this.pocketSlots()[this.pocketAt] : undefined
+    const all = this.pocketMode === 'open' ? this.pocketSlots() : []
+    const slot = this.pocketMode === 'open' ? all[this.anchorPocket(all)] : undefined
     this.deps.addressAgent?.(this.agentAddressed())
     this.setFocus(slot && slot.kind !== 'agent' ? slot.id : null)
   }
@@ -1688,7 +1781,7 @@ export class NotchController {
    * one of these, that is the bug — not the thing you were about to fix.
    */
   private sendPocket(slots: PocketSlotP[] = this.pocketSlots()): void {
-    this.clampPocket(slots.length)
+    this.anchorPocket(slots)   // follows the card, and keeps the index inside the ring
     const waiting = slots.filter((sl) => sl.demanding && sl.kind !== 'agent').length
     const data: PocketP = {
       mode: this.pocketMode, at: this.pocketAt, waiting, slots,
@@ -1734,6 +1827,16 @@ export class NotchController {
     // pocketing and collapsing are different jobs. Pocketing needs a task;
     // getting out of the way does not.
     if (this.engaged === 'none') return
+    // NOT WHILE A CAPTURE IS RECORDING. Collapsing clears the voice's address,
+    // and the destination is read at submit — so glancing at another window
+    // mid-sentence would send the words to the router instead of this task.
+    // Held, not dropped: it applies when the capture ends unless they came back.
+    if (this.capturing()) {
+      this.deferredLeave = reason
+      log.event('user-left-held', { reason, why: 'capture in progress' })
+      this.deferUntilCaptureEnds()
+      return
+    }
     const id = this.focusedId
     const t = id ? this.deps.getTask(id) : undefined
     // Remember what to put back, so a return inside the window restores the
@@ -1752,6 +1855,7 @@ export class NotchController {
 
   /** Came straight back → you did not mean to leave. Re-open what collapsed. */
   private onUserReturned(): void {
+    this.deferredLeave = null
     const back = this.returnTo
     if (!back || Date.now() > this.returnGraceUntil) return
     this.returnGraceUntil = 0
@@ -1802,8 +1906,12 @@ export class NotchController {
     //
     // The index is still the fallback, for a surface that predates the id and
     // for a slot that has genuinely gone away while the key was in flight.
-    const slot = (wanted ? slots.find((s) => s.id === wanted) : undefined) ?? slots[this.pocketAt]
+    const slot = (wanted ? slots.find((s) => s.id === wanted) : undefined) ?? slots[this.anchorPocket(slots)]
     if (!slot) return
+    // THE POCKET IS WHERE YOU OPENED IT FROM. Left behind, the index went on
+    // pointing at whatever the list had re-sorted into that position, and the
+    // held-order `front()` read THAT — replacing the card you opened.
+    this.pocketAt = slots.indexOf(slot)
     if (wanted && slot.id !== wanted) {
       log.event('pocket-expand-drifted', { wanted, opened: slot.id, at: this.pocketAt })
     }
@@ -1927,11 +2035,13 @@ export class NotchController {
     // closes, so the next visit re-sorts to what you last worked in. Browsing
     // itself never re-ranks anything.
     this.holdOrder()
-    const n = this.pocketSlots().length
+    const slots = this.pocketSlots()
+    const n = slots.length
     if (n <= 1) return
+    const from = this.anchorPocket(slots)   // step from the card on screen
     this.pocketAt = typeof e.to === 'number'
       ? Math.max(0, Math.min(n - 1, e.to))
-      : (this.pocketAt + (e.delta ?? 1) + n * 2) % n
+      : (from + (e.delta ?? 1) + n * 2) % n
     this.applyVoiceTarget()
     this.sendPocket()
   }
@@ -1951,6 +2061,9 @@ export class NotchController {
     this.rebuildQueue()
     if (!this.queue.length) return
     if (this.engaged !== 'none') return   // you left something open; that wins
+    // An open pocket is something open too: re-sorting it or rewinding it to
+    // card 1 would move the card (and the voice) out from under you.
+    if (this.pocketMode === 'open') return
     this.frozenOrder = null               // fresh visit, fresh order
     this.pocketAt = 0
     log.event('woke-into-backlog', { waiting: this.queue.length })
@@ -2029,6 +2142,7 @@ export class NotchController {
     const slots = this.pocketSlots()
     const n = slots.length
     if (!n) return
+    this.anchorPocket(slots)
     const current = slots.findIndex(slot => slot.id === this.focusedId)
     if (current >= 0) this.pocketAt = current
     for (let walked = 0; walked < n; walked++) {
@@ -2218,7 +2332,8 @@ export class NotchController {
   agentAddressed(): boolean {
     if (this.agentOpen) return true
     if (this.pocketMode !== 'open') return false
-    return this.pocketSlots()[this.pocketAt]?.kind === 'agent'
+    const slots = this.pocketSlots()
+    return slots[this.anchorPocket(slots)]?.kind === 'agent'
   }
 
   /**
@@ -2442,8 +2557,12 @@ export class NotchController {
     if (!t) return
     this.attentionAcknowledged.set(id, t.state)
     this.queue = this.queue.filter((x) => x !== id)
-    if (this.focusedId === id) { this.focusedId = null; this.deps.focus(null) }
-    if (this.queue.length === 0 && this.engaged === 'task') this.engaged = 'none'
+    if (this.focusedId === id) {
+      this.focusedId = null; this.deps.focus(null)
+      // Only muting the OPEN task can end the engagement; muting another one
+      // must not collapse what you are looking at.
+      if (this.queue.length === 0 && this.engaged === 'task') this.engaged = 'none'
+    }
     this.client.send({ type: 'toast', text: 'muted — back when it changes or you open it' })
     this.reconcile()
   }
@@ -2499,6 +2618,11 @@ export class NotchController {
 
   /** Throughput loop: answering advances to the next queued your-move task. */
   private advanceAfterAnswer(id: string): void {
+    // NOT MID-UTTERANCE. The answer can land seconds after it was sent (the
+    // async path), by which time the person may be speaking to this task —
+    // advancing now would send the rest of the sentence to the next one
+    // (and moving the pocket index would move the card under them).
+    if (this.capturing()) { this.scheduleReconcile(); return }
     // HOLD THE ORDER ACROSS THE ANSWER. Answering IS engagement, and engagement
     // drives the sort — so without the hold the task you just replied to would
     // sort straight back to the front and "advance" would land you on it again.
@@ -2617,6 +2741,14 @@ export class NotchController {
     const t = taskId ? this.deps.getTask(taskId) : undefined
     const target = t ? (t.name ?? truncate(t.intent)) : undefined
     this.client.send({ type: 'capturePhase', phase, target })
+    // Past `listening` the destination is settled — apply anything held back.
+    if (phase !== 'listening') this.afterCapture()
+  }
+
+  /** Is an expanded surface (a task, the Agent chat, the dashboard) open? Hosts
+   *  ask before raising another app over it on a task's behalf. */
+  holdsSurface(): boolean {
+    return this.engaged !== 'none'
   }
 
   /** The pad changed. Pushed verbatim — the payload is built by the one
