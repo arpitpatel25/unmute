@@ -497,23 +497,6 @@ struct PocketCard: View {
                     .foregroundColor(quiet ? Theme.textDim : Theme.text)
                     .lineLimit(1).truncationMode(.tail)
             }
-            // RENAME FROM THE POCKET, EDITED IN THE CARD. The pocket only holds
-            // the keyboard on a deliberate claim, and its row widths are
-            // pre-measured, so the pen does not edit here: it opens this task
-            // with the title editor already up. This header is flexible width
-            // (Spacer below), so the pen changes no measured metric.
-            if let id = slot?.id, !PocketFace.isAgent(slot) {
-                Button {
-                    model.renamingTaskId = id
-                    model.emit(.pocketExpand(id: id))
-                } label: {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 10.5, weight: .regular))
-                        .foregroundColor(Theme.textFaint)
-                }
-                .buttonStyle(.plain)
-                .help("Rename")
-            }
             Spacer(minLength: 0)
         }
         // The two controls own this corner — unless they have moved up to the

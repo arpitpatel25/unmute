@@ -2783,7 +2783,7 @@ test('closing the pocket AFTER expanding a task still releases the voice', () =>
  * a different surface with different chrome, rather than the pocket where the
  * conversation lives.
  */
-test('a session link opens the pocket on that card, not the cockpit', () => {
+test('a session link expands that card from the pocket, not the cockpit', () => {
   const h = setup()
   put(h, makeTask({ id: 'a', state: 'needs-user', alive: true }))
   put(h, makeTask({ id: 'b', state: 'needs-user', alive: true }))
@@ -2791,10 +2791,15 @@ test('a session link opens the pocket on that card, not the cockpit', () => {
 
   h.client.fire({ type: 'pocketFocusTask', id: 'b' })
 
-  const pocket = h.client.last('pocket')
-  assert.equal(pocket?.data.mode, 'open', 'the pocket is the surface a link lands on')
-  // And it lands ON that card, rather than merely opening the pocket somewhere.
+  // The link opens the conversation itself, expanded — not just its pocket row.
+  assert.equal(h.client.last('showTask')?.task.id, 'b', 'the linked task is shown expanded')
   assert.deepEqual(h.calls.focus?.at(-1), ['b'], 'voice follows the card the link named')
+  assert.equal(h.client.last('stageDetail'), undefined, 'never the cockpit')
+
+  // Escape from the expanded card returns to the pocket, on that card.
+  h.client.fire({ type: 'collapsed' })
+  h.flush()
+  assert.equal(h.client.last('pocket')?.data.mode, 'open', 'coming back lands in the pocket')
 })
 
 test('a link to a card that cannot be pocketed still lands somewhere correct', () => {

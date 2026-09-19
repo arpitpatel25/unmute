@@ -2217,9 +2217,12 @@ export class NotchController {
     this.engaged = 'none'
     this.pocketAt = at
     log.event('pocket-focus-task', { taskId: id, at, slots: this.pocketSlots().length })
-    this.setPocketMode('open')
-    this.applyVoiceTarget()
-    this.reconcile()
+    // A LINK OPENS THE CONVERSATION, not just its card. Landing on the pocket
+    // row left one more tap between the person and the task they asked for.
+    // The pocket is marked open WITHOUT being drawn first, so the expand
+    // morphs straight into the task and Escape still returns to this card.
+    this.pocketMode = 'open'
+    this.onPocketExpand(id)
   }
 
   private onFocusTask(id: string): void {
