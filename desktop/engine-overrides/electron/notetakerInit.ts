@@ -48,7 +48,7 @@
 //
 // Per docs/superpowers/specs/2026-08-23-meeting-notetaker-detection-capture.md.
 
-import { Notification, dialog, ipcMain, app } from 'electron'
+import { Notification, dialog, ipcMain, app, powerMonitor } from 'electron'
 import { execFile } from 'node:child_process'
 import path from 'path'
 import fs from 'fs'
@@ -63,7 +63,9 @@ import { encodeChunk, transcribeEncodedChunk, persistSession, newMeetingId } fro
 import { cleanChunkText } from './notetaker/chunkStitcher'
 import { mergeChannelChunks, mergeAdjacentSpeakerTurns, removeMicEchoDuplicates, type TimedChunkText, type SpeakerSample, type TranscriptSegment } from './notetaker/transcriptMerge'
 import { WavAppender } from './notetaker/wavAppender'
-import { createMeetingRecording } from './notetaker/wavMixer'
+import { createMeetingRecording, reconcileRecordingStarts } from './notetaker/wavMixer'
+import { recoverableAudioPaths } from './notetaker/meetingRecovery'
+import { captureStopReason, MAX_CAPTURE_MS, SILENCE_STOP_MS, type CaptureStopReason } from './notetaker/captureWatchdog'
 import { readRetryWavChunks } from './notetaker/wavRetry'
 import { pollZoomSpeaker } from './notetaker/zoomSpeaker'
 import { ZOOM_BUNDLE_ID } from './meetingApps'
@@ -756,6 +758,8 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       // to decode silence or a click-sized stop tail. The decoder otherwise
       // fills that vacuum with its prompt or common closing phrases.
       if (segment.audibleDurationMs < 500) {
+        // Deliberately does NOT touch lastAudibleAtMs: a chunk with no
+        // speech in it is exactly what the watchdog counts as silence.
         clog.event('chunk-stt-skipped', {
           reason: 'insufficient-speech-energy',
           audibleDurationMs: Math.round(segment.audibleDurationMs),
@@ -764,6 +768,8 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         return
       }
 
+      // Real speech in either lane keeps the capture alive (see captureWatchdog).
+      lastAudibleAtMs = Date.now()
       tracker.attempted++
       // Fired and tracked, NOT awaited here — feeding further chunks (and
       // the session generally) must never block on one chunk's network
@@ -835,9 +841,15 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // micChunksReceived.
   let systemChunksReceived = 0
 
+  /** Wall-clock time of the last chunk, in EITHER lane, that carried real
+   *  speech. Seeded in start() so a capture that never hears anything is
+   *  still bounded from its first minute. Read only by the watchdog below. */
+  let lastAudibleAtMs = 0
+
   class HookedNotetakerSession extends NotetakerSession {
     start(pid: number): AudioTapStartResult | undefined {
       sessionStartedAt = Date.now()
+      lastAudibleAtMs = sessionStartedAt
       sessionMeetingId = newMeetingId()
       gestureScreenshots = []
       micChunksReceived = 0
@@ -1096,7 +1108,11 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
         const micPath = mic.audioFileName ? path.join(meetingDir, mic.audioFileName) : null
         const systemPath = system.audioFileName ? path.join(meetingDir, system.audioFileName) : null
-        const recordingStarts = { micStartMs: mic.audioStartTimestampMs, systemStartMs: system.audioStartTimestampMs }
+        const capturedStarts = { micStartMs: mic.audioStartTimestampMs, systemStartMs: system.audioStartTimestampMs }
+        const recordingStarts = reconcileRecordingStarts(capturedStarts)
+        if (recordingStarts !== capturedStarts) {
+          mlog.warn('lane start times disagree beyond any real capture skew — re-anchored mic on the system clock', capturedStarts)
+        }
         try {
           writeMeetingJsonFile(meetingId, 'audio-timing.json', recordingStarts)
         } catch (e) {
@@ -1380,6 +1396,80 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       keyboardManager.confirmNotesStop()
     } catch (e) {
       log.error('stop-on-quit failed', { error: (e as Error).message })
+    }
+  })
+
+  // ── Bounds on a running capture (captureWatchdog.ts) ──
+  //
+  // Until this existed, every way a capture could end was a person doing
+  // something: the double-tap, the widget's End/Discard, app quit, or
+  // MeetingWatcher's end-detection — and that last one only fires for a
+  // meeting it detected the START of, which a chord-started capture (or any
+  // Chrome-hosted meeting, which detection deliberately does not watch)
+  // never is. On 2026-09-09 an interview capture therefore ran 9h08m: real
+  // speech stopped after about four hours, the rest is silence and one
+  // hallucinated segment, and the 286-segment transcript then blew the note
+  // cleanup budget. Neither limit can cut a live meeting short — speech in
+  // EITHER lane resets the silence clock — and stopping saves, so the cost
+  // of a limit firing is a saved meeting, never a lost one.
+  const stopCaptureAutomatically = (reason: CaptureStopReason, fields: Record<string, unknown>): void => {
+    // Snapshot before stop(): a later start() reassigns sessionMeetingId, and
+    // this notification can be clicked long after that.
+    const meetingId = sessionMeetingId
+    const mlog = log.child({ meetingId })
+    mlog.event('capture-auto-stopped', { reason, ...fields })
+    try {
+      session.stop()
+      keyboardManager.confirmNotesStop()
+      showNotetakerNotification({
+        title: 'Notetaker',
+        body: reason === 'silence'
+          ? 'Stopped a note-taking session that had gone quiet. Your notes are being prepared.'
+          : 'Stopped a note-taking session that had run for hours. Your notes are being prepared.',
+        onClick: () => { openMeetingInApp(meetingId) },
+      })
+    } catch (e) {
+      mlog.error('automatic stop failed', { reason, error: (e as Error).message })
+    }
+  }
+
+  // One minute is well under both limits and costs nothing: the tick only
+  // does arithmetic, unlike the meeting-signal poll above. unref'd so it can
+  // never hold the process open at quit.
+  const WATCHDOG_TICK_MS = 60_000
+  const watchdogTimer = setInterval(() => {
+    if (!session.isActive) return
+    const nowMs = Date.now()
+    const reason = captureStopReason({ nowMs, startedAtMs: sessionStartedAt, lastAudibleAtMs })
+    if (!reason) return
+    stopCaptureAutomatically(reason, {
+      silentForMs: nowMs - lastAudibleAtMs,
+      runningForMs: nowMs - sessionStartedAt,
+      silenceLimitMs: SILENCE_STOP_MS,
+      maxDurationMs: MAX_CAPTURE_MS,
+    })
+  }, WATCHDOG_TICK_MS)
+  watchdogTimer.unref()
+
+  // ── The Mac going to sleep ends the capture ──
+  //
+  // No audio is captured while the machine is asleep, so anything still
+  // "recording" across a sleep is recording nothing: the 2026-09-09 session
+  // slept through its own evening, and the silence watchdog above can only
+  // notice that a minute at a time once the machine is awake again. Saving at
+  // suspend also stops a capture from spanning a sleep at all.
+  // Best-effort in the same way before-quit is —
+  // the save's network work may not finish before the machine suspends, and
+  // an interrupted one is recoverable on next launch (meetingRecovery.ts).
+  powerMonitor.on('suspend', () => {
+    if (!session.isActive) return
+    const mlog = log.child({ meetingId: sessionMeetingId })
+    mlog.event('capture-stopped-for-sleep', { runningForMs: Date.now() - sessionStartedAt })
+    try {
+      session.stop()
+      keyboardManager.confirmNotesStop()
+    } catch (e) {
+      mlog.error('stop-on-sleep failed', { error: (e as Error).message })
     }
   })
 
@@ -1824,16 +1914,21 @@ async function retryMeetingTranscription(meetingId: string): Promise<void> {
   if (!meeting) throw new Error('Meeting not found.')
   const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
   const previous = readTranscriptSegments(meetingId)
-  const rawMicPath = meeting.audio_mic_path ? path.join(meetingDir, meeting.audio_mic_path) : null
-  const rawSystemPath = meeting.audio_system_path ? path.join(meetingDir, meeting.audio_system_path) : null
-  const recordingStarts = readRecordingStartTimes(meetingDir)
+  // A meeting that crashed before persistSession() has NULL paths on its row
+  // but its lanes on disk under their fixed names.
+  const audioPaths = recoverableAudioPaths(meetingDir, meeting)
+  const rawMicPath = audioPaths.audio_mic_path ? path.join(meetingDir, audioPaths.audio_mic_path) : null
+  const rawSystemPath = audioPaths.audio_system_path ? path.join(meetingDir, audioPaths.audio_system_path) : null
+  // Also used below as each lane's transcript origin, so a bad mic clock must
+  // not survive into the retry either.
+  const recordingStarts = reconcileRecordingStarts(readRecordingStartTimes(meetingDir))
   // Rebuild the user-facing mix for older recordings. STT deliberately uses
   // the two raw source lanes: muting mic whenever system audio is active can
   // erase genuine local speech during overlap and corrupt speaker ownership.
   createMeetingRecording(rawMicPath, rawSystemPath, path.join(meetingDir, 'audio-meeting.wav'), recordingStarts)
   const inputs: Array<{ channel: 'mic' | 'system'; relPath: string | null }> = [
-    { channel: 'mic', relPath: meeting.audio_mic_path },
-    { channel: 'system', relPath: meeting.audio_system_path },
+    { channel: 'mic', relPath: audioPaths.audio_mic_path },
+    { channel: 'system', relPath: audioPaths.audio_system_path },
   ]
   const retried = await Promise.all(inputs.map(async ({ channel, relPath }): Promise<RetriedChannel> => {
     if (!relPath) return { channel, retried: false, text: '', durationMs: 0, segments: [] }

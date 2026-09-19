@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { encodeWav } from './wavEncoder'
-import { createMeetingRecording } from './wavMixer'
+import { createMeetingRecording, reconcileRecordingStarts } from './wavMixer'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'notetaker-wav-mixer-'))
@@ -93,5 +93,47 @@ describe('createMeetingRecording', () => {
     writeWav(system, new Array(100).fill(0), 100)
     assert.equal(createMeetingRecording(mic, system, output, { micStartMs: 1_000 }), true)
     assert.equal((fs.readFileSync(output).length - 44) / 2, 100)
+  })
+
+  // 2026-09-15: the renderer's mic clock lagged wall time by the ~9h the Mac
+  // had slept, so the mixer padded the mic lane with 9h of silence — a 2.3GB
+  // Float32Array for a one-hour meeting — threw, and the meeting sat on
+  // "Preparing notes…" forever.
+  test('ignores a lane start skew no real capture can produce instead of padding hours of silence', () => {
+    const dir = tempDir()
+    const mic = path.join(dir, 'mic.wav')
+    const system = path.join(dir, 'system.wav')
+    const output = path.join(dir, 'meeting.wav')
+    writeWav(mic, new Array(100).fill(0.2), 100)
+    writeWav(system, new Array(100).fill(0), 100)
+    const nineHoursMs = 9 * 60 * 60 * 1000
+    assert.equal(createMeetingRecording(mic, system, output, { micStartMs: 0, systemStartMs: nineHoursMs }), true)
+    assert.equal((fs.readFileSync(output).length - 44) / 2, 100)
+  })
+
+  test('returns false instead of throwing when the recording cannot be composed', () => {
+    const dir = tempDir()
+    const mic = path.join(dir, 'mic.wav')
+    const system = path.join(dir, 'system.wav')
+    writeWav(mic, new Array(100).fill(0.2), 100)
+    writeWav(system, new Array(100).fill(0), 100)
+    const unreadableStarts = Object.defineProperty({}, 'micStartMs', { get: () => { throw new Error('boom') } })
+    assert.equal(createMeetingRecording(mic, system, path.join(dir, 'meeting.wav'), unreadableStarts), false)
+  })
+})
+
+describe('reconcileRecordingStarts', () => {
+  test('keeps plausible lane starts untouched', () => {
+    assert.deepEqual(reconcileRecordingStarts({ micStartMs: 1_140, systemStartMs: 1_000 }), { micStartMs: 1_140, systemStartMs: 1_000 })
+  })
+
+  test('re-anchors the mic lane on the native system clock when the two disagree by more than a capture could', () => {
+    const systemStartMs = 1_789_464_746_877
+    const micStartMs = 1_789_432_567_969 // the real, sleep-lagged value from 2026-09-15
+    assert.deepEqual(reconcileRecordingStarts({ micStartMs, systemStartMs }), { micStartMs: systemStartMs, systemStartMs })
+  })
+
+  test('passes partial timing metadata through', () => {
+    assert.deepEqual(reconcileRecordingStarts({ micStartMs: 5 }), { micStartMs: 5 })
   })
 })

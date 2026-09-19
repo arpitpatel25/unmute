@@ -16,6 +16,7 @@
 // all — see that file's own header for why.
 
 import { runHeadlessAgent, type HeadlessProvider } from './headlessAgent'
+import { timeoutMsForSegments } from './pipelineTimeout'
 import { mergeAdjacentSpeakerTurns, type TranscriptSegment } from './transcriptMerge'
 import { createNotetakerLogger } from './notetakerLog'
 import { extractJson } from './extractJson'
@@ -173,10 +174,10 @@ export type SummaryResult =
   | { ok: true; notes: MeetingNotes; degraded?: boolean }
   | { ok: false; error: string }
 
-type NotesRunner = (provider: NoteProvider, input: string) => Promise<{ ok: true; output: string } | { ok: false; error: string }>
+type NotesRunner = (provider: NoteProvider, input: string, timeoutMs?: number) => Promise<{ ok: true; output: string } | { ok: false; error: string }>
 
-async function runNotesAgent(provider: NoteProvider, input: string): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
-  return runHeadlessAgent(provider, input)
+async function runNotesAgent(provider: NoteProvider, input: string, timeoutMs?: number): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
+  return runHeadlessAgent(provider, input, timeoutMs === undefined ? {} : { timeoutMs })
 }
 
 export async function generateNotes(
@@ -198,7 +199,7 @@ export async function generateNotes(
   // agent call whose output is unusable; transport/auth failures are not
   // repeated. The agent still receives transcript text only, never audio.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await runAgent(provider, nextInput)
+    const result = await runAgent(provider, nextInput, timeoutMsForSegments(segments.length))
     if (!result.ok) {
       log.error('summary call failed', { provider, error: result.error, attempt: attempt + 1 })
       return { ok: false, error: result.error }

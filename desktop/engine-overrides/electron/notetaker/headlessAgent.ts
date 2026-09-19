@@ -25,6 +25,7 @@
 
 import { spawn } from 'node:child_process'
 import { createNotetakerLogger } from './notetakerLog'
+import { DEFAULT_TIMEOUT_MS } from './pipelineTimeout'
 
 const log = createNotetakerLogger('headless-agent')
 
@@ -38,7 +39,7 @@ export type HeadlessResult =
  *  Generous — a full-meeting transcript through a CLI's own startup
  *  overhead can take real time — but bounded, so a hung call can never
  *  hang the pipeline forever. */
-export const DEFAULT_TIMEOUT_MS = 300_000
+export { DEFAULT_TIMEOUT_MS } from './pipelineTimeout'
 
 /**
  * Spawns `command` with `args`, writes `input` to its stdin, collects
