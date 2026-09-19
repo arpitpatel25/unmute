@@ -1086,6 +1086,82 @@ test('setName persists the generated name into meta.json (survives restart)', as
   tm.killAll()
 })
 
+test('a deliberate setName locks the name, persists the lock, and clamps to 48', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('check the twitter strategy folder')
+  tm.setName(id, 'Router name', { auto: true })
+  assert.equal(tm.get(id)!.nameSetByUser, undefined, 'an automatic name is not a lock')
+  tm.setName(id, '  ' + 'x'.repeat(60) + '  ')
+  assert.equal(tm.get(id)!.name, 'x'.repeat(48))
+  assert.equal(tm.get(id)!.nameSetByUser, true)
+  await new Promise((r) => setTimeout(r, 50))
+  const meta = JSON.parse(await fs.readFile(path.join(tm.get(id)!.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.nameSetByUser, true)
+  const restarted = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await restarted.rehydrate()
+  assert.equal(restarted.get(id)!.name, 'x'.repeat(48))
+  assert.equal(restarted.get(id)!.nameSetByUser, true, 'the lock survives a restart')
+  tm.killAll(); restarted.killAll()
+})
+
+test('a locked name survives the router late name and any automatic namer', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('fix the billing bug')
+  tm.setName(id, 'Provisional', { auto: true })
+  tm.setName(id, 'My billing fix')
+  tm.setName(id, 'Late router label', { auto: true })
+  assert.equal(tm.get(id)!.name, 'My billing fix')
+  tm.setName(id, 'Renamed again')
+  assert.equal(tm.get(id)!.name, 'Renamed again', 'a deliberate rename still wins over a lock')
+  tm.killAll()
+})
+
+test('a locked name survives the Claude Desktop title poll; an unlocked one follows it', async () => {
+  const baseDir = await tmpBase()
+  const driver = {
+    async watch() { return () => {} },
+    async snapshot() {
+      return { task: { title: 'Claude Desktop title' },
+        snapshot: { updatedAt: 1, turns: [], userMessages: 0, pendingToolCalls: 0, lastAgentMessage: null } }
+    },
+  }
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), claudeDesktopDriver: driver as never,
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const locked = await tm.dispatch('one')
+  const free = await tm.dispatch('two')
+  for (const id of [locked, free]) { tm.get(id)!.claudeDesktopSessionId = `cd-${id}`; tm.get(id)!.kind = 'session' }
+  tm.setName(locked, 'Mine')
+  tm.setName(free, 'Auto', { auto: true })
+  const poll = (tm as unknown as { pollClaudeDesktop(id: string): Promise<void> }).pollClaudeDesktop.bind(tm)
+  await poll(locked); await poll(free)
+  assert.equal(tm.get(locked)!.name, 'Mine')
+  assert.equal(tm.get(free)!.name, 'Claude Desktop title')
+  tm.killAll()
+})
+
+test('a deliberate rename of a live Codex thread is mirrored via thread/name/set; automatic names are not', async () => {
+  const baseDir = await tmpBase()
+  const renames: Array<[string, string]> = []
+  let taskId = ''
+  const hub = {
+    async startThread(id: string) { taskId = id; return { threadId: 'owned-thread', url: 'ws://127.0.0.1:1' } },
+    async send() { return true },
+    threadIdFor(id: string) { return id === taskId ? 'owned-thread' : undefined },
+    async rename(id: string, name: string) { renames.push([id, name]) },
+    async stopAndRelease() { return true },
+    release() {}, stop() {},
+  }
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), codexHub: hub as never,
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('tidy the codex thread', { agent: 'codex' })
+  await new Promise((r) => setTimeout(r, 20))
+  tm.setName(id, 'Router label', { auto: true })
+  tm.setName(id, 'Codex cleanup')
+  assert.deepEqual(renames, [[id, 'Codex cleanup']])
+})
+
 // ─── Project-bound spawn (Orchestrate): the agent runs IN the user's dir ──────
 
 test('project-bound dispatch: spawns in the project dir and pollutes NOTHING there', async () => {

@@ -1653,6 +1653,13 @@ final class AppController: NSObject, NotchResizing {
                     NotchLog.log("esc: closed the composer's command menu")
                     return nil
                 }
+                // Same rule for the title editor: Escape cancels the rename and
+                // leaves the card open.
+                if self.model.renamingTaskId != nil, self.isExpanded(self.model.state) {
+                    NotchLog.log("esc: cancelled the title rename")
+                    self.model.renamingTaskId = nil
+                    return nil
+                }
                 // Logged so a leak is DIAGNOSABLE rather than inferred: if this
                 // line is absent when Escape leaks, the local monitor never
                 // fired and the panel was not key (see NotchWindow).

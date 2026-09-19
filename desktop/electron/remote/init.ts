@@ -838,7 +838,8 @@ const agentContinuations = new AgentContinuationService({
     deliverDraft: (id: string, text: string, attachments: readonly string[]) => manager!.deliverDraft(id, text, [...attachments]),
     attachProviderSession: (i: Parameters<TaskManager['attachProviderSession']>[0]) => manager!.attachProviderSession(i),
     forkProviderSession: (i: Parameters<TaskManager['forkProviderSession']>[0]) => manager!.forkProviderSession(i),
-    setName: (id: string, name: string) => manager!.setName(id, name),
+    // Only fills a non-descriptive title on resume — automatic, never a rename.
+    setName: (id: string, name: string) => manager!.setName(id, name, { auto: true }),
     setGroup: (id: string, group: string) => manager!.setGroup(id, group),
     // Where a message goes when the session reopened but would not take it yet.
     saveDraft: (id: string, text: string) => { taskDrafts.setText(id, text) },
@@ -4258,7 +4259,7 @@ async function mcpCreateTask(callerTaskId: string, input: McpCreateTaskInput): P
     spawnedBy: callerTaskId,
     forkFromSessionId: forkFrom,
   })
-  if (input.name) manager.setName(newId, input.name.slice(0, 48))
+  if (input.name) manager.setName(newId, input.name.slice(0, 48), { auto: true })
   if (forkFrom) setTimeout(() => { void manager?.adoptForkSessionId(newId, forkFrom!) }, 8000)
   log.event('mcp-task-created', { by: callerTaskId, child: newId, kind: input.kind ?? 'oneoff', forked: !!forkFrom })
   return { task_id: newId, name: input.name, note }
@@ -4998,7 +4999,7 @@ async function dispatchFromCaptureInner(
       if (decision.intent) manager.setIntent(newId, decision.intent)
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
-      if (decision.name) manager.setName(newId, decision.name)
+      if (decision.name) manager.setName(newId, decision.name, { auto: true })
       // GROUP EVERY NEW TASK THAT HAS A SUBJECT, one-offs included.
       //
       // This used to read `decision.kind === 'session'`, inherited from spec
@@ -5028,9 +5029,10 @@ async function dispatchFromCaptureInner(
       // replaced the moment the real one arrives.
       if (decision.enrich) {
         const taskManager = manager
-        if (!decision.name) manager.setName(newId, provisionalName(decision.intent || raw))
+        if (!decision.name) manager.setName(newId, provisionalName(decision.intent || raw), { auto: true })
         void decision.enrich.then((late) => {
-          if (late.name && taskManager.get(newId)?.origin !== 'unmute-agent') taskManager.setName(newId, late.name)
+          // `auto`: a name the user already chose in the gap is kept.
+          if (late.name && taskManager.get(newId)?.origin !== 'unmute-agent') taskManager.setName(newId, late.name, { auto: true })
           // Assign-once still holds: only fill a group the task does not have.
           if (late.group && !taskManager.get(newId)?.group) taskManager.setGroup(newId, late.group)
           log.event('late-label-applied', { taskId: newId, name: late.name ?? null, group: late.group ?? null })
@@ -5830,7 +5832,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         resume: (id) => mgr.resume(id),
         rerun: (intent) => { void dispatchFromCapture(intent) },
         setKind: (id, kind) => mgr.setKind(id, kind, { pinned: kind === 'session' }),
-        setName: (id, name) => { if (name.trim()) mgr.setName(id, name.trim().slice(0, 48)) },
+        setName: (id, name) => { if (name.trim()) mgr.setName(id, name) }, // deliberate: locks + clamps
         setShelved: (id, on) => mgr.setShelved(id, on),
         setNote: (id, note) => mgr.setNote(id, note),
         focus: (id) => {
@@ -6605,7 +6607,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // path is the fallback and must never OVERWRITE a name that already landed.
     if (completeFn) {
       void nameIntent(t.intent, completeFn)
-        .then((n) => { if (n && !manager?.get(t.id)?.name) manager?.setName(t.id, n) })
+        .then((n) => { if (n && !manager?.get(t.id)?.name) manager?.setName(t.id, n, { auto: true }) })
         .catch(() => {})
     }
   })
@@ -7196,7 +7198,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // bad auto-name. Persists via setName (survives restarts).
   ipcMain.handle('remote:rename-task', async (_e, id: string, name: string) => {
     if (!manager || !name?.trim()) return false
-    manager.setName(id, name.trim().slice(0, 48))
+    manager.setName(id, name) // deliberate: locks + clamps to MAX_TASK_NAME
     return true
   })
   // Shelve/unshelve — preserved-but-out-of-the-way (hidden from the wall grid,
