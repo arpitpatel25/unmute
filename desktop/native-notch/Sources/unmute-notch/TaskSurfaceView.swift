@@ -85,7 +85,8 @@ struct TaskSurfaceView: View {
                         StageComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
                                       modelLabel: t.modelLabel, sending: t.sending ?? false,
                                       draft: t.draft, config: t.chatConfig, followup: t.followup, composerMode: t.composerMode, question: t.question,
-                                      commands: t.commands ?? [])
+                                      commands: t.commands ?? [],
+                                      onStop: taskShowsStop(t, blocks: model.taskBlocks) ? { model.emit(.kill(id: t.id)) } : nil)
                             .id(t.id)
                             .padding(.top, 9)
                     case .notRunning:
@@ -251,12 +252,8 @@ struct TaskSurfaceView: View {
                 KeyButton(label: "Open in \(t.foreignAppName)", symbol: "arrow.up.forward.app") { model.emit(.openInTerminal(id: t.id)) }
             }
             .padding(.top, 11)
-        } else if t.isOwned && t.alive && (t.status == .processing || t.status == .needsUser) {
-            HStack(spacing: 6) {
-                KeyButton(label: "Stop", symbol: "stop.circle") { model.emit(.kill(id: t.id)) }
-            }
-            .padding(.top, 11)
         }
+        // Stop lives in the composer now, at the send position.
     }
 
     private func footer(_ t: TaskDetail) -> some View {

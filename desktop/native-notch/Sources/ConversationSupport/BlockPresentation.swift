@@ -88,6 +88,23 @@ public enum BlockPresentation {
         return turns
     }
 
+    /// Is the LAST turn still working, by its blocks alone? The same rule the
+    /// chat's working indicator uses (`meta(of:)`), over just the tail after
+    /// the last user message — cheap enough to ask on every render. Feeds the
+    /// Stop affordance: if the chat says it is working, Stop must be there.
+    public static func lastTurnRunning(_ blocks: [Block]) -> Bool {
+        var start = blocks.lastIndex(where: { $0.isUser || $0.kind == "sessionBoundary" }).map { $0 + 1 } ?? 0
+        // A turn's start marker can precede its prompt; buildTurns folds it
+        // into that turn, and so must this.
+        if start > 0, blocks[start - 1].isUser {
+            var i = start - 1
+            while i > 0, blocks[i - 1].kind == "turnStart" { i -= 1 }
+            if i < start - 1 { return meta(of: Array(blocks[i..<(start - 1)]) + Array(blocks[start...])).isRunning }
+        }
+        guard start < blocks.count else { return false }
+        return meta(of: Array(blocks[start...])).isRunning
+    }
+
     /// Clock markers bound a turn; they are not work that came after an answer.
     private static func isBoundary(_ b: Block) -> Bool {
         b.kind == "turnStart" || b.kind == "turnEnd"

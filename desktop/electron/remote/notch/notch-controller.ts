@@ -101,9 +101,26 @@ export interface TaskLite {
   mcpStatuses?: import('../codex/app-server-events').McpStatus[]
   mcpGap?: { integration?: string; fixCommand: string; message: string } | null
   alive?: boolean
+  /** The runtime reports a turn in flight (TaskManager.turnActive). */
+  turnActive?: boolean
   chatWritable?: boolean
   chatResumable?: boolean
   chatOwned?: boolean
+}
+
+/**
+ * WHETHER TO OFFER STOP: whenever work is visibly happening on a task that is
+ * ours to stop. Deliberately NOT gated on `alive` or on `state` alone — both
+ * lag the runtime (a reattach that lost the turn-start, a disconnect that
+ * latched failed) and that is how cards streamed output with no Stop at all.
+ * The runtime's own busy flag is the strongest witness; state is a fallback.
+ */
+export function canStopTask(t: TaskLite): boolean {
+  // The Agent's own chat has its own interrupt and never offered Stop. Cards
+  // the Agent OPENED are ordinary tasks and keep it.
+  if (t.id === 'unmute-agent') return false
+  if (providerOf(t.agent).transport !== 'structured' || t.chatOwned === false) return false
+  return t.turnActive === true || t.state === 'processing' || t.state === 'needs-user'
 }
 
 export interface ProposalLite {
@@ -2768,6 +2785,7 @@ export class NotchController {
        *  A driver-backed task has nothing of ours to kill; the card offers
        *  Remove instead, which forgets it without touching the user's app. */
       owned: providerOf(t.agent).transport === 'structured' && t.chatOwned !== false,
+      canStop: canStopTask(t),
       canCompose: providerOf(t.agent).transport === 'structured' && t.chatWritable !== false,
       // THE CONVERSATION IS SENT FOR EVERY BACKEND NOW.
       //

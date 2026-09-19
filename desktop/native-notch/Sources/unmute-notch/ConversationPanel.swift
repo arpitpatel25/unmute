@@ -256,6 +256,13 @@ private struct StepRow: View {
 ///
 /// The placeholder keeps voice primary in both cases — it names the key before
 /// it names the field.
+/// Should this task's surface offer Stop right now? One rule for the composer
+/// and the cockpit header — see `stopAvailable`.
+func taskShowsStop(_ t: TaskDetail, blocks: [Block]) -> Bool {
+    stopAvailable(isOwned: t.isOwned, taskId: t.id, canStop: t.canStop, status: t.status.rawValue,
+                  lastTurnRunning: BlockPresentation.lastTurnRunning(blocks))
+}
+
 struct StageComposer: View {
     var placeholder: String = "Reply — or hold right ⌥ and speak"
     @ObservedObject var model: NotchModel
@@ -274,6 +281,8 @@ struct StageComposer: View {
     /// What `/` offers in this thread. Empty ⇒ the menu never opens.
     var commands: [CommandP] = []
     var pastePolicy: ComposerPastePolicy = .default
+    /// Present while the task is working: draws Stop at the send position.
+    var onStop: (() -> Void)? = nil
     @State private var confirmUncertainRecovery = false
     @State private var text = ""
     @State private var editorHeight: CGFloat = 30
@@ -441,17 +450,38 @@ struct StageComposer: View {
                     }
                     // The composer's ONE primary action, and the only tinted
                     // thing on this surface.
-                    Button(action: send) {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(canSend ? Theme.accentInk : Theme.textFaint)
-                            .frame(width: 24, height: 24)
-                            .background(Circle().fill(canSend ? Theme.accent : Theme.raised))
+                    //
+                    // WHILE THE TASK WORKS, STOP TAKES THIS PLACE — the way
+                    // every chat app does it. Send stays beside it only once a
+                    // follow-up has been typed, so the draft can still go (it
+                    // queues); Stop is always the right-most control.
+                    if onStop == nil || canSend {
+                        Button(action: send) {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(canSend ? Theme.accentInk : Theme.textFaint)
+                                .frame(width: 24, height: 24)
+                                .background(Circle().fill(canSend ? Theme.accent : Theme.raised))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(sending ? "Submitting message" : composerFollowupSendLabel(mode: composerMode))
+                        .disabled(!canSend || sending || model.questionBusy(taskId, question))
+                        .animation(Theme.hover, value: canSend)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(sending ? "Submitting message" : composerFollowupSendLabel(mode: composerMode))
-                    .disabled(!canSend || sending || model.questionBusy(taskId, question))
-                    .animation(Theme.hover, value: canSend)
+                    if let onStop {
+                        // A filled square in a filled disc — deliberately not
+                        // the dictation mic's outlined `stop.circle`.
+                        Button(action: onStop) {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(canSend ? Theme.text : Theme.accentInk)
+                                .frame(width: 24, height: 24)
+                                .background(Circle().fill(canSend ? Theme.raisedHover : Theme.accent))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Stop")
+                        .accessibilityLabel("Stop")
+                    }
                 }
                 controls
             }

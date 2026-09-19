@@ -161,6 +161,10 @@ interface ThreadState {
   disconnected?: boolean
   submissionFinished?: Promise<void>
   stopping?: boolean
+  /** A non-retry `error` arrived while a turn was live. The card went failed
+   *  on it, but only turn/completed says the turn is over — new work on the
+   *  same turn un-latches it. */
+  failedMidTurn?: boolean
   completedTurns?: Set<string>
   options?: StartThreadOpts
   /** What Unmute asked for before this machine's policy lowered it. */
@@ -662,6 +666,10 @@ export class CodexHub {
   }
 
   threadIdFor(taskId: string): string | undefined { return this.byTask.get(taskId)?.threadId }
+  /** Is a turn in flight on this task's thread, as far as the hub knows?
+   *  The Stop affordance and kill() read this rather than the task's state,
+   *  which can be latched wrong by a mid-turn error or a reconnect. */
+  turnActive(taskId: string): boolean { return !!this.byTask.get(taskId)?.turnId }
   validationErrorFor(taskId: string): string | undefined { return this.byTask.get(taskId)?.pending?.validationError }
 
   private async loadHistory(srv: CodexAppServer, threadId: string, result: ResumeHistory): Promise<HistoryTurn[]> {
@@ -909,7 +917,17 @@ export class CodexHub {
     let blocksChanged = false
     if (st) blocksChanged = st.blocks.push({ method: m.method, params: m.params }, Date.now())
 
-    const patch = reduceAppServerEvent({ method: m.method, params: m.params })
+    let patch = reduceAppServerEvent({ method: m.method, params: m.params })
+    if (st) {
+      if (m.method === 'turn/started' || m.method === 'turn/completed') st.failedMidTurn = false
+      else if (m.method === 'error' && patch?.state === 'failed' && st.turnId) st.failedMidTurn = true
+      else if (st.failedMidTurn && st.turnId && (m.method === 'item/started' || m.method.endsWith('/delta'))) {
+        // The error did not end the turn: it is still producing work. Say so,
+        // or the card reads failed (and offers no Stop) while Codex keeps going.
+        st.failedMidTurn = false
+        patch = { ...patch, state: 'processing', turnOutcome: null, errorReason: '' }
+      }
+    }
     if (!patch && !blocksChanged) return
     if (!st) {
       if (threadId) log.debug('notification for an unknown thread', { method: m.method, threadId })
