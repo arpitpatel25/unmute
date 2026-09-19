@@ -1919,28 +1919,111 @@ test('opening a Codex thread spawns nothing — it has no session of ours to rev
   tm.killAll()
 })
 
-test('shelve/note persist to meta.json and survive rehydrate; shelved is purge-exempt', { timeout: 5000 }, async () => {
+test('remove-from-pocket/note persist to meta.json and survive rehydrate; the task keeps running and is NOT purge-exempt', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
-  const id = await tm.dispatch('research task worth keeping')
+  const id = await tm.dispatch('research task out of the way')
   const task = tm.get(id)!
-  await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'kept' } })
-  tm.setShelved(id, true)
+  const before = task.updatedAt
+  tm.setInPocket(id, false)
+  // Out of the pocket and NOTHING else: still running, still listed, not aged.
+  assert.equal(tm.get(id)!.state, 'processing')
+  assert.ok(tm.isLive(id), 'the session keeps running')
+  assert.ok(tm.list().some((t) => t.id === id), 'still in the orchestrator')
+  assert.equal(tm.get(id)!.updatedAt, before, 'removing a card is not activity')
   tm.setNote(id, 'JIRA-123 — revisit after the launch')
   await new Promise((r) => setTimeout(r, 150)) // let the async meta writes land
   const meta = JSON.parse(await fs.readFile(path.join(task.home, 'meta.json'), 'utf8'))
-  assert.equal(meta.shelved, true)
+  assert.equal(meta.pocketRemoved, true)
+  assert.equal(meta.shelved, undefined, 'only the new field is written')
   assert.equal(meta.note, 'JIRA-123 — revisit after the launch')
-  // Purge exemption: backdate far past the 24h cutoff — the shelf keeps it.
-  task.updatedAt = Date.now() - 48 * 60 * 60_000
-  await tm.purgeStale()
-  assert.ok(tm.get(id), 'shelved task survives the purge sweep')
-  // Survives restart: a fresh manager rehydrates shelved + note from meta.
+  // Survives restart: a fresh manager rehydrates the flag + note from meta.
   tm.kill(id)
   const tm2 = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   await tm2.rehydrate()
-  assert.equal(tm2.get(id)!.shelved, true)
+  assert.equal(tm2.get(id)!.pocketRemoved, true)
   assert.equal(tm2.get(id)!.note, 'JIRA-123 — revisit after the launch')
+  // NOT a keep gesture: an unrenamed one-off out of the pocket ages out like any other.
+  tm2.get(id)!.updatedAt = Date.now() - 4 * 24 * 60 * 60_000
+  await tm2.purgeStale()
+  assert.equal(tm2.get(id), undefined, 'pocket membership has no say in retention')
+})
+
+test('a legacy shelved receipt migrates to pocketRemoved on rehydrate and becomes an ordinary task', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('something shelved last month')
+  const home = tm.get(id)!.home
+  tm.kill(id)
+  await new Promise((r) => setTimeout(r, 100))
+  const metaPath = path.join(home, 'meta.json')
+  const legacy = JSON.parse(await fs.readFile(metaPath, 'utf8'))
+  await fs.writeFile(metaPath, JSON.stringify({ ...legacy, shelved: true }))
+
+  const tm2 = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm2.rehydrate()
+  const t = tm2.get(id)!
+  assert.equal(t.pocketRemoved, true, 'out of the pocket — the one part of shelving that survives')
+  assert.equal((t as Record<string, unknown>).shelved, undefined)
+  const migrated = JSON.parse(await fs.readFile(metaPath, 'utf8'))
+  assert.equal(migrated.pocketRemoved, true)
+  assert.equal('shelved' in migrated, false, 'the receipt is rewritten without the old field')
+  assert.equal(migrated.intent, legacy.intent, 'and nothing else is lost')
+})
+
+test('sending a removed task input returns it to the pocket', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const a = await tm.dispatch('typed at directly')
+  const b = await tm.dispatch('followed up by voice')
+  tm.setInPocket(a, false)
+  tm.setInPocket(b, false)
+  tm.sendInput(a, 'yes\r')
+  assert.equal(tm.get(a)!.pocketRemoved, undefined, 'typing into it (submitted) brings it back')
+  tm.followUp(b, 'and one more thing')
+  assert.equal(tm.get(b)!.pocketRemoved, undefined, 'a follow-up brings it back')
+  tm.killAll()
+})
+
+test('retention: sessions and renamed tasks are kept; plain one-offs go after 3 days, not 24h', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const DAY = 24 * 60 * 60_000
+  const twoDays = await tm.dispatch('an errand from two days ago')
+  const fourDays = await tm.dispatch('an errand from four days ago')
+  const session = await tm.dispatch('a long-running session', { kind: 'session' })
+  const renamed = await tm.dispatch('an errand the person renamed')
+  tm.setName(renamed, 'Keep me')
+  for (const id of [twoDays, fourDays, session, renamed]) tm.get(id)!.state = 'done'
+  tm.get(twoDays)!.updatedAt = Date.now() - 2 * DAY
+  for (const id of [fourDays, session, renamed]) tm.get(id)!.updatedAt = Date.now() - 30 * DAY
+  tm.get(fourDays)!.updatedAt = Date.now() - 4 * DAY
+
+  await tm.purgeStale()
+
+  assert.ok(tm.get(twoDays), 'two days is inside the 3-day window (it would have gone under the old 24h)')
+  assert.equal(tm.get(fourDays), undefined, 'a plain one-off past 3 days is retired')
+  assert.ok(tm.get(session), 'sessions are never purged')
+  assert.ok(tm.get(renamed), 'a renamed task is one the person cares about')
+  tm.killAll()
+})
+
+test('retention: an orphan receipt the person renamed is never orphan-purged', async () => {
+  const baseDir = await tmpBase()
+  const reaped: string[] = []
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+    purgeAgeMs: 60_000, userKey: 'local', reapSession: (id) => reaped.push(id),
+  })
+  const root = path.join(baseDir, 'local')
+  for (const [dir, meta] of [['renamed-orphan', { kind: 'oneoff', nameSetByUser: true }], ['plain-orphan', { kind: 'oneoff' }]] as const) {
+    await fs.mkdir(path.join(root, dir), { recursive: true })
+    await fs.writeFile(path.join(root, dir, 'meta.json'), JSON.stringify(meta))
+    const past = new Date(Date.now() - 120_000)
+    utimesSync(path.join(root, dir), past, past)
+  }
+  await tm.purgeStale()
+  assert.deepEqual(reaped, ['plain-orphan'])
 })
 
 // ─── Fear #1 killed: speaking at a BUSY session queues safely and visibly ─────

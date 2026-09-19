@@ -182,11 +182,11 @@ const tools = [
   },
   {
     name: 'session_close',
-    description: 'Take a session card out of the pocket — the undo for having opened the wrong'
-      + ' one. Takes the taskId of the card, not a provider session id. It hides the CARD and'
-      + ' deletes nothing: the task and its transcript stay exactly where they were and a resume'
-      + ' brings it back, so never say the conversation was deleted. Closing one that is already'
-      + ' gone succeeds quietly.',
+    description: 'Remove a session card from the pocket — the undo for having opened the wrong'
+      + ' one; the same act as task_remove_from_pocket. Takes the taskId of the card, not a provider'
+      + ' session id. It deletes nothing: the task keeps running, stays in the orchestrator with its'
+      + ' transcript, and comes back to the pocket when it needs the person or is opened, so never'
+      + ' say the conversation was deleted. Closing one that is already gone succeeds quietly.',
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['taskId'],
       properties: { taskId: { type: 'string', minLength: 1, maxLength: 128 } },

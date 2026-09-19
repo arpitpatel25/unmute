@@ -55,7 +55,7 @@ test('compiled floor mirrors config.ts + contract exactly', () => {
   assert.equal(d.knobs.taskStaleMs, 4 * 60_000)
   assert.equal(d.knobs.taskWarmMs, 15 * 60_000)
   assert.equal(d.knobs.taskNavigateWarmMs, 8 * 60_000)
-  assert.equal(d.knobs.taskPurgeAgeMs, 24 * 60 * 60_000)
+  assert.equal(d.knobs.taskPurgeAgeMs, 3 * 24 * 60 * 60_000) // was 24h; the Shelf removal made it the retention window
   assert.equal(d.knobs.readyDecayMs, 60 * 60_000)
   assert.equal(d.knobs.routerDecisionTimeoutMs, 60_000)
   assert.equal(d.knobs.routerMaxSessionMs, 2 * 60 * 60_000)

@@ -3,7 +3,7 @@ import StageSupport
 
 // The focused Stage inside the cockpit — split (stage + sessions minirail) or
 // full (terminal edge-to-edge). Header carries every per-task action: rename,
-// pin/unpin, kill, shelve, remove, next, full/split, esc. Body: warm-up,
+// pin/unpin, kill, delete, next, full/split, esc. Body: warm-up,
 // editable note, pending question (chips or free-text), live terminal when
 // alive, dead panel (re-run + artifacts) when not.
 //
@@ -18,6 +18,7 @@ struct StageView: View {
 
     @State private var renaming = false
     @State private var renameText = ""
+    @State private var confirmingDelete = false
     @State private var editingNote = false
     @State private var noteText = ""
 
@@ -191,10 +192,6 @@ struct StageView: View {
                           symbol: t.kind == "session" ? "pin.slash" : "pin") {
                     model.emit(.setKind(id: t.id, kind: t.kind == "session" ? "oneoff" : "session"))
                 }
-                KeyButton(label: (t.shelved ?? false) ? "Unshelve" : "Shelve",
-                          symbol: "archivebox") {
-                    model.emit(.shelve(id: t.id, shelved: !(t.shelved ?? false)))
-                }
             }
             // 2 · LIFECYCLE — BACKEND FIRST, then liveness.
             //
@@ -227,10 +224,20 @@ struct StageView: View {
             }
             .padding(.leading, 6)
             // 3 · DESTRUCTIVE — isolated, so it is never a neighbour-miss.
-            KeyButton(label: "Remove", danger: true, symbol: "trash") {
-                model.emit(.remove(id: t.id))
+            //
+            // DELETE LIVES HERE, AND ONLY HERE. The pocket can only remove a
+            // card from itself; the orchestrator holds every task, so it is
+            // the one place a task can be deleted — and it asks first.
+            KeyButton(label: "Delete from Unmute…", danger: true, symbol: "trash") {
+                confirmingDelete = true
             }
             .padding(.leading, 6)
+            .alert("Delete from Unmute?", isPresented: $confirmingDelete) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete", role: .destructive) { model.emit(.remove(id: t.id)) }
+            } message: {
+                Text("This stops the task and removes it from Unmute everywhere — the pocket and the orchestrator. The provider's own conversation history stays on disk.")
+            }
             // 4 · VIEW
             KeyButton(label: model.stageFull ? "Split" : "Full",
                       symbol: model.stageFull ? "rectangle.split.2x1" : "rectangle") {

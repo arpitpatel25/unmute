@@ -75,9 +75,9 @@ export interface RemoteTask {
   /** Rolling "where you left off" (2-3 sentences from the session itself,
    *  refreshed every turn) — re-entry warm-up, never authoritative. */
   threadContext?: string | null
-  /** Shelved: kept-but-out-of-the-way — hidden from the wall grid, purge-exempt,
-   *  findable in the rail's Shelf. */
-  shelved?: boolean
+  /** Out of the notch's pocket (not hidden anywhere else — the orchestrator
+   *  still shows it, and it is retained like any other task). */
+  pocketRemoved?: boolean
   /** The user's card note (ticket link, context) — annotation only. */
   note?: string | null
   /** Provenance: task id that agent-spawned this one via the Unmute MCP. */

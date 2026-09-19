@@ -184,7 +184,6 @@ struct TaskDetail: Codable {
     let status: TaskStatus
     let kind: String           // "oneoff" | "session"
     let alive: Bool
-    let shelved: Bool?
     let dir: String?
     let age: String?
     let elapsed: String?
@@ -400,7 +399,6 @@ struct AgentActivityP: Codable {
     let agentRunId: String?
     let provider: String?
 }
-struct ShelfItemP: Codable { let id: String; let name: String }
 /// A Claude Code CLI session on this machine that unmute does not have. Exists
 /// only to be imported; once it is a task it stops being listed.
 struct ImportableP: Codable, Equatable {
@@ -430,7 +428,9 @@ struct CockpitData: Codable {
     let oneoffs: [OneoffP]
     let unmuteSkills: [SkillP]
     let skills: [SkillP]
-    let shelf: [ShelfItemP]
+    // `shelf` is gone with the Shelf. A task out of the pocket is an ordinary
+    // task on the wall. An older engine still sending the key is harmless:
+    // Codable ignores keys it does not declare.
     let importable: [ImportableP]?
     let digest: String?        // "while you were away: …" or nil
     let doorbell: Bool
@@ -750,7 +750,9 @@ enum Event {
     case remove(id: String)
     case killAll
     case setKind(id: String, kind: String)         // pin/unpin oneoff↔session
-    case shelve(id: String, shelved: Bool)
+    /// "Remove from pocket": out of the pocket, nothing else — it keeps
+    /// running and stays on the wall. No inverse: opening it brings it back.
+    case removeFromPocket(id: String)
     case rename(id: String, name: String)
     case setNote(id: String, note: String)
     case pinSkill(name: String, pinned: Bool)
@@ -881,7 +883,7 @@ enum Event {
         case .remove(let id): return ["type": "remove", "id": id]
         case .killAll: return ["type": "killAll"]
         case .setKind(let id, let kind): return ["type": "setKind", "id": id, "kind": kind]
-        case .shelve(let id, let shelved): return ["type": "shelve", "id": id, "shelved": shelved]
+        case .removeFromPocket(let id): return ["type": "removeFromPocket", "id": id]
         case .rename(let id, let name): return ["type": "rename", "id": id, "name": name]
         case .setNote(let id, let note): return ["type": "setNote", "id": id, "note": note]
         case .pinSkill(let name, let pinned): return ["type": "pinSkill", "name": name, "pinned": pinned]

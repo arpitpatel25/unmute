@@ -122,9 +122,16 @@ test('pocket tasks are matched from pocket_list, and none-found is said plainly'
   assert.match(AGENT_PRINCIPLES, /call mcp__unmute__pocket_list first/)
   assert.match(AGENT_PRINCIPLES, /Several: ask which, naming\s+them/)
   assert.match(AGENT_PRINCIPLES, /there is no such task in the pocket/)
-  // "Remove from pocket" hides; it is never a delete.
-  assert.match(AGENT_PRINCIPLES, /mcp__unmute__task_hide for 'remove it from the pocket'/)
-  assert.match(AGENT_PRINCIPLES, /takes the card away and deletes nothing/)
+  // "Remove" leaves the pocket only; it is never a delete.
+  assert.match(AGENT_PRINCIPLES, /mcp__unmute__task_remove_from_pocket for 'remove it'/)
+  assert.match(AGENT_PRINCIPLES, /it only leaves the pocket: it keeps\s+running, stays in the orchestrator/)
+  assert.doesNotMatch(AGENT_PRINCIPLES, /\bshel(f|ve|ved)\b/i)
+})
+
+test('delete is the orchestrator\'s, only on an explicit delete, and only after a confirmation turn', () => {
+  assert.match(AGENT_PRINCIPLES, /the POCKET is what is in front of them now; the ORCHESTRATOR holds every task/)
+  assert.match(AGENT_PRINCIPLES, /Use it only when the\s+person explicitly asks to delete — never for remove, hide, close or clear/)
+  assert.match(AGENT_PRINCIPLES, /confirmed: true only after they confirm in a later turn/)
 })
 
 test('there is one retrieval rule and it points at the transcripts', () => {
@@ -257,7 +264,7 @@ const TOOL_NAMES = [
   'memory_list', 'memory_store', 'memory_search', 'memory_get',
   'task_create', 'task_status', 'session_resume', 'session_fork',
   'sessions_open', 'session_close',
-  'pocket_list', 'task_rename', 'task_stop', 'task_end', 'task_hide',
+  'pocket_list', 'task_rename', 'task_stop', 'task_end', 'task_remove_from_pocket', 'task_delete',
   'unmute_history_search', 'unmute_history_copy',
   'notetaker_list', 'notetaker_read', 'notetaker_search', 'notetaker_open',
 ]

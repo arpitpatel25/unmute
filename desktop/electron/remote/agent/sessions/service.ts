@@ -19,8 +19,9 @@ interface ContinuationManager {
   /** Respawn a cold card's session. `resume()` marks it resumable; THIS wakes it. */
   opened?(taskId: string): void
   isLive?(taskId: string): boolean
-  /** Bringing a session back is what un-hides it; see the notch's counterpart. */
-  setShelved?(taskId: string, shelved: boolean): void
+  /** Bringing a session back is what puts its card back in the pocket; see
+   *  the notch's counterpart (onPocketFocusTask). */
+  returnToPocket?(taskId: string): void
   setKind?(taskId: string, kind: 'oneoff' | 'session'): void
   attachProviderSession(input: {
     harness: 'claude' | 'codex'; sessionId: string; cwd: string; intent?: string; title?: string; group?: string; groupId?: string
@@ -140,7 +141,7 @@ export class AgentContinuationService {
       // an Agent-driven resume woke nothing, and the first version of this fix
       // politely retried for 6.6s against a session that only came alive 16s
       // later when the person opened the card by hand.
-      manager.setShelved?.(plan.taskId, false)
+      manager.returnToPocket?.(plan.taskId)
       manager.opened?.(plan.taskId)
       // A RESUME THAT CARRIES A MESSAGE IS A THREAD, AND THREADS STAY IN THE
       // POCKET. Graduation normally waits for a SECOND follow-up, which is the
@@ -215,7 +216,7 @@ export class AgentContinuationService {
     // The same wake-then-wait the resume path learned the hard way: resume()
     // only marks it resumable, opened() is what respawns a cold card, and
     // delivery has to wait for the process that is still coming up.
-    manager.setShelved?.(taskId, false)
+    manager.returnToPocket?.(taskId)
     manager.opened?.(taskId)
     manager.setKind?.(taskId, 'session')
     const live = await this.waitUntilLiveResult(taskId)

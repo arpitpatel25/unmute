@@ -352,9 +352,10 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('curator:conv-data', handler)
     return () => ipcRenderer.removeListener('curator:conv-data', handler)
   },
-  /** Shelve/unshelve a task — kept but out of the way (hidden from the wall grid). */
-  remoteSetShelved: (taskId: string, on: boolean): Promise<boolean> =>
-    ipcRenderer.invoke('remote:set-shelved', taskId, on),
+  /** Put a task in the pocket or take it out — pocket-only: it keeps running
+   *  and stays in the orchestrator either way. */
+  remoteSetInPocket: (taskId: string, inPocket: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-in-pocket', taskId, inPocket),
   /** Set/clear the user's note on a task card (empty string clears). */
   remoteSetNote: (taskId: string, note: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-note', taskId, note),

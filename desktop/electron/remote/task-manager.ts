@@ -51,6 +51,27 @@ function sessionOwnership(meta: Record<string, unknown>): 'unmute' | 'external' 
   return 'unknown'
 }
 
+/** THE SHELF IS GONE; ITS TASKS ARE NOT. A legacy `shelved: true` receipt is
+ *  read as "out of the pocket" — the one part of shelving that survives. The
+ *  other two parts (hidden from the wall, exempt from purge) are dropped on
+ *  purpose: the task is an ordinary orchestrator task from here on. */
+function pocketRemovedFromMeta(meta: { pocketRemoved?: boolean; shelved?: boolean }): boolean {
+  return meta.pocketRemoved === true || meta.shelved === true
+}
+
+/**
+ * WHAT AUTO-PURGE NEVER TOUCHES. The Shelf used to be the "keep this" gesture;
+ * it is gone, and these two signals carry that meaning instead:
+ *   - a persistent SESSION is untouched "by updatedAt" for days by design;
+ *   - a task the person RENAMED (nameSetByUser, the rename lock) is one they
+ *     said they care about.
+ * Everything else is a one-off, retired after purgeAgeMs (3 days) untouched.
+ * Pocket membership is deliberately not an input.
+ */
+export function retentionExempt(t: { kind?: string; nameSetByUser?: boolean }): boolean {
+  return t.kind === 'session' || t.nameSetByUser === true
+}
+
 /** Tap a task's PTY bytes next to the run logs. No-op unless the tap is on. */
 function tapPtyForTask(taskId: string, dir: 'in' | 'out', bytes: Buffer, atMs: number): void {
   const logsDir = remoteLogDir()
@@ -215,7 +236,7 @@ export interface Task {
    *  resume, reading Claude's session store, and future orchestration. */
   sessionId: string
   /** Species (Orchestrate). 'oneoff' = an errand with a warm-window idle-kill
-   *  and 24h conversation retirement. Its project survives. 'session' = a persistent working
+   *  and 3-day conversation retirement. Its project survives. 'session' = a persistent working
    *  session (often multi-day, often project-bound): NEVER idle-killed, NEVER
    *  auto-purged — it lives until the user explicitly kills/removes it, and
    *  survives app restarts as interrupted-but-resumable (`--continue` restores
@@ -509,10 +530,14 @@ export interface Task {
    *  clock: a session is auto-routable only while this is recent ("hot thread");
    *  cold sessions are focus-only. */
   lastUserInputAt?: number
-  /** Shelved (Orchestrate): deliberately preserved AND out of the way — hidden
-   *  from the wall grid, exempt from auto-purge, findable in the rail's Shelf.
-   *  The answer to "I want to keep this but stop seeing it". */
-  shelved?: boolean
+  /** REMOVED FROM THE POCKET, and nothing else. The task keeps running and
+   *  stays in the orchestrator exactly as before — wall grid, rail, retention
+   *  all ignore this. It only keeps the card out of the notch's pocket until
+   *  the task needs the person again, is opened, or is sent input (see
+   *  setInPocket). Replaces the old `shelved`, which also hid the task from
+   *  the wall and exempted it from purge; meta.json's legacy `shelved: true`
+   *  is read as this on rehydrate. */
+  pocketRemoved?: boolean
   /** User's free-form note pinned to the card (ticket link, context, a reminder
    *  to future-you). Pure annotation — never fed to the agent. */
   note?: string
@@ -645,7 +670,8 @@ export interface TaskManagerOpts {
    *  the maintenance sweep — session stopped, row hidden, project bytes retained.
    *  Keeps the user from accumulating hundreds of Unmute-spun Claude/tmux sessions.
    *  NEVER touches ~/.claude (Claude cleans its own transcripts on its own clock).
-   *  Default 24h ("gone by end of day"). */
+   *  Sessions and renamed tasks are exempt (retentionExempt). Default 3 days —
+   *  long enough that yesterday's errand is still there tomorrow. */
   purgeAgeMs?: number
   /** How often the maintenance sweep runs. Default 1h. */
   purgeSweepMs?: number
@@ -821,7 +847,7 @@ export class TaskManager extends EventEmitter {
   private startupRecovery: Promise<void> = Promise.resolve()
   private static readonly AUTO_RESUME_COOLDOWN_MS = 5_000
   // Per-task chain serializing meta.json read-modify-writes. Two concurrent
-  // merges (e.g. setShelved + setNote in one tick) would otherwise race the
+  // merges (e.g. setInPocket + setNote in one tick) would otherwise race the
   // read and the last write would silently drop the other's field.
   private metaChains = new Map<string, Promise<void>>()
   // Per-task ring buffer of recent PTY output for render-on-demand (PRD §13.4#8).
@@ -880,7 +906,7 @@ export class TaskManager extends EventEmitter {
       warmMs: opts.warmMs ?? DEFAULT_WARM_MS,
       navigateWarmMs: opts.navigateWarmMs ?? 8 * 60_000,
       detachGraceMs: opts.detachGraceMs ?? 1500,
-      purgeAgeMs: opts.purgeAgeMs ?? 24 * 60 * 60_000, // 24h — "gone by end of day"
+      purgeAgeMs: opts.purgeAgeMs ?? 3 * 24 * 60 * 60_000, // 3 days
       purgeSweepMs: opts.purgeSweepMs ?? 60 * 60_000,  // hourly
       persistentIdleMs: opts.persistentIdleMs ?? 7 * 24 * 60 * 60_000,
       approvalSweepMs: opts.approvalSweepMs ?? 1500,
@@ -4360,7 +4386,7 @@ export class TaskManager extends EventEmitter {
       if (this.tasks.has(id)) continue
       if (await this.recordRetired(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; nameSetByUser?: boolean; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result']; continuationMode?: Task['continuationMode']; continuationSources?: Task['continuationSources']; continuationArtifacts?: Task['continuationArtifacts']; continuationConfidence?: number; agentRelays?: Task['agentRelays'] }
+      let meta: { intent?: string; sessionId?: string; name?: string; nameSetByUser?: boolean; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; pocketRemoved?: boolean; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result']; continuationMode?: Task['continuationMode']; continuationSources?: Task['continuationSources']; continuationArtifacts?: Task['continuationArtifacts']; continuationConfidence?: number; agentRelays?: Task['agentRelays'] }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { meta = {} }
       if ((meta as Task).continuationPending) continue
       if (!meta.intent) {
@@ -4384,6 +4410,14 @@ export class TaskManager extends EventEmitter {
         // this write fails.
         void writeFileAtomic(join(dir, 'meta.json'), JSON.stringify(meta))
           .catch((e) => log.child({ taskId: id }).warn('rehydrate: could not persist recovered meta.json', { error: (e as Error).message }))
+      }
+      // MIGRATE THE SHELF ONCE. The receipt is rewritten with the new field
+      // and without the old one, so this runs a single time per task and no
+      // writer ever has to know `shelved` existed.
+      if (meta.intent && meta.shelved !== undefined) {
+        meta = { ...meta, ...(pocketRemovedFromMeta(meta) ? { pocketRemoved: true } : {}), shelved: undefined }
+        await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify(meta))
+          .catch((e) => log.child({ taskId: id }).warn('rehydrate: could not migrate shelved', { error: (e as Error).message }))
       }
       if (!meta.intent) continue // unreachable after the reconstruction above, but keeps `meta.intent` narrowed to `string` below
       if (meta.origin === 'unmute-agent' && meta.agentRunId && !(meta as Task).sessionOwnership) {
@@ -4409,7 +4443,7 @@ export class TaskManager extends EventEmitter {
           lastHeartbeatMs: meta.updatedAt ?? now0,
           mode: 'managed',
           result: meta.result,
-          shelved: meta.shelved || undefined,
+          pocketRemoved: pocketRemovedFromMeta(meta) || undefined,
           note: meta.note || undefined,
           continuationMode: meta.continuationMode,
           continuationSources: meta.continuationSources,
@@ -4467,7 +4501,7 @@ export class TaskManager extends EventEmitter {
           lastMtimeMs: 0,
           lastHeartbeatMs: meta.updatedAt ?? now0,
           mode: meta.mode ?? 'managed',
-          ...(meta.shelved ? { shelved: true } : {}),
+          ...(pocketRemovedFromMeta(meta) ? { pocketRemoved: true } : {}),
           ...(meta.note ? { note: meta.note } : {}),
           ...this.groupFromMeta(meta),
         } as Task
@@ -4507,7 +4541,7 @@ export class TaskManager extends EventEmitter {
           surface: meta.surface,
           mode: meta.mode ?? 'managed',
           injectedRecipes: [],
-          shelved: meta.shelved || undefined,
+          pocketRemoved: pocketRemovedFromMeta(meta) || undefined,
           note: meta.note || undefined,
           spawnedBy: meta.spawnedBy || undefined,
           ...this.groupFromMeta(meta),
@@ -4622,7 +4656,7 @@ export class TaskManager extends EventEmitter {
         // persistState(). Without it the card falls back to the short status
         // line where the exchange should be.
         ...(Array.isArray(meta.conversation) ? { conversation: meta.conversation as Task['conversation'] } : {}),
-        shelved: meta.shelved || undefined,
+        pocketRemoved: pocketRemovedFromMeta(meta) || undefined,
         note: meta.note || undefined,
         spawnedBy: meta.spawnedBy || undefined,
         continuationMode: meta.continuationMode,
@@ -4756,7 +4790,7 @@ export class TaskManager extends EventEmitter {
 
   /**
    * Start the background maintenance sweep: hard-erase any task untouched (by
-   * updatedAt) for >= purgeAgeMs (default 24h). This is what keeps a user from
+   * updatedAt) for >= purgeAgeMs (default 3 days). This is what keeps a user from
    * ending up with hundreds of Unmute-spun Claude/tmux sessions + scratch dirs.
    * Runs once now, then every purgeSweepMs. Idempotent (a second call is a no-op).
    * Call once at app start (init.ts). Reuses remove() — the SAME proven path as
@@ -5019,12 +5053,13 @@ export class TaskManager extends EventEmitter {
     // what retires the record. Project bytes survive that retirement too.
     const oneoffCutoff = cutoff
     // 1. IN-MEMORY tasks that have aged out — remove() kills the live session too.
-    //    PERSISTENT SESSIONS ARE EXEMPT: a multi-day working session is untouched
-    //    "by updatedAt" for days by design. Explicit Remove retires its record;
-    //    it does not delete the workspace.
-    //    SHELVED tasks are exempt too — shelving IS the "keep this" gesture.
+    //    One rule, retentionExempt(): sessions and tasks the person renamed are
+    //    kept; every other one-off goes after purgeAgeMs untouched. Being out
+    //    of the pocket has no say here — it is not a "keep" gesture, and it is
+    //    not a "discard" one either. Explicit Delete retires a record; it does
+    //    not delete the workspace.
     const stale = [...this.tasks.values()].filter((t) => {
-      if (t.kind === 'session' || t.shelved) return false
+      if (retentionExempt(t)) return false
       return t.updatedAt < (TERMINAL.includes(t.state) ? oneoffCutoff : cutoff)
     })
     if (stale.length) {
@@ -5069,12 +5104,12 @@ export class TaskManager extends EventEmitter {
         mtimeMs = st.mtimeMs // dir mtime advances on every status (atomic rename) ≈ last activity
       } catch { continue }
       if (mtimeMs >= cutoff) continue // recent orphan (e.g. a just-crashed run) — keep
-      // Persistent-session receipts are NEVER orphan-purged (same exemption as
-      // pass 1): if one isn't in memory (e.g. this sweep ran before rehydrate),
+      // Persistent-session and renamed receipts are NEVER orphan-purged (the
+      // same retentionExempt() rule as pass 1): if one isn't in memory (e.g. this sweep ran before rehydrate),
       // deleting it would erase a multi-day session behind the user's back.
       try {
-        const meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) as { kind?: string; origin?: string }
-        if (meta.kind === 'session' || meta.origin === 'unmute-agent') continue
+        const meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) as { kind?: string; origin?: string; nameSetByUser?: boolean }
+        if (retentionExempt(meta) || meta.origin === 'unmute-agent') continue
       } catch { /* unidentified data is retained too */ }
       await this.retireRecord(id)
       try { this.opts.reapSession?.(id) } catch { /* best-effort orphan runtime cleanup */ }
@@ -5193,6 +5228,9 @@ export class TaskManager extends EventEmitter {
   private noteUserInput(task: Task, op: string): void {
     task.lastUserInputAt = this.clock()
     this.mergeMeta(task, { lastUserInputAt: task.lastUserInputAt }, op)
+    // SPEAKING TO A TASK PUTS IT BACK IN FRONT OF YOU. A card removed from the
+    // pocket that you just sent something to is, by definition, at hand again.
+    if (task.pocketRemoved) this.setInPocket(task.id, true)
   }
 
   /** For a FORKED spawn: discover the fork's real session id (Claude mints it;
@@ -5534,16 +5572,25 @@ export class TaskManager extends EventEmitter {
     }
   }
 
-  /** Shelve/unshelve (Orchestrate): preserved-but-out-of-the-way. Persists to
-   *  meta.json so the shelf survives restarts; emits 'updated' for the wall. */
-  setShelved(id: string, on: boolean): void {
+  /**
+   * IN THE POCKET, OR NOT — and that is ALL this changes. "Remove from pocket"
+   * takes the card out of the notch; the task keeps running, stays on the
+   * orchestrator's wall and rail, and ages exactly as it would have (so
+   * `updatedAt` is deliberately NOT touched: removing a card is not activity,
+   * and it must not buy the task more retention either).
+   *
+   * Coming back is never a gesture of its own. It happens when the task needs
+   * the person again (the notch controller clears it on that transition), when
+   * anyone opens it, or when the person sends it something (noteUserInput).
+   * Persists to meta.json; emits 'updated' so every surface re-reads it.
+   */
+  setInPocket(id: string, inPocket: boolean): void {
     const task = this.tasks.get(id)
-    if (!task || !!task.shelved === on) return
-    task.shelved = on
-    task.updatedAt = this.clock()
+    if (!task || !task.pocketRemoved === inPocket) return
+    task.pocketRemoved = inPocket ? undefined : true
     this.emit('updated', task)
-    log.child({ taskId: id }).event(on ? 'shelved' : 'unshelved', {})
-    this.mergeMeta(task, { shelved: on }, 'setShelved')
+    log.child({ taskId: id }).event(inPocket ? 'returned-to-pocket' : 'removed-from-pocket', {})
+    this.mergeMeta(task, { pocketRemoved: !inPocket }, 'setInPocket')
   }
 
   /**
@@ -6764,6 +6811,7 @@ export class TaskManager extends EventEmitter {
       if (data.includes('\r')) {
         this.mergeMeta(t, { lastUserInputAt: t.lastUserInputAt }, 'typed-input')
         this.noteFollowUp(t)
+        if (t.pocketRemoved) this.setInPocket(t.id, true)
       }
     }
     // A user typing into a parked-warm session means they want to keep working;

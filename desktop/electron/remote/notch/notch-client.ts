@@ -173,7 +173,6 @@ export interface TaskDetailP {
   resuming?: boolean
   /** Visible reason when restoring the CLI process failed. */
   resumeError?: string
-  shelved?: boolean
   dir?: string
   age?: string
   elapsed?: string
@@ -290,7 +289,6 @@ export interface ImportableP {
   agent?: string
 }
 
-export interface ShelfItemP { id: string; name: string }
 export interface RouteOfferP { newTaskId: string; altTaskId: string; altName: string }
 
 export interface CockpitPayload {
@@ -312,7 +310,8 @@ export interface CockpitPayload {
   // receive anything again. An inbox that cannot fill is worse than no inbox.
   unmuteSkills: SkillItemP[]
   skills: SkillItemP[]
-  shelf: ShelfItemP[]
+  // shelf REMOVED with the Shelf itself: a task out of the pocket is an
+  // ordinary orchestrator task, so there is no second list to draw.
   /** Claude Code CLI sessions on this machine that unmute does NOT have.
    *  The only thing this list is for is importing them; a row that is already
    *  a task never appears. */
@@ -527,7 +526,10 @@ export type NotchEvent =
   | { type: 'remove'; id: string }
   | { type: 'killAll' }
   | { type: 'setKind'; id: string; kind: 'oneoff' | 'session' }
-  | { type: 'shelve'; id: string; shelved: boolean }
+  /** "Remove from pocket" — out of the pocket only; the task keeps running and
+   *  stays in the orchestrator. There is no inverse event: opening the task,
+   *  sending it input, or it needing you again is what brings it back. */
+  | { type: 'removeFromPocket'; id: string }
   | { type: 'rename'; id: string; name: string }
   | { type: 'setNote'; id: string; note: string }
   | { type: 'pinSkill'; name: string; pinned: boolean }

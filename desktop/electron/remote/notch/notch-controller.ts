@@ -4,7 +4,7 @@ import { messageWindow } from './message-window'
 // v2: full cockpit/overlay parity. It owns the your-move QUEUE (skip=requeue),
 // derives the six-rung baseline (dormant/active/attention) vs. the user's
 // engaged state (task/cockpit), builds the complete CockpitPayload (groups,
-// queue, one-offs, projects, suggestions, skills, shelf, digest, doorbell,
+// queue, one-offs, projects, suggestions, skills, digest, doorbell,
 // route offer) and per-task TaskDetail, streams PTY output to the helper's
 // terminal, and maps EVERY helper event onto the same internals the old IPC
 // handlers call. Pure orchestration over injected deps — unit-testable without
@@ -73,7 +73,9 @@ export interface TaskLite {
    *  to meta.json (Pack F, decision D6), so it survives a restart. */
   model?: string
   threadContext?: string | null
-  shelved?: boolean
+  /** Out of the pocket (TaskManager.setInPocket). Pocket-only: the wall, the
+   *  rail and retention all ignore it. */
+  pocketRemoved?: boolean
   note?: string | null
   spawnedBy?: string | null
   group?: string | null
@@ -189,7 +191,8 @@ export interface NotchControllerDeps {
   rerun(intent: string): void
   setKind(id: string, kind: 'oneoff' | 'session'): void
   setName(id: string, name: string): void
-  setShelved(id: string, on: boolean): void
+  /** Put a task back in the pocket, or take it out. Nothing else changes. */
+  setInPocket(id: string, inPocket: boolean): void
   setNote(id: string, note: string): void
   focus(id: string | null): void
   /** Run an Agent turn from typed text — the chat's composer. Optional: a host
@@ -959,7 +962,7 @@ export class NotchController {
     on('remove', (e) => void this.deps.remove((e as { id: string }).id))
     on('killAll', () => this.deps.killAll())
     on('setKind', (e) => { const { id, kind } = e as { id: string; kind: 'oneoff' | 'session' }; this.deps.setKind(id, kind); this.scheduleReconcile() })
-    on('shelve', (e) => { const { id, shelved } = e as { id: string; shelved: boolean }; this.deps.setShelved(id, shelved); if (shelved && this.focusedId === id) this.setFocus(null); this.scheduleReconcile() })
+    on('removeFromPocket', (e) => this.removeFromPocket((e as { id: string }).id))
     on('rename', (e) => { const { id, name } = e as { id: string; name: string }; this.deps.setName(id, name); this.scheduleReconcile() })
     on('setNote', (e) => { const { id, note } = e as { id: string; note: string }; this.deps.setNote(id, note); this.scheduleReconcile() })
     on('pinSkill', (e) => { const { name, pinned } = e as { name: string; pinned: boolean }; void this.onPinSkill(name, pinned) })
@@ -1098,8 +1101,30 @@ export class NotchController {
     this.reconcile()
   }
 
+  /** A card out of the pocket does not demand — until it newly needs you, at
+   *  which point onTransition puts it back (returnsOnDemand) and this is true
+   *  again with nothing special-cased. */
   private demanding(t: TaskLite): boolean {
-    if (t.shelved) return false
+    if (t.pocketRemoved) return false
+    return this.wouldDemand(t)
+  }
+
+  /**
+   * SHOULD A PENDING TRANSITION BRING A REMOVED CARD BACK? The same notion of
+   * "needs you" the attention queue uses (wouldDemand), narrowed to what
+   * actually asks something of the person: a question or approval (needs-user,
+   * stuck) or a failure. A turn that simply FINISHED does not count, even on a
+   * thread — quiet progress is exactly what removing the card asked not to see.
+   * A failure you caused (Stop, Kill all) is not news either.
+   */
+  private returnsOnDemand(t: TaskLite): boolean {
+    if (t.state !== 'needs-user' && t.state !== 'stuck' && t.state !== 'failed') return false
+    if (t.state === 'failed' && /^Stopped/.test(t.error?.reason ?? '')) return false
+    return this.wouldDemand(t)
+  }
+
+  /** demanding() without the pocket flag. */
+  private wouldDemand(t: TaskLite): boolean {
     if (this.attentionAcknowledged.get(t.id) === t.state) return false
     if (t.state === 'needs-user' || t.state === 'stuck') return true
     const fresh = this.presence.awakeMs() - this.demandSince(t) < DEMAND_WINDOW_MS
@@ -1251,10 +1276,11 @@ export class NotchController {
    * The liveness test is obsolete anyway. Sending to a cold session revives it
    * and delivers (TaskManager.answer), so sleeping is not unreachable — it is
    * one message from awake. What the pocket must exclude is what can never be
-   * reached again: a task that is gone, or one you shelved. Nothing else.
+   * reached again: a task that is gone, or one you removed from the pocket.
+   * Nothing else.
    */
   private addressable(t: TaskLite): boolean {
-    if (t.shelved) return false
+    if (t.pocketRemoved) return false
     if (providerOf(t.agent).transport === 'driver') return true
     // A session sleeps; it does not die. A finished ONE-OFF with no process is
     // genuinely over — there is no thread to continue and nothing to say to it.
@@ -1293,7 +1319,7 @@ export class NotchController {
       // still going.
       //
       // WHICH ONE FIRST? — your clock. See `addressedStamp`.
-      .filter((t) => !already.has(t.id) && !t.shelved && this.addressable(t)
+      .filter((t) => !already.has(t.id) && this.addressable(t)
         && now - this.engagedAt(t) < POCKET_IDLE_MS)
       .sort(this.byAddressed)
 
@@ -1323,11 +1349,12 @@ export class NotchController {
     return new Set(this.pocketList().map((t) => t.id))
   }
 
-  /** Take a task out of (or put it back into) the pocket without touching the
-   *  task itself — the same act as the card's own 'shelve', for the Agent. */
-  setPocketHidden(id: string, hidden: boolean): void {
-    this.deps.setShelved(id, hidden)
-    if (hidden && this.focusedId === id) this.setFocus(null)
+  /** "Remove from pocket": the card's menu item and the Agent's
+   *  task_remove_from_pocket are this one call. The task keeps running and
+   *  stays on the orchestrator; only the pocket lets go of it. */
+  removeFromPocket(id: string): void {
+    this.deps.setInPocket(id, false)
+    if (this.focusedId === id) this.setFocus(null)
     this.scheduleReconcile()
   }
 
@@ -1480,6 +1507,17 @@ export class NotchController {
       this.stateSeen.set(t.id, t.state)
       if (seen) this.demandStamp.set(t.id, this.presence.awakeMs())
       else this.demandSince(t)     // seed from wall-clock age, once
+      // A REMOVED CARD COMES BACK WHEN IT NEEDS YOU — on the transition, and
+      // only on one we watched happen (`seen`): a restore is not news, so a
+      // card you removed while it was waiting stays removed across a relaunch.
+      // The flag is cleared at the source so every surface agrees; from here
+      // it is an ordinary new demand, under every guard below — it joins the
+      // pocket's list, and never replaces an open task or moves mid-capture.
+      if (seen && t.pocketRemoved && this.returnsOnDemand(t)) {
+        log.event('pocket-return-on-demand', { taskId: t.id, state: t.state })
+        this.deps.setInPocket(t.id, true)
+        t = { ...t, pocketRemoved: false }
+      }
     }
     const eligible = this.demanding(t)
     const queued = this.queue.includes(t.id)
@@ -2201,17 +2239,18 @@ export class NotchController {
    * being set here: applyVoiceTarget reads the slot under `pocketAt` whenever
    * the pocket is open, which is the same path the pocket chord uses.
    *
-   * If it is not pocketable at all — shelved, say — the cockpit is a correct
-   * place to land, so that is the fallback rather than an error.
+   * If it is not pocketable at all — a one-off whose process is gone, say —
+   * the cockpit is a correct place to land, so that is the fallback rather
+   * than an error.
    */
   private onPocketFocusTask(id: string): void {
     this.leaveAgent()
-    // HIDING IS NEVER PERMANENT. Shelving takes a card out of the pocket; the
-    // act of bringing it back is what puts it in again, whoever does it — the
-    // person tapping a link, or the Agent reopening the session. Without this
-    // the flag would outlive its reason and a hidden card could only be
-    // recovered from the dashboard.
-    this.deps.setShelved(id, false)
+    // REMOVING IS NEVER PERMANENT. "Remove from pocket" takes a card out; the
+    // act of opening it is what puts it back, whoever does it — the person
+    // tapping a link, or the Agent reopening the session. Without this the
+    // flag would outlive its reason and the card could only be reached from
+    // the orchestrator.
+    this.deps.setInPocket(id, true)
     const at = this.pocketSlots().findIndex((slot) => slot.kind !== 'agent' && slot.id === id)
     if (at < 0) { this.onFocusTask(id); return }
     this.engaged = 'none'
@@ -2227,7 +2266,7 @@ export class NotchController {
 
   private onFocusTask(id: string): void {
     this.leaveAgent()
-    this.deps.setShelved(id, false)
+    this.deps.setInPocket(id, true) // opening it from the wall is opening it
     this.engaged = 'cockpit'
     const opened = this.deps.getTask(id)
     if (opened) this.attentionAcknowledged.set(id, opened.state)
@@ -2813,7 +2852,7 @@ export class NotchController {
     const last = this.deps.getLastSeen()
     if (!last || Date.now() - last < AWAY_MS) { this.digestText = null; return }
     const tasks = this.deps.listTasks()
-    const needs = tasks.filter((t) => classify(t.state) !== null && !t.shelved).length
+    const needs = tasks.filter((t) => classify(t.state) !== null && !t.pocketRemoved).length
     const finished = tasks.filter((t) => t.state === 'done' && (t.updatedAt ?? 0) > last).length
     this.digestText = (needs || finished)
       ? `while you were away: ${needs} need${needs === 1 ? 's' : ''} you · ${finished} errand${finished === 1 ? '' : 's'} finished`
@@ -2825,7 +2864,9 @@ export class NotchController {
    *  This used to be called visibleOnWall and claimed to mirror the renderer.
    *  It no longer does: Pack C replaced the renderer's rule with a 24-hour
    *  window, and this one kept the old behaviour — sessions never fade, done
-   *  one-offs fade after 15m, errored/stuck after 60m, shelved → Shelf only.
+   *  one-offs fade after 15m, errored/stuck after 60m. Being out of the pocket
+   *  does not hide a task here: the wall is the orchestrator, and it holds
+   *  everything.
    *
    *  Keeping them separate is CORRECT. The notch answers "what is going on
    *  right now" and must not drop a live session because a filter in another
@@ -2835,7 +2876,6 @@ export class NotchController {
    *  What was wrong was the shared NAME, which invited someone editing one to
    *  assume they had edited both. Renamed so the next person has to choose. */
   private notchVisible(t: TaskLite, now: number): boolean {
-    if (t.shelved) return false
     if (t.kind === 'session') return true
     if ((t.updatedAt ?? 0) <= this.clearedAt && (t.state === 'done' || t.state === 'failed' || t.state === 'ready')) return false
     if (t.state === 'done') return now - (t.updatedAt ?? 0) < FADE_DONE_MS
@@ -2968,7 +3008,6 @@ export class NotchController {
       status: t.state,
       kind: t.kind ?? 'oneoff',
       alive: external ? true : (t.alive ?? false),
-      shelved: t.shelved ?? false,
       dir: this.dirLabel(t),
       age: relativeAge(t.updatedAt, now),
       elapsed: relativeAge(t.createdAt, now),
@@ -3180,14 +3219,11 @@ export class NotchController {
 
     // One-offs rail (live + finished, clear-finished honored).
     const oneoffs = tasks
-      .filter((t) => (t.kind ?? 'oneoff') === 'oneoff' && !t.shelved)
+      .filter((t) => (t.kind ?? 'oneoff') === 'oneoff')
       .filter((t) => (t.updatedAt ?? 0) > this.clearedAt || classify(t.state) !== null || t.state === 'processing')
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
       .slice(0, 8)
       .map((t) => ({ id: t.id, name: t.name ?? truncate(t.intent, 36), status: t.state, age: relativeAge(t.updatedAt, now) }))
-
-    const shelf = tasks.filter((t) => t.shelved)
-      .map((t) => ({ id: t.id, name: t.name ?? truncate(t.intent, 40) }))
 
     if (!this.digestDismissed) this.computeDigest()
 
@@ -3200,7 +3236,6 @@ export class NotchController {
       oneoffs,
       unmuteSkills: this.skills.filter((s) => s.origin === 'unmute'),
       skills: this.skills.filter((s) => s.origin !== 'unmute'),
-      shelf,
       importable: this.importable.map((s) => ({
         sessionId: s.sessionId,
         title: s.title,

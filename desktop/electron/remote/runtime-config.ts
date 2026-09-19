@@ -81,7 +81,7 @@ export interface ConfigKnobs {
   taskWarmMs: number
   /** Shorter warm window for navigate-category tasks. */
   taskNavigateWarmMs: number
-  /** Hard-erase any task untouched this long ("gone by end of day"). */
+  /** Retire a one-off untouched this long (sessions and renamed tasks are exempt). */
   taskPurgeAgeMs: number
   /** A ready ONE-OFF ignored this long decays to done (ready-inflation valve). */
   readyDecayMs: number
@@ -123,7 +123,7 @@ const KNOB_SPEC: Record<keyof ConfigKnobs, KnobSpec> = {
   taskStaleMs:             { def: 4 * 60_000,    min: 1_000,  max: DAY },
   taskWarmMs:              { def: 15 * 60_000,   min: 1_000,  max: 7 * DAY },
   taskNavigateWarmMs:      { def: 8 * 60_000,    min: 1_000,  max: 7 * DAY },
-  taskPurgeAgeMs:          { def: 24 * 60 * 60_000, min: 60_000, max: 30 * DAY },
+  taskPurgeAgeMs:          { def: 3 * DAY,       min: 60_000, max: 30 * DAY }, // one-offs only; sessions + renamed are exempt
   readyDecayMs:            { def: 60 * 60_000,   min: 60_000, max: 7 * DAY },
   routerDecisionTimeoutMs: { def: 60_000,        min: 1_000,  max: 10 * 60_000 },
   routerMaxSessionMs:      { def: 2 * 60 * 60_000, min: 60_000, max: DAY },

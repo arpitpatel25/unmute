@@ -132,7 +132,8 @@ export class AgentRuntimeService {
           rename: input => this.host('pocket.rename', [input]),
           stop: input => this.host('pocket.stop', [input]),
           end: input => this.host('pocket.end', [input]),
-          hide: input => this.host('pocket.hide', [input]),
+          removeFromPocket: input => this.host('pocket.removeFromPocket', [input]),
+          delete: input => this.host('pocket.delete', [input]),
         }),
         // The constitution sends every how-do-I question here; it was only
         // ever registered on the retired in-process path.

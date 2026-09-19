@@ -45,7 +45,7 @@ function fixture(existing = false, deliveries: boolean[] = [], startsLive = true
     // A cold Claude card wakes on opened(), NOT on resume() — the whole bug.
     opened(id: string) { calls.push({ op: 'opened', input: id }); live = true },
     isLive(_id: string) { return live },
-    setShelved(id: string, shelved: boolean) { calls.push({ op: 'setShelved', input: { id, shelved } }) },
+    returnToPocket(id: string) { calls.push({ op: 'returnToPocket', input: { id } }) },
     setKind(id: string, kind: string) { calls.push({ op: 'setKind', input: { id, kind } }) },
     async attachProviderSession(input: unknown) { calls.push({ op: 'attach', input }); return { taskId: 'new-task', sessionId: 'source-session' } },
     async forkProviderSession(input: unknown) { calls.push({ op: 'fork', input }); return { taskId: 'child-task', sessionId: 'child-session' } },
@@ -76,9 +76,9 @@ test('resume wakes an existing card and delivers only the current request', asyn
   })
   assert.deepEqual(calls, [
     { op: 'wake', input: 'existing-task' },
-    // Bringing it back is what un-hides it — a card shelved earlier must not
-    // stay out of the pocket once the Agent has reopened it.
-    { op: 'setShelved', input: { id: 'existing-task', shelved: false } },
+    // Bringing it back is what returns it to the pocket — a card removed from
+    // the pocket earlier must not stay out once the Agent has reopened it.
+    { op: 'returnToPocket', input: { id: 'existing-task' } },
     { op: 'opened', input: 'existing-task' },
     // A resume carrying a message promotes the task: a thread, not an errand.
     { op: 'setKind', input: { id: 'existing-task', kind: 'session' } },
@@ -202,7 +202,7 @@ test('reopening a hidden card puts it back in the pocket', async () => {
   await service.resume({ sessionId: 'source-session', intent: 'carry on', title: 'Billing migration', group: 'Unmute' })
   // Hiding must never outlive the reason for it: bringing the session back IS
   // the act that un-hides it.
-  assert.deepEqual(calls.find(c => c.op === 'setShelved')?.input, { id: 'existing-task', shelved: false })
+  assert.deepEqual(calls.find(c => c.op === 'returnToPocket')?.input, { id: 'existing-task' })
 })
 
 
@@ -241,7 +241,7 @@ test('a relay speaks into the card that already exists and creates nothing', asy
   assert.deepEqual(result, { taskId: 'existing-task', operation: 'send', delivered: true })
   assert.deepEqual(calls, [
     { op: 'wake', input: 'existing-task' },
-    { op: 'setShelved', input: { id: 'existing-task', shelved: false } },
+    { op: 'returnToPocket', input: { id: 'existing-task' } },
     { op: 'opened', input: 'existing-task' },
     // Words deliberately carried here make this a thread, exactly as a resume
     // carrying a message does.

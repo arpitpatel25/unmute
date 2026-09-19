@@ -100,7 +100,13 @@ function setup(opts: { proposals?: ProposalLite[]; getOutput?: (id: string) => s
     rerun: rec('rerun'),
     setKind: rec('setKind'),
     setName: rec('setName'),
-    setShelved: rec('setShelved'),
+    // Recorded AND applied, like the real TaskManager: the pocket reads the
+    // flag back through getTask/listTasks.
+    setInPocket: (id, inPocket) => {
+      rec('setInPocket')(id, inPocket)
+      const t = tasks.get(id)
+      if (t) tasks.set(id, { ...t, pocketRemoved: !inPocket })
+    },
     setNote: rec('setNote'),
     focus: rec('focus'),
     opened: rec('opened'),
@@ -458,7 +464,7 @@ test('per-task actions pass through to the runtime internals', () => {
   h.client.fire({ type: 'remove', id: 't1' })
   h.client.fire({ type: 'killAll' })
   h.client.fire({ type: 'setKind', id: 't1', kind: 'session' })
-  h.client.fire({ type: 'shelve', id: 't1', shelved: true })
+  h.client.fire({ type: 'removeFromPocket', id: 't1' })
   h.client.fire({ type: 'rename', id: 't1', name: 'better name' })
   h.client.fire({ type: 'setNote', id: 't1', note: 'JIRA-42' })
   assert.deepEqual(h.calls.kill?.[0], ['t1'])
@@ -467,7 +473,7 @@ test('per-task actions pass through to the runtime internals', () => {
   assert.deepEqual(h.calls.remove?.[0], ['t1'])
   assert.equal(h.calls.killAll?.length, 1)
   assert.deepEqual(h.calls.setKind?.[0], ['t1', 'session'])
-  assert.deepEqual(h.calls.setShelved?.[0], ['t1', true])
+  assert.deepEqual(h.calls.setInPocket?.[0], ['t1', false])
   assert.deepEqual(h.calls.setName?.[0], ['t1', 'better name'])
   assert.deepEqual(h.calls.setNote?.[0], ['t1', 'JIRA-42'])
 })
@@ -572,16 +578,17 @@ test('openDashboard builds the full cockpit payload', async () => {
   const old = Date.now() - 30 * 60 * 1000
   put(h, makeTask({ id: 's1', state: 'processing', kind: 'session', name: 'Notch UI', group: 'unmute', cwd: `${process.env.HOME}/tools/x` }))
   put(h, makeTask({ id: 'o1', state: 'done', kind: 'oneoff', name: 'Old done', updatedAt: old, alive: false }))
-  put(h, makeTask({ id: 'sh1', state: 'done', kind: 'session', name: 'Shelved thing', shelved: true }))
+  put(h, makeTask({ id: 'pr1', state: 'done', kind: 'session', name: 'Out of the pocket', pocketRemoved: true }))
   h.client.fire({ type: 'openDashboard' })
   await new Promise((r) => setTimeout(r, 10)) // rails are async
   h.flush()
   const cp: CockpitPayload = h.client.last('setCockpit')!.data
-  // groups: named first, shelved excluded, faded done excluded
+  // groups: named first, faded done excluded
   assert.ok(cp.groups.some((g) => g.name === 'unmute' && g.cards.some((c) => c.id === 's1')))
   assert.ok(!cp.groups.flatMap((g) => g.cards).some((c) => c.id === 'o1')) // done >15m → faded
-  assert.ok(!cp.groups.flatMap((g) => g.cards).some((c) => c.id === 'sh1'))
-  assert.deepEqual(cp.shelf, [{ id: 'sh1', name: 'Shelved thing' }])
+  // NO SHELF: a task out of the pocket is an ordinary card on the wall.
+  assert.ok(cp.groups.flatMap((g) => g.cards).some((c) => c.id === 'pr1'))
+  assert.equal((cp as Record<string, unknown>).shelf, undefined)
   // rails
   assert.equal(cp.skills.length, 1)
   assert.equal(cp.unmuteSkills.length, 1)
@@ -590,8 +597,8 @@ test('openDashboard builds the full cockpit payload', async () => {
   assert.equal((cp as Record<string, unknown>).suggestions, undefined)
   assert.equal(cp.doorbell, true)
   assert.equal(cp.tmuxAvailable, true)
-  // queue: only your-move, unshelved
-  assert.ok(!cp.queue.some((q) => q.id === 'sh1'))
+  // queue: only your-move
+  assert.ok(!cp.queue.some((q) => q.id === 'pr1'))
 })
 
 test('moving between expanded tasks silently opens each selected task', () => {
@@ -2691,7 +2698,7 @@ test('INVARIANT: everything demanding is reachable, and the count matches', () =
     { id: 'broke', state: 'failed' },
     { id: 'codex', state: 'processing', agent: 'codex-desktop', codexThreadId: 'th', alive: false },
     { id: 'deadErrand', state: 'done', kind: 'oneoff', alive: false },
-    { id: 'shelved', state: 'needs-user', shelved: true, question: { text: 'q' } },
+    { id: 'removed', state: 'needs-user', pocketRemoved: true, question: { text: 'q' } },
     { id: 'sleeping', state: 'done', kind: 'session', alive: false },
   ]
   for (const t of mixed) put(h, makeTask(t))
@@ -2731,7 +2738,7 @@ test('INVARIANT: every TASK slot resolves to a task the voice can actually reach
   for (const sl of taskSlots(h)) {
     const t = h.tasks.get(sl.id)
     assert.ok(t, `slot ${sl.id} has no task behind it`)
-    assert.ok(!t!.shelved, `slot ${sl.id} is shelved`)
+    assert.ok(!t!.pocketRemoved, `slot ${sl.id} was removed from the pocket`)
   }
 })
 
@@ -2804,13 +2811,14 @@ test('a session link expands that card from the pocket, not the cockpit', () => 
 
 test('a link to a card that cannot be pocketed still lands somewhere correct', () => {
   const h = setup()
-  put(h, makeTask({ id: 'a', state: 'needs-user', alive: true, shelved: true }))
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'oneoff', alive: false }))
   h.client.sent = []
 
   h.client.fire({ type: 'pocketFocusTask', id: 'a' })
 
-  // Shelved: not pocketable. The cockpit is a correct place to land, and is
-  // what focusTask would have done — a fallback, never an error.
+  // A finished errand with no process: not pocketable. The cockpit is a
+  // correct place to land, and is what focusTask would have done — a
+  // fallback, never an error.
   assert.deepEqual(h.calls.focus?.at(-1), ['a'])
 })
 
@@ -3174,4 +3182,94 @@ test('load earlier fetches durable history for a ready but non-durable card', as
   h.client.fire({ type: 'loadOlderMessages', id: 'tail-ready' }); h.flush()
   await Promise.resolve()
   assert.deepEqual(loads, [['tail-ready', true]])
+})
+
+// ── REMOVE FROM POCKET (replaces the Shelf) ────────────────────────────────
+//
+// Two places: the pocket (what is in front of you) and the orchestrator (all
+// of it). Removing a card touches the first only; it comes back when it needs
+// you, is opened, or is sent input — and never by stealing the screen.
+
+test('remove from pocket takes the card out of the pocket and leaves it on the wall', async () => {
+  const h = setup()
+  put(h, makeTask({ id: 'r', state: 'processing', kind: 'session', name: 'Keep going', group: 'unmute' }))
+  h.client.fire({ type: 'pocketOpen' }); h.flush()
+  assert.ok(taskSlots(h).some((sl) => sl.id === 'r'), 'in the pocket to begin with')
+
+  h.client.fire({ type: 'removeFromPocket', id: 'r' }); h.flush()
+  assert.deepEqual(h.calls.setInPocket?.at(-1), ['r', false])
+  assert.equal(h.calls.kill, undefined, 'nothing is stopped')
+  assert.equal(h.calls.remove, undefined, 'nothing is deleted')
+  assert.ok(!taskSlots(h).some((sl) => sl.id === 'r'), 'out of the pocket')
+
+  h.client.fire({ type: 'openDashboard' })
+  await new Promise((r) => setTimeout(r, 10))
+  h.flush()
+  const cp: CockpitPayload = h.client.last('setCockpit')!.data
+  assert.ok(cp.groups.flatMap((g) => g.cards).some((c) => c.id === 'r'), 'still an ordinary card on the wall')
+})
+
+test('a removed card returns to the pocket when it newly needs you', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'r', state: 'processing', pocketRemoved: true }))
+  h.client.fire({ type: 'pocketOpen' }); h.flush()
+  assert.ok(!taskSlots(h).some((sl) => sl.id === 'r'))
+
+  put(h, { ...h.tasks.get('r')!, state: 'needs-user', question: { text: 'Allow?' } })
+  assert.deepEqual(h.calls.setInPocket?.at(-1), ['r', true], 'the flag is cleared at the source')
+  const slot = taskSlots(h).find((sl) => sl.id === 'r')
+  assert.ok(slot, 'back in the pocket')
+  assert.equal(slot!.demanding, true)
+})
+
+test('a removed card returns on a fresh failure, but not on a stop you made', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'broke', state: 'processing', pocketRemoved: true }))
+  put(h, makeTask({ id: 'stopped', state: 'processing', pocketRemoved: true }))
+  put(h, { ...h.tasks.get('broke')!, state: 'failed', error: { reason: 'Claude exited unexpectedly' } })
+  put(h, { ...h.tasks.get('stopped')!, state: 'failed', error: { reason: 'Stopped (kill all)' } })
+  assert.deepEqual(h.calls.setInPocket, [['broke', true]])
+})
+
+test('quiet progress does not bring a removed card back', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'r', state: 'processing', kind: 'session', pocketRemoved: true }))
+  // A thread finishing its turn: demanding for a card in the pocket, but not
+  // a reason to undo "remove from pocket".
+  put(h, { ...h.tasks.get('r')!, state: 'done', updatedAt: Date.now() + 1000 })
+  put(h, { ...h.tasks.get('r')!, state: 'processing', step: 'Reading files' })
+  assert.equal(h.calls.setInPocket, undefined)
+  h.client.fire({ type: 'pocketOpen' }); h.flush()
+  assert.ok(!taskSlots(h).some((sl) => sl.id === 'r'))
+  assert.equal(h.client.last('setState')!.attention, 0, 'and it does not count as waiting')
+})
+
+test('a card removed while it was waiting stays removed across a restore', () => {
+  const h = setup()
+  // First sighting (a relaunch): not a transition, so not news.
+  put(h, makeTask({ id: 'r', state: 'needs-user', pocketRemoved: true, question: { text: 'q' } }))
+  assert.equal(h.calls.setInPocket, undefined)
+  h.client.fire({ type: 'pocketOpen' }); h.flush()
+  assert.ok(!taskSlots(h).some((sl) => sl.id === 'r'))
+})
+
+test('a removed card returning on demand never replaces the task you have open', () => {
+  const h = setup()
+  h.controller.setAutoExpand(true)
+  put(h, makeTask({ id: 'r', state: 'processing', name: 'R', pocketRemoved: true }))
+  expandX(h)
+  put(h, { ...h.tasks.get('r')!, state: 'needs-user', question: { text: 'Allow?' }, lastUserInputAt: Date.now() + 5000 })
+  assertStillX(h, 'removed card returned')
+  assert.deepEqual(h.calls.setInPocket?.at(-1), ['r', true], 'it did return — it just joined the list')
+})
+
+test('opening a removed card puts it back: wall click, link tap', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', pocketRemoved: true }))
+  put(h, makeTask({ id: 'b', state: 'processing', kind: 'session', pocketRemoved: true }))
+  h.client.fire({ type: 'focusTask', id: 'a' })
+  assert.deepEqual(h.calls.setInPocket?.at(-1), ['a', true])
+  h.client.fire({ type: 'pocketFocusTask', id: 'b' })
+  assert.deepEqual(h.calls.setInPocket?.at(-1), ['b', true])
+  assert.equal(h.client.last('showTask')?.task.id, 'b', 'the link lands on the card, in the pocket')
 })

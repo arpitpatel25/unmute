@@ -818,20 +818,22 @@ function openAgentSessions(limit?: number) {
 }
 
 /** The undo. It takes the card out of the pocket and DELETES NOTHING: this
- *  used to call manager.remove() — the UI's confirmed "Remove…" — while the
- *  tool and the constitution both promised only the card would go. Hiding is
- *  what the promise describes, and a resume brings the card back. Closing one
- *  that is already gone is a success, so a correction never fails twice. */
+ *  used to call manager.remove() — now the orchestrator's confirmed "Delete
+ *  from Unmute…" — while the tool and the constitution both promised only the
+ *  card would go. It is exactly task_remove_from_pocket: the task keeps
+ *  running, stays in the orchestrator, and opening it brings the card back.
+ *  Closing one that is already gone is a success, so a correction never fails
+ *  twice. */
 async function closeAgentSession(taskId: string) {
   if (!manager) throw new Error('Unmute Remote is not initialized')
   if (!manager.get(taskId)) return { taskId, closed: false }
-  hideFromPocket(taskId)
+  removeFromPocket(taskId)
   return { taskId, closed: true }
 }
 
-function hideFromPocket(taskId: string): void {
-  if (notchController) notchController.setPocketHidden(taskId, true)
-  else manager?.setShelved(taskId, true)
+function removeFromPocket(taskId: string): void {
+  if (notchController) notchController.removeFromPocket(taskId)
+  else manager?.setInPocket(taskId, false)
 }
 
 /** The task behind a pocket card, or undefined when it is not in the pocket.
@@ -903,11 +905,23 @@ const pocketActions = {
     if (!task || !manager) return null
     return { taskId: task.id, ended: await manager.endSession(task.id) }
   },
-  async hide(input: { taskId: string }) {
+  async removeFromPocket(input: { taskId: string }) {
     const task = pocketTask(input.taskId)
     if (!task) return null
-    hideFromPocket(task.id)
-    return { taskId: task.id, hidden: true }
+    removeFromPocket(task.id)
+    return { taskId: task.id, removedFromPocket: true }
+  },
+  /** The orchestrator's "Delete from Unmute…", for the Agent. The one pocket
+   *  action that is NOT limited to the pocket — delete lives in the
+   *  orchestrator, which holds every task — and the one that cannot be undone,
+   *  which is why the capability refuses it without `confirmed: true`. */
+  async delete(input: { taskId: string }) {
+    if (!manager || input.taskId === NotchController.AGENT_SLOT) return null
+    const task = manager.get(input.taskId)
+    if (!task) return null
+    const name = task.name ?? clip(task.intent ?? '', 60)
+    await manager.remove(task.id)
+    return { taskId: task.id, deleted: true, name }
   },
 }
 const turnIndex = new SessionTurnIndex()
@@ -931,7 +945,7 @@ const agentContinuations = new AgentContinuationService({
     // resume() marks a card resumable; opened() is what respawns its session.
     opened: (id: string) => manager!.opened(id),
     isLive: (id: string) => manager!.isLive(id),
-    setShelved: (id: string, shelved: boolean) => manager!.setShelved(id, shelved),
+    returnToPocket: (id: string) => manager!.setInPocket(id, true),
     setKind: (id: string, kind: 'oneoff' | 'session') => manager!.setKind(id, kind),
   },
   locate: locateSession,
@@ -2695,7 +2709,7 @@ function serializeTask(t: Task) {
     cwd: t.cwd,
     kind: t.kind ?? 'oneoff',
     threadContext: t.threadContext ?? null,
-    shelved: t.shelved ?? false,
+    pocketRemoved: t.pocketRemoved ?? false,
     note: t.note ?? null,
     spawnedBy: t.spawnedBy ?? null,
     group: t.group ?? null,
@@ -4419,7 +4433,8 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
   if (method === 'pocket.rename') return pocketActions.rename(args[0])
   if (method === 'pocket.stop') return pocketActions.stop(args[0])
   if (method === 'pocket.end') return pocketActions.end(args[0])
-  if (method === 'pocket.hide') return pocketActions.hide(args[0])
+  if (method === 'pocket.removeFromPocket') return pocketActions.removeFromPocket(args[0])
+  if (method === 'pocket.delete') return pocketActions.delete(args[0])
   if (method === 'help.settings') return helpSettings()
   if (method === 'handoff.cardForSession') return agentCardForSession(String(args[0]))
   if (method === 'handoff.createTask') {
@@ -4833,7 +4848,7 @@ async function dispatchFromCaptureInner(
       //
       // This USED to say it mirrored the renderer's visibleOnWall. It no
       // longer does — Pack C gave the renderer a 24-hour window, and this rule
-      // (non-shelved sessions always; active states; recent finishes) stayed as
+      // (sessions always; active states; recent finishes) stayed as
       // it was. That is deliberate: curation must be able to name a session the
       // user has parked for a week, and a filter in one window should not make
       // it unaddressable by voice. Three rules now exist on purpose — this one,
@@ -4846,7 +4861,6 @@ async function dispatchFromCaptureInner(
       const DONE_FADE_MS = 15 * 60_000
       const ATTN_FADE_MS = 60 * 60_000
       const wall = manager.list().filter((t) => {
-        if (t.shelved) return false
         if ((t.kind ?? 'oneoff') === 'session') return true
         if (t.state === 'processing' || t.state === 'needs-user') return true
         const age = nowMs - t.updatedAt
@@ -5942,7 +5956,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         rerun: (intent) => { void dispatchFromCapture(intent) },
         setKind: (id, kind) => mgr.setKind(id, kind, { pinned: kind === 'session' }),
         setName: (id, name) => { if (name.trim()) mgr.setName(id, name) }, // deliberate: locks + clamps
-        setShelved: (id, on) => mgr.setShelved(id, on),
+        setInPocket: (id, inPocket) => mgr.setInPocket(id, inPocket),
         setNote: (id, note) => mgr.setNote(id, note),
         focus: (id) => {
           orchestrateFocusId = id
@@ -7310,11 +7324,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     manager.setName(id, name) // deliberate: locks + clamps to MAX_TASK_NAME
     return true
   })
-  // Shelve/unshelve — preserved-but-out-of-the-way (hidden from the wall grid,
-  // purge-exempt, findable in the rail's Shelf).
-  ipcMain.handle('remote:set-shelved', async (_e, id: string, on: boolean) => {
+  // In the pocket or out of it — pocket-only; the task keeps running and
+  // stays in the orchestrator either way.
+  ipcMain.handle('remote:set-in-pocket', async (_e, id: string, inPocket: boolean) => {
     if (!manager) return false
-    manager.setShelved(id, !!on)
+    manager.setInPocket(id, !!inPocket)
     return true
   })
   // Card note — the user's annotation (ticket link, context); never fed to the agent.

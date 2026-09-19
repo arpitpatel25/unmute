@@ -12,7 +12,6 @@ import ComposerSupport
 struct TaskSurfaceView: View {
     @ObservedObject var model: NotchModel
     let topInset: CGFloat
-    @State private var confirmingRemoval = false
 
     private var t: TaskDetail? { model.task }
 
@@ -107,14 +106,6 @@ struct TaskSurfaceView: View {
             .padding(.top, topInset + 4)
             .padding(.bottom, 14)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .alert("Remove from Unmute?", isPresented: $confirmingRemoval) {
-                Button("Cancel", role: .cancel) {}
-                Button("Remove", role: .destructive) {
-                    if let id = t?.id { model.emit(.remove(id: id)) }
-                }
-            } message: {
-                Text("This removes the task from Unmute. Provider history and project files are preserved.")
-            }
             if model.captureAimed {
                 AimedChip(level: model.captureLevel)
                     .padding(.bottom, 16)
@@ -222,28 +213,21 @@ struct TaskSurfaceView: View {
             // dashboard's four visible KeyButtons do not fit beside them.
             if t.id != "unmute-agent" {
                 Menu {
-                    // HIDE IS NOT DELETE. Shelving takes the card out of the
-                    // pocket and nothing else: the session keeps running, ages
-                    // out on its own schedule, and stays in the dashboard.
-                    // Anything that brings it back — you, or the Agent
-                    // reopening it — clears the flag.
-                    Button((t.shelved ?? false) ? "Show in pocket" : "Hide from pocket") {
-                        model.emit(.shelve(id: t.id, shelved: !(t.shelved ?? false)))
+                    // THE POCKET'S ONE ACTION. Remove from pocket takes the
+                    // card out of the pocket and nothing else: the task keeps
+                    // running and stays in the orchestrator. It comes back by
+                    // itself when it needs you, or when you or the Agent open
+                    // it. Deleting lives in the orchestrator, not here.
+                    Button("Remove from pocket") {
+                        model.emit(.removeFromPocket(id: t.id))
                     }
-                    Divider()
-                    // THROUGH THE CONFIRMATION, NOT PAST IT. This fired
-                    // immediately while the duplicate menu beside Next — now
-                    // gone — was the one that asked first. Consolidating to a
-                    // single menu must not consolidate to the unguarded half:
-                    // removing a card is destructive and confirms.
-                    Button("Remove…", role: .destructive) { confirmingRemoval = true }
                 } label: {
                     Image(systemName: "ellipsis").foregroundColor(Theme.textFaint)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("Hide this card from the pocket, or remove it")
+                .help("Remove this card from the pocket — it keeps running in the orchestrator")
             }
             CloseButton { model.emit(.collapsed) }
         }

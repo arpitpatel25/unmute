@@ -18,8 +18,9 @@ const MIC: PocketTaskEntry = {
   working: true, live: true, provider: 'claude', updatedAt: 9_000, recentUserTurns: ['try the quiet gate again'],
 }
 
-/** A pocket holding exactly the given tasks. Every write refuses anything else. */
-function pocket(entries: PocketTaskEntry[] = [MIC]): PocketAdapters & { asked: any[] } {
+/** A pocket holding exactly the given tasks. Every write refuses anything else
+ *  — except delete, which reaches every task Unmute holds (`orchestrator`). */
+function pocket(entries: PocketTaskEntry[] = [MIC], orchestrator: string[] = ['task-mic', 'task-elsewhere']): PocketAdapters & { asked: any[] } {
   const asked: any[] = []
   const held = (taskId: string) => entries.find(entry => entry.taskId === taskId)
   return {
@@ -33,7 +34,8 @@ function pocket(entries: PocketTaskEntry[] = [MIC]): PocketAdapters & { asked: a
       return entry.working ? { taskId: input.taskId, stopped: true } : { taskId: input.taskId, stopped: false, message: 'It was not running a turn, so there was nothing to stop.' }
     },
     async end(input) { asked.push({ op: 'end', ...input }); return held(input.taskId) ? { taskId: input.taskId, ended: true } : null },
-    async hide(input) { asked.push({ op: 'hide', ...input }); return held(input.taskId) ? { taskId: input.taskId, hidden: true } : null },
+    async removeFromPocket(input) { asked.push({ op: 'removeFromPocket', ...input }); return held(input.taskId) ? { taskId: input.taskId, removedFromPocket: true } : null },
+    async delete(input) { asked.push({ op: 'delete', ...input }); return orchestrator.includes(input.taskId) ? { taskId: input.taskId, deleted: true } : null },
   }
 }
 
@@ -54,8 +56,8 @@ test('each write acts on a pocket task and reports what it did', async () => {
   assert.deepEqual(parse(await c.call(ctx, 'task_rename', { taskId: 'task-mic', name: '  Mic fix  ' })).result, { taskId: 'task-mic', name: 'Mic fix' })
   assert.deepEqual(parse(await c.call(ctx, 'task_stop', { taskId: 'task-mic' })).result, { taskId: 'task-mic', stopped: true })
   assert.deepEqual(parse(await c.call(ctx, 'task_end', { taskId: 'task-mic' })).result, { taskId: 'task-mic', ended: true })
-  assert.deepEqual(parse(await c.call(ctx, 'task_hide', { taskId: 'task-mic' })).result, { taskId: 'task-mic', hidden: true })
-  assert.deepEqual(a.asked.map(entry => entry.op), ['rename', 'stop', 'end', 'hide'])
+  assert.deepEqual(parse(await c.call(ctx, 'task_remove_from_pocket', { taskId: 'task-mic' })).result, { taskId: 'task-mic', removedFromPocket: true })
+  assert.deepEqual(a.asked.map(entry => entry.op), ['rename', 'stop', 'end', 'removeFromPocket'])
 })
 
 test('a rename is cut to the card\'s 48 characters', async () => {
@@ -73,7 +75,7 @@ test('stopping a task that is not working is benign, not an error', async () => 
 })
 
 test('a task that is not in the pocket is refused, and the refusal says not to retry', async () => {
-  for (const tool of ['task_rename', 'task_stop', 'task_end', 'task_hide']) {
+  for (const tool of ['task_rename', 'task_stop', 'task_end', 'task_remove_from_pocket']) {
     const result = parse(await new PocketCapability(pocket()).call(ctx, tool, { taskId: 'task-elsewhere', name: 'x' }))
     assert.equal(result.ok, false, tool)
     assert.equal(result.error.code, 'not-in-pocket', tool)
@@ -82,9 +84,9 @@ test('a task that is not in the pocket is refused, and the refusal says not to r
 })
 
 test('the Agent\'s own slot is not a task, and is refused before the app is asked', async () => {
-  for (const tool of ['task_rename', 'task_stop', 'task_end', 'task_hide']) {
+  for (const tool of ['task_rename', 'task_stop', 'task_end', 'task_remove_from_pocket', 'task_delete']) {
     const a = pocket()
-    const result = parse(await new PocketCapability(a).call(ctx, tool, { taskId: 'unmute-agent', name: 'x' }))
+    const result = parse(await new PocketCapability(a).call(ctx, tool, { taskId: 'unmute-agent', name: 'x', confirmed: true }))
     assert.equal(result.error.code, 'not-a-task', tool)
     assert.deepEqual(a.asked, [], tool)
   }
@@ -109,18 +111,46 @@ test('a failure in the app is reported once, with no retry', async () => {
   assert.match(result.error.message, /Do not retry/)
 })
 
-test('only the Agent holds the pocket tools, and none of them is destructive', () => {
+test('only the Agent holds the pocket tools, and none is classed destructive', () => {
   const capability = new PocketCapability(pocket())
   assert.deepEqual([...capability.roles], ['unmute-agent'])
-  // NOT 'destructive': that needs an intent flag voice never supplies, and
-  // nothing here deletes — rename, stop, end and hide all leave the task.
+  // NOT 'destructive': that needs an intent flag voice never supplies. Rename,
+  // stop, end and remove-from-pocket all leave the task; task_delete does not,
+  // and is gated by its own `confirmed: true` instead (tested below).
   assert.deepEqual(Object.fromEntries(capability.tools.map(t => [t.name, t.consequence])), {
     pocket_list: 'read',
     task_rename: 'reversible-write',
     task_stop: 'reversible-write',
     task_end: 'reversible-write',
-    task_hide: 'reversible-write',
+    task_remove_from_pocket: 'reversible-write',
+    task_delete: 'reversible-write',
   })
+})
+
+test('task_delete refuses without confirmed: true, and never asks the app', async () => {
+  for (const input of [{ taskId: 'task-mic' }, { taskId: 'task-mic', confirmed: false }, { taskId: 'task-mic', confirmed: 'true' }]) {
+    const a = pocket()
+    const result = parse(await new PocketCapability(a).call(ctx, 'task_delete', input))
+    assert.equal(result.ok, false)
+    assert.equal(result.error.code, 'confirmation-required')
+    assert.match(result.error.message, /ask them to confirm/)
+    assert.deepEqual(a.asked, [])
+  }
+})
+
+test('task_delete reaches any task Unmute holds, not only the pocket', async () => {
+  const a = pocket([MIC], ['task-mic', 'task-elsewhere'])
+  const c = new PocketCapability(a)
+  assert.deepEqual(parse(await c.call(ctx, 'task_delete', { taskId: 'task-elsewhere', confirmed: true })).result, { taskId: 'task-elsewhere', deleted: true })
+  const missing = parse(await c.call(ctx, 'task_delete', { taskId: 'task-gone', confirmed: true }))
+  assert.equal(missing.error.code, 'not-found')
+  assert.match(missing.error.message, /Do not retry/)
+})
+
+test('task_remove_from_pocket refuses a task that is only in the orchestrator', async () => {
+  const a = pocket([MIC], ['task-mic', 'task-elsewhere'])
+  const result = parse(await new PocketCapability(a).call(ctx, 'task_remove_from_pocket', { taskId: 'task-elsewhere' }))
+  assert.equal(result.error.code, 'not-in-pocket')
 })
 
 test('an expired or non-Agent principal is refused', async () => {
@@ -134,11 +164,21 @@ test('an expired or non-Agent principal is refused', async () => {
  * pulls in the whole remote stack and cannot be imported by a unit test, so the
  * guard reads the function itself.
  */
-test('session_close hides the card and never deletes the task', () => {
+test('session_close removes the card from the pocket and never deletes the task', () => {
   const source = readFileSync(new URL('../../init.ts', import.meta.url), 'utf8')
   const start = source.indexOf('async function closeAgentSession(')
   assert.ok(start > 0)
   const body = source.slice(start, source.indexOf('\n}\n', start))
   assert.doesNotMatch(body, /\.remove\(/)
-  assert.match(body, /hideFromPocket\(taskId\)/)
+  assert.match(body, /removeFromPocket\(taskId\)/)
+})
+
+/** The Agent's delete must be the orchestrator's delete — the one remove(). */
+test('the host\'s delete action calls the same destructive remove', () => {
+  const source = readFileSync(new URL('../../init.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('  async delete(input: { taskId: string })')
+  assert.ok(start > 0)
+  const body = source.slice(start, source.indexOf('\n  },\n', start))
+  assert.match(body, /manager\.remove\(task\.id\)/)
+  assert.match(body, /NotchController\.AGENT_SLOT/)
 })

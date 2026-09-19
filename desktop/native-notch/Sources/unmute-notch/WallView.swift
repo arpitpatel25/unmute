@@ -2,7 +2,7 @@ import SwiftUI
 import WallPresentationSupport
 
 // The Orchestrator wall — group sections of cards plus the sidebar (queue /
-// one-offs / shelf), the away digest, doorbell and the
+// one-offs), the away digest, doorbell and the
 // route offer. Clicking a card emits focusTask (the voice address) and the
 // Stage takes over (StageView).
 //
@@ -32,7 +32,7 @@ struct WallView: View {
     private var data: CockpitData {
         model.cockpit ?? CockpitData(groups: [], hiddenTotal: 0, showingAll: false, todayOnly: false,
                                      queue: [], oneoffs: [],
-                                     unmuteSkills: [], skills: [], shelf: [], importable: [],
+                                     unmuteSkills: [], skills: [], importable: [],
                                      digest: nil, doorbell: true,
                                      routeOffer: nil, tmuxAvailable: false)
     }
@@ -485,26 +485,9 @@ struct WallView: View {
                         }
                     }
                 }
-                // Shelf.
-                if !data.shelf.isEmpty {
-                    railSection("Shelf · \(data.shelf.count)") {
-                        ForEach(data.shelf, id: \.id) { s in
-                            HStack(spacing: 8) {
-                                Button(action: { model.emit(.focusTask(id: s.id)) }) {
-                                    Text(s.name).font(Theme.fBody)
-                                        .foregroundColor(Theme.text).lineLimit(1)
-                                }.buttonStyle(.plain)
-                                Spacer(minLength: 0)
-                                Button(action: { model.emit(.shelve(id: s.id, shelved: false)) }) {
-                                    Image(systemName: "chevron.up")
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundColor(Theme.textFaint)
-                                }.buttonStyle(.plain).help("Unshelve — back on the wall")
-                            }
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                        }
-                    }
-                }
+                // NO SHELF. It was a second list for tasks hidden from the
+                // wall; nothing is hidden from the wall any more. A task out of
+                // the pocket is on the wall like any other.
                 Spacer(minLength: 44)
             }
             .padding(.horizontal, 14)
