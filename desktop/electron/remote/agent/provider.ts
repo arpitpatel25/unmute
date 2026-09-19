@@ -97,9 +97,25 @@ export type AgentProviderErrorCode =
   | 'provider-unavailable'
 
 /** Public errors are deliberately typed and path/driver-message free. */
+/**
+ * WHY A PROVIDER COULD NOT START, in words written for the user.
+ *
+ * Every setup failure used to surface as "The selected Agent provider is
+ * unavailable" — for a Mac that was not signed in, a company policy Codex
+ * refused, and a crash alike, so nobody could act on it. A driver throws this
+ * with a sentence it wrote itself (never raw process output, which can carry
+ * paths or credentials); that sentence travels to the chat.
+ */
+export class AgentSetupError extends Error {
+  constructor(readonly userMessage: string, detail?: string) {
+    super(detail ?? userMessage)
+    this.name = 'AgentSetupError'
+  }
+}
+
 export class AgentProviderError extends Error {
-  constructor(readonly code: AgentProviderErrorCode, readonly diagnostic?: string) {
-    super(publicErrorMessage(code))
+  constructor(readonly code: AgentProviderErrorCode, readonly diagnostic?: string, readonly reason?: string) {
+    super(reason ? `${publicErrorMessage(code)} ${reason}` : publicErrorMessage(code))
     this.name = 'AgentProviderError'
   }
 }
@@ -161,6 +177,8 @@ export type ProbeBinary = (binary: string) => Promise<boolean>
 const SAFE_ENV = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR',
   'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'COLORTERM',
+  // Where the user keeps Codex, when not ~/.codex — its login lives there.
+  'CODEX_HOME',
 ])
 
 export function buildAgentEnvironment(input: AgentStartInput): NodeJS.ProcessEnv {
@@ -585,7 +603,7 @@ function redact(value: string, input: AgentStartInput): string {
 function providerFailure(code: AgentProviderErrorCode, error: unknown, input: AgentStartInput): AgentProviderError {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
   const diagnostic = message ? [...redact(message, input)].slice(0, 500).join('') : undefined
-  return new AgentProviderError(code, diagnostic)
+  return new AgentProviderError(code, diagnostic, error instanceof AgentSetupError ? error.userMessage : undefined)
 }
 
 export interface ProviderObservation {

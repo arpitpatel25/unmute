@@ -597,7 +597,7 @@ function controllerError(error: unknown): AgentInteractionError {
   const code = dependencyCode(error)
   switch (code) {
     case 'acceptance-uncertain': return publicError('acceptance-uncertain')
-    case 'provider-unavailable': return publicError('provider-unavailable')
+    case 'provider-unavailable': return withReason(publicError('provider-unavailable'), error)
     case 'provider-crashed': return publicError('provider-crashed')
     case 'resource-pressure': return publicError('resource-pressure')
     case 'run-not-found':
@@ -620,6 +620,12 @@ function controllerError(error: unknown): AgentInteractionError {
     case 'invalid-handle': return publicError('invalid-request')
     default: return publicError('interaction-failed')
   }
+}
+
+/** Adds the provider's own account of why (AgentSetupError), when it gave one. */
+function withReason(base: AgentInteractionError, error: unknown): AgentInteractionError {
+  const reason = (error as { reason?: unknown } | null)?.reason
+  return typeof reason === 'string' && reason ? { ...base, message: `${base.message} ${reason}` } : base
 }
 
 function publicError(

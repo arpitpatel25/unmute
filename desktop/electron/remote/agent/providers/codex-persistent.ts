@@ -3,7 +3,8 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
-import type { AgentProcessDriver, AgentProcessEvent, AgentProcessLaunch } from '../provider'
+import { AgentSetupError, type AgentProcessDriver, type AgentProcessEvent, type AgentProcessLaunch } from '../provider'
+import { clampPosture, learnFromRejection, mergeRequirements, requirementsFrom, type CodexRequirements } from '../../codex/requirements'
 import { diagnostic, type DiagnosticSink } from '../../diagnostics'
 import { parseModels } from '../../codex/appserver'
 import { codexModelUnavailable } from '../modelAvailability'
@@ -13,8 +14,7 @@ import { agentModelName, markModelUnavailable, markModelWorking } from '../model
  * Give it a private, empty home instead. Only auth and native conversation
  * storage are shared; user config, plugins, hooks and saved rules are absent.
  * The host's cwd is the private Unmute runtime, never a user project. */
-export async function isolatedCodexHome(userHome: string): Promise<{ path: string; dispose(): Promise<void> }> {
-  const original = join(userHome, '.codex')
+export async function isolatedCodexHome(userHome: string, original = join(userHome, '.codex')): Promise<{ path: string; dispose(): Promise<void> }> {
   // Do not guess how to retrieve keychain-only credentials or create a login.
   await fs.access(join(original, 'auth.json')).catch(() => { throw new Error('Persistent Codex requires an existing auth.json login') })
   const path = await fs.mkdtemp(join(tmpdir(), 'unmute-agent-codex-'))
@@ -28,6 +28,80 @@ export async function isolatedCodexHome(userHome: string): Promise<{ path: strin
     }
   } catch (error) { await fs.rm(path, { recursive: true, force: true }); throw error }
   return { path, dispose: () => fs.rm(path, { recursive: true, force: true }) }
+}
+
+/**
+ * THE HOME THE AGENT'S CODEX RUNS IN.
+ *
+ * Isolated when it can be: a private home holding only a link to auth.json
+ * (isolatedCodexHome above). A login kept in the Keychain has no auth.json,
+ * and Codex files a Keychain login under the exact home folder it belongs to
+ * — measured 2026-09-20: a login made in home A reads "Not logged in" from any
+ * other home, and logged in through a symlink to A. So no private home can
+ * ever see it, and the Agent used to refuse to start on such a Mac.
+ *
+ * Then the Agent runs in the real ~/.codex, kept apart the ways Codex allows:
+ * its thread index goes to a private CODEX_SQLITE_HOME, so Agent threads stay
+ * out of the Codex app's list, and each of the user's own MCP servers is
+ * switched off by name (`-c mcp_servers={}` does not remove them — measured).
+ */
+export async function agentCodexHome(userHome: string, original = join(userHome, '.codex')): Promise<{ path: string; args: string[]; env: NodeJS.ProcessEnv; shared: boolean; dispose(): Promise<void> }> {
+  const hasAuthFile = await fs.access(join(original, 'auth.json')).then(() => true, () => false)
+  if (hasAuthFile) {
+    const isolated = await isolatedCodexHome(userHome, original)
+    return { ...isolated, args: [], env: {}, shared: false }
+  }
+  if (!await fs.stat(original).then(s => s.isDirectory(), () => false)) {
+    throw new AgentSetupError('Codex is not set up on this Mac. Open Codex and sign in, then try again.', 'no ~/.codex')
+  }
+  const config = await fs.readFile(join(original, 'config.toml'), 'utf8').catch(() => '')
+  const sqlite = await fs.mkdtemp(join(tmpdir(), 'unmute-agent-codex-state-'))
+  await fs.chmod(sqlite, 0o700)
+  return {
+    path: original,
+    // Unquoted on purpose: Codex's `-c` does not unquote a dotted key, so
+    // `mcp_servers."x".enabled` creates a broken server literally named "x"
+    // and the app-server refuses to start (measured). A name that would need
+    // quoting cannot be switched off this way and is left as it is.
+    args: userMcpServers(config).filter(name => /^[A-Za-z0-9_-]+$/.test(name)).flatMap(name => ['-c', `mcp_servers.${name}.enabled=false`]),
+    env: { CODEX_SQLITE_HOME: sqlite },
+    shared: true,
+    dispose: () => fs.rm(sqlite, { recursive: true, force: true }),
+  }
+}
+
+/** The MCP server names a Codex config.toml declares. */
+export function userMcpServers(config: string): string[] {
+  const names = new Set<string>()
+  for (const m of config.matchAll(/^\s*\[\s*mcp_servers\.(?:"([^"]+)"|([A-Za-z0-9_-]+))/gm)) names.add(m[1] ?? m[2])
+  for (const m of config.matchAll(/^\s*mcp_servers\.(?:"([^"]+)"|([A-Za-z0-9_-]+))\s*[.=]/gm)) names.add(m[1] ?? m[2])
+  names.delete('unmute')
+  return [...names]
+}
+
+/**
+ * WHAT THE AGENT ANSWERS WHEN CODEX ASKS. Where a company policy forbids
+ * "never ask", Codex runs the Agent with approvals on and asks. The Agent is
+ * read-only and nobody watches it, so: its own tool calls to Unmute's server
+ * are approved (that is the Agent's whole job, and the server is token-scoped
+ * to this conversation); everything else — commands, file changes, extra
+ * permissions, other servers' forms — is declined in the shape Codex expects
+ * (same shapes as codex/hub.ts), so the turn carries on instead of stalling.
+ */
+export function agentRequestResponse(method: string, params: any): { result: unknown } | undefined {
+  switch (method) {
+    case 'mcpServer/elicitation/request': {
+      const ours = params?.serverName === 'unmute' && params?._meta?.codex_approval_kind === 'mcp_tool_call'
+      return { result: ours ? { action: 'accept', content: {} } : { action: 'decline' } }
+    }
+    case 'item/commandExecution/requestApproval':
+    case 'item/fileChange/requestApproval': return { result: { decision: 'decline' } }
+    case 'item/permissions/requestApproval': return { result: { permissions: {}, scope: 'turn' } }
+    case 'item/tool/requestUserInput': return { result: { answers: {} } }
+    case 'execCommandApproval':
+    case 'applyPatchApproval': return { result: { decision: 'denied' } }
+    default: return undefined
+  }
 }
 
 export interface CodexAgentConnection {
@@ -156,6 +230,11 @@ export class CodexPersistentProcess implements AgentProcessDriver {
     })
     await this.connection.request('initialize', { clientInfo: { name: 'unmute-agent', version: '1' } })
     this.connection.notify('initialized', {})
+    // SAY IT WHEN THERE IS NO LOGIN, instead of failing later as "unavailable".
+    const account = await this.connection.request<{ account?: unknown; requiresOpenaiAuth?: boolean }>('account/read', {}).catch(() => null)
+    if (account && !account.account && account.requiresOpenaiAuth) {
+      throw new AgentSetupError('Codex is not signed in on this Mac. Open Codex and sign in, then try again.', 'account/read: no account')
+    }
     // CHECK BEFORE ASKING. A default this account cannot use (not on the plan,
     // retired) fails every turn; the model list says so up front.
     let model = launch.model
@@ -169,23 +248,55 @@ export class CodexPersistentProcess implements AgentProcessDriver {
       }
     }
     const resumePath = launch.session.id && launch.environment.HOME
-      ? await (this.options.resolveResumePath ?? findResumePath)(launch.session.id, launch.environment.HOME) : undefined
-    const response = await this.connection.request('thread/' + (launch.session.kind === 'resume' ? 'resume' : 'start'), {
-      ...(launch.session.id ? { threadId: launch.session.id } : {}),
-      ...(resumePath ? { path: resumePath } : {}),
-      cwd: launch.cwd, ...(model ? { model } : {}),
-      approvalPolicy: 'never', sandbox: 'read-only', developerInstructions: prompt,
-      config: {
-        model_reasoning_effort: 'medium',
-        mcp_servers: { unmute: {
-          url: launch.environment.UNMUTE_MCP_ENDPOINT,
-          bearer_token_env_var: 'UNMUTE_MCP_TOKEN', enabled: true, required: true,
-          default_tools_approval_mode: 'approve',
-        } },
-      },
-    })
-    if (!response.thread?.id || (launch.session.id && response.thread.id !== launch.session.id)
-      || response.approvalPolicy !== 'never' || response.sandbox?.type !== 'readOnly') throw new Error('Codex session posture mismatch')
+      ? await (this.options.resolveResumePath ?? ((id: string, home: string) => findResumePath(id, home, codexHomeOf(launch.environment))))(launch.session.id, launch.environment.HOME) : undefined
+    // THE MOST THIS MACHINE ALLOWS (codex/requirements.ts, as for tasks). The
+    // Agent wants read-only and never to be asked; a company policy may forbid
+    // "never" (Codex then silently applies "untrusted" — measured) or refuse it
+    // outright. Ask for what the policy permits, learn from a refusal, and
+    // accept any stricter approval Codex applies: approvals are answered by
+    // agentRequestResponse, so they cannot stall the Agent.
+    const read = requirementsFrom(await this.connection.request('configRequirements/read', {}).catch(() => null))
+    let learned: CodexRequirements | null = null
+    const asked = { approvalPolicy: 'never', sandbox: 'read-only' }
+    let response: any
+    for (let attempt = 0; ; attempt++) {
+      const posture = clampPosture(asked, mergeRequirements(read, learned))
+      try {
+        response = await this.connection.request('thread/' + (launch.session.kind === 'resume' ? 'resume' : 'start'), {
+          ...(launch.session.id ? { threadId: launch.session.id } : {}),
+          ...(resumePath ? { path: resumePath } : {}),
+          cwd: launch.cwd, ...(model ? { model } : {}),
+          approvalPolicy: posture.approvalPolicy, sandbox: posture.sandbox, developerInstructions: prompt,
+          config: {
+            model_reasoning_effort: 'medium',
+            mcp_servers: { unmute: {
+              url: launch.environment.UNMUTE_MCP_ENDPOINT,
+              bearer_token_env_var: 'UNMUTE_MCP_TOKEN', enabled: true, required: true,
+              default_tools_approval_mode: 'approve',
+            } },
+          },
+        })
+        break
+      } catch (error) {
+        const message = (error as Error).message ?? ''
+        const taught: CodexRequirements | null = attempt < 2 ? learnFromRejection(message, learned) : null
+        if (taught && JSON.stringify(clampPosture(asked, mergeRequirements(read, taught))) !== JSON.stringify(posture)) { learned = taught; continue }
+        if (learnFromRejection(message, null)) {
+          throw new AgentSetupError(`This Mac's Codex policy refused the Agent's session (${message.replace(/^-?\d+:\s*/, '').slice(0, 200)}).`, message)
+        }
+        throw error
+      }
+    }
+    if (!response.thread?.id || (launch.session.id && response.thread.id !== launch.session.id)) throw new Error('Codex session identity mismatch')
+    // Never MORE access than the Agent needs. Workspace-write is tolerated only
+    // because a policy may not allow read-only, and the cwd is the Agent's own
+    // private runtime folder, never a project.
+    if (response.sandbox?.type !== 'readOnly' && response.sandbox?.type !== 'workspaceWrite') {
+      throw new AgentSetupError('Codex applied broader access than the Unmute Agent allows, so the Agent did not start.', `sandbox ${response.sandbox?.type}`)
+    }
+    if (response.approvalPolicy !== 'never' || response.sandbox?.type !== 'readOnly') {
+      (this.options.audit ?? diagnostic)('agent-codex-posture', { asked, applied: { approvalPolicy: response.approvalPolicy, sandbox: response.sandbox?.type } })
+    }
     this.threadId = response.thread.id
     this.model = response.model
     // Identity alone is not acceptance of the next user turn.
@@ -251,14 +362,17 @@ export class CodexPersistentProcess implements AgentProcessDriver {
 
 /** Private stdio prevents another local client attaching to the Agent server. */
 async function connectStdio(launch: AgentProcessLaunch, notify: (method: string, params: any) => void, exited: () => void): Promise<CodexAgentConnection> {
-  if (!launch.environment.HOME) throw new Error('Codex login home is unavailable')
-  const isolated = await isolatedCodexHome(launch.environment.HOME)
+  if (!launch.environment.HOME) throw new AgentSetupError('Unmute could not find your home folder to start Codex.', 'no HOME')
+  const isolated = await agentCodexHome(launch.environment.HOME, codexHomeOf(launch.environment))
   let child: ChildProcessWithoutNullStreams
   try {
-    child = spawn(launch.binary, ['app-server', '--listen', 'stdio://'], {
-      cwd: launch.cwd, env: { ...launch.environment, CODEX_HOME: isolated.path }, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
+    child = spawn(launch.binary, ['app-server', ...isolated.args, '--listen', 'stdio://'], {
+      cwd: launch.cwd, env: { ...launch.environment, ...isolated.env, CODEX_HOME: isolated.path }, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     })
-  } catch (error) { await isolated.dispose(); throw error }
+  } catch (error) {
+    await isolated.dispose()
+    throw new AgentSetupError('Codex could not be started. Check that the Codex CLI is installed.', (error as Error).message)
+  }
   let serial = 0
   let closed = false
   const pending = new Map<number, { resolve(value: any): void; reject(error: Error): void; timer: NodeJS.Timeout }>()
@@ -280,14 +394,20 @@ async function connectStdio(launch: AgentProcessLaunch, notify: (method: string,
     try { message = JSON.parse(line) } catch { return }
     if (message.method) {
       if (message.id !== undefined) {
-        // The Agent has no approval escalation rail: never grant a server request.
-        send({ id: message.id, error: { code: -32601, message: 'Agent server requests are not authorized' } })
+        const answer = agentRequestResponse(message.method, message.params)
+        diagnostic('agent-codex-request', { method: message.method, answered: answer ? JSON.stringify(answer.result).slice(0, 60) : 'refused',
+          server: typeof message.params?.serverName === 'string' ? message.params.serverName : undefined })
+        if (answer) send({ id: message.id, result: answer.result })
+        else send({ id: message.id, error: { code: -32601, message: 'Agent server requests are not authorized' } })
       } else notify(message.method, message.params)
     } else if (typeof message.id === 'number') {
       const waiting = pending.get(message.id)
       if (!waiting) return
       clearTimeout(waiting.timer); pending.delete(message.id)
-      if (message.error) waiting.reject(new Error('Codex request failed')); else waiting.resolve(message.result)
+      // Keep Codex's own words: a policy refusal names what is allowed, which
+      // is exactly what the retry above learns from.
+      if (message.error) waiting.reject(new Error(`${message.error.code ?? ''}: ${message.error.message ?? 'Codex request failed'}`.replace(/^: /, '')))
+      else waiting.resolve(message.result)
     }
   })
   return {
@@ -305,7 +425,12 @@ async function connectStdio(launch: AgentProcessLaunch, notify: (method: string,
   }
 }
 
-async function findResumePath(id: string, home: string): Promise<string | undefined> {
+/** The user's Codex home: CODEX_HOME when they set one, else ~/.codex. */
+function codexHomeOf(environment: NodeJS.ProcessEnv): string {
+  return environment.CODEX_HOME || join(environment.HOME ?? '', '.codex')
+}
+
+async function findResumePath(id: string, home: string, codexDir = join(home, '.codex')): Promise<string | undefined> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Invalid Codex identity')
   const candidates: string[] = []
   async function walk(directory: string, depth: number): Promise<void> {
@@ -318,8 +443,8 @@ async function findResumePath(id: string, home: string): Promise<string | undefi
       else if (entry.isFile() && entry.name.endsWith(`${id}.jsonl`)) candidates.push(join(directory, entry.name))
     }
   }
-  await walk(join(home, '.codex', 'sessions'), 0)
-  await walk(join(home, '.codex', 'archived_sessions'), 0)
+  await walk(join(codexDir, 'sessions'), 0)
+  await walk(join(codexDir, 'archived_sessions'), 0)
   if (candidates.length > 1) throw new Error('Ambiguous Codex rollout identity')
   return candidates[0]
 }
