@@ -59,3 +59,16 @@ Module._resolveFilename = function patched(request, ...rest) {
   }
   return originalResolve.call(this, request, ...rest)
 }
+
+// The repository test install intentionally omits Electron itself. Keyboard
+// modules only need app metadata while under Node's test runner, so provide the
+// smallest test-only surface rather than making unit tests depend on Electron.
+const originalLoad = Module._load
+Module._load = function patchedLoad(request, ...rest) {
+  if (request === 'electron') {
+    try { return originalLoad.call(this, request, ...rest) } catch {
+      return { app: { isPackaged: false, getPath: () => '/tmp', getVersion: () => 'test' } }
+    }
+  }
+  return originalLoad.call(this, request, ...rest)
+}

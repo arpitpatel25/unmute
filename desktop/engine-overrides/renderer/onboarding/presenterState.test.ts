@@ -35,3 +35,13 @@ test('a new snapshot clears an old clip failure', () => {
 
   assert.equal(next.videoUnavailable, false)
 })
+
+test('gesture phase follows authoritative onboarding receipts', () => {
+  const listening = reducePresenter(emptyPresenter(), {
+    type: 'snapshot', action: 'notes-dictation', clipId: 'dictation-explain-v1', caption: 'Tap Function.',
+    card: { kind: 'speak', phrase: 'My first Unmute dictation.', detail: 'Listening' }, phase: 'listening',
+  })
+
+  assert.equal(listening.phase, 'listening')
+  assert.equal(listening.card?.detail, 'Listening')
+})

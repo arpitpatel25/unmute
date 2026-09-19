@@ -5,6 +5,7 @@ export const ACTION_ORDER: readonly ActionId[] = [
   'privacy',
   'microphone',
   'accessibility',
+  'function-key',
   'system-audio',
   'provider-choice',
   'notes-dictation',
@@ -23,6 +24,7 @@ export const PERMISSION_ACTIONS: readonly ActionId[] = [
   'privacy',
   'microphone',
   'accessibility',
+  'function-key',
   'system-audio',
 ] as const
 
@@ -45,6 +47,10 @@ export const CHAPTERS: Readonly<Record<ActionId, ChapterDefinition>> = {
     action: 'accessibility', clipId: 'permission-accessibility-v1', caption: 'Next, allow Accessibility. This lets Unmute recognize its shortcuts and place finished text wherever your cursor is.',
     card: { kind: 'permission', title: 'Accessibility' },
   },
+  'function-key': {
+    action: 'function-key', clipId: 'function-key-readiness-v1', caption: 'Before dictation, make sure macOS leaves the Function key available to Unmute. In Keyboard Settings, set “Press Globe key to” to “Do Nothing,” then come back and tap Function once so Unmute can verify it.',
+    card: { kind: 'repair', title: 'Make Function available', detail: 'Set “Press 🌐 key to” to “Do Nothing,” then tap Function once.' },
+  },
   'system-audio': {
     action: 'system-audio', clipId: 'permission-system-audio-v1', caption: 'Finally, allow System Audio. Unmute uses it only when you deliberately start Notetaker.',
     card: { kind: 'permission', title: 'System Audio' },
@@ -54,23 +60,23 @@ export const CHAPTERS: Readonly<Record<ActionId, ChapterDefinition>> = {
     card: { kind: 'provider', title: 'Connect your agent', detail: 'Unmute needs at least one of these tools to run agent tasks.' },
   },
   'notes-dictation': {
-    action: 'notes-dictation', clipId: 'dictation-explain-v1', caption: 'Let’s start with dictation. We’ve opened Apple Notes for you. Put your cursor in the note, hold the Function key, say the sentence shown here, and release.',
+    action: 'notes-dictation', clipId: 'dictation-explain-v1', caption: 'Let’s start with dictation. We’ve opened Apple Notes for you. Put your cursor in the note, tap Function once, say the sentence shown here, then tap Function again to submit.',
     card: { kind: 'speak', phrase: 'My first Unmute dictation.' },
   },
   'clipboard-capture': {
-    action: 'clipboard-capture', clipId: 'capture-clipboard-v1', caption: 'You can also give Unmute context while you speak. Hold Function, begin saying the phrase shown here, copy the highlighted text, and then release. Unmute will combine both in the same result.',
+    action: 'clipboard-capture', clipId: 'capture-clipboard-v1', caption: 'You can also give Unmute context while you speak. Tap Function once, say the phrase shown here, copy the highlighted text, then tap Function again to submit. Unmute will combine both in the same result.',
     card: { kind: 'speak', phrase: 'Add this copied detail to my note.' },
   },
   'screenshot-capture': {
-    action: 'screenshot-capture', clipId: 'capture-screenshot-v1', caption: 'The same thing works with screenshots. Hold Function, begin saying the phrase shown here, take a normal macOS screenshot, and then release.',
+    action: 'screenshot-capture', clipId: 'capture-screenshot-v1', caption: 'The same thing works with screenshots. Tap Function once, say the phrase shown here, take a normal macOS screenshot, then tap Function again to submit.',
     card: { kind: 'speak', phrase: 'Include this screenshot in my note.' },
   },
   'orchestrator-task': {
-    action: 'orchestrator-task', clipId: 'orchestrator-explain-v1', caption: 'Orchestrator turns a spoken request into a real task for Claude Code or Codex. Press Right Option and say the request shown here. Unmute will send it to your chosen agent and keep the task available for you.',
+    action: 'orchestrator-task', clipId: 'orchestrator-explain-v1', caption: 'Starting a new Claude Code or Codex session—or finding the right existing one—creates friction between having a thought and acting on it. Orchestrator removes that friction. If you’re reading a tweet, article, or document and a question comes to mind, select the useful context, tap Right Option, say your question, then tap Right Option again. Unmute creates or continues the task without making you manage terminals or sessions. Let’s try it now.',
     card: { kind: 'speak', phrase: 'Create hello-unmute.txt containing My first Unmute task.' },
   },
   'agent-task-link': {
-    action: 'agent-task-link', clipId: 'agent-explain-v1', caption: 'The Unmute Agent helps you find, create, and continue work. It understands your Unmute tasks, sessions, and notes. Double-tap Right Command, say the follow-up shown here, and then open the task link it gives you.',
+    action: 'agent-task-link', clipId: 'agent-explain-v1', caption: 'The Unmute Agent helps you find, create, and continue work. It understands your Unmute tasks, sessions, and notes. Double-tap Right Command, say the follow-up shown here, tap Right Command once to submit, and then open the task link it gives you.',
     card: { kind: 'speak', phrase: "Create a follow-up task to add today's date to hello-unmute.txt." },
   },
   'notetaker-save': {
@@ -91,7 +97,11 @@ export const CHAPTERS: Readonly<Record<ActionId, ChapterDefinition>> = {
   },
 }
 
-export function presenterSnapshot(action: ActionId): PresenterCommand {
+export function presenterSnapshot(action: ActionId, gesture?: { started: boolean; stopped: boolean }): PresenterCommand {
   const chapter = CHAPTERS[action]
-  return { type: 'snapshot', action, clipId: chapter.clipId, caption: chapter.caption, card: chapter.card }
+  const phase = gesture?.stopped ? 'processing' : gesture?.started ? 'listening' : 'ready'
+  const card = chapter.card?.kind === 'speak' && phase !== 'ready'
+    ? { ...chapter.card, detail: phase === 'listening' ? 'Listening — perform the action, then tap the shortcut again to submit.' : 'Processing…' }
+    : chapter.card
+  return { type: 'snapshot', action, clipId: chapter.clipId, caption: chapter.caption, card, phase }
 }

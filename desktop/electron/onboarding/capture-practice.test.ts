@@ -11,6 +11,8 @@ test('a screenshot observed but omitted from delivery does not advance', () => {
 
 test('the matching captured item delivered advances', () => {
   let progress = initialProgress({ action: 'clipboard-capture' })
+  progress = reduceOnboarding(progress, { type: 'shortcut-started', lane: 'dictation' })
+  progress = reduceOnboarding(progress, { type: 'shortcut-stopped', lane: 'dictation' })
   for (const event of captureEvents({ captureId: 'c2', observed: [{ id: 'p1', kind: 'clipboard-text' }], deliveredItemIds: ['p1'], targetBundleId: 'com.apple.Notes' })) progress = reduceOnboarding(progress, event)
   assert.equal(progress.action, 'screenshot-capture')
 })

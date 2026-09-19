@@ -7,6 +7,7 @@ export type ActionId =
   | 'privacy'
   | 'microphone'
   | 'accessibility'
+  | 'function-key'
   | 'system-audio'
   | 'provider-choice'
   | 'notes-dictation'
@@ -28,12 +29,18 @@ export interface OnboardingProgress {
   observedCaptureItemIds: string[]
   taskIds: { orchestrator?: string; agent?: string }
   meetingId?: string
+  gesture?: { lane: ShortcutLane; started: boolean; stopped: boolean }
   updatedAt: number
 }
+
+export type ShortcutLane = 'dictation' | 'orchestrator' | 'agent'
 
 export type OnboardingEvent =
   | { type: 'capability-satisfied'; action: ActionId }
   | { type: 'provider-selected'; provider: ProviderId }
+  | { type: 'function-key-observed' }
+  | { type: 'shortcut-started'; lane: ShortcutLane }
+  | { type: 'shortcut-stopped'; lane: ShortcutLane }
   | { type: 'transcription-ready'; captureId: string }
   | { type: 'dictation-delivered'; captureId: string; target: string }
   | { type: 'capture-observed'; captureId: string; kind: 'clipboard-text' | 'screenshot'; itemId: string }
@@ -65,6 +72,7 @@ export type PresenterCommand = {
   clipId: string
   caption: string
   card: PresenterCard
+  phase?: 'ready' | 'listening' | 'processing'
 }
 
 export interface ChapterDefinition {

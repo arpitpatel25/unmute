@@ -29,7 +29,15 @@ function completeCurrent(progress: OnboardingProgress, patch: Partial<Onboarding
     action: nextAction(progress.action),
     captureId: undefined,
     observedCaptureItemIds: [],
+    gesture: undefined,
   }
+}
+
+function expectedLane(action: ActionId) {
+  if (action === 'notes-dictation' || action === 'clipboard-capture' || action === 'screenshot-capture') return 'dictation'
+  if (action === 'orchestrator-task') return 'orchestrator'
+  if (action === 'agent-task-link') return 'agent'
+  return null
 }
 
 function observeCapture(progress: OnboardingProgress, event: Extract<OnboardingEvent, { type: 'capture-observed' }>): OnboardingProgress {
@@ -67,12 +75,22 @@ export function reduceOnboarding(progress: OnboardingProgress, event: Onboarding
     return completeCurrent(progress)
   }
 
+  if (progress.action === 'function-key' && event.type === 'function-key-observed') return completeCurrent(progress)
+
+  const lane = expectedLane(progress.action)
+  if (event.type === 'shortcut-started' && event.lane === lane && !progress.gesture?.started) {
+    return { ...progress, gesture: { lane: event.lane, started: true, stopped: false } }
+  }
+  if (event.type === 'shortcut-stopped' && event.lane === lane && progress.gesture?.started && !progress.gesture.stopped) {
+    return { ...progress, gesture: { ...progress.gesture, stopped: true } }
+  }
+
   if (progress.action === 'provider-choice' && event.type === 'provider-selected') {
     return completeCurrent(progress, { provider: event.provider })
   }
 
   if (progress.action === 'notes-dictation' && event.type === 'dictation-delivered'
-    && event.target === NOTES_BUNDLE_ID) {
+    && event.target === NOTES_BUNDLE_ID && progress.gesture?.started && progress.gesture.stopped) {
     return completeCurrent(progress)
   }
 
@@ -80,6 +98,7 @@ export function reduceOnboarding(progress: OnboardingProgress, event: Onboarding
 
   if ((progress.action === 'clipboard-capture' || progress.action === 'screenshot-capture')
     && event.type === 'capture-delivered'
+    && progress.gesture?.started && progress.gesture.stopped
     && progress.captureId === event.captureId
     && progress.observedCaptureItemIds.some(itemId => event.includedItemIds.includes(itemId))) {
     return completeCurrent(progress)
@@ -89,7 +108,8 @@ export function reduceOnboarding(progress: OnboardingProgress, event: Onboarding
     if (event.type === 'task-created' && event.source === 'orchestrator') {
       return { ...progress, taskIds: { ...progress.taskIds, orchestrator: event.taskId } }
     }
-    if (event.type === 'task-completed' && event.taskId === progress.taskIds.orchestrator) {
+    if (event.type === 'task-completed' && event.taskId === progress.taskIds.orchestrator
+      && progress.gesture?.started && progress.gesture.stopped) {
       return completeCurrent(progress)
     }
   }
@@ -98,7 +118,8 @@ export function reduceOnboarding(progress: OnboardingProgress, event: Onboarding
     if (event.type === 'agent-task-linked' && event.href.length > 0) {
       return { ...progress, taskIds: { ...progress.taskIds, agent: event.taskId } }
     }
-    if (event.type === 'task-link-opened' && event.taskId === progress.taskIds.agent) {
+    if (event.type === 'task-link-opened' && event.taskId === progress.taskIds.agent
+      && progress.gesture?.started && progress.gesture.stopped) {
       return completeCurrent(progress)
     }
   }

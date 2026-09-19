@@ -51,6 +51,8 @@ test('replay resets durable progress and opens the presenter', async () => {
 test('orchestrator completion advances only after output verification', async () => {
   const h = harness(initialProgress({ action: 'orchestrator-task', taskIds: { orchestrator: 't1' } }))
   await h.runtime.boot()
+  await h.runtime.accept({ type: 'shortcut-started', lane: 'orchestrator' })
+  await h.runtime.accept({ type: 'shortcut-stopped', lane: 'orchestrator' })
   h.runtime.setVerifyOrchestratorTask(async () => false)
   await h.runtime.accept({ type: 'task-completed', taskId: 't1' })
   assert.equal(h.runtime.snapshot().action, 'orchestrator-task')

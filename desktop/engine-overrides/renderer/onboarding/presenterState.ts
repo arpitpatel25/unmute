@@ -14,10 +14,11 @@ export type PresenterState = {
   caption: string
   card: PresenterCard
   videoUnavailable: boolean
+  phase?: 'ready' | 'listening' | 'processing'
 }
 
 export type PresenterMessage =
-  | { type: 'snapshot'; action: string; clipId: string; caption: string; card: PresenterCard }
+  | { type: 'snapshot'; action: string; clipId: string; caption: string; card: PresenterCard; phase?: 'ready' | 'listening' | 'processing' }
   | { type: 'video-unavailable' }
 
 export function emptyPresenter(): PresenterState {

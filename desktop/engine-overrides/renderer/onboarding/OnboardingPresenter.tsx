@@ -41,8 +41,8 @@ function CompanionCard({ card }: { card: NonNullable<PresenterCard> }) {
       <ProviderButton provider="codex" card={card} />
     </div>}
     {(card.kind === 'permission' || card.kind === 'repair') &&
-      <button className="ob-presenter__primary" type="button" onClick={() => send({ type: card.kind === 'repair' ? 'retry' : 'continue' })}>
-        {card.kind === 'repair' ? 'Try again' : 'Continue'}
+      <button className="ob-presenter__primary" type="button" onClick={() => send({ type: card.kind === 'repair' ? 'open-settings' : 'continue' })}>
+        {card.kind === 'repair' ? 'Open Keyboard Settings' : 'Continue'}
       </button>}
     {card.kind === 'success' && <button className="ob-presenter__primary" type="button" onClick={() => send({ type: card.title === 'One last step' ? 'open-sign-in' : 'complete-orientation' })}>
       {card.title === 'One last step' ? 'Sign in' : 'Explore Unmute'}

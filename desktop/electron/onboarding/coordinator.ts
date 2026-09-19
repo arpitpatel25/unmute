@@ -23,7 +23,8 @@ export class OnboardingCoordinator {
   }
 
   snapshot(): PresenterCommand {
-    return presenterSnapshot(this.currentProgress().action)
+    const progress = this.currentProgress()
+    return presenterSnapshot(progress.action, progress.gesture)
   }
 
   dispatch(event: OnboardingEvent): Promise<PresenterCommand> {

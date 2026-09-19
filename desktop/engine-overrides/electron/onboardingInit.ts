@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import { app, BrowserWindow, ipcMain, screen, systemPreferences } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, shell, systemPreferences } from 'electron'
 
 import { AllowanceGrantStore, OnboardingAllowanceSession, InstallationIdentityStore, setOnboardingAllowanceSession } from './paywall/onboarding/allowance'
 import { OnboardingCoordinator } from './paywall/onboarding/coordinator'
@@ -15,6 +15,7 @@ import { ProgressStore } from './paywall/onboarding/progress-store'
 import { OnboardingRuntime } from './paywall/onboarding/register'
 import { onOnboardingReceipt } from './paywall/onboarding/receipts'
 import type { ActionId, OnboardingEvent, PresenterCommand, ProviderId, ProviderUiStatus } from './paywall/onboarding/types'
+import { keyboardManager } from './keyboard'
 import { preflightNotetakerSystemAudio } from './notetakerInit'
 import { setOnboardingTaskWorkspace } from './paywall/remote/init'
 
@@ -51,6 +52,7 @@ function satisfiedPermissions(progressCompleted: readonly ActionId[]): ActionId[
   if (progressCompleted.includes('privacy')) result.push('privacy')
   if (systemPreferences.getMediaAccessStatus('microphone') === 'granted') result.push('microphone')
   if (systemPreferences.isTrustedAccessibilityClient(false)) result.push('accessibility')
+  if (progressCompleted.includes('function-key')) result.push('function-key')
   // macOS exposes no non-prompting ScreenCaptureKit audio probe. Once the real
   // tap succeeded, preserve that checkpoint; the Notetaker start remains the
   // authoritative runtime check if the permission is later revoked.
@@ -65,6 +67,9 @@ export async function initOnboarding(
   navigate: (destination: 'orchestrator' | 'notetaker' | 'account') => void,
 ): Promise<OnboardingRuntime> {
   activeRuntime?.dispose()
+  // The first-run curriculum has one deterministic input contract.
+  keyboardManager.setDictationKey('fn')
+  keyboardManager.setActivationMode('tap-toggle')
   const root = path.join(app.getPath('userData'), 'onboarding')
   const workspace = path.join(root, 'workspace')
   await prepareOnboardingWorkspace(workspace)
@@ -144,6 +149,9 @@ export async function initOnboarding(
   }
 
   const configureAction = async (command: PresenterCommand): Promise<void> => {
+    keyboardManager.setFunctionReadinessProbe(command.action === 'function-key'
+      ? () => { void runtime.accept({ type: 'function-key-observed' }).then(configureAction) }
+      : null)
     const usesWorkspace = command.action === 'orchestrator-task' || command.action === 'agent-task-link'
     setOnboardingTaskWorkspace(usesWorkspace ? workspace : null)
     if (command.action === 'notes-dictation') {
@@ -152,6 +160,22 @@ export async function initOnboarding(
     if (command.action === 'provider-choice') presentProviderChoice()
   }
   afterReceipt = () => configureAction(runtime.snapshot())
+  keyboardManager.on('keyboard', event => {
+    const mapped = event.type === 'session-start' && event.mode === 'dictation'
+      ? { type: 'shortcut-started', lane: 'dictation' } as const
+      : event.type === 'session-stop' && event.mode === 'dictation'
+        ? { type: 'shortcut-stopped', lane: 'dictation' } as const
+        : event.type === 'remote-start'
+          ? { type: 'shortcut-started', lane: 'orchestrator' } as const
+          : event.type === 'remote-stop'
+            ? { type: 'shortcut-stopped', lane: 'orchestrator' } as const
+            : event.type === 'agent-start'
+              ? { type: 'shortcut-started', lane: 'agent' } as const
+              : event.type === 'agent-stop'
+                ? { type: 'shortcut-stopped', lane: 'agent' } as const
+                : null
+    if (mapped) void runtime.accept(mapped).then(configureAction)
+  })
   await configureAction(runtime.snapshot())
   void probeProviders().then(value => {
     if (!providers) providers = value
@@ -196,6 +220,9 @@ export async function initOnboarding(
   ipcMain.on('onboarding:presenter-action', async (_event, value: unknown) => {
     const action = value as { type?: string; provider?: ProviderId }
     if (action.type === 'continue' || action.type === 'retry') await advancePermission()
+    if (action.type === 'open-settings' && runtime.snapshot().action === 'function-key') {
+      await shell.openExternal('x-apple.systempreferences:com.apple.Keyboard-Settings.extension')
+    }
     if (action.type === 'complete-orientation' && runtime.snapshot().action === 'product-orientation') {
       const result = await runtime.completeOrientation()
       await configureAction(result)

@@ -14,11 +14,32 @@ test('delivery, not transcription, completes Notes dictation', () => {
   progress = reduceOnboarding(progress, { type: 'transcription-ready', captureId: 'c1' })
   assert.equal(progress.action, 'notes-dictation')
 
+  progress = reduceOnboarding(progress, { type: 'shortcut-started', lane: 'dictation' })
+  progress = reduceOnboarding(progress, { type: 'shortcut-stopped', lane: 'dictation' })
+
   progress = reduceOnboarding(progress, {
     type: 'dictation-delivered',
     captureId: 'c1',
     target: 'com.apple.Notes',
   })
+  assert.equal(progress.action, 'clipboard-capture')
+})
+
+test('Function readiness and dictation require real ordered shortcut receipts', () => {
+  let progress = atAction('function-key')
+  progress = reduceOnboarding(progress, { type: 'shortcut-started', lane: 'dictation' })
+  assert.equal(progress.action, 'function-key')
+  progress = reduceOnboarding(progress, { type: 'function-key-observed' })
+  assert.equal(progress.action, 'system-audio')
+
+  progress = atAction('notes-dictation')
+  progress = reduceOnboarding(progress, { type: 'dictation-delivered', captureId: 'c1', target: 'com.apple.Notes' })
+  assert.equal(progress.action, 'notes-dictation')
+  progress = reduceOnboarding(progress, { type: 'shortcut-stopped', lane: 'dictation' })
+  assert.equal(progress.action, 'notes-dictation')
+  progress = reduceOnboarding(progress, { type: 'shortcut-started', lane: 'dictation' })
+  progress = reduceOnboarding(progress, { type: 'shortcut-stopped', lane: 'dictation' })
+  progress = reduceOnboarding(progress, { type: 'dictation-delivered', captureId: 'c1', target: 'com.apple.Notes' })
   assert.equal(progress.action, 'clipboard-capture')
 })
 
@@ -66,7 +87,7 @@ test('boot revalidation advances when every permission is now satisfied', () => 
   const progress = atAction('system-audio')
   const next = reduceOnboarding(progress, {
     type: 'boot-revalidated',
-    satisfied: ['welcome', 'privacy', 'microphone', 'accessibility', 'system-audio'],
+    satisfied: ['welcome', 'privacy', 'microphone', 'accessibility', 'function-key', 'system-audio'],
   })
 
   assert.equal(next.action, 'provider-choice')
@@ -83,6 +104,8 @@ test('unrelated authoritative events cannot skip the current action', () => {
 
 test('orchestrator requires its created task to complete', () => {
   let progress = atAction('orchestrator-task')
+  progress = reduceOnboarding(progress, { type: 'shortcut-started', lane: 'orchestrator' })
+  progress = reduceOnboarding(progress, { type: 'shortcut-stopped', lane: 'orchestrator' })
   progress = reduceOnboarding(progress, {
     type: 'task-created',
     source: 'orchestrator',
@@ -100,6 +123,8 @@ test('orchestrator requires its created task to complete', () => {
 
 test('agent prose is not proof; its structured task link must be opened', () => {
   let progress = atAction('agent-task-link')
+  progress = reduceOnboarding(progress, { type: 'shortcut-started', lane: 'agent' })
+  progress = reduceOnboarding(progress, { type: 'shortcut-stopped', lane: 'agent' })
   progress = reduceOnboarding(progress, { type: 'agent-text', text: 'I created the task.' })
   assert.equal(progress.action, 'agent-task-link')
 

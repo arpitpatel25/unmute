@@ -61,6 +61,17 @@ const liveLanes = (events: Emitted[]): string[] => {
 const lifecycle = (events: Emitted[]): string[] =>
   events.map((e) => e.type).filter((t) => t !== 'key-state')
 
+test('Function readiness consumes one tap without starting dictation', () => {
+  const { km, events } = fresh()
+  let observed = 0
+  km.setFunctionReadinessProbe(() => { observed += 1 })
+
+  fn(km)
+
+  assert.equal(observed, 1)
+  assert.equal(lifecycle(events).includes('session-start'), false)
+})
+
 describe('the pocket chord — right Command held, right Option tapped', () => {
   // The native listener decides this, not keyboard.ts: it sees right Command
   // already down when right Option arrives, so it emits `pocket-chord` and
