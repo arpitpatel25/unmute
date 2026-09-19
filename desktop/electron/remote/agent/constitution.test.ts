@@ -118,6 +118,15 @@ test('what is open, and the undo, are both named', () => {
   assert.match(AGENT_PRINCIPLES, /rather than something to ask them to do/)
 })
 
+test('pocket tasks are matched from pocket_list, and none-found is said plainly', () => {
+  assert.match(AGENT_PRINCIPLES, /call mcp__unmute__pocket_list first/)
+  assert.match(AGENT_PRINCIPLES, /Several: ask which, naming\s+them/)
+  assert.match(AGENT_PRINCIPLES, /there is no such task in the pocket/)
+  // "Remove from pocket" hides; it is never a delete.
+  assert.match(AGENT_PRINCIPLES, /mcp__unmute__task_hide for 'remove it from the pocket'/)
+  assert.match(AGENT_PRINCIPLES, /takes the card away and deletes nothing/)
+})
+
 test('there is one retrieval rule and it points at the transcripts', () => {
   // The digest tier was removed with the summary sweep, so the ladder is flat:
   // no record to read first, and nothing to fall back FROM. A lingering
@@ -248,6 +257,7 @@ const TOOL_NAMES = [
   'memory_list', 'memory_store', 'memory_search', 'memory_get',
   'task_create', 'task_status', 'session_resume', 'session_fork',
   'sessions_open', 'session_close',
+  'pocket_list', 'task_rename', 'task_stop', 'task_end', 'task_hide',
   'unmute_history_search', 'unmute_history_copy',
   'notetaker_list', 'notetaker_read', 'notetaker_search', 'notetaker_open',
 ]

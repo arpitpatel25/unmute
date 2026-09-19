@@ -111,6 +111,7 @@ import { HistoryCapability } from './agent/capabilities/history'
 import { NotetakerCapability, type NotetakerAdapters } from './agent/capabilities/notetaker'
 import { HelpCapability } from './agent/capabilities/help'
 import { SessionsCapability } from './agent/capabilities/sessions'
+import { PocketCapability } from './agent/capabilities/pocket'
 import { locateSession } from './agent/sessions/locate'
 import { SessionTurnIndex } from './agent/sessions/turn-index'
 import { AgentContinuationService } from './agent/sessions/service'
@@ -816,14 +817,98 @@ function openAgentSessions(limit?: number) {
     })
 }
 
-/** The undo. Removing a card is an Unmute operation, not a provider one: the
- *  transcript is untouched and the session can be resumed again by id. Closing
- *  one that is already gone is a success, so a correction never fails twice. */
+/** The undo. It takes the card out of the pocket and DELETES NOTHING: this
+ *  used to call manager.remove() — the UI's confirmed "Remove…" — while the
+ *  tool and the constitution both promised only the card would go. Hiding is
+ *  what the promise describes, and a resume brings the card back. Closing one
+ *  that is already gone is a success, so a correction never fails twice. */
 async function closeAgentSession(taskId: string) {
   if (!manager) throw new Error('Unmute Remote is not initialized')
   if (!manager.get(taskId)) return { taskId, closed: false }
-  await manager.remove(taskId)
+  hideFromPocket(taskId)
   return { taskId, closed: true }
+}
+
+function hideFromPocket(taskId: string): void {
+  if (notchController) notchController.setPocketHidden(taskId, true)
+  else manager?.setShelved(taskId, true)
+}
+
+/** The task behind a pocket card, or undefined when it is not in the pocket.
+ *  The Agent's own slot is never a task. */
+function pocketTask(taskId: string) {
+  if (!manager || taskId === NotchController.AGENT_SLOT) return undefined
+  if (!(notchController?.pocketTaskIds() ?? new Set<string>()).has(taskId)) return undefined
+  return manager.get(taskId)
+}
+
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
+
+/** What pocket_list returns: enough about each card to match "the one where I
+ *  fixed the mic" in one call. Recent turns come from what the task already
+ *  holds in memory — its chat blocks, else its legacy conversation. */
+function listPocketTasks() {
+  if (!manager) return []
+  const ids = [...(notchController?.pocketTaskIds() ?? new Set<string>())].filter(id => id !== NotchController.AGENT_SLOT)
+  return ids
+    .map(id => manager!.get(id))
+    .filter((task): task is NonNullable<typeof task> => !!task)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .map(task => {
+      const workspace = groupRegistry?.get(task.groupId) || groupRegistry?.find(task.group)
+      const said = task.blocks?.length
+        ? task.blocks.flatMap(block => block.kind === 'message' && block.role === 'user' ? [block.text] : [])
+        : (task.conversation ?? []).flatMap(turn => turn.role === 'user' ? [turn.text] : [])
+      const summary = task.result?.summary?.trim()
+      return {
+        taskId: task.id,
+        sessionId: task.codexRolloutId ?? task.sessionId,
+        ...(task.name ? { title: task.name } : {}),
+        intent: clip(task.intent ?? '', 300),
+        state: task.state,
+        working: task.state === 'processing' || task.state === 'stuck',
+        live: manager!.isLive(task.id),
+        ...(task.agent === 'claude' || task.agent === 'codex' ? { provider: task.agent } : {}),
+        ...(task.cwd ? { cwd: task.cwd } : {}),
+        ...(workspace ? { workspace: workspace.label } : {}),
+        updatedAt: task.updatedAt,
+        ...(summary ? { result: clip(summary, 300) } : {}),
+        recentUserTurns: said.map(text => text.trim()).filter(Boolean).slice(-3).map(text => clip(text, 240)),
+      }
+    })
+}
+
+/** The card's own actions, for the Agent — each calls what the card's button
+ *  calls. Each returns null when the task is not in the pocket, which the
+ *  capability turns into a plain refusal. */
+const pocketActions = {
+  async rename(input: { taskId: string; name: string }) {
+    const task = pocketTask(input.taskId)
+    if (!task || !manager) return null
+    const name = input.name.trim().slice(0, 48)
+    manager.setName(task.id, name)
+    return { taskId: task.id, name: manager.get(task.id)?.name ?? name }
+  },
+  async stop(input: { taskId: string }): Promise<{ taskId: string; stopped: boolean; message?: string } | null> {
+    const task = pocketTask(input.taskId)
+    if (!task || !manager) return null
+    if (task.state !== 'processing' && task.state !== 'stuck') {
+      return { taskId: task.id, stopped: false, message: 'It was not running a turn, so there was nothing to stop.' }
+    }
+    manager.kill(task.id)
+    return { taskId: task.id, stopped: true }
+  },
+  async end(input: { taskId: string }) {
+    const task = pocketTask(input.taskId)
+    if (!task || !manager) return null
+    return { taskId: task.id, ended: await manager.endSession(task.id) }
+  },
+  async hide(input: { taskId: string }) {
+    const task = pocketTask(input.taskId)
+    if (!task) return null
+    hideFromPocket(task.id)
+    return { taskId: task.id, hidden: true }
+  },
 }
 const turnIndex = new SessionTurnIndex()
 let continuationInteractionId: string | undefined
@@ -857,6 +942,14 @@ const agentContinuations = new AgentContinuationService({
  *  the LIVE capture a question (which lane is it on?) can, without threading
  *  `deps` through every helper. Set once by initRemote; opaque by contract. */
 let sessionManagerRef: SessionManagerLike | null = null
+let keyboardManagerRef: KeyboardManagerLike | null = null
+/** The person's current dictation settings, for unmute_help's shortcut answers. */
+function helpSettings() {
+  return {
+    dictationKey: keyboardManagerRef?.getDictationKey?.() ?? settings.get('dictationKey'),
+    activationMode: keyboardManagerRef?.getActivationMode?.() ?? 'tap-toggle' as const,
+  }
+}
 
 type UnmuteAgentUnavailableReason =
   | 'disabled'
@@ -1485,10 +1578,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
     ])
     const registry = new CapabilityRegistry([
       new MemoryCapability(memory),
-      new HelpCapability(() => ({
-        dictationKey: deps.keyboardManager.getDictationKey?.() ?? settings.get('dictationKey'),
-        activationMode: deps.keyboardManager.getActivationMode?.() ?? 'tap-toggle',
-      })),
+      new HelpCapability(helpSettings),
       // WHAT THE USER ACTUALLY SAID, LATELY. The one thing a coding session
       // cannot reach: it lives in Unmute's own archive, not on the filesystem.
       // Read-only, and pasting reuses copyHistoryToClipboard — the same call
@@ -1533,6 +1623,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
         fork: input => agentContinuations.fork(input),
         send: input => relayIntoSession(input),
       }),
+      new PocketCapability({ list: async () => listPocketTasks(), ...pocketActions }),
       // What the user recorded. Optional: only present when the notetaker
       // feature wired its adapters in via RemoteInitDeps.notetaker — a build
       // without it simply never registers this capability, the same as any
@@ -4314,6 +4405,12 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
   if (method === 'sessions.createWorkspace') return createAgentWorkspace(args[0])
   if (method === 'sessions.open') return openAgentSessions((args[0] as { limit?: number } | undefined)?.limit)
   if (method === 'sessions.close') return closeAgentSession((args[0] as { taskId: string }).taskId)
+  if (method === 'pocket.list') return listPocketTasks()
+  if (method === 'pocket.rename') return pocketActions.rename(args[0])
+  if (method === 'pocket.stop') return pocketActions.stop(args[0])
+  if (method === 'pocket.end') return pocketActions.end(args[0])
+  if (method === 'pocket.hide') return pocketActions.hide(args[0])
+  if (method === 'help.settings') return helpSettings()
   if (method === 'handoff.cardForSession') return agentCardForSession(String(args[0]))
   if (method === 'handoff.createTask') {
     if (!manager) throw new Error('Unmute Remote is not initialized')
@@ -5121,6 +5218,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
   notetakerAdapters = deps.notetaker ?? null
   sessionManagerRef = deps.sessionManager
+  keyboardManagerRef = deps.keyboardManager
   runHeadlessSummary = deps.runHeadless ?? null
   captureHistory.cleanup()
   if (manager) return manager
