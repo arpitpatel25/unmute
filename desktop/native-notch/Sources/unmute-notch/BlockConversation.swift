@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import ConversationSupport
 
@@ -58,7 +59,12 @@ struct BlockConversation: View {
     @State private var loadingOlder = false
     @State private var olderAnchor: BlockTurn?
 
-    @State private var atBottom = true
+    /// Whether a streaming tick may move the reader to the live end. Held in a
+    /// reference box, NOT as @State: nothing is drawn from it, so no scroll
+    /// report or wheel event can invalidate the body — the measure/set loops
+    /// BottomProximity.swift describes need state that reads AND changes
+    /// layout, and this changes none. See LiveEndFollow.
+    @State private var follow = LiveEndFollowBox()
     /// Viewport height, so the reporter's measurement can be turned into a
     /// distance-below-the-fold rather than a raw coordinate.
     @State private var viewportHeight: CGFloat = 0
@@ -92,6 +98,7 @@ struct BlockConversation: View {
         let task = id
         positionedTask = nil
         _ = restoreGate.begin(task: task, savedAnchor: nil)
+        follow.state.reset()
         DispatchQueue.main.async {
             if let target = initialConversationAnchor(turns: turns) { proxy.scrollTo(target, anchor: .top) }
             DispatchQueue.main.async {
@@ -148,15 +155,20 @@ struct BlockConversation: View {
                             Color.clear
                                 .frame(height: 1)
                                 .id(BLOCK_BOTTOM)
-                                .background(BottomDistanceReporter { end in
-                                    // viewportHeight - end = points of content
-                                    // still below the fold. Folded through the
-                                    // hysteresis so the Jump control cannot move
-                                    // the value across its own boundary.
-                                    atBottom = isAtBottom(was: atBottom, distance: viewportHeight - end)
-                                })
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        // The column's frame in viewport space: its maxY is the
+                        // end marker's (the marker is the last row, and the
+                        // Jump padding is applied outside), its minY moves only
+                        // when the reader scrolls. bottomDistance owns the sign.
+                        .background(BottomDistanceReporter { frame in
+                            follow.state.measure(contentTop: frame.minY, contentEnd: frame.maxY,
+                                                 viewportHeight: viewportHeight,
+                                                 restoring: !restoreGate.mayFollow(task: id))
+                        })
+                        // The reader's hands on the scroller. Zero-size in
+                        // effect (a background) and transparent to the mouse.
+                        .background(UserScrollObserver(follow: follow))
                         // Cross-fade the tail rather than letting it pop: it
                         // appears and disappears on someone else's schedule
                         // (the first block back), and an unannounced jump in
@@ -191,10 +203,11 @@ struct BlockConversation: View {
                     // file was rewritten to avoid. The hysteresis in
                     // BottomProximity exists because the control's presence
                     // moved the content it was measuring; a control that is
-                    // always there cannot move anything. `atBottom` now feeds
+                    // always there cannot move anything. The at-bottom flag (LiveEndFollow) feeds
                     // one thing only — whether new turns may scroll a reader —
                     // and the dead zone still earns its place there.
                     JumpToLatest(status: liveStatus) {
+                        follow.state.jumpToLatest()
                         withAnimation(.easeOut(duration: 0.2)) {
                             proxy.scrollTo(BLOCK_BOTTOM, anchor: .bottom)
                         }
@@ -212,13 +225,14 @@ struct BlockConversation: View {
                         return
                     }
                     if positionedTask != id { restorePosition(proxy); return }
-                    guard atBottom else { return }   // do not yank a reader back
+                    // Do not yank a reader back, nor fight one mid-scroll.
+                    guard restoreGate.mayFollow(task: id), follow.state.mayFollow(at: now()) else { return }
                     withAnimation(.easeOut(duration: 0.18)) {
                         proxy.scrollTo(BLOCK_BOTTOM, anchor: .bottom)
                     }
                 }
                 .onChange(of: streamExtent) { _ in
-                    guard restoreGate.mayFollow(task: id), atBottom else { return }
+                    guard restoreGate.mayFollow(task: id), follow.state.mayFollow(at: now()) else { return }
                     proxy.scrollTo(BLOCK_BOTTOM, anchor: .bottom)
                 }
                 .onChange(of: id) { _ in restorePosition(proxy) }
@@ -271,6 +285,8 @@ struct BlockConversation: View {
         return last.meta.summary
     }
 
+    private func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
     private var streamExtent: Int {
         guard let last = turns.last else { return 0 }
         let replyCount = last.reply?.text?.utf16.count ?? 0
@@ -295,16 +311,17 @@ struct BlockConversation: View {
 /// visibility can. The threshold logic — and the dead zone that makes the
 /// control unable to flip its own condition — lives with the pure function.
 private struct BottomDistanceReporter: View {
-    let onMeasure: (CGFloat) -> Void
+    let onMeasure: (CGRect) -> Void
 
     var body: some View {
         GeometryReader { geo in
             Color.clear
                 .preference(
                     key: BottomDistanceKey.self,
-                    // Distance from this marker (the content's end) up to the
-                    // bottom edge of the scroll viewport. Zero when they meet.
-                    value: geo.frame(in: .named(BLOCK_SCROLL)).maxY
+                    // The transcript column's frame in the scroll viewport's
+                    // space. maxY - viewportHeight is what is left below the
+                    // fold; see bottomDistance for the sign.
+                    value: geo.frame(in: .named(BLOCK_SCROLL))
                 )
         }
         .onPreferenceChange(BottomDistanceKey.self, perform: onMeasure)
@@ -312,8 +329,109 @@ private struct BottomDistanceReporter: View {
 }
 
 private struct BottomDistanceKey: PreferenceKey {
-    static var defaultValue: CGFloat = .nan
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    static var defaultValue: CGRect = CGRect(x: CGFloat.nan, y: .nan, width: .nan, height: .nan)
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+}
+
+/// The follow decision's home. A class so writes from scroll reports and wheel
+/// events never invalidate the view (see BlockConversation.follow).
+final class LiveEndFollowBox {
+    var state = LiveEndFollow()
+}
+
+/// THE READER'S HANDS ON THE SCROLLER.
+///
+/// Two sources, because neither covers everything:
+///   * NSScrollView's live-scroll notifications cover trackpad gestures (through
+///     their momentum tail) and dragging the scroller knob — but a classic
+///     mouse wheel posts none.
+///   * A local scroll-wheel monitor covers every wheel/trackpad event, momentum
+///     included, and is what lets an UPWARD movement leave the bottom at once
+///     instead of after 120pt of hysteresis.
+///
+/// Same containment approach as PocketSwipeArea: transparent to the mouse
+/// (`hitTest` nil), reads the app's event stream, accepts only events inside
+/// its VISIBLE rect — it sits behind the whole transcript column, so the
+/// visible rect is the part of the column the viewport shows. Never consumes
+/// an event.
+private struct UserScrollObserver: NSViewRepresentable {
+    let follow: LiveEndFollowBox
+
+    func makeNSView(context: Context) -> UserScrollObserverView {
+        let view = UserScrollObserverView()
+        view.follow = follow
+        return view
+    }
+
+    func updateNSView(_ view: UserScrollObserverView, context: Context) {
+        view.follow = follow
+    }
+
+    static func dismantleNSView(_ view: UserScrollObserverView, coordinator: ()) {
+        view.stopWatching()
+    }
+}
+
+final class UserScrollObserverView: NSView {
+    var follow: LiveEndFollowBox?
+    private var monitor: Any?
+    private var observers: [NSObjectProtocol] = []
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window == nil ? stopWatching() : startWatching()
+    }
+
+    private func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    private func startWatching() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            self?.handle(event)
+            return event
+        }
+        let center = NotificationCenter.default
+        // object: nil and filter by ancestry — SwiftUI's scroll view is private,
+        // and matching on "an NSScrollView that contains me" needs no guess at
+        // its class or at how deep in it this view is hosted.
+        observers = [
+            center.addObserver(forName: NSScrollView.willStartLiveScrollNotification, object: nil, queue: .main) { [weak self] note in
+                guard let self, self.isInside(note) else { return }
+                self.follow?.state.liveScrollBegan(at: self.now())
+            },
+            center.addObserver(forName: NSScrollView.didEndLiveScrollNotification, object: nil, queue: .main) { [weak self] note in
+                guard let self, self.isInside(note) else { return }
+                self.follow?.state.liveScrollEnded(at: self.now())
+            },
+        ]
+    }
+
+    func stopWatching() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
+    }
+
+    private func isInside(_ note: Notification) -> Bool {
+        guard let scroll = note.object as? NSScrollView else { return false }
+        return isDescendant(of: scroll)
+    }
+
+    private func handle(_ event: NSEvent) {
+        guard let window, event.window === window else { return }
+        // Inside the viewport, not merely inside the (much taller) column.
+        let inside: Bool
+        if let scroll = enclosingScrollView {
+            inside = scroll.bounds.contains(scroll.convert(event.locationInWindow, from: nil))
+        } else {
+            inside = visibleRect.contains(convert(event.locationInWindow, from: nil))
+        }
+        guard inside else { return }
+        follow?.state.userScrolled(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, at: now())
+    }
 }
 
 private struct JumpToLatest: View {
