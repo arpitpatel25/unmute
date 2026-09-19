@@ -1,4 +1,6 @@
 import { createLogger } from '../log'
+import { devFields } from '../curator-devlog'
+import { classifyRetrieval } from './devlog'
 import type { AgentTrace } from './trace'
 import type { AgentProcessLaunch } from './provider'
 
@@ -91,6 +93,9 @@ export function agentTraceSinks(provider: string): {
           log.event('tool-call', {
             provider, sessionId, tool: trace.tool, id: trace.id,
             inputChars: trace.input?.length, ...(trace.input ? { input: trace.input } : {}),
+            // DEV-ONLY: which kind of lookup this was, and whether it could
+            // only see part of what it asked for (see agent/devlog.ts).
+            ...devFields({ retrieval: classifyRetrieval(trace.tool, trace.input ?? '') }),
           })
           return
         case 'toolResult':

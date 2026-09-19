@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises'
 import { join } from 'node:path'
 import { defaultIndexRoot, type IndexedSession, type IndexedTurn } from './turn-index'
+import { devLogEnabled } from '../../curator-devlog'
+import { devTrace } from '../devlog'
 
 /**
  * EVERY SESSION THAT MATCHES, RANKED — NEVER THE FIRST FEW THAT HAPPENED TO.
@@ -210,17 +212,39 @@ interface Corpus {
 }
 
 const corpora = new Map<string, Corpus>()
+/** One load at a time per index. Without this the warm-up and the first
+ *  search both found no corpus and each built one (caught by the dev trace:
+ *  two first-loads, 6.6 s instead of 3), and two loads appending to the same
+ *  corpus from the same byte offset would index every new turn twice. */
+const loading = new Map<string, Promise<Corpus>>()
 
-async function loadTurns(root: string): Promise<Corpus> {
+function loadTurns(root: string): Promise<Corpus> {
+  const previous = loading.get(root) ?? Promise.resolve(undefined)
+  const next = previous.catch(() => undefined).then(() => loadTurnsNow(root))
+  loading.set(root, next)
+  void next.finally(() => { if (loading.get(root) === next) loading.delete(root) }).catch(() => {})
+  return next
+}
+
+async function loadTurnsNow(root: string): Promise<Corpus> {
+  const started = Date.now()
   const path = join(root, 'turns.jsonl')
   const stat = await fs.stat(path).catch(() => null)
   let corpus = corpora.get(root)
-  if (!stat) { corpus = { size: 0, turns: [], vocabulary: new Map(), unreadable: 0 }; corpora.set(root, corpus); return corpus }
+  if (!stat) {
+    devTrace('index-search.corpus', { root, reason: 'no-index-file' })
+    corpus = { size: 0, turns: [], vocabulary: new Map(), unreadable: 0 }; corpora.set(root, corpus); return corpus
+  }
+  const reason = !corpus ? 'first-load' : stat.size < corpus.size ? 'shrunk-rebuild' : stat.size > corpus.size ? 'appended' : 'unchanged'
+  const before = { turns: corpus?.turns.length ?? 0, bytes: corpus?.size ?? 0 }
   if (!corpus || stat.size < corpus.size) {
     corpus = { size: 0, turns: [], vocabulary: new Map(), unreadable: 0, ...(corpus?.sessions ? { sessions: corpus.sessions } : {}) }
     corpora.set(root, corpus)
   }
-  if (stat.size === corpus.size) return corpus
+  if (stat.size === corpus.size) {
+    devTrace('index-search.corpus', { reason, turns: corpus.turns.length, bytes: corpus.size, ms: Date.now() - started })
+    return corpus
+  }
 
   const handle = await fs.open(path, 'r')
   let chunk: string
@@ -229,7 +253,10 @@ async function loadTurns(root: string): Promise<Corpus> {
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, corpus.size)
     // Stop at the last complete line; a half-written one is read next time.
     const end = buffer.subarray(0, bytesRead).lastIndexOf(0x0a)
-    if (end < 0) return corpus
+    if (end < 0) {
+      devTrace('index-search.corpus', { reason: 'partial-line-only', pendingBytes: bytesRead, turns: corpus.turns.length })
+      return corpus
+    }
     chunk = buffer.subarray(0, end + 1).toString('utf8')
     corpus.size += end + 1
   } finally { await handle.close().catch(() => {}) }
@@ -247,6 +274,12 @@ async function loadTurns(root: string): Promise<Corpus> {
       if (at) at.push(index); else corpus.vocabulary.set(word, [index])
     }
   }
+  devTrace('index-search.corpus', {
+    reason, fileBytes: stat.size, readFromByte: before.bytes, bytesRead: corpus.size - before.bytes,
+    pendingPartialBytes: stat.size - corpus.size,
+    turnsBefore: before.turns, turnsAdded: corpus.turns.length - before.turns, turns: corpus.turns.length,
+    vocabulary: corpus.vocabulary.size, unreadable: corpus.unreadable, ms: Date.now() - started,
+  })
   return corpus
 }
 
@@ -257,6 +290,7 @@ async function loadSessions(root: string, corpus: Corpus): Promise<Map<string, I
   const stat = await fs.stat(path).catch(() => null)
   if (!stat) return new Map()
   if (corpus.sessions && corpus.sessions.size === stat.size && corpus.sessions.mtimeMs === stat.mtimeMs) return corpus.sessions.byId
+  const started = Date.now()
   const byId = new Map<string, IndexedSession>()
   let raw = ''
   try { raw = await fs.readFile(path, 'utf8') } catch { return byId }
@@ -268,6 +302,7 @@ async function loadSessions(root: string, corpus: Corpus): Promise<Map<string, I
     } catch { /* one bad line is not a bad file */ }
   }
   corpus.sessions = { size: stat.size, mtimeMs: stat.mtimeMs, byId }
+  devTrace('index-search.sessions-loaded', { sessions: byId.size, bytes: stat.size, ms: Date.now() - started })
   return byId
 }
 
@@ -327,9 +362,17 @@ export async function searchTurnIndex(input: TurnSearchInput, root: string = def
   const limit = Math.min(MAX_PAGE, Math.max(1, input.limit ?? DEFAULT_PAGE))
   const cursor = Math.max(0, input.cursor ?? 0)
 
+  const started = Date.now()
   const corpus = await loadTurns(root)
   const described = await loadSessions(root, corpus)
+  const loadedAt = Date.now()
   const close = closeMatches(corpus, terms)
+  const closedAt = Date.now()
+  // DEV-ONLY: how each term actually matched, which is where a bad variant or
+  // a noisy respelling ("hardness" finding every "harness") shows up.
+  const perTerm = devLogEnabled()
+    ? new Map(terms.map(term => [term, { exact: 0, joined: 0, close: 0 }]))
+    : undefined
 
   const bySession = new Map<string, TurnSearchSession>()
   const allSessions = new Set<string>()
@@ -348,6 +391,7 @@ export async function searchTurnIndex(input: TurnSearchInput, root: string = def
     const matches = matchTurn(turn, index, terms, close)
     if (!matches.length) continue
     matchedTurns++
+    if (perTerm) for (const match of matches) perTerm.get(match.term)![match.kind]++
 
     const best = matches.reduce((a, b) => (TIER[b.kind] > TIER[a.kind] ? b : a))
     let entry = bySession.get(turn.s)
@@ -402,6 +446,33 @@ export async function searchTurnIndex(input: TurnSearchInput, root: string = def
 
   const page = ranked.slice(cursor, cursor + limit)
   const next = cursor + page.length
+  if (devLogEnabled()) {
+    devTrace('index-search.search', {
+      terms: terms.map(term => ({ raw: term.raw, norm: term.norm, joined: term.joined, slack: term.slack })),
+      perTerm: terms.map(term => ({
+        term: term.raw, ...perTerm!.get(term)!,
+        // The vocabulary words a respelling accepted — read these to judge
+        // whether close matching found the person or found noise.
+        closeWords: [...new Set(close.get(term)?.values() ?? [])].filter(word => word !== term.norm).slice(0, 25),
+      })),
+      searchedTurns: corpus.turns.length, searchedSessions: allSessions.size,
+      matchedTurns, matchedSessions: ranked.length,
+      byTier: {
+        exact: ranked.filter(s => s.match === 'exact').length,
+        joined: ranked.filter(s => s.match === 'joined').length,
+        close: ranked.filter(s => s.match === 'close').length,
+      },
+      secondary: ranked.filter(isSecondary).length,
+      cursor, limit, returned: page.length, remaining: Math.max(0, ranked.length - next),
+      // The ranking as the Agent will see it, with why each is where it is.
+      ranking: ranked.slice(cursor, cursor + limit).map((s, i) => ({
+        rank: cursor + i + 1, sessionId: s.sessionId, match: s.match, secondary: isSecondary(s),
+        lastMatchAt: new Date(s.lastMatchAt).toISOString(), matchedTurns: s.matchedTurns,
+        terms: s.matchedTerms, provider: s.provider ?? null, cwd: s.cwd ?? null,
+      })),
+      ms: { load: loadedAt - started, close: closedAt - loadedAt, match: Date.now() - closedAt, total: Date.now() - started },
+    })
+  }
   return {
     searched: {
       turns: corpus.turns.length, sessions: allSessions.size,
@@ -424,5 +495,9 @@ function isSecondary(entry: TurnSearchSession): boolean {
 /** Prepare the index ahead of the first question, so the first search of a
  *  process does not pay the one-time ~3 s it takes to read 28 MB. */
 export function warmTurnSearch(root: string = defaultIndexRoot()): void {
-  void loadTurns(root).then(corpus => loadSessions(root, corpus)).catch(() => {})
+  const started = Date.now()
+  devTrace('index-search.warm-started', { root })
+  void loadTurns(root).then(corpus => loadSessions(root, corpus))
+    .then(sessions => devTrace('index-search.warm-done', { sessions: sessions.size, ms: Date.now() - started }))
+    .catch(error => devTrace('index-search.warm-failed', { error: String(error), ms: Date.now() - started }))
 }

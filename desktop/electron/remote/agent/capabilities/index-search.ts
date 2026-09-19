@@ -8,6 +8,7 @@ import {
   DEFAULT_PAGE, MAX_PAGE, MAX_TERM_LENGTH, MAX_TERMS,
   searchTurnIndex, type TurnSearchInput, type TurnSearchResult,
 } from '../sessions/turn-search'
+import { devTrace } from '../devlog'
 
 /**
  * The turn index, searched completely.
@@ -78,6 +79,9 @@ function ok(result: unknown): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify({ ok: true, result }) }] }
 }
 function fail(code: string, message: string): ToolResult {
+  // DEV-ONLY: a refusal the Agent will then have to route around — the
+  // registry logs that a call failed, this says which rule refused it.
+  devTrace('index-search.refused', { code, message })
   return {
     content: [{ type: 'text', text: JSON.stringify({ ok: false, error: { code, message, retryable: false } }) }],
     isError: true,
@@ -125,7 +129,8 @@ export class IndexSearchCapability implements CapabilityModule {
         ...(typeof cursor === 'number' ? { cursor } : {}),
         ...(typeof limit === 'number' ? { limit } : {}),
       })
-    } catch {
+    } catch (error) {
+      devTrace('index-search.read-failed', { terms, error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) })
       return fail('search-failed', 'The session index could not be read. Grep ~/.unmute/remote/session-index/turns.jsonl instead.')
     }
     return ok({

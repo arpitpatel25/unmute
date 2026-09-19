@@ -160,3 +160,15 @@ test('distance is bounded and exact', () => {
   assert.equal(withinDistance('tanmay', 'tanmee', 1), false)
   assert.equal(withinDistance('onboarding', 'onbording', 2), true)
 })
+
+test('searches racing each other build the index once and never duplicate a turn', async () => {
+  const root = await index([turn(1, 1, 'Tanmay one'), turn(2, 2, 'Tanmay two')])
+  const results = await Promise.all([1, 2, 3, 4].map(() => searchTurnIndex({ terms: ['Tanmay'] }, root)))
+  for (const result of results) {
+    assert.equal(result.searched.turns, 2)
+    assert.equal(result.matchedTurns, 2)
+  }
+  await fs.appendFile(join(root, 'turns.jsonl'), JSON.stringify(turn(3, 3, 'Tanmay three')) + '\n')
+  const after = await Promise.all([1, 2, 3].map(() => searchTurnIndex({ terms: ['Tanmay'] }, root)))
+  for (const result of after) assert.equal(result.searched.turns, 3)
+})

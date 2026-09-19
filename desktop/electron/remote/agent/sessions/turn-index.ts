@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { writeFileAtomic } from '../../atomic-file'
 import { cwdFromPrefix, defaultRoots, readSessionProvenance, type Harness, type SessionProvenance, type SessionRoots } from './locate'
+import { devTrace } from '../devlog'
 
 /**
  * WHAT THE USER SAID, ALL OF IT, AS A FILE.
@@ -315,6 +316,8 @@ export class SessionTurnIndex {
   private running = false
   private again = false
   private loaded = false
+  /** DEV-ONLY: turns appended during the current pass, for the pass trace. */
+  private appended = 0
 
   constructor(deps: TurnIndexDeps = {}) {
     this.roots = deps.roots ?? defaultRoots()
@@ -369,18 +372,27 @@ export class SessionTurnIndex {
   }
 
   private async pass(): Promise<void> {
+    const started = this.now()
     await fs.mkdir(this.root, { recursive: true, mode: 0o700 })
     await this.load()
     let budget = PASS_BUDGET
     let dirty = false
+    let files = 0
+    this.appended = 0
     for (const [harness, dir] of [['claude', this.roots.claudeProjects], ['codex', this.roots.codexSessions]] as const) {
       for (const path of await this.transcripts(dir)) {
-        if (budget <= 0) { this.again = true; return }
+        if (budget <= 0) {
+          devTrace('turn-index.pass', { files, bytes: PASS_BUDGET - budget, turnsAppended: this.appended, budgetExhausted: true, ms: this.now() - started })
+          this.again = true; return
+        }
         const consumed = await this.ingest(path, harness, budget).catch(() => 0)
-        if (consumed > 0) { budget -= consumed; dirty = true }
+        if (consumed > 0) { budget -= consumed; dirty = true; files++ }
       }
     }
-    if (dirty) await this.flush()
+    if (dirty) {
+      await this.flush()
+      devTrace('turn-index.pass', { files, bytes: PASS_BUDGET - budget, turnsAppended: this.appended, sessions: this.sessions.size, ms: this.now() - started })
+    }
   }
 
   /** No cap. The 2,000-file ceiling in the old catalog silently hid ~1,087 of
@@ -476,6 +488,7 @@ export class SessionTurnIndex {
 
     if (offset === start) return 0
     if (lines.length) await fs.appendFile(this.paths.turns, lines.join('') , { mode: 0o600 })
+    this.appended += lines.length
     this.cursors.set(path, { offset, size: stat.size })
     this.bump(id, lines.length, times)
     return consumed

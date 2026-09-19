@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { CapabilityRegistry } from './capabilities/registry'
+import { devInteractionEnded, devInteractionStarted, devProviderTool, devTrace } from './devlog'
 import type {
   CaptureAttachmentSource,
   InteractionAttachmentHandles,
@@ -216,6 +217,9 @@ export class UnmuteAgentController {
     let source: AgentInteractionSource = 'provider'
     let provider: AgentProviderId | undefined
     let finalOutcome: AgentInteractionOutcome = 'failed'
+    // DEV-ONLY bookkeeping for the interaction summary (devlog.ts).
+    let devFinalText: string | undefined
+    let devError: string | undefined
     let journaled = false
     let providerTurnAccepted = false
     try {
@@ -233,12 +237,22 @@ export class UnmuteAgentController {
       if (provider !== 'claude' && provider !== 'codex') {
         throw new ControllerFailure('provider-unavailable')
       }
+      devInteractionStarted(interactionId, { runId, provider, transcript: validated.transcript, resumed: !!validated.priorRunId })
       const runtime = validateRuntime(this.options.runtime())
       const recent = (await this.options.supervisor.recentExchanges())
         .filter(exchange => (validated.priorRunId ?? context?.carryoverRunId) === exchange.runId)
         .slice(-MAX_RECENT_EXCHANGES)
       const capabilities = this.options.capabilities.tools(principal)
       const transcript = providerTranscript(validated, handles, recent, capabilities, context?.handoff)
+      devTrace('interaction.prompt', {
+        interactionId, runId, provider,
+        tools: capabilities.map(tool => tool.name),
+        hasIndexSearch: capabilities.some(tool => tool.name === 'index_search'),
+        recentExchanges: recent.length,
+        attachments: handles.length,
+        handoff: !!context?.handoff,
+        promptChars: transcript.length,
+      })
 
       await this.emit({
         interactionId,
@@ -271,6 +285,7 @@ export class UnmuteAgentController {
       const completion = await session.completion
       await pump
       finalOutcome = completion.outcome
+      devFinalText = completion.finalText
       const presentation = this.options.classifyPresentation?.({
         input: validated,
         runId,
@@ -327,6 +342,7 @@ export class UnmuteAgentController {
       }
     } catch (error) {
       const failure = controllerError(error)
+      devError = failure.code
       if (!journaled) {
         try {
           await this.appendExchange({
@@ -360,6 +376,11 @@ export class UnmuteAgentController {
         error: failure,
       }
     } finally {
+      devInteractionEnded(interactionId, {
+        outcome: finalOutcome,
+        ...(devFinalText ? { finalText: devFinalText } : {}),
+        ...(devError ? { error: devError } : {}),
+      })
       interaction.active = false
       // A rejected resume may target a run whose earlier interaction is still
       // active. Close only a token belonging to a turn accepted above; the
@@ -390,6 +411,8 @@ export class UnmuteAgentController {
   ): Promise<void> {
     try {
       for await (const activity of session.activity) {
+        // DEV-ONLY: the raw tool call, before it is reduced to a UI phrase.
+        if (activity.detail) devProviderTool(interactionId, activity.detail.tool, activity.detail.input)
         await this.emit({
           interactionId,
           agentRunId: session.runId,

@@ -44,7 +44,13 @@ export interface AgentActivity {
   sequence: number
   kind: AgentActivityKind
   summary: string
+  /** DEV-ONLY: the raw tool and its input, so a dev build can see whether the
+   *  Agent searched the index whole or grepped a capped slice of it. Present
+   *  only when devLogEnabled(); never shown to the person. See devlog.ts. */
+  detail?: AgentActivityDetail
 }
+
+export interface AgentActivityDetail { tool: string; input: string }
 
 export interface AgentCompletion {
   outcome: 'completed' | 'interrupted' | 'failed'
@@ -134,7 +140,7 @@ function publicErrorMessage(code: AgentProviderErrorCode): string {
 
 export type AgentProcessEvent =
   | { type: 'handle'; sessionId: string; observed?: boolean; model?: string }
-  | { type: 'activity'; kind: AgentActivityKind; summary: string }
+  | { type: 'activity'; kind: AgentActivityKind; summary: string; detail?: AgentActivityDetail }
   | { type: 'completion'; outcome: AgentCompletion['outcome']; finalText?: string; failure?: AgentCompletion['failure']; notice?: string }
   | { type: 'observer-failure' }
   | { type: 'terminal-output'; chunk: string }
@@ -516,6 +522,12 @@ export class CliProviderRuntime implements AgentProvider {
               sequence: ++live.sequence,
               kind: event.kind,
               summary: redact(event.summary, live.input),
+              // Paths are kept — a path IS the evidence of where it looked —
+              // but the run's MCP token never leaves.
+              ...(event.detail ? { detail: {
+                tool: event.detail.tool,
+                input: live.input.mcp.token ? event.detail.input.split(live.input.mcp.token).join('[redacted]') : event.detail.input,
+              } } : {}),
             })
           }
           continue

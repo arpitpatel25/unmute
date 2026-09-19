@@ -13,6 +13,7 @@ import {
   ExecutorBackedAgentProcess,
   probeCli,
   type AgentProcessEvent,
+  type AgentActivityDetail,
   type AgentProcessFactory,
   type AgentProcessLaunch,
   type ProbeBinary,
@@ -21,6 +22,7 @@ import {
 import { agentRuntimeMode, type AgentRuntimeMode } from './claude-headless'
 import { CodexHeadlessProcess } from './codex-headless'
 import { CodexPersistentProcess } from './codex-persistent'
+import { devLogEnabled } from '../../curator-devlog'
 
 export interface CodexCliProviderOptions {
   binary?: string
@@ -496,6 +498,17 @@ function emitCodexEvent(
   emit: (event: AgentProcessEvent) => void,
   lastMessage: string,
 ): string {
+  // DEV-ONLY. The Unmute Agent on Codex does most of its looking inside a
+  // JavaScript `exec` cell — `tools.exec_command({ cmd: "rg -m 50 … turns.jsonl" })`
+  // — which reaches the rollout as a function call and never as an
+  // exec_command event. Without this, a dev build could not tell index_search
+  // from a capped grep on Codex at all. Emitted as ordinary tool activity, so
+  // the only thing a dev build shows differently is one more "using a tool".
+  if (event.type === 'response_item' && devLogEnabled()) {
+    const call = codexCallDetail(event.payload)
+    if (call) emit({ type: 'activity', kind: 'tool', summary: 'using a tool', detail: call })
+    return lastMessage
+  }
   if (event.type !== 'event_msg') return lastMessage
   const kind = event.payload?.type
   const message = typeof event.payload?.message === 'string'
@@ -513,9 +526,34 @@ function emitCodexEvent(
   }
   else if (kind === 'turn_aborted') emit({ type: 'completion', outcome: 'interrupted' })
   else if (/^(mcp_tool_call|patch_apply|web_search|exec_command)_(begin|end)$/.test(kind ?? '')) {
-    emit({ type: 'activity', kind: 'tool', summary: codexActivity(kind!) })
+    const detail = devLogEnabled() && kind?.endsWith('_begin') ? codexEventDetail(kind, event.payload) : undefined
+    emit({ type: 'activity', kind: 'tool', summary: codexActivity(kind!), ...(detail ? { detail } : {}) })
   }
   return lastMessage
+}
+
+function stringify(value: unknown): string {
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'string') return value
+  try { return JSON.stringify(value) } catch { return String(value) }
+}
+
+/** A model-issued call in the rollout: `exec`, `shell`, a custom tool. */
+function codexCallDetail(payload: any): AgentActivityDetail | undefined {
+  const type = payload?.type
+  if (type !== 'function_call' && type !== 'custom_tool_call' && type !== 'local_shell_call') return undefined
+  const tool = typeof payload.name === 'string' ? payload.name : type
+  return { tool, input: stringify(payload.arguments ?? payload.input ?? payload.action) }
+}
+
+/** The begin half of a Codex tool event, with what it was asked to do. */
+function codexEventDetail(kind: string, payload: any): AgentActivityDetail | undefined {
+  if (kind.startsWith('exec_command')) return { tool: 'exec_command', input: stringify(payload?.command ?? payload?.parsed_cmd) }
+  if (kind.startsWith('mcp_tool_call')) {
+    const invocation = payload?.invocation ?? {}
+    return { tool: String(invocation.tool ?? 'mcp'), input: stringify(invocation.arguments) }
+  }
+  return undefined
 }
 
 function codexActivity(kind: string): string {

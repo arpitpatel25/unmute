@@ -18,6 +18,7 @@ import {
   type AgentRuntimeMode,
 } from './claude-headless'
 import { agentTraceSinks } from '../traceLog'
+import { devLogEnabled } from '../../curator-devlog'
 
 export interface ClaudeCodeProviderOptions {
   binary?: string
@@ -98,10 +99,19 @@ export function claudeHookObserver(source: ClaudeHookEventSource): ProviderEvent
   }
 }
 
+function stringify(value: unknown): string {
+  if (value === undefined) return ''
+  if (typeof value === 'string') return value
+  try { return JSON.stringify(value) } catch { return String(value) }
+}
+
 function mapHookEvent(event: HookEvent): AgentProcessEvent | null {
   switch (event.kind) {
     case 'prompt-submitted': return { type: 'activity', kind: 'progress', summary: 'turn started' }
-    case 'tool-used': return { type: 'activity', kind: 'tool', summary: event.tool ? `using ${event.tool}` : 'using a tool' }
+    case 'tool-used': return {
+      type: 'activity', kind: 'tool', summary: event.tool ? `using ${event.tool}` : 'using a tool',
+      ...(devLogEnabled() && event.tool ? { detail: { tool: event.tool, input: stringify(event.toolInput) } } : {}),
+    }
     case 'turn-ended': return { type: 'completion', outcome: 'completed', ...(event.lastMessage ? { finalText: event.lastMessage } : {}) }
     case 'waiting': return { type: 'activity', kind: 'waiting', summary: 'waiting for you' }
     case 'ask-opened': return { type: 'activity', kind: 'waiting', summary: 'waiting for your answer' }
