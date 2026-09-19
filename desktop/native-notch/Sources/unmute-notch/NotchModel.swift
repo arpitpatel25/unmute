@@ -95,6 +95,11 @@ final class NotchModel: ObservableObject {
 
     // The fronted task (attention strip + task surface).
     @Published var task: TaskDetail? = nil
+    /// The task whose title is being edited in the expanded view. Set by the
+    /// pen (or a click on the title) there, and by the pocket's pen BEFORE it
+    /// expands the card, so the editor opens as the card lands. Cleared on
+    /// commit, on Escape, and when the editor goes away.
+    @Published var renamingTaskId: String? = nil
     @Published private(set) var taskConversationRows: [ConversationRow] = []
 
     // The wall.

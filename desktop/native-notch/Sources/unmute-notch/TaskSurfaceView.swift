@@ -176,7 +176,26 @@ struct TaskSurfaceView: View {
             //
             // Its ABSENCE is the useful half. Speak with no chip showing and
             // the words are going to the router to become a new task.
-            title(t).lineLimit(1)
+            // RENAMING WHERE YOU READ THE NAME. Names are voice addresses, and
+            // fixing a bad one used to need the dashboard. The Agent's own card
+            // is not renameable — its name is the product's.
+            if t.id != "unmute-agent", model.renamingTaskId == t.id {
+                TaskTitleEditor(model: model, taskId: t.id, current: t.title)
+                    .id(t.id)
+            } else if t.id != "unmute-agent" {
+                title(t).lineLimit(1)
+                    .onTapGesture { model.renamingTaskId = t.id }
+                    .help("Click to rename — names are voice addresses")
+                Button { model.renamingTaskId = t.id } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundColor(Theme.textFaint)
+                }
+                .buttonStyle(.plain)
+                .help("Rename")
+            } else {
+                title(t).lineLimit(1)
+            }
             StatusLabel(status: t.status)
             if let e = t.elapsed { NumText(text: e) }
             Spacer(minLength: 8)
@@ -282,5 +301,40 @@ struct TaskSurfaceView: View {
             }
         }
         .padding(.top, 10)
+    }
+}
+
+/// The title, editable. Return commits through the same `.rename` the
+/// dashboard uses; Escape cancels (AppController's key monitor routes it here
+/// before it can step the surface down); an empty or unchanged name is no
+/// change. The text is seeded once on appear — the card is keyed by id, so a
+/// card switch builds a fresh editor rather than carrying one name onto another.
+private struct TaskTitleEditor: View {
+    @ObservedObject var model: NotchModel
+    let taskId: String
+    let current: String
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Name", text: $text)
+            .textFieldStyle(.plain)
+            .font(Theme.fTitle).foregroundColor(Theme.text)
+            .focused($focused)
+            .frame(maxWidth: 260)
+            .onSubmit(commit)
+            .onExitCommand { model.renamingTaskId = nil }
+            .onAppear {
+                text = current
+                DispatchQueue.main.async { focused = true }
+            }
+            .onDisappear { if model.renamingTaskId == taskId { model.renamingTaskId = nil } }
+    }
+
+    private func commit() {
+        // 48 = MAX_TASK_NAME on the main side, which clamps as well.
+        let v = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(48))
+        if !v.isEmpty, v != current { model.emit(.rename(id: taskId, name: v)) }
+        if model.renamingTaskId == taskId { model.renamingTaskId = nil }
     }
 }

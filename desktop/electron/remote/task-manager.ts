@@ -168,6 +168,8 @@ import {
  * and the thing you were doing is still there.
  */
 export const DEFAULT_WARM_MS = 12 * 60 * 60_000
+/** Longest name a deliberate rename keeps (notch rows are sized for it). */
+export const MAX_TASK_NAME = 48
 
 const log = createLogger('task-manager')
 
@@ -203,6 +205,10 @@ export interface Task {
    *  dispatch. The UI shows this instead of the full intent; undefined until it
    *  lands (UI falls back to a truncated intent). */
   name?: string
+  /** The name was chosen deliberately (the user renamed it, or the Agent did on
+   *  their behalf). Automatic namers — router, late label, Claude Desktop's own
+   *  title, session metadata fills — never overwrite a locked name. Persisted. */
+  nameSetByUser?: boolean
   /** Claude Code session id pinned for this task (minted at dispatch, passed as
    *  `--session-id`). A stable handle to THE session this task drives — used for
    *  resume, reading Claude's session store, and future orchestration. */
@@ -1339,8 +1345,11 @@ export class TaskManager extends EventEmitter {
 
   private continuationPresentation(task: Task, input: { sessionId: string; cwd: string; title?: string; group?: string; groupId?: string; intent?: string }, _fork: boolean): void {
     const source = this.list().find(t => t.sessionId === input.sessionId || t.codexRolloutId === input.sessionId)
-    const title = isDescriptiveTitle(source?.name, source?.cwd) ? source.name : input.title?.trim() || source?.intent || input.intent?.trim()
+    const inherited = isDescriptiveTitle(source?.name, source?.cwd)
+    const title = inherited ? source.name : input.title?.trim() || source?.intent || input.intent?.trim()
     task.name = title?.slice(0, 160)
+    // A name the user chose travels with the conversation it names.
+    if (inherited && source.nameSetByUser) task.nameSetByUser = true
     task.intent = input.intent?.trim() || task.name || task.intent
     if (input.groupId) { task.group = input.group; task.groupId = input.groupId }
     else if (source?.group) { task.group = this.opts.groupRegistry?.get(source.groupId)?.label || source.group; task.groupId = source.groupId }
@@ -3065,7 +3074,7 @@ export class TaskManager extends EventEmitter {
     // The app's own title beats our generated name once it exists — it is what
     // the user sees in Claude Desktop, so showing something else in Unmute
     // makes the two lists impossible to line up.
-    if (meta.title && meta.title !== task.name && task.origin !== 'unmute-agent') task.name = meta.title
+    if (meta.title && meta.title !== task.name && task.origin !== 'unmute-agent' && !task.nameSetByUser) task.name = meta.title
     if (snap.lastAgentMessage && snap.lastAgentMessage !== task.threadContext) {
       task.threadContext = snap.lastAgentMessage
     }
@@ -4194,6 +4203,7 @@ export class TaskManager extends EventEmitter {
       state: task.state, updatedAt: task.updatedAt,
       intent: task.intent,
       name: task.name,
+      nameSetByUser: task.nameSetByUser === true,
       group: task.group,
       groupId: task.groupId,
       chatUnstarted: task.chatUnstarted === true,
@@ -4317,7 +4327,7 @@ export class TaskManager extends EventEmitter {
       if (this.tasks.has(id)) continue
       if (await this.recordRetired(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result']; continuationMode?: Task['continuationMode']; continuationSources?: Task['continuationSources']; continuationArtifacts?: Task['continuationArtifacts']; continuationConfidence?: number; agentRelays?: Task['agentRelays'] }
+      let meta: { intent?: string; sessionId?: string; name?: string; nameSetByUser?: boolean; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; followUps?: number; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result']; continuationMode?: Task['continuationMode']; continuationSources?: Task['continuationSources']; continuationArtifacts?: Task['continuationArtifacts']; continuationConfidence?: number; agentRelays?: Task['agentRelays'] }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { meta = {} }
       if ((meta as Task).continuationPending) continue
       if (!meta.intent) {
@@ -4349,6 +4359,7 @@ export class TaskManager extends EventEmitter {
           id,
           intent: meta.intent,
           name: meta.name,
+          ...(meta.nameSetByUser ? { nameSetByUser: true } : {}),
           sessionId: meta.agentRunId,
           origin: 'unmute-agent',
           agentRunId: meta.agentRunId,
@@ -4402,6 +4413,7 @@ export class TaskManager extends EventEmitter {
           id,
           intent: meta.intent,
           name: meta.name,
+          ...(meta.nameSetByUser ? { nameSetByUser: true } : {}),
           sessionId: meta.claudeDesktopSessionId,
           ...(meta.origin ? { origin: meta.origin, agentRunId: meta.agentRunId, sessionOwnership: sessionOwnership(meta as Record<string, unknown>) } : {}),
           agent: 'claude-code-desktop',
@@ -4437,6 +4449,7 @@ export class TaskManager extends EventEmitter {
           id,
           intent: meta.intent,
           name: meta.name,
+          ...(meta.nameSetByUser ? { nameSetByUser: true } : {}),
           sessionId: meta.codexThreadId,
           ...(meta.origin ? { origin: meta.origin, agentRunId: meta.agentRunId, sessionOwnership: sessionOwnership(meta as Record<string, unknown>) } : {}),
           agent: 'codex-desktop',
@@ -4522,6 +4535,7 @@ export class TaskManager extends EventEmitter {
         id,
         intent: meta.intent,
         name: meta.name,
+        ...(meta.nameSetByUser ? { nameSetByUser: true } : {}),
         // Pre-sessionId receipts won't carry one; fall back to the task id so the
         // field is always present (older tasks simply aren't session-pinned).
         sessionId: meta.sessionId ?? id,
@@ -5203,15 +5217,36 @@ export class TaskManager extends EventEmitter {
     this.mergeMeta(task, { intent: next }, 'setIntent')
   }
 
-  setName(id: string, name: string): void {
+  /** Rename a task.
+   *
+   *  CONTRACT: `setName(id, name)` with no options is a DELIBERATE rename — the
+   *  user, or the Agent acting for the user. It clamps to MAX_TASK_NAME, locks
+   *  the name (`nameSetByUser`, persisted) and mirrors it to a live Codex
+   *  thread. Automatic namers pass `{ auto: true }`: no lock, and a no-op when
+   *  the name is already locked. */
+  setName(id: string, name: string, opts: { auto?: boolean } = {}): void {
     const task = this.tasks.get(id)
-    const n = (name || '').trim()
-    if (!task || !n || task.name === n) return
+    if (!task) return
+    const auto = opts.auto === true
+    if (auto && task.nameSetByUser) return
+    const trimmed = (name || '').trim()
+    const n = auto ? trimmed : trimmed.slice(0, MAX_TASK_NAME).trim()
+    if (!n) return
+    const lockChanged = !auto && !task.nameSetByUser
+    if (task.name === n && !lockChanged) return
+    const renamed = task.name !== n
     task.name = n
+    if (!auto) task.nameSetByUser = true
     task.updatedAt = this.clock()
     this.emit('updated', task)
     // Durability (best-effort): fold the name into the receipt.
-    this.mergeMeta(task, { name: n }, 'setName')
+    this.mergeMeta(task, auto ? { name: n } : { name: n, nameSetByUser: true }, 'setName')
+    // Codex keeps its own thread title; keep the two lists in step. Claude has
+    // no title API. Fire-and-forget: the card has already been renamed.
+    if (!auto && renamed && task.agent === 'codex' && this.opts.codexHub?.threadIdFor(id)) {
+      void this.opts.codexHub.rename(id, n).catch((e) =>
+        log.child({ taskId: id }).warn('setName: codex thread rename failed', { error: (e as Error).message }))
+    }
   }
 
   /** Records the configuration last successfully selected for this task.
