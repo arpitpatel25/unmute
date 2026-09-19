@@ -18,7 +18,7 @@ test('a saved action resumes after a new store instance', async () => {
   const first = new ProgressStore(path)
   await first.save(initialProgress({
     action: 'system-audio',
-    completed: ['privacy', 'microphone', 'accessibility', 'input-monitoring'],
+    completed: ['welcome', 'privacy', 'microphone', 'accessibility'],
   }))
 
   const second = new ProgressStore(path)
@@ -43,7 +43,7 @@ test('corrupt progress recovers to a safe fresh journey', async () => {
   await writeFile(path, '{not-json', 'utf8')
 
   const recovered = await new ProgressStore(path).load()
-  assert.equal(recovered.action, 'privacy')
+  assert.equal(recovered.action, 'welcome')
   assert.deepEqual(recovered.completed, [])
 })
 
@@ -53,8 +53,34 @@ test('legacy-shaped progress is normalized without skipping capabilities', async
 
   const recovered = await new ProgressStore(path).load()
   assert.equal(recovered.action, 'notes-dictation')
+  assert.deepEqual(recovered.completed, ['welcome', 'privacy'])
   assert.deepEqual(recovered.taskIds, {})
   assert.deepEqual(recovered.observedCaptureItemIds, [])
+})
+
+test('removed legacy actions resume at the nearest current capability', async () => {
+  const inputMonitoringPath = await temporaryPath()
+  await writeFile(inputMonitoringPath, JSON.stringify({
+    schema: 1,
+    action: 'input-monitoring',
+    completed: ['privacy', 'microphone', 'accessibility'],
+  }), 'utf8')
+
+  const instructPath = await temporaryPath()
+  await writeFile(instructPath, JSON.stringify({
+    schema: 1,
+    action: 'notes-instruct',
+    completed: ['privacy', 'microphone', 'accessibility', 'system-audio', 'provider-choice', 'notes-dictation'],
+  }), 'utf8')
+
+  const permissionProgress = await new ProgressStore(inputMonitoringPath).load()
+  assert.equal(permissionProgress.action, 'system-audio')
+  assert.deepEqual(permissionProgress.completed, ['welcome', 'privacy', 'microphone', 'accessibility'])
+
+  const practiceProgress = await new ProgressStore(instructPath).load()
+  assert.equal(practiceProgress.action, 'clipboard-capture')
+  assert.equal(practiceProgress.completed.includes('welcome'), true)
+  assert.equal(practiceProgress.completed.includes('notes-instruct' as never), false)
 })
 
 test('coordinator saves an accepted event before publishing its snapshot', async () => {
@@ -63,21 +89,21 @@ test('coordinator saves an accepted event before publishing its snapshot', async
   const coordinator = new OnboardingCoordinator(store, () => 42)
   await coordinator.start()
 
-  const snapshot = await coordinator.dispatch({ type: 'capability-satisfied', action: 'privacy' })
-
-  assert.equal(snapshot.action, 'microphone')
-  assert.equal((await new ProgressStore(path).load()).action, 'microphone')
-  assert.equal((await readFile(path, 'utf8')).includes('"updatedAt":42'), true)
-})
-
-test('coordinator reset removes prior progress and returns to privacy', async () => {
-  const path = await temporaryPath()
-  const coordinator = new OnboardingCoordinator(new ProgressStore(path), () => 7)
-  await coordinator.start()
-  await coordinator.dispatch({ type: 'capability-satisfied', action: 'privacy' })
-
-  const snapshot = await coordinator.reset()
+  const snapshot = await coordinator.dispatch({ type: 'capability-satisfied', action: 'welcome' })
 
   assert.equal(snapshot.action, 'privacy')
   assert.equal((await new ProgressStore(path).load()).action, 'privacy')
+  assert.equal((await readFile(path, 'utf8')).includes('"updatedAt":42'), true)
+})
+
+test('coordinator reset removes prior progress and returns to welcome', async () => {
+  const path = await temporaryPath()
+  const coordinator = new OnboardingCoordinator(new ProgressStore(path), () => 7)
+  await coordinator.start()
+  await coordinator.dispatch({ type: 'capability-satisfied', action: 'welcome' })
+
+  const snapshot = await coordinator.reset()
+
+  assert.equal(snapshot.action, 'welcome')
+  assert.equal((await new ProgressStore(path).load()).action, 'welcome')
 })

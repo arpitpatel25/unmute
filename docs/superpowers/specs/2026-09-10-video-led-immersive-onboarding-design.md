@@ -12,7 +12,7 @@ for the real product to prove that it worked before continuing.
 
 The experience begins on first launch, before sign-in. It is not a slideshow, a
 settings wizard, or a simulated product tour. Apple Notes, the native notch and
-pill, Dictation, Instruct, Orchestrator, the Unmute Agent, and Notetaker are the
+pill, Dictation, Orchestrator, the Unmute Agent, and Notetaker are the
 real shipping systems throughout.
 
 The interaction model is inspired by MiniMe's founder-video onboarding, but its
@@ -42,7 +42,7 @@ There is no onboarding notch, fake pill, fake task, simulated transcript, or
 internal practice editor. The native notch and pill start normally with the app.
 The onboarding coordinator observes them; it does not replace them.
 
-Apple Notes is the real destination for Dictation, Instruct, clipboard capture,
+Apple Notes is the real destination for Dictation, clipboard capture,
 and screenshot capture. Orchestrator and the Unmute Agent create real tasks
 through the user's detected CLI. Notetaker creates a real saved recording.
 
@@ -141,9 +141,7 @@ The required first-run permission surface is:
 1. **Microphone** for voice capture.
 2. **Accessibility** for reading selection state and delivering text into other
    applications.
-3. **Input Monitoring** for global modifier-key triggers, unless signed-build
-   verification proves the shipping listener works from Accessibility alone.
-4. **System Audio Recording** for Notetaker.
+3. **System Audio Recording** for Notetaker.
 
 System Audio has no standalone request API. During the permission chapter,
 Unmute starts and immediately stops a controlled native system-audio tap so
@@ -182,7 +180,7 @@ the presenter asks which should be the default. If neither is ready, the card
 shows the exact official installation and login instructions and can rerun one
 provider's test without rerunning onboarding.
 
-### 4.4 Dictation and Instruct in Apple Notes
+### 4.4 Dictation in Apple Notes
 
 Unmute opens Apple Notes without creating a fake in-app editor. The presenter
 does not resize; it remains beside Notes.
@@ -191,10 +189,6 @@ The user places the cursor in Notes and follows a displayed phrase. They press
 their configured Dictation trigger, speak, finish, and see the real text arrive.
 Completion requires the actual delivery event and observable text at the target,
 not merely a successful transcription response.
-
-The founder then explains Instruct. The user selects the text, presses Caps
-Lock, speaks the displayed rewrite instruction, and sees the selected text
-change in place. Completion requires the real instruction delivery.
 
 ### 4.5 Clipboard and screenshot capture
 
@@ -317,7 +311,6 @@ The coordinator consumes normalized events from existing systems, including:
 - provider default selected;
 - capture route and phase changed;
 - Dictation delivered at the target;
-- Instruct rewrite delivered;
 - clipboard or screenshot captured and included in delivery;
 - Orchestrator task created, completed, or failed;
 - Unmute Agent task receipt and task link created;
@@ -362,7 +355,7 @@ readiness can be safely revalidated.
   official installation/login instructions; retry only that provider.
 - **Provider timeout:** terminate the disposable process, report timeout rather
   than absence, and allow retry.
-- **Dictation or Instruct failure:** preserve Notes content and retry only the
+- **Dictation failure:** preserve Notes content and retry only the
   failed action.
 - **Spoken phrase differs:** accept safe variation and verify the resulting
   action. Exact transcription matching is not required.
@@ -419,7 +412,7 @@ one uninterrupted run:
 2. grant every real TCC permission;
 3. survive any required relaunch;
 4. detect and test Claude Code and/or Codex CLI;
-5. complete Dictation, Instruct, clipboard, and screenshot exercises in Notes;
+5. complete Dictation, clipboard, and screenshot exercises in Notes;
 6. create and verify the Orchestrator task;
 7. create and open the Unmute Agent's linked task;
 8. start and save a Notetaker recording;

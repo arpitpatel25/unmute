@@ -34,21 +34,15 @@ test('system audio preflight still stops after a denied start', async () => {
   assert.deepEqual(calls, ['start', 'stop'])
 })
 
-test('permission snapshot keeps accessibility and input monitoring distinct', async () => {
-  const adapters = permissionHarness({ accessibility: true, inputMonitoring: false })
+test('permission snapshot exposes only the permissions onboarding asks for', async () => {
+  const adapters = permissionHarness({ accessibility: true })
   const snapshot = await probePermissions(adapters)
 
-  assert.equal(snapshot.accessibility, true)
-  assert.equal(snapshot.inputMonitoring, false)
-})
-
-test('requesting input monitoring uses its own adapter', async () => {
-  const calls: string[] = []
-  const adapters = permissionHarness({}, calls)
-
-  await requestPermission('input-monitoring', adapters)
-
-  assert.deepEqual(calls, ['input-monitoring'])
+  assert.deepEqual(snapshot, {
+    microphone: 'not-determined',
+    accessibility: true,
+    systemAudio: 'unknown',
+  })
 })
 
 test('progress is checkpointed before relaunching', async () => {
@@ -62,7 +56,7 @@ test('progress is checkpointed before relaunching', async () => {
 })
 
 function permissionHarness(
-  values: Partial<{ accessibility: boolean; inputMonitoring: boolean }> = {},
+  values: Partial<{ accessibility: boolean }> = {},
   calls: string[] = [],
 ): PermissionAdapters {
   return {
@@ -70,8 +64,6 @@ function permissionHarness(
     requestMicrophone: () => { calls.push('microphone'); return 'granted' },
     accessibilityStatus: async () => values.accessibility ?? false,
     requestAccessibility: async () => { calls.push('accessibility') },
-    inputMonitoringStatus: async () => values.inputMonitoring ?? false,
-    requestInputMonitoring: async () => { calls.push('input-monitoring') },
     systemAudio: {
       start: async () => {}, stop: async () => {}, status: () => 'unknown',
     },

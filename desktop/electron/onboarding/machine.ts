@@ -6,7 +6,7 @@ const NOTES_BUNDLE_ID = 'com.apple.Notes'
 export function initialProgress(overrides: Partial<OnboardingProgress> = {}): OnboardingProgress {
   return {
     schema: 1,
-    action: 'privacy',
+    action: 'welcome',
     completed: [],
     observedCaptureItemIds: [],
     taskIds: {},
@@ -73,11 +73,6 @@ export function reduceOnboarding(progress: OnboardingProgress, event: Onboarding
 
   if (progress.action === 'notes-dictation' && event.type === 'dictation-delivered'
     && event.target === NOTES_BUNDLE_ID) {
-    return completeCurrent(progress)
-  }
-
-  if (progress.action === 'notes-instruct' && event.type === 'instruction-delivered'
-    && event.target === NOTES_BUNDLE_ID && event.changedSelection) {
     return completeCurrent(progress)
   }
 

@@ -13,8 +13,7 @@ test('wrong-app and transcription-only state cannot produce a delivery event', (
   assert.equal(notesEventFromReceipt({ captureId: 'c1', mode: 'dictation', targetBundleId: 'com.apple.Notes', delivered: false }), null)
 })
 
-test('instruction requires a successful selection replacement', () => {
+test('instruction delivery is not part of onboarding', () => {
   const event = notesEventFromReceipt({ captureId: 'c1', mode: 'instruction', targetBundleId: 'com.apple.Notes', delivered: true, changedSelection: false })
-  assert.equal(event?.type, 'instruction-delivered')
-  assert.equal(event?.changedSelection, false)
+  assert.equal(event, null)
 })

@@ -15,7 +15,6 @@ import { ProgressStore } from './paywall/onboarding/progress-store'
 import { OnboardingRuntime } from './paywall/onboarding/register'
 import { onOnboardingReceipt } from './paywall/onboarding/receipts'
 import type { ActionId, OnboardingEvent, PresenterCommand, ProviderId, ProviderUiStatus } from './paywall/onboarding/types'
-import { isGlobalKeyMonitoringReady, requestGlobalKeyMonitoring } from './keyListener'
 import { preflightNotetakerSystemAudio } from './notetakerInit'
 import { setOnboardingTaskWorkspace } from './paywall/remote/init'
 
@@ -48,10 +47,10 @@ async function launchFreshNotesNote(): Promise<void> {
 
 function satisfiedPermissions(progressCompleted: readonly ActionId[]): ActionId[] {
   const result: ActionId[] = []
+  if (progressCompleted.includes('welcome')) result.push('welcome')
   if (progressCompleted.includes('privacy')) result.push('privacy')
   if (systemPreferences.getMediaAccessStatus('microphone') === 'granted') result.push('microphone')
   if (systemPreferences.isTrustedAccessibilityClient(false)) result.push('accessibility')
-  if (isGlobalKeyMonitoringReady()) result.push('input-monitoring')
   // macOS exposes no non-prompting ScreenCaptureKit audio probe. Once the real
   // tap succeeded, preserve that checkpoint; the Notetaker start remains the
   // authoritative runtime check if the permission is later revoked.
@@ -172,10 +171,9 @@ export async function initOnboarding(
   const advancePermission = async (): Promise<void> => {
     const action = runtime.snapshot().action
     let granted = false
-    if (action === 'privacy') granted = true
+    if (action === 'welcome' || action === 'privacy') granted = true
     if (action === 'microphone') granted = await systemPreferences.askForMediaAccess('microphone')
     if (action === 'accessibility') granted = systemPreferences.isTrustedAccessibilityClient(true)
-    if (action === 'input-monitoring') { requestGlobalKeyMonitoring(); granted = isGlobalKeyMonitoringReady() }
     if (action === 'system-audio') granted = await preflightNotetakerSystemAudio() === 'granted'
     if (granted) await runtime.accept({ type: 'capability-satisfied', action })
     await configureAction(runtime.snapshot())

@@ -25,8 +25,6 @@ export async function openNotesPractice(adapters: NotesPracticeAdapters, timeout
 }
 
 export function notesEventFromReceipt(receipt: DeliveryReceipt) {
-  if (!receipt.delivered || receipt.targetBundleId !== APPLE_NOTES_BUNDLE_ID) return null
-  return receipt.mode === 'instruction'
-    ? { type: 'instruction-delivered' as const, captureId: receipt.captureId, target: receipt.targetBundleId, changedSelection: receipt.changedSelection === true }
-    : { type: 'dictation-delivered' as const, captureId: receipt.captureId, target: receipt.targetBundleId }
+  if (!receipt.delivered || receipt.mode !== 'dictation' || receipt.targetBundleId !== APPLE_NOTES_BUNDLE_ID) return null
+  return { type: 'dictation-delivered' as const, captureId: receipt.captureId, target: receipt.targetBundleId }
 }

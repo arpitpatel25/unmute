@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- The real native notch, pill, Dictation, Instruct, Orchestrator, Unmute Agent, Notetaker, and Apple Notes are used; no onboarding copies or simulated successes.
+- The real native notch, pill, Dictation, Orchestrator, Unmute Agent, Notetaker, and Apple Notes are used; no onboarding copies or simulated successes.
 - The closed notch remains opaque black; presenter visuals reuse the current adaptive dark-glass language without changing native notch material behavior.
 - Onboarding begins before sign-in; anonymous managed access is limited to prescribed onboarding transcription calls.
 - Claude Code and Codex credentials remain provider-owned and never pass through Unmute.
@@ -80,7 +80,7 @@ test('delivery, not transcription, completes Notes dictation', () => {
   p = reduceOnboarding(p, { type: 'transcription-ready', captureId: 'c1' })
   assert.equal(p.action, 'notes-dictation')
   p = reduceOnboarding(p, { type: 'dictation-delivered', captureId: 'c1', target: 'com.apple.Notes' })
-  assert.equal(p.action, 'notes-instruct')
+  assert.equal(p.action, 'clipboard-capture')
 })
 
 test('restart resumes the first incomplete capability', () => {
@@ -99,8 +99,8 @@ Expected: FAIL because the onboarding contract modules do not exist.
 
 ```ts
 export type ActionId =
-  | 'privacy' | 'microphone' | 'accessibility' | 'input-monitoring' | 'system-audio'
-  | 'provider-choice' | 'notes-dictation' | 'notes-instruct' | 'clipboard-capture'
+  | 'welcome' | 'privacy' | 'microphone' | 'accessibility' | 'system-audio'
+  | 'provider-choice' | 'notes-dictation' | 'clipboard-capture'
   | 'screenshot-capture' | 'orchestrator-task' | 'agent-task-link'
   | 'notetaker-save' | 'product-orientation' | 'sign-in' | 'complete'
 
@@ -118,7 +118,6 @@ export type OnboardingEvent =
   | { type: 'capability-satisfied'; action: ActionId }
   | { type: 'transcription-ready'; captureId: string }
   | { type: 'dictation-delivered'; captureId: string; target: string }
-  | { type: 'instruction-delivered'; captureId: string; target: string; changedSelection: boolean }
   | { type: 'capture-observed'; captureId: string; kind: 'clipboard-text' | 'screenshot'; itemId: string }
   | { type: 'capture-delivered'; captureId: string; includedItemIds: string[] }
   | { type: 'task-created'; source: 'orchestrator' | 'agent'; taskId: string }
@@ -427,7 +426,7 @@ Expected: FAIL because allowance modules and grant handling are missing.
 ```ts
 export interface OnboardingGrantClaims {
   installationId: string
-  actions: Array<'notes-dictation' | 'notes-instruct' | 'clipboard-capture' | 'screenshot-capture' | 'orchestrator-task' | 'agent-task-link'>
+  actions: Array<'notes-dictation' | 'clipboard-capture' | 'screenshot-capture' | 'orchestrator-task' | 'agent-task-link'>
   maxRequests: 8
   maxAudioSeconds: 180
   expiresAt: number
@@ -450,7 +449,7 @@ git add backend/cloudflare/pipeline/src desktop/electron/onboarding/allowance* d
 git commit -m "feat(onboarding): add bounded pre-sign-in transcription grant"
 ```
 
-### Task 7: Apple Notes Dictation and Instruct Exercises
+### Task 7: Apple Notes Dictation Exercise
 
 **Files:**
 - Create: `desktop/electron/onboarding/notes-practice.ts`
@@ -461,7 +460,7 @@ git commit -m "feat(onboarding): add bounded pre-sign-in transcription grant"
 - Modify: `desktop/electron/onboarding/coordinator.ts`
 
 **Interfaces:**
-- Produces: `openNotesPractice()`, `verifyNotesDelivery(captureId)`, `dictation-delivered`, and `instruction-delivered` events.
+- Produces: `openNotesPractice()`, `verifyNotesDelivery(captureId)`, and `dictation-delivered` events.
 - Consumes: existing capture/session IDs, delivery results, and frontmost-app metadata.
 
 - [ ] **Step 1: Write tests that reject transcription-only success**
@@ -472,7 +471,7 @@ test('Notes exercise waits for target delivery', async () => {
   c.accept({ type: 'transcription-ready', captureId: 'c1' })
   assert.equal(c.snapshot().action, 'notes-dictation')
   c.accept({ type: 'dictation-delivered', captureId: 'c1', target: 'com.apple.Notes' })
-  assert.equal(c.snapshot().action, 'notes-instruct')
+  assert.equal(c.snapshot().action, 'clipboard-capture')
 })
 ```
 
@@ -487,7 +486,7 @@ Expected: FAIL because delivery receipts are not wired to onboarding.
 ```ts
 export interface DeliveryReceipt {
   captureId: string
-  mode: 'dictation' | 'instruction'
+  mode: 'dictation'
   targetBundleId: string | null
   delivered: boolean
   changedSelection?: boolean
@@ -497,8 +496,7 @@ export interface DeliveryReceipt {
 Open Notes with Launch Services, bring it forward, and wait until
 `com.apple.Notes` is frontmost before enabling the phrase card. Generate one
 capture ID at recording start and preserve it through transcription and paste.
-Emit success only after the shipping paste path returns success; for Instruct,
-also require a nonempty captured selection and successful replacement.
+Emit success only after the shipping paste path returns success.
 
 - [ ] **Step 4: Run Notes, keyboard, and recorder tests**
 

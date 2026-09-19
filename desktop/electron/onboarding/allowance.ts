@@ -5,7 +5,7 @@ import { dirname } from 'node:path'
 import type { ActionId } from './types'
 
 const TRANSCRIPTION_ACTIONS = new Set<ActionId>([
-  'notes-dictation', 'notes-instruct', 'clipboard-capture', 'screenshot-capture',
+  'notes-dictation', 'clipboard-capture', 'screenshot-capture',
   'orchestrator-task', 'agent-task-link',
 ])
 

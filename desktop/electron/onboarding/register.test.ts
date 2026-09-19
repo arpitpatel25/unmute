@@ -44,7 +44,7 @@ test('replay resets durable progress and opens the presenter', async () => {
   await h.runtime.boot()
   assert.equal(h.shown, 0)
   await h.runtime.reset()
-  assert.equal(h.runtime.snapshot().action, 'privacy')
+  assert.equal(h.runtime.snapshot().action, 'welcome')
   assert.equal(h.shown, 1)
 })
 

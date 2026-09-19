@@ -10,6 +10,12 @@ function isActionId(value: unknown): value is ActionId {
   return typeof value === 'string' && ACTION_ORDER.includes(value as ActionId)
 }
 
+function migrateActionId(value: unknown): ActionId | null {
+  if (value === 'input-monitoring') return 'system-audio'
+  if (value === 'notes-instruct') return 'clipboard-capture'
+  return isActionId(value) ? value : null
+}
+
 function isProvider(value: unknown): value is ProviderId {
   return value === 'claude' || value === 'codex'
 }
@@ -17,17 +23,21 @@ function isProvider(value: unknown): value is ProviderId {
 export function migrateProgress(value: unknown): OnboardingProgress {
   if (!value || typeof value !== 'object') return initialProgress()
   const raw = value as Record<string, unknown>
-  if (!isActionId(raw.action)) return initialProgress()
+  const action = migrateActionId(raw.action)
+  if (!action) return initialProgress()
 
-  const completed = Array.isArray(raw.completed)
+  let completed = Array.isArray(raw.completed)
     ? raw.completed.filter(isActionId).filter((action, index, all) => all.indexOf(action) === index)
     : []
+  if (action !== 'welcome' && !completed.includes('welcome')) {
+    completed = ['welcome', ...completed]
+  }
   const rawTasks = raw.taskIds && typeof raw.taskIds === 'object'
     ? raw.taskIds as Record<string, unknown>
     : {}
 
   return initialProgress({
-    action: raw.action,
+    action,
     completed,
     provider: isProvider(raw.provider) ? raw.provider : undefined,
     captureId: typeof raw.captureId === 'string' ? raw.captureId : undefined,

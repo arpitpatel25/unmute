@@ -21,7 +21,7 @@ Use a signed and notarized build. Test with a clean macOS account and with an ac
 2. Confirm the presenter is compact, translucent, background-adaptive, clear of the physical notch, and never replaces the real app with a fake product page.
 3. Complete every permission individually. At a relaunch prompt, quit/relaunch and confirm the exact chapter resumes.
 4. Confirm provider detection launches an isolated ephemeral readiness check, terminates it, and reports missing versus authentication-required accurately.
-5. Complete Dictation and Instruct in the real Apple Notes note. Confirm neither transcription alone nor delivery into another app advances.
+5. Complete Dictation in the real Apple Notes note. Confirm neither transcription alone nor delivery into another app advances.
 6. Copy text and take a normal screenshot during their respective recordings. Confirm only a composition containing the observed item advances.
 7. Complete the Orchestrator exercise. Confirm the task runs only in `userData/onboarding/workspace` and `hello-unmute.txt` contains exactly `My first Unmute task`.
 8. Complete the Agent follow-up and open its matching native task link. Plain text resembling a link must not advance.

@@ -3,14 +3,13 @@ export type ProviderUiState = 'checking' | 'ready' | 'missing' | 'auth-required'
 export type ProviderUiStatus = { state: ProviderUiState; detail?: string }
 
 export type ActionId =
+  | 'welcome'
   | 'privacy'
   | 'microphone'
   | 'accessibility'
-  | 'input-monitoring'
   | 'system-audio'
   | 'provider-choice'
   | 'notes-dictation'
-  | 'notes-instruct'
   | 'clipboard-capture'
   | 'screenshot-capture'
   | 'orchestrator-task'
@@ -37,7 +36,6 @@ export type OnboardingEvent =
   | { type: 'provider-selected'; provider: ProviderId }
   | { type: 'transcription-ready'; captureId: string }
   | { type: 'dictation-delivered'; captureId: string; target: string }
-  | { type: 'instruction-delivered'; captureId: string; target: string; changedSelection: boolean }
   | { type: 'capture-observed'; captureId: string; kind: 'clipboard-text' | 'screenshot'; itemId: string }
   | { type: 'capture-delivered'; captureId: string; includedItemIds: string[] }
   | { type: 'task-created'; source: 'orchestrator' | 'agent'; taskId: string; cwd?: string }

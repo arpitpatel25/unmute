@@ -19,7 +19,7 @@ test('delivery, not transcription, completes Notes dictation', () => {
     captureId: 'c1',
     target: 'com.apple.Notes',
   })
-  assert.equal(progress.action, 'notes-instruct')
+  assert.equal(progress.action, 'clipboard-capture')
 })
 
 test('dictation delivery must target Apple Notes', () => {
@@ -34,14 +34,14 @@ test('dictation delivery must target Apple Notes', () => {
 
 test('restart resumes the first incomplete capability', () => {
   const progress = initialProgress({
-    completed: ['privacy', 'microphone'],
+    completed: ['welcome', 'privacy', 'microphone'],
     action: 'accessibility',
   })
 
   assert.equal(
     reduceOnboarding(progress, {
       type: 'boot-revalidated',
-      satisfied: ['privacy', 'microphone'],
+      satisfied: ['welcome', 'privacy', 'microphone'],
     }).action,
     'accessibility',
   )
@@ -49,13 +49,13 @@ test('restart resumes the first incomplete capability', () => {
 
 test('boot revalidation removes revoked capabilities and returns to the first gap', () => {
   const progress = initialProgress({
-    completed: ['privacy', 'microphone', 'accessibility', 'input-monitoring', 'system-audio'],
+    completed: ['welcome', 'privacy', 'microphone', 'accessibility', 'system-audio'],
     action: 'provider-choice',
   })
 
   const next = reduceOnboarding(progress, {
     type: 'boot-revalidated',
-    satisfied: ['privacy', 'microphone', 'input-monitoring', 'system-audio'],
+    satisfied: ['welcome', 'privacy', 'microphone', 'system-audio'],
   })
 
   assert.equal(next.action, 'accessibility')
@@ -66,7 +66,7 @@ test('boot revalidation advances when every permission is now satisfied', () => 
   const progress = atAction('system-audio')
   const next = reduceOnboarding(progress, {
     type: 'boot-revalidated',
-    satisfied: ['privacy', 'microphone', 'accessibility', 'input-monitoring', 'system-audio'],
+    satisfied: ['welcome', 'privacy', 'microphone', 'accessibility', 'system-audio'],
   })
 
   assert.equal(next.action, 'provider-choice')
@@ -125,8 +125,8 @@ test('notetaker save, not start or stop, completes the chapter', () => {
 })
 
 test('retry preserves progress and reset creates a fresh journey', () => {
-  const progress = atAction('notes-instruct', {
-    completed: ['privacy', 'microphone'],
+  const progress = atAction('clipboard-capture', {
+    completed: ['welcome', 'privacy', 'microphone'],
     captureId: 'c1',
   })
 

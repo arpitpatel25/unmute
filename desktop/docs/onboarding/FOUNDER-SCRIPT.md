@@ -1,24 +1,112 @@
 # Founder Video Recording Contract
 
-Record each clip separately, looking into camera. Keep the delivery warm and direct. The product pauses at every action; never tell the viewer that a timed animation proves completion. Final footage replaces the built-in branded stand-in without changing clip IDs.
+This is the complete review draft for the video-led onboarding. Record each clip separately, looking into camera. Keep the delivery warm, direct, and conversational. The product pauses at every required action; never imply that watching the video itself completes a step. Final footage replaces the built-in stand-in without changing clip IDs.
 
-| Clip ID | Spoken copy / caption intent | Visible card | Armed when | Completion proof | Failure / repair | Max |
-|---|---|---|---|---|---|---:|
-| `welcome-privacy-v1` | “Welcome to Unmute. Your dictation is sent securely for transcription, and we do not store it. Your Claude Code and Codex work goes directly through the tools you already use, not through Unmute.” | Privacy | first launch | Continue | replay | 18s |
-| `permission-microphone-v1` | “First, allow microphone access. Unmute only listens when you deliberately activate a recording feature.” | Microphone | privacy accepted | macOS microphone grant | open System Settings and retry | 9s |
-| `permission-accessibility-v1` | “Next, allow Accessibility. This lets Unmute place the finished text wherever your cursor is.” | Accessibility | microphone granted | signed app is AX-trusted | open System Settings and retry | 10s |
-| `permission-input-monitoring-v1` | “Allow Input Monitoring so Unmute’s keyboard shortcuts work from any application.” | Input Monitoring | Accessibility granted | native listener reports trusted | grant, relaunch, resume here | 10s |
-| `permission-system-audio-v1` | “Finally, allow System Audio. Unmute uses it only when you deliberately start Notetaker.” | System Audio | Input Monitoring granted | real audio tap starts | grant, relaunch, resume here | 10s |
-| `provider-readiness-v1` | “Unmute works with the Claude Code or Codex CLI already configured on your Mac. Choose the agent you would like to use.” | provider choices | permission preflight complete | isolated CLI replies READY | exact install/sign-in repair | 14s |
-| `dictation-explain-v1` | “We opened Apple Notes for you. Put your cursor in the note, hold Function, say the sentence shown here, and release.” | phrase | Notes is frontmost | real paste receipt targets Notes | refocus Notes and retry | 13s |
-| `instruct-explain-v1` | “Now select that sentence, press Caps Lock, and say the instruction shown here. Unmute will replace the selected text.” | instruction phrase | dictation delivered | real selected-text replacement in Notes | select text and retry | 11s |
-| `capture-clipboard-v1` | “Unmute can combine your voice with captured context. Hold Function, begin speaking, copy the highlighted text, and then release.” | capture phrase | capture observer armed | observed item ID appears in delivered composition | copy again | 12s |
-| `capture-screenshot-v1` | “It works with screenshots too. Hold Function, begin speaking, take a normal macOS screenshot, and then release.” | capture phrase | screenshot observer armed | observed screenshot ID appears in Notes delivery | Desktop-folder repair and retry | 12s |
-| `orchestrator-explain-v1` | “Orchestrator turns a spoken request into a real task for Claude Code or Codex. Press Right Option and say the request shown here.” | exact task phrase | owned workspace selected | owned task completes and file contents verify | task/provider-specific retry | 16s |
-| `agent-explain-v1` | “The Unmute Agent remembers your work and can create or resume tasks. Double-tap Right Command, say this follow-up, and open the task link it gives you.” | exact follow-up phrase | Agent lane uses owned workspace | structured task receipt and matching link open | retry without accepting prose links | 18s |
-| `notetaker-explain-v1` | “Notetaker uses the models you already pay for. Double-tap Left Control, say the line shown here, and save the recording from the real pill.” | note phrase | real Notetaker armed | meeting metadata and retained audio persist | discard/failure stays here | 18s |
-| `orientation-v1` | “This is your Unmute home: today’s tasks, automatic workspaces, and your Notetaker recordings and summaries.” | Explore Unmute | real app visible | orientation action | replay clip | 14s |
-| `sign-in-v1` | “You have now used every major part of Unmute. Sign in to keep using it after this guided session.” | Sign in | all exercises complete | AuthContext confirms signed-in session | normal auth recovery | 8s |
-| `complete-v1` | “That’s it. You now know Unmute because you have actually used it. Welcome.” | Welcome | sign-in confirmed | terminal state | replay from Settings | 7s |
+## 1. Meet Unmute
 
-The spoken copy above is also the exact caption text in `electron/onboarding/chapters.ts`. If the recording changes, update both in the same commit so video, captions, and Script mode remain synchronized.
+**Clip:** `welcome-product-v1`
+**Founder says:** “Welcome to Unmute. Unmute lets you speak instead of type, turn requests into real work with Claude Code or Codex, and capture meeting notes without breaking your flow. In the next few minutes, you’ll use each part yourself.”
+**On screen:** Meet Unmute — Dictate, delegate, and remember without leaving what you are doing.
+**Completes when:** The user chooses Continue.
+
+## 2. Privacy
+
+**Clip:** `privacy-v1`
+**Founder says:** “Before we begin, here’s how your data moves. Dictation is sent securely for transcription and is not stored by Unmute. Your Claude Code and Codex work goes directly through the tools you already use; Unmute does not proxy or store those conversations.”
+**On screen:** Your privacy.
+**Completes when:** The user chooses Continue.
+
+## 3. Microphone
+
+**Clip:** `permission-microphone-v1`
+**Founder says:** “First, allow microphone access. Unmute only listens when you deliberately activate a recording feature.”
+**On screen:** Allow Microphone.
+**Completes when:** macOS reports that microphone access is granted. If denied, remain here and offer the correct System Settings route.
+
+## 4. Accessibility
+
+**Clip:** `permission-accessibility-v1`
+**Founder says:** “Next, allow Accessibility. This lets Unmute recognize its shortcuts and place finished text wherever your cursor is.”
+**On screen:** Allow Accessibility.
+**Completes when:** The signed Unmute application is Accessibility-trusted. Save progress before any required relaunch and resume at this step.
+
+## 5. System Audio
+
+**Clip:** `permission-system-audio-v1`
+**Founder says:** “Finally, allow System Audio. Unmute uses it only when you deliberately start Notetaker.”
+**On screen:** Allow System Audio.
+**Completes when:** The real system-audio preflight tap starts successfully. Save progress before any required relaunch.
+
+## 6. Connect an agent
+
+**Clip:** `provider-readiness-v1`
+**Founder says:** “Unmute runs agent tasks through Claude Code or Codex on your Mac. We’ll check what is ready and help you set up either one if it is missing.”
+**On screen:** Claude Code and Codex readiness cards. A missing provider offers Set up; an installed but signed-out provider offers Sign in.
+**Completes when:** The selected provider passes an isolated readiness check and replies `READY`.
+
+## 7. Dictation in Apple Notes
+
+**Clip:** `dictation-explain-v1`
+**Founder says:** “Let’s start with dictation. We’ve opened Apple Notes for you. Put your cursor in the note, hold the Function key, say the sentence shown here, and release.”
+**User says:** “My first Unmute dictation.”
+**Completes when:** The real delivery receipt confirms that the text was pasted into Apple Notes. Transcription alone, or delivery into another app, does not advance.
+
+## 8. Add copied context
+
+**Clip:** `capture-clipboard-v1`
+**Founder says:** “You can also give Unmute context while you speak. Hold Function, begin saying the phrase shown here, copy the highlighted text, and then release. Unmute will combine both in the same result.”
+**User says:** “Add this copied detail to my note.”
+**Completes when:** The observed clipboard item is included in the delivered composition.
+
+## 9. Add a screenshot
+
+**Clip:** `capture-screenshot-v1`
+**Founder says:** “The same thing works with screenshots. Hold Function, begin saying the phrase shown here, take a normal macOS screenshot, and then release.”
+**User says:** “Include this screenshot in my note.”
+**Completes when:** The observed screenshot is included in the delivered composition in Apple Notes.
+
+## 10. Orchestrator
+
+**Clip:** `orchestrator-explain-v1`
+**Founder says:** “Orchestrator turns a spoken request into a real task for Claude Code or Codex. Press Right Option and say the request shown here. Unmute will send it to your chosen agent and keep the task available for you.”
+**User says:** “Create hello-unmute.txt containing My first Unmute task.”
+**Completes when:** The task finishes inside the onboarding workspace and `hello-unmute.txt` contains exactly `My first Unmute task`.
+
+## 11. Unmute Agent
+
+**Clip:** `agent-explain-v1`
+**Founder says:** “The Unmute Agent helps you find, create, and continue work. It understands your Unmute tasks, sessions, and notes. Double-tap Right Command, say the follow-up shown here, and then open the task link it gives you.”
+**User says:** “Create a follow-up task to add today’s date to hello-unmute.txt.”
+**Completes when:** Unmute receives the structured task receipt and the user opens its matching native task link. Plain text that merely resembles a link does not count.
+
+## 12. Notetaker
+
+**Clip:** `notetaker-explain-v1`
+**Founder says:** “Unmute also includes Notetaker. It uses the strong models you already pay for through Claude Code or Codex to create useful notes you can interact with later. Double-tap Left Control, say the line shown here, and save the recording from the pill.”
+**User says:** “This is my first Unmute note.”
+**Completes when:** The real Notetaker recording is saved and its meeting metadata and audio are retained. Stopping or discarding does not advance.
+
+## 13. Your Unmute workspace
+
+**Clip:** `orientation-v1`
+**Founder says:** “This is your Unmute home. Orchestrator shows today’s tasks and automatically groups related work into workspaces. Notetaker keeps your recordings, transcripts, and summaries here. And when your notes are ready, you can ask the Unmute Agent to find information in them.”
+**On screen:** The real Electron app, showing Orchestrator and Notetaker.
+**Completes when:** The user chooses Continue.
+
+## 14. Sign in
+
+**Clip:** `sign-in-v1`
+**Founder says:** “You’ve now used every major part of Unmute. Sign in to keep using it after this guided session.”
+**On screen:** Sign in.
+**Completes when:** Unmute confirms an authenticated session.
+
+## 15. Complete
+
+**Clip:** `complete-v1`
+**Founder says:** “That’s it. You now know Unmute because you’ve actually used it. Welcome.”
+**On screen:** Welcome to Unmute.
+**Completes when:** The onboarding reaches its terminal state. It can be replayed later from Settings.
+
+## Synchronization rule
+
+The founder wording above is also the caption wording in `electron/onboarding/chapters.ts`. Any approved script edit must update the matching caption in the same commit so recorded footage, captions, and Script mode cannot drift apart.

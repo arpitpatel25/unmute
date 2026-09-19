@@ -24,7 +24,7 @@ test('expired and completed sessions fail closed', () => {
   let now = 100
   const session = new OnboardingAllowanceSession('installation_123456789', () => now)
   session.acceptGrant({ grant: 'signed-token', expiresAt: 200 })
-  session.arm('notes-instruct')
+  session.arm('notes-dictation')
   now = 200
   assert.equal(session.headers(), null)
 

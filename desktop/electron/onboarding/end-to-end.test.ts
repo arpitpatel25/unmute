@@ -7,12 +7,11 @@ import type { OnboardingEvent } from './types'
 test('fresh install completes only after every real receipt and sign-in', () => {
   let progress = initialProgress()
   const accept = (event: OnboardingEvent) => { progress = reduceOnboarding(progress, event) }
-  for (const action of ['privacy', 'microphone', 'accessibility', 'input-monitoring', 'system-audio'] as const) {
+  for (const action of ['welcome', 'privacy', 'microphone', 'accessibility', 'system-audio'] as const) {
     accept({ type: 'capability-satisfied', action })
   }
   accept({ type: 'provider-selected', provider: 'codex' })
   accept({ type: 'dictation-delivered', captureId: 'd1', target: 'com.apple.Notes' })
-  accept({ type: 'instruction-delivered', captureId: 'i1', target: 'com.apple.Notes', changedSelection: true })
   accept({ type: 'capture-observed', captureId: 'c1', kind: 'clipboard-text', itemId: 'copy1' })
   accept({ type: 'capture-delivered', captureId: 'c1', includedItemIds: ['copy1'] })
   accept({ type: 'capture-observed', captureId: 'c2', kind: 'screenshot', itemId: 'shot1' })
