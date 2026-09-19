@@ -1,4 +1,4 @@
-import { resolveHelpGuide, searchHelpGuide, type ActivationMode, type DictationKey, type HelpGuideEntry } from '../../help-guide.ts'
+import { resolveHelpGuide, searchHelpGuide, type ActivationMode, type DictationKey, type HelpGuideEntry } from '../../help-guide'
 import type { CapabilityCallContext, CapabilityModule, ToolDefinition, ToolResult } from '../types.ts'
 
 const tools = [{
@@ -13,7 +13,7 @@ const tools = [{
   consequence: 'read',
 }] as const satisfies readonly ToolDefinition[]
 
-type HelpSettings = { dictationKey: DictationKey; activationMode: ActivationMode }
+export type HelpSettings = { dictationKey: DictationKey; activationMode: ActivationMode }
 
 function present(entry: HelpGuideEntry): Omit<HelpGuideEntry, 'keywords' | 'source'> {
   const { keywords: _keywords, source: _source, ...visible } = entry
@@ -29,7 +29,9 @@ export class HelpCapability implements CapabilityModule {
   readonly roles = ['unmute-agent'] as const
   readonly tools = tools
 
-  constructor(private readonly currentSettings: () => HelpSettings) {}
+  /** Sync in the app; a promise in the Agent daemon, where the settings are
+   *  one host call away in Electron main. */
+  constructor(private readonly currentSettings: () => HelpSettings | Promise<HelpSettings>) {}
 
   async call(ctx: CapabilityCallContext, tool: string, input: unknown): Promise<ToolResult> {
     if (ctx.principal.kind !== 'unmute-agent' || ctx.principal.expiresAt <= ctx.now) {
@@ -38,7 +40,7 @@ export class HelpCapability implements CapabilityModule {
     if (tool !== 'unmute_help') {
       return result({ ok: false, error: { code: 'invalid-input', message: 'Unknown help tool' } }, true)
     }
-    const guide = resolveHelpGuide(this.currentSettings())
+    const guide = resolveHelpGuide(await this.currentSettings())
     const query = typeof (input as { query?: unknown } | null)?.query === 'string'
       ? String((input as { query: string }).query).trim()
       : ''

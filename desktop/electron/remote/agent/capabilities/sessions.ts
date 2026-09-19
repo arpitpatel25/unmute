@@ -182,10 +182,11 @@ const tools = [
   },
   {
     name: 'session_close',
-    description: 'Remove a session card from Unmute — the undo for having opened the wrong'
-      + ' one. Takes the taskId of the card, not a provider session id. It closes the CARD:'
-      + ' the transcript stays on disk exactly where it was and can be resumed again, so never'
-      + ' say the conversation was deleted. Closing one that is already gone succeeds quietly.',
+    description: 'Take a session card out of the pocket — the undo for having opened the wrong'
+      + ' one. Takes the taskId of the card, not a provider session id. It hides the CARD and'
+      + ' deletes nothing: the task and its transcript stay exactly where they were and a resume'
+      + ' brings it back, so never say the conversation was deleted. Closing one that is already'
+      + ' gone succeeds quietly.',
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['taskId'],
       properties: { taskId: { type: 'string', minLength: 1, maxLength: 128 } },

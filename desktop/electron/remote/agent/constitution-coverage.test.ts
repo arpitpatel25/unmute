@@ -4,6 +4,7 @@ import { agentConstitution } from './constitution.ts'
 import { MemoryCapability } from './capabilities/memory.ts'
 import { HistoryCapability } from './capabilities/history.ts'
 import { SessionsCapability } from './capabilities/sessions.ts'
+import { PocketCapability } from './capabilities/pocket.ts'
 import { HandoffCapability } from './capabilities/handoff.ts'
 import { NotetakerCapability } from './capabilities/notetaker.ts'
 import { HelpCapability } from './capabilities/help.ts'
@@ -30,6 +31,7 @@ const tools = [
   ...new MemoryCapability({} as never).tools,
   ...new HistoryCapability({} as never).tools,
   ...new SessionsCapability({} as never).tools,
+  ...new PocketCapability({} as never).tools,
   ...new HandoffCapability({} as never).tools,
   ...new NotetakerCapability({} as never).tools,
   ...new HelpCapability(() => ({ dictationKey: 'fn', activationMode: 'tap-toggle' })).tools,

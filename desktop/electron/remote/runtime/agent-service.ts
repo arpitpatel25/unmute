@@ -16,6 +16,8 @@ import { CapabilityRegistry } from '../agent/capabilities/registry'
 import { MemoryCapability } from '../agent/capabilities/memory'
 import { HistoryCapability } from '../agent/capabilities/history'
 import { SessionsCapability } from '../agent/capabilities/sessions'
+import { PocketCapability } from '../agent/capabilities/pocket'
+import { HelpCapability } from '../agent/capabilities/help'
 import { HandoffCapability } from '../agent/capabilities/handoff'
 import { NotetakerCapability } from '../agent/capabilities/notetaker'
 import { DeliveryCapability, type AttachmentDeliveryTransaction, type DeliveryAttachmentMetadata } from '../agent/capabilities/delivery'
@@ -125,6 +127,16 @@ export class AgentRuntimeService {
           fork: input => this.host('sessions.fork', [input]),
           send: input => this.host('sessions.send', [input]),
         }),
+        new PocketCapability({
+          list: () => this.host('pocket.list', []),
+          rename: input => this.host('pocket.rename', [input]),
+          stop: input => this.host('pocket.stop', [input]),
+          end: input => this.host('pocket.end', [input]),
+          hide: input => this.host('pocket.hide', [input]),
+        }),
+        // The constitution sends every how-do-I question here; it was only
+        // ever registered on the retired in-process path.
+        new HelpCapability(() => this.host('help.settings', [])),
         new HandoffCapability({ createTask: input => this.host('handoff.createTask', [input]), taskStatus: id => this.host('handoff.taskStatus', [id]), cardForSession: id => this.host('handoff.cardForSession', [id]) }),
         ...(config.notetaker ? [new NotetakerCapability({ list: limit => this.host('notetaker.list', [limit]), search: (q, limit) => this.host('notetaker.search', [q, limit]), read: id => this.host('notetaker.read', [id]), open: id => this.host('notetaker.open', [id]) })] : []),
         new DeliveryCapability({ resolveAttachment: (principal, handle) => attachments.resolveForDelivery(principal, handle),

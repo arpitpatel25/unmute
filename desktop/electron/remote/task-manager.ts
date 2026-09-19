@@ -5513,6 +5513,50 @@ export class TaskManager extends EventEmitter {
     this.mergeMeta(task, { shelved: on }, 'setShelved')
   }
 
+  /**
+   * END THE SESSION, KEEP THE CONVERSATION. The Agent's "end that task":
+   * whatever turn is running is interrupted, the process is released, and the
+   * record stays exactly where it was — resumable, the same way the warm-idle
+   * expiry leaves it (see "THE RUNTIME EXPIRES, THE RECORD DOES NOT"). This is
+   * deliberately not remove(): a process is a cache, a conversation is not.
+   * Returns false when there is no such task.
+   */
+  async endSession(id: string): Promise<boolean> {
+    const task = this.tasks.get(id)
+    if (!task) return false
+    if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
+    const tlog = log.child({ taskId: id })
+    tlog.ui('task-row.ended', {})
+    if (task.codexThreadId) { this.surfacedApprovals.delete(task.codexThreadId); void clearApproval(task.codexThreadId) }
+    // Owned app-server threads have no PTY for hardKill() to close; the same
+    // guard remove() uses, so a turn is never left running invisibly.
+    if (task.codexSessionSettings && this.opts.codexHub?.threadIdFor(id)) {
+      if (!(await this.opts.codexHub.stopAndRelease(id))) {
+        task.deliveryError = 'Could not stop Codex, so the session was not ended.'
+        this.emit('updated', task)
+        throw new Error(task.deliveryError)
+      }
+    }
+    const claude = this.claudeTasks.get(id)
+    if (claude) {
+      this.chatStopVersion.set(id, (this.chatStopVersion.get(id) ?? 0) + 1)
+      claude.channel.requestStop()
+      if (claude.driver.busy) await claude.driver.interrupt().catch(() => {})
+    }
+    const working = task.state === 'processing' || task.state === 'stuck'
+    this.hardKill(id)
+    if (working) {
+      task.state = 'failed'
+      task.error = { reason: 'Ended by you' }
+    } else if (!TERMINAL.includes(task.state)) task.state = 'done'
+    task.codexActivity = undefined
+    task.updatedAt = this.clock()
+    await this.persistState(task).catch(() => {})
+    this.emit('updated', task)
+    tlog.event('task-session-ended', { wasWorking: working, kept: true })
+    return true
+  }
+
   /** Set/clear the user's card note (annotation only — the agent never sees it).
    *  Persists to meta.json; empty string clears. */
   setNote(id: string, note: string): void {

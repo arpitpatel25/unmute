@@ -1261,6 +1261,14 @@ export class NotchController {
     return new Set(this.pocketList().map((t) => t.id))
   }
 
+  /** Take a task out of (or put it back into) the pocket without touching the
+   *  task itself — the same act as the card's own 'shelve', for the Agent. */
+  setPocketHidden(id: string, hidden: boolean): void {
+    this.deps.setShelved(id, hidden)
+    if (hidden && this.focusedId === id) this.setFocus(null)
+    this.scheduleReconcile()
+  }
+
   private pocketOrder(): string[] {
     const live = this.pocketList()
     const liveIds = live.map((t) => t.id)
