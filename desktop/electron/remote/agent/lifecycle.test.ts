@@ -476,7 +476,12 @@ test('stop interrupts the live run, and only while one is actually running', asy
     h.calls[0].settle('interrupted')
     assert.equal((await p).outcome, 'interrupted')
     const view = h.lifecycle.view()
-    assert.equal(view.snapshot.chat.turns.at(-1)!.failed, true, 'the stopped turn is marked, not hidden')
+    const last = view.snapshot.chat.turns.at(-1)!
+    // RED IS FOR WHAT THEY DID NOT ASK FOR. `failed` would paint the turn red,
+    // latch the card to `failed`, and put the provider's parting error in the
+    // transcript as though it were the answer.
+    assert.equal(last.failed, undefined, 'a stopped turn is not a failed turn')
+    assert.equal(last.text, 'Stopped.', 'it says so, plainly, and stays out of the way')
     assert.equal(view.snapshot.queued.length, 0, 'stopping is not a retry — nothing is re-sent')
     assert.equal(view.record.phase, 'ready', 'and the chat is ready for the next message')
 

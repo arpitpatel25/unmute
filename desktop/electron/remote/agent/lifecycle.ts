@@ -540,7 +540,21 @@ function applySettlement(view: AgentConversationView, pending: AgentPendingSettl
   const accepted = view.record.accepted.find(a => a.submissionId === pending.submissionId)
   if (!accepted || view.record.generation !== pending.generation || view.record.runId !== pending.runId) throw new Error('Pending Agent settlement identity is invalid.')
   if (!view.snapshot.results?.[pending.submissionId]) {
-    view.snapshot.chat.turns.push({ role: 'agent', text: pending.result.text ?? pending.result.error?.message ?? 'Done.', at: pending.at, ...(pending.result.outcome !== 'completed' ? { failed: true } : {}), ...(pending.result.notice ? { notice: pending.result.notice } : {}) })
+    // A TURN THE USER STOPPED IS NOT A TURN THAT FAILED.
+    //
+    // `failed` does three things at once: it paints the turn red in the chat,
+    // it latches the card's status to `failed` (agentLine reads it back), and
+    // it puts the provider's parting error into the transcript as the answer.
+    // All three are wrong for something the person asked for. Red is for what
+    // they did not ask for.
+    const stopped = pending.result.outcome === 'interrupted'
+    view.snapshot.chat.turns.push({
+      role: 'agent',
+      text: stopped ? 'Stopped.' : pending.result.text ?? pending.result.error?.message ?? 'Done.',
+      at: pending.at,
+      ...(!stopped && pending.result.outcome !== 'completed' ? { failed: true } : {}),
+      ...(pending.result.notice ? { notice: pending.result.notice } : {}),
+    })
   }
   view.snapshot.results = { ...view.snapshot.results, [pending.submissionId]: pending.result }
   accepted.outcome = pending.result.outcome
