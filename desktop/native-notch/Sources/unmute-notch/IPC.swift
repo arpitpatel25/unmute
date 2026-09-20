@@ -686,7 +686,13 @@ enum Event {
     case userLeft(reason: String)                  // "blur" | "screenshot"
     case userReturned                              // …and inside the grace window, it re-opens
     case pocketMove(delta: Int)                    // carousel: which address
-    case pocketOpen                                // tap it open (sticky = an explicit aim)
+    case pocketOpen                                // tap it open (an explicit aim)
+    /// THE POINTER ARRIVED ON THE OPEN CARD — no instruction, just attention.
+    /// Main's pocket runs an idle clock and every other kind of use reaches it
+    /// as a command of its own; reading the card is the one that does not.
+    /// Sent once per arrival, never on exit, so it can only ever KEEP the
+    /// pocket up for one more window — never hold it open indefinitely.
+    case pocketHover
     case pocketRelease                             // let go — back to the notch
     /// Back to the FULL task. The pocket is a glance, not a destination:
     /// it exists because the panel is large, not because it is wrong.
@@ -812,6 +818,7 @@ enum Event {
         case .userReturned: return ["type": "userReturned"]
         case let .pocketMove(delta): return ["type": "pocketMove", "delta": delta]
         case .pocketOpen: return ["type": "pocketOpen"]
+        case .pocketHover: return ["type": "pocketHover"]
         case .pocketRelease: return ["type": "pocketRelease"]
         case .pocketExpand(let id):
             var payload: [String: Any] = ["type": "pocketExpand"]

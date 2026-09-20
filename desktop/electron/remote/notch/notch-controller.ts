@@ -357,6 +357,53 @@ export function relativeAge(ts: number | undefined, now = Date.now()): string {
 /** Leave and come straight back and you did not mean to leave — a ⌘-Tab to
  *  check the link the task just gave you should not cost you the panel. */
 const RETURN_GRACE_MS = 4000
+/**
+ * HOW LONG AN OPEN POCKET STAYS UP WITH NOTHING TOUCHING IT.
+ *
+ * Not to be confused with POCKET_IDLE_MS below, which is about MEMBERSHIP — how
+ * long an untouched task keeps its place in the pocket at all. This one is
+ * about the CARD: whether it is currently on your screen.
+ *
+ * The pocket used to be sticky: opened once, open until closed by hand. That is
+ * right for the card itself — it is small, it is at the top edge, and it costs
+ * nothing to leave there — but it is wrong for what an open pocket MEANS. An
+ * open pocket is the voice's address (see applyVoiceTarget): every word you say
+ * goes to the card instead of the router. That address going stale is the whole
+ * reason this clock exists. It is not tidying, it is aim.
+ *
+ * Twenty seconds, and it is short on purpose. The clock only ever runs on DEAD
+ * time: opening arms it, every gesture on the surface re-arms it (see the `on`
+ * wrapper), a live microphone suspends it outright, and a task that newly needs
+ * you re-arms it. So the question it answers is not "how long does a glance
+ * take" — nothing in the glance spends it — but "how long a silence means you
+ * have gone", and the honest answer to that is short. Past a couple of minutes
+ * it stops being different from sticky and the stale aim survives the context
+ * switch it was meant to lose.
+ *
+ * WHAT IT COSTS, stated plainly: a pause of more than twenty seconds between
+ * opening the card and doing anything about it drops the aim, and the words you
+ * then speak go to the router. Speaking itself is safe — the capture suspends
+ * the clock — so this is only the gap BEFORE you start, and the way back is one
+ * chord. That trade was made deliberately: a card that overstays is the failure
+ * that is silent, and a card that leaves early is the failure you can see.
+ *
+ * Spent on the WALL clock, not `Presence.awakeMs()`, and that is deliberate —
+ * it is the one window here that is not about giving you a chance to see
+ * something. Time away makes an aim MORE stale, not less: come back from lunch,
+ * speak, and the words must go to the router, not to the card you opened before
+ * you left. Demand windows are the opposite and correctly use presence.
+ *
+ * ONLY EVER THE POCKET. Nothing else on this surface is on a clock of its own:
+ * the expanded task and the cockpit are surfaces the user opened and stay until
+ * they close them. `stirPocket` no-ops when the pocket is shut, and the timer is
+ * armed in one place — `setPocketMode('open')` — so there is no state it can
+ * reach into.
+ *
+ * NOTHING IS LOST WHEN IT FIRES. A task that needs you is still saying so on
+ * the bar, the pocket still holds it, and one chord (right ⌘ then right ⌥) or a
+ * click on the notch brings the card straight back.
+ */
+export const POCKET_OPEN_IDLE_MS = 20_000
 const FADE_DONE_MS = 15 * 60 * 1000       // done fades from the wall after 15m
 const FADE_ERR_MS = 60 * 60 * 1000        // errored/stuck after 60m
 const AWAY_MS = 30 * 60 * 1000            // digest threshold
@@ -492,6 +539,8 @@ export class NotchController {
   private todayOnly = false
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
   private demandTimer: ReturnType<typeof setInterval> | null = null
+  /** Running only while the pocket is open and nothing has touched it. */
+  private pocketIdleTimer: ReturnType<typeof setTimeout> | null = null
   /** id → the last `demanding()` answer we rendered, so the tick can notice a
    *  window closing without re-rendering the world every minute. */
   private demandSeen = new Map<string, boolean>()
@@ -662,7 +711,20 @@ export class NotchController {
 
     // Helper events → runtime. Every handler calls the SAME internals the old
     // IPC handlers call (via deps).
-    const on = (type: string, fn: (e: NotchEvent) => void) => this.client.on(type, fn)
+    const on = (type: string, fn: (e: NotchEvent) => void) => this.client.on(type, (e) => {
+      // EVERY GESTURE ON THIS SURFACE COUNTS AS TOUCHING AN OPEN POCKET.
+      //
+      // Deliberately here rather than on a hand-picked list of pocket events.
+      // The card is reachable while the bar, the pill and the composer are all
+      // live, and someone working any of them has plainly not wandered off —
+      // a list would have to be kept in step with every new control forever,
+      // and the first one forgotten is a card that vanishes mid-use.
+      //
+      // `userLeft` is the single exclusion: going to another application is the
+      // opposite of acting here, so it must not buy the pocket more time.
+      if (type !== 'userLeft') this.stirPocket()
+      fn(e)
+    })
     on('agentSend', e => {
       const event = e as { submissionId: string; revision: number }
       this.sendAgentDraft(event.submissionId, event.revision)
@@ -729,6 +791,10 @@ export class NotchController {
     on('userReturned', () => this.onUserReturned())
     on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
     on('pocketOpen', () => { this.pocketAt = 0; this.setPocketMode('open'); this.reconcile() })
+    // THE HANDLING IS THE STIR. `on` re-arms the idle clock for every event
+    // from the surface, and a pointer resting on the card has nothing else to
+    // say — so this registration exists purely to let hover through that door.
+    on('pocketHover', () => {})
     on('pocketRelease', () => {
       // CLOSING THE POCKET RELEASES ITS ORDER — the next open re-sorts to
       // whatever has actually moved since. Expanding a card out of the pocket
@@ -1053,6 +1119,7 @@ export class NotchController {
     if (this.reconcileTimer) clearTimeout(this.reconcileTimer)
     if (this.demandTimer) clearInterval(this.demandTimer)
     if (this.captureWait) clearInterval(this.captureWait)
+    this.disarmPocketIdle()
   }
 
   // ── queue ──────────────────────────────────────────────────────────────────
@@ -1095,6 +1162,10 @@ export class NotchController {
     if (!this.captureWait || this.capturing()) return
     clearInterval(this.captureWait)
     this.captureWait = null
+    // SPEAKING TO THE CARD IS THE LOUDEST INTERACTION THERE IS, so an open
+    // pocket gets its whole window back from the moment the utterance settles —
+    // not from whenever the clock happened to be suspended.
+    this.stirPocket()
     const leave = this.deferredLeave
     this.deferredLeave = null
     if (leave) { this.deferredExpand = null; this.onUserLeft(leave); return }
@@ -1528,6 +1599,14 @@ export class NotchController {
     const queued = this.queue.includes(t.id)
     if (eligible && !queued) {
       this.queue.push(t.id)
+      // SOMETHING NEW WANTS YOU, AND THE POCKET IS WHERE IT LANDED.
+      //
+      // With the pocket open the auto-expand below is deliberately suppressed
+      // (the guard on `pocketMode`), so this card joins the rail instead —
+      // which is the pocket changing under the user because a task needs them,
+      // not because they did anything. That is still the surface earning its
+      // place on screen, so it gets a full window to be answered in.
+      this.stirPocket()
       // AUTO-EXPAND, guarded on `engaged === 'none'`.
       //
       // The guard is the whole design. Without it a task arriving while you are
@@ -1854,9 +1933,79 @@ export class NotchController {
     this.client.send({ type: 'pocket', data })
   }
 
+  // ── The idle clock ────────────────────────────────────────────────────────
+  //
+  // THE POCKET LETS GO WHEN YOU HAVE STOPPED USING IT. It used to be sticky:
+  // opened once, up until closed by hand. Harmless for the card — it is small
+  // and lives at the top edge — and wrong for what an open pocket MEANS, which
+  // is where your voice lands. See POCKET_OPEN_IDLE_MS.
+  //
+  // "Using it" is read as widely as it can honestly be read:
+  //
+  //   opening it      arms a fresh window, by whichever route (setPocketMode).
+  //   acting on it    every event the surface sends re-arms it — the carousel,
+  //                   the ‹ ›, the swipe, the buttons, a hover over the card,
+  //                   a keystroke in a composer. See the `on` wrapper.
+  //   speaking to it  a live capture SUSPENDS the clock instead of racing it,
+  //                   and the window starts over when the capture ends.
+  //   being needed    a task that newly demands you — or an Agent answer — while
+  //                   the pocket is open re-arms it: the card changed under your
+  //                   eye because something wants you, so your window to react
+  //                   starts then, not whenever you last touched the surface.
+  //                   This is the case the user has to be given for free; they
+  //                   did nothing to earn it and did nothing to lose it either.
+
+  /** Something touched the pocket. No-op when it is closed, which is why
+   *  callers never have to ask. */
+  private stirPocket(): void {
+    if (this.pocketMode !== 'open') return
+    this.armPocketIdle()
+  }
+
+  private armPocketIdle(): void {
+    this.disarmPocketIdle()
+    this.pocketIdleTimer = setTimeout(() => this.pocketWentIdle(), POCKET_OPEN_IDLE_MS)
+    this.pocketIdleTimer.unref?.()
+  }
+
+  private disarmPocketIdle(): void {
+    if (!this.pocketIdleTimer) return
+    clearTimeout(this.pocketIdleTimer)
+    this.pocketIdleTimer = null
+  }
+
+  /** The window ran out. Closes exactly as Escape does — including releasing
+   *  the aim — because a card that went away while the voice still pointed at
+   *  it would be strictly worse than one that never went away at all. */
+  private pocketWentIdle(): void {
+    this.pocketIdleTimer = null
+    if (this.pocketMode !== 'open') return
+    // NOT MID-SENTENCE. The destination is read at submit, so closing here
+    // would hand the words to the router instead of the card the person was
+    // looking at when they started speaking. Held, and `afterCapture` gives it
+    // a full window again once the utterance is settled.
+    if (this.capturing()) {
+      log.event('pocket-idle-held', { why: 'capture in progress' })
+      this.deferUntilCaptureEnds()
+      return
+    }
+    log.event('pocket-idle-close', { after: POCKET_OPEN_IDLE_MS, at: this.pocketAt })
+    this.frozenOrder = null
+    this.engaged = 'none'
+    this.setFocus(null)
+    this.setPocketMode('closed')
+    this.reconcile()
+  }
+
   private setPocketMode(mode: PocketMode): void {
     if (this.pocketMode === mode) return
     this.pocketMode = mode
+    // THE IDLE CLOCK RUNS ONLY WHILE THE CARD IS UP, and every route in arms a
+    // fresh one. Put here rather than on the handlers so that opening the
+    // pocket is the thing that starts it, whoever asked — the chord, a click, a
+    // session link, coming back from an expanded card, or a path written later.
+    if (mode === 'open') this.armPocketIdle()
+    else this.disarmPocketIdle()
     // DELIBERATELY DOES NOT RESET THE INDEX. It used to land on 0 on every
     // open, which is right for a FRESH open (the `pocketOpen` handler resets
     // there) and wrong for coming back from an expanded card: you left from
@@ -2371,6 +2520,11 @@ export class NotchController {
     // card in front of the very thing it is a card for.
     if (!this.agentOpen) this.agentUnread = true
     if (this.agentOpen) this.sendAgentDetail()
+    // AN ANSWER IS THE AGENT'S CARD ASKING FOR YOU, and the pocket is where it
+    // arrives — the same claim a newly demanding task makes in onTransition, so
+    // it earns the same fresh window to be read in. The Agent is not a task and
+    // never passes through that path, which is the only reason this is here.
+    this.stirPocket()
     log.event('agent-answered', { chars: text.length, failed, unread: this.agentUnread })
     // WHAT THE USER NOW SEES, AND WHERE. The card carries only the first line,
     // so the line itself is recorded — a report of "it said something odd" is
@@ -2814,6 +2968,13 @@ export class NotchController {
    * nothing, that is the answer.
    */
   notifyCapturePhase(phase: string, taskId: string | null): void {
+    // TALKING TO THE CARD IS USING THE CARD. While the pocket is open the voice
+    // is aimed at it, so any capture at all — start, transcribe, land — is this
+    // person working the pocket, and the idle clock has to hear about it. It
+    // cannot come through the `on` wrapper: a capture is not a surface gesture,
+    // it arrives from the host. Without this, speaking for ten seconds inside
+    // an open window still left the card closing fifteen seconds later.
+    this.stirPocket()
     // LANDED. `idle` with a task on it is the router reporting where the
     // utterance actually went, and speaking to a task is the plainest form of
     // talking to it there is — but it never passes through a handler here, so

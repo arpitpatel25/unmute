@@ -44,6 +44,13 @@ export type TaskStatusName = 'processing' | 'needs-user' | 'ready' | 'stuck' | '
  * Closing is the whole control. Escape shuts the card and the aim goes with it,
  * mid-sentence or not, because that is already what closing means on the
  * expanded panel. Nothing new to learn, and no modifier to remember.
+ *
+ * AND IT CLOSES ITSELF WHEN YOU HAVE STOPPED USING IT — see POCKET_OPEN_IDLE_MS
+ * in notch-controller.ts. That is not a retreat from "opening is the user's
+ * decision": it is the same rule read forwards. An aim you chose 40 minutes ago
+ * is not a choice you are still making, and a pocket that can only be closed by
+ * hand is one that silently swallows whatever you say next. Every automatic
+ * close does exactly what Escape does, including releasing the aim.
  */
 export type PocketMode = 'closed' | 'open'
 
@@ -477,8 +484,15 @@ export type NotchEvent =
   | { type: 'userReturned' }
   /** Move the carousel. `to` is an absolute slot index; `delta` steps. */
   | { type: 'pocketMove'; delta?: number; to?: number }
-  /** Tap the pocket open (sticky), or let it go back to the notch. */
+  /** Tap the pocket open, or let it go back to the notch. */
   | { type: 'pocketOpen' }
+  /** THE POINTER ARRIVED ON THE OPEN CARD. Carries no instruction — it exists
+   *  so the pocket's idle clock knows the one kind of attention that sends no
+   *  command of its own. Reading the card is using it, and a card that went
+   *  away from under a pointer that was about to press ‹ › would hand the click
+   *  to whatever was behind it. Sent once per arrival, never on exit: a ping
+   *  cannot leave the pocket stuck open the way a hold could. */
+  | { type: 'pocketHover' }
   /** Hold background audio quiet from an open card, or give it back. The hold
    *  is released on collapse too — a mute the user can no longer see is one
    *  they cannot undo. */

@@ -1366,6 +1366,17 @@ final class AppController: NSObject, NotchResizing {
                 interaction.reduce(.pointerEntered(.bar))
                 projectInteraction()
                 if !isExpanded(model.state), model.state != .dormant { refreshBar() }
+                // READING THE CARD IS USING IT, and it is the only kind of use
+                // that sends main nothing. Main closes an untouched pocket on a
+                // clock; everything else that keeps it up — the carousel, the
+                // buttons, the swipe, the voice — arrives there as a command
+                // already. A pointer that came to rest on the card does not, so
+                // it would be the one way to have the card taken out from under
+                // you while you were looking straight at it.
+                //
+                // Inside the deduplicating branch on purpose: one line per
+                // arrival, not one per redraw.
+                if model.pocket.isOpen { model.emit(.pocketHover) }
             }
             // A rested rung outranks the plain reveal: the question a quiet
             // notch raises is "is anything waiting on me", and idle cannot

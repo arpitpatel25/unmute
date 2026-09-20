@@ -1,8 +1,8 @@
-import { test } from 'node:test'
+import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import {
-  NotchController, classify, relativeAge, headlineFor,
+  NotchController, classify, relativeAge, headlineFor, POCKET_OPEN_IDLE_MS,
   type TaskLite, type NotchClientLike, type NotchControllerDeps, type ProposalLite,
 } from './notch-controller'
 import type { NotchCommand, NotchEvent, CockpitPayload } from './notch-client'
@@ -3362,4 +3362,182 @@ test('the Agent chat offers Stop while it is busy, and stopping reaches the host
   h.controller.agentAnswered('The Agent interaction was interrupted.', true)
   h.flush()
   assert.equal(h.client.last('showTask')!.task.canStop, false, 'and it goes as soon as the turn is over')
+})
+
+/**
+ * THE POCKET LETS GO WHEN YOU STOP USING IT.
+ *
+ * It was sticky: opened once, up until closed by hand. What makes that wrong is
+ * not clutter — the card is small — but AIM. An open pocket is the voice's
+ * address, so a card left up from an hour ago silently swallows the next thing
+ * you say. The clock exists to bound that, and every one of these tests is
+ * really about which things count as still using it.
+ *
+ * `mock.timers` covers setTimeout only, so the controller's own intervals and
+ * the harness's direct `flush()` behave exactly as they do in every other test.
+ */
+function idlePocket(h: Harness): void {
+  mock.timers.tick(POCKET_OPEN_IDLE_MS + 1)
+  h.flush()
+}
+
+test('an untouched pocket closes itself, and the chord brings it straight back', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const h = setup()
+    put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', name: 'A' }))
+    h.client.fire({ type: 'pocketOpen' })
+    h.flush()
+    assert.equal(pocketOf(h)!.mode, 'open')
+
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 1000)
+    assert.equal(pocketOf(h)!.mode, 'open', 'it is not hurried off the screen')
+
+    idlePocket(h)
+    assert.equal(pocketOf(h)!.mode, 'closed', 'nothing touched it, so it let go')
+    assert.deepEqual(h.calls.focus?.at(-1), [null],
+      'and it took the voice with it — a closed pocket must never leave an aim behind')
+
+    h.controller.pocketChord()
+    h.flush()
+    assert.equal(pocketOf(h)!.mode, 'open', 'the way back is the way in')
+    h.controller.dispose()
+  } finally { mock.timers.reset() }
+})
+
+test('using the pocket buys it another window', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const h = setup()
+    put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', name: 'A' }))
+    put(h, makeTask({ id: 'b', state: 'processing', kind: 'session', name: 'B' }))
+    h.client.fire({ type: 'pocketOpen' })
+    h.flush()
+
+    // Two near-misses back to back: without a reset the second would close it.
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 1000)
+    h.client.fire({ type: 'pocketMove', delta: 1 })
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 1000)
+    h.client.fire({ type: 'pocketHover' } as NotchEvent)
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 1000)
+    h.flush()
+    assert.equal(pocketOf(h)!.mode, 'open', 'walking it and reading it are both using it')
+
+    idlePocket(h)
+    assert.equal(pocketOf(h)!.mode, 'closed', 'and the window still runs out once you stop')
+    h.controller.dispose()
+  } finally { mock.timers.reset() }
+})
+
+test('the pocket does not close mid-sentence, and gets a fresh window afterwards', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    let capturing = true
+    const h = setup({ deps: { isCapturing: () => capturing } })
+    put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', name: 'A' }))
+    h.client.fire({ type: 'pocketOpen' })
+    h.flush()
+    assert.deepEqual(h.calls.focus?.at(-1), ['a'], 'the open card is the address')
+
+    idlePocket(h)
+    assert.equal(pocketOf(h)!.mode, 'open',
+      'closing here would send the words to the router instead of the card')
+    assert.deepEqual(h.calls.focus?.at(-1), ['a'], 'the aim survives the whole utterance')
+
+    capturing = false
+    h.controller.notifyCapturePhase('idle', 'a')
+    h.flush()
+    assert.equal(pocketOf(h)!.mode, 'open', 'speaking to it is using it — the window starts over')
+
+    idlePocket(h)
+    assert.equal(pocketOf(h)!.mode, 'closed', 'and then it lets go like any other silence')
+    h.controller.dispose()
+  } finally { mock.timers.reset() }
+})
+
+test('speaking to the card inside the window keeps it up afterwards', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    let capturing = false
+    const h = setup({ deps: { isCapturing: () => capturing } })
+    put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', name: 'A' }))
+    h.client.fire({ type: 'pocketOpen' })
+    h.flush()
+
+    // An utterance that starts and ends WELL INSIDE the window. It never
+    // touches the deferral path, so the only thing that can carry it to the
+    // clock is the capture phase itself.
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 5000)
+    capturing = true
+    h.controller.notifyCapturePhase('recording', 'a')
+    capturing = false
+    h.controller.notifyCapturePhase('idle', 'a')
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 5000)
+    h.flush()
+    assert.equal(pocketOf(h)!.mode, 'open',
+      'you spoke to this card ten seconds ago — it is not idle')
+    h.controller.dispose()
+  } finally { mock.timers.reset() }
+})
+
+test('a task that newly needs you resets the open pocket clock', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const h = setup()
+    put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', name: 'A' }))
+    h.client.fire({ type: 'pocketOpen' })
+    h.flush()
+
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 1000)
+    // The card joins the open pocket's rail rather than expanding over it, so
+    // this IS the surface changing under the user because something wants them.
+    put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Q', question: { text: 'Allow?' } }))
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 1000)
+    h.flush()
+    assert.equal(pocketOf(h)!.mode, 'open',
+      'the window to answer starts when it asks, not when you last clicked')
+
+    idlePocket(h)
+    assert.equal(pocketOf(h)!.mode, 'closed')
+    assert.equal(h.client.last('setState')!.attention, 1,
+      'and nothing is lost: the bar still says something is waiting on you')
+    h.controller.dispose()
+  } finally { mock.timers.reset() }
+})
+
+test('an Agent answer resets the open pocket clock too', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const h = setup()
+    put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', name: 'A' }))
+    h.client.fire({ type: 'pocketOpen' })
+    h.flush()
+
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 1000)
+    // The Agent is an element of the pocket, not a task, so it never reaches
+    // the queue path that gives a newly demanding TASK its window.
+    h.controller.agentAnswered('Here is what I found')
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 1000)
+    h.flush()
+    assert.equal(pocketOf(h)!.mode, 'open', 'it just answered you — that is not idle')
+    h.controller.dispose()
+  } finally { mock.timers.reset() }
+})
+
+test('switching to another app does not buy the pocket more time', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const h = setup()
+    put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', name: 'A' }))
+    h.client.fire({ type: 'pocketOpen' })
+    h.flush()
+
+    mock.timers.tick(POCKET_OPEN_IDLE_MS - 1000)
+    h.client.fire({ type: 'userLeft', reason: 'blur' } as unknown as NotchEvent)
+    mock.timers.tick(2000)
+    h.flush()
+    assert.equal(pocketOf(h)!.mode, 'closed',
+      'going to another window is the opposite of using this one')
+    h.controller.dispose()
+  } finally { mock.timers.reset() }
 })
