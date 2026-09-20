@@ -116,6 +116,7 @@ import { IndexSearchCapability } from './agent/capabilities/index-search'
 import { warmTurnSearch } from './agent/sessions/turn-search'
 import { locateSession } from './agent/sessions/locate'
 import { SessionTurnIndex } from './agent/sessions/turn-index'
+import { sweepRouterSessions } from './agent/sessions/router-sweep'
 import { AgentContinuationService } from './agent/sessions/service'
 import { validateContinuationSources } from './agent/sessions/sources'
 import { isDescriptiveTitle, requireWorkspaceLabel } from './agent/metadata'
@@ -927,6 +928,7 @@ const pocketActions = {
   },
 }
 const turnIndex = new SessionTurnIndex()
+let routerSweepTimer: NodeJS.Timeout | null = null
 let continuationInteractionId: string | undefined
 const agentContinuations = new AgentContinuationService({
   interactionId: () => continuationInteractionId,
@@ -6429,6 +6431,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // roots. Pure file work — no model call and no tokens — so it runs whether
     // or not anyone ever speaks to the Agent.
     turnIndex.start().catch(error => log.warn('turn index failed to start', { error: (error as Error).message }))
+    // The router's leftovers: one transcript per spoken command, never resumed,
+    // in the user's own Claude and Codex history. Swept once at startup and
+    // every six hours after — see sessions/router-sweep.ts for what it will
+    // not touch (the Agent's own chat, anything inside the grace window).
+    void sweepRouterSessions().catch(error => log.warn('router sweep failed', { error: (error as Error).message }))
+    // Often enough that a day of routing never piles up, rare enough to be
+    // invisible: the sweep is a stat per file and opens only what is old.
+    const ROUTER_SWEEP_MS = 6 * 60 * 60 * 1000
+    routerSweepTimer = setInterval(() => {
+      void sweepRouterSessions().catch(error => log.warn('router sweep failed', { error: (error as Error).message }))
+    }, ROUTER_SWEEP_MS)
+    routerSweepTimer.unref()
     // Forget machine-authored streams nothing has used in weeks. Runs AFTER
     // rehydrate, so a task that still holds an entry is counted as a member
     // before anything is dropped. User-named streams never decay.
@@ -8119,6 +8133,7 @@ export function _resetForTest(): void {
   disposeMcpServer()
   try { manager?.stopMaintenance() } catch { /* ignore */ }
   try { turnIndex.stop() } catch { /* ignore */ }
+  if (routerSweepTimer) { clearInterval(routerSweepTimer); routerSweepTimer = null }
   manager = null
   completeFn = null
   try { router?.dispose() } catch { /* ignore */ }

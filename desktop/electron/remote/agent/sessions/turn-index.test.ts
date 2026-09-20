@@ -589,3 +589,27 @@ test('a session tailed a day later counts the gap across the two passes', async 
   await index.sync()
   assert.equal((await sessionsOf(w.indexRoot)).find(s => s.id === CLAUDE_ID)!.returns, 1)
 })
+
+test('Unmute talking to itself is never indexed, and is dropped if it already was', async () => {
+  const w = await workspace()
+  const index = new SessionTurnIndex({ roots: w.roots, root: w.indexRoot })
+  await fs.writeFile(join(w.claudeProjects, `${CLAUDE_ID}.jsonl`),
+    JSON.stringify({ type: 'user', cwd: '/Users/x/.unmute/remote/router-headless', sessionId: CLAUDE_ID, message: { role: 'user', content: 'Spoken command: "message Tanmay"' } }) + '\n')
+  const real = 'bbbbbbbb-2222-4333-8444-555555555555'
+  await fs.writeFile(join(w.claudeProjects, `${real}.jsonl`),
+    JSON.stringify({ type: 'user', cwd: '/Users/x/tools/unmute', sessionId: real, message: { role: 'user', content: 'message Tanmay on WhatsApp' } }) + '\n')
+  await index.sync()
+
+  const sessions = (await fs.readFile(join(w.indexRoot, 'sessions.jsonl'), 'utf8')).split('\n').filter(Boolean).map(l => JSON.parse(l) as IndexedSession)
+  assert.deepEqual(sessions.map(s => s.id), [real])
+  const turns = (await fs.readFile(join(w.indexRoot, 'turns.jsonl'), 'utf8')).split('\n').filter(Boolean).map(l => JSON.parse(l) as IndexedTurn)
+  assert.deepEqual(turns.map(t => t.s), [real])
+
+  // And an index written by an older version is compacted on the next pass.
+  await fs.appendFile(join(w.indexRoot, 'turns.jsonl'), JSON.stringify({ s: CLAUDE_ID, t: 1, o: 0, text: 'Spoken command: "message Tanmay"' }) + '\n')
+  await fs.appendFile(join(w.indexRoot, 'sessions.jsonl'), JSON.stringify({ id: CLAUDE_ID, provider: 'claude', cwd: '/Users/x/.unmute/remote/router-headless', provenance: 'main', path: '/x', firstAt: 1, lastAt: 1, turns: 1 }) + '\n')
+  const reopened = new SessionTurnIndex({ roots: w.roots, root: w.indexRoot })
+  await reopened.sync()
+  const after = (await fs.readFile(join(w.indexRoot, 'turns.jsonl'), 'utf8')).split('\n').filter(Boolean).map(l => JSON.parse(l) as IndexedTurn)
+  assert.deepEqual(after.map(t => t.s), [real])
+})

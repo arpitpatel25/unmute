@@ -214,6 +214,39 @@ const RETURN_GAP_MS = 30 * 60_000
  */
 const BRIEFING = [/^You are /, /^\/(?:Users|home|tmp|Volumes)\//]
 
+/**
+ * UNMUTE TALKING TO ITSELF IS NOT THE PERSON'S HISTORY.
+ *
+ * A BRIEFING is labelled and kept, because the same words could be something
+ * a person typed. These are different: the cwd says outright that Unmute
+ * spawned the session for its own machinery, and the only reason the person's
+ * words appear inside is that Unmute quoted them into a prompt. There is no
+ * reading of "the thing we were working on" that means one of these.
+ *
+ * On one real machine they were 850 of 4,792 sessions, and they took five of
+ * the top six results for "Tanmay" — the router classifying the very sentence
+ * that asked. Labelling was not enough: the Agent still had to read past them.
+ *
+ *  - router-headless / router-codex-exec: ONE EXEC PER ROUTE, never resumed,
+ *    a single classification of one spoken command.
+ *  - unmute-agent/runtime: the Agent's own chat. It IS resumed, so the files
+ *    stay on disk and only the indexing stops.
+ *  - agent-eval-*: the behaviour evals' temp dirs — test fixtures, not history.
+ *
+ * Matched on cwd, which is recorded for every session and cannot be faked by
+ * the text of a turn.
+ */
+const MACHINERY = [
+  /[\\/]\.unmute[\\/]remote[\\/]router-[A-Za-z0-9-]+/,
+  /[\\/]unmute-agent[\\/]runtime(?:[\\/]|$)/,
+  /[\\/]agent-eval-[A-Za-z0-9]+(?:[\\/]|$)/,
+]
+
+/** True when this session is Unmute's own machinery — see MACHINERY. */
+export function isUnmuteMachinery(cwd: string | undefined): boolean {
+  return !!cwd && MACHINERY.some(form => form.test(cwd))
+}
+
 /** Attachment references Codex wraps around a turn — opening AND closing, and
  *  several in a row when more than one image was attached. The words after
  *  them are still the person's, so strip the tags rather than drop the turn. */
@@ -316,6 +349,7 @@ export class SessionTurnIndex {
   private running = false
   private again = false
   private loaded = false
+  private compacted = false
   /** DEV-ONLY: turns appended during the current pass, for the pass trace. */
   private appended = 0
 
@@ -375,6 +409,7 @@ export class SessionTurnIndex {
     const started = this.now()
     await fs.mkdir(this.root, { recursive: true, mode: 0o700 })
     await this.load()
+    await this.compact()
     let budget = PASS_BUDGET
     let dirty = false
     let files = 0
@@ -426,6 +461,14 @@ export class SessionTurnIndex {
     if (stat.size <= start) return 0
 
     if (!this.sessions.has(id)) await this.describe(id, path, harness)
+    // Unmute's own machinery is stepped over, not labelled: the cursor jumps
+    // to the end so the file is never read again, and nothing it contains
+    // reaches the index. see MACHINERY.
+    if (isUnmuteMachinery(this.sessions.get(id)?.cwd)) {
+      this.sessions.delete(id)
+      this.cursors.set(path, { offset: stat.size, size: stat.size })
+      return 0
+    }
 
     const handle = await fs.open(path, 'r').catch(() => null)
     if (!handle) return 0
@@ -595,6 +638,40 @@ export class SessionTurnIndex {
   private dropSession(id: string): void {
     const session = this.sessions.get(id)
     if (session) { session.turns = 0; session.firstAt = 0; session.lastAt = 0; delete session.returns }
+  }
+
+  /**
+   * Drop machinery that a previous version already indexed.
+   *
+   * Runs once per process, after load, and only rewrites when it finds
+   * something: a turn's `o` is an offset into its TRANSCRIPT, never into
+   * turns.jsonl, so removing lines here cannot invalidate the rest. Cursors
+   * are left alone — those files are excluded at ingest now, so a kept cursor
+   * is exactly what stops them being read again.
+   */
+  private async compact(): Promise<void> {
+    if (this.compacted) return
+    this.compacted = true
+    const drop = new Set<string>()
+    for (const [id, session] of this.sessions) if (isUnmuteMachinery(session.cwd)) drop.add(id)
+    if (!drop.size) return
+    let kept = 0
+    let removed = 0
+    const lines: string[] = []
+    try {
+      for (const line of (await fs.readFile(this.paths.turns, 'utf8')).split('\n')) {
+        if (!line.trim()) continue
+        let id: string | undefined
+        try { id = (JSON.parse(line) as IndexedTurn).s } catch { id = undefined }
+        if (id && drop.has(id)) { removed++; continue }
+        kept++
+        lines.push(line + '\n')
+      }
+      await writeFileAtomic(this.paths.turns, lines.join(''))
+    } catch { return }
+    for (const id of drop) this.sessions.delete(id)
+    await this.flush()
+    devTrace('turn-index.compacted', { sessionsDropped: drop.size, turnsDropped: removed, turnsKept: kept })
   }
 
   private async load(): Promise<void> {
