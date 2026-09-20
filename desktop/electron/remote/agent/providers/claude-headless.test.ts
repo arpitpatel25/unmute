@@ -11,7 +11,7 @@ import {
   type HeadlessChild,
 } from './claude-headless'
 import { ClaudeCodeProvider } from './claude'
-import { ExecutorBackedAgentProcess, type AgentProcessEvent, type AgentProcessLaunch } from '../provider'
+import { ExecutorBackedAgentProcess, settledByInterrupt, type AgentProcessEvent, type AgentProcessLaunch } from '../provider'
 
 // Every shape below was copied from a real `claude -p --output-format
 // stream-json --verbose` run, not invented. The parser is only worth what its
@@ -833,4 +833,40 @@ test('the rest of the model chain is handed to Claude as --fallback-model', () =
   const argv = headlessArgv({ ...launch({ kind: 'fresh', id: FRESH }), model: 'opus', fallbackModels: ['sonnet', 'haiku'] }, 'C')
   assert.deepEqual(argv.slice(argv.indexOf('--fallback-model'), argv.indexOf('--fallback-model') + 2), ['--fallback-model', 'sonnet,haiku'])
   assert.ok(!headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'C').includes('--fallback-model'))
+})
+
+/**
+ * FIELD REPORT (2026-09-20). Press Stop in the Agent's chat and the chat went
+ * red with "The Agent provider stopped unexpectedly. Retry this request in a
+ * fresh turn." Nothing unexpected had happened — the person asked for it.
+ *
+ * SIGINT does not kill the CLI silently. It prints a final `result` line on the
+ * way out, and that line is never `subtype: 'success'`, so `headlessEvents`
+ * reads it the only way it can — as a failure. `readStdout` then sets
+ * `completed`, which is exactly the flag `onExit`'s `interrupted && !completed`
+ * branch was guarding on, so the driver's own account of the stop never fired.
+ */
+test('a failed result during an interrupt is the stop, not a crash', () => {
+  const crash = headlessEvents({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'aborted' })
+  assert.equal(crash.length, 1)
+  assert.equal(crash[0].type, 'completion')
+  assert.equal((crash[0] as { outcome: string }).outcome, 'failed', 'the parser cannot know, and must not guess')
+
+  const settled = settledByInterrupt(crash[0], true)
+  assert.deepEqual(settled, { type: 'completion', outcome: 'interrupted' },
+    'the driver holds both facts, so it is where they are put back together')
+  assert.equal((settled as { failure?: unknown }).failure, undefined,
+    "the CLI's parting account of a turn WE ended explains nothing the user needs")
+})
+
+test('nothing else is reclassified, and not while running normally', () => {
+  const failure = { type: 'completion' as const, outcome: 'failed' as const, failure: { subtype: 'error_max_turns' } }
+  assert.deepEqual(settledByInterrupt(failure, false), failure, 'a real failure stays a real failure')
+
+  const answered = { type: 'completion' as const, outcome: 'completed' as const, finalText: 'Done.' }
+  assert.deepEqual(settledByInterrupt(answered, true), answered,
+    'an answer already given is not rewritten by however the process ended')
+
+  const activity = { type: 'activity' as const, kind: 'thinking' as const, summary: 'Thinking' }
+  assert.deepEqual(settledByInterrupt(activity, true), activity, 'only completions carry an outcome')
 })

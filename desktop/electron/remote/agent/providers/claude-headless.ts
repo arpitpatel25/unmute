@@ -1,9 +1,10 @@
 import { spawn as spawnProcess } from 'node:child_process'
 import { promises as fs } from 'node:fs'
-import type {
-  AgentProcessDriver,
-  AgentProcessEvent,
-  AgentProcessLaunch,
+import {
+  settledByInterrupt,
+  type AgentProcessDriver,
+  type AgentProcessEvent,
+  type AgentProcessLaunch,
 } from '../provider'
 import { traceStreamLine, type AgentTrace } from '../trace'
 import { claudeFallbackReason, claudeModelUnavailable } from '../modelAvailability'
@@ -466,8 +467,9 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
         // explanation must already be written down when the end is announced.
         for (const trace of traceStreamLine(parsed)) this.onTrace(trace)
         for (const event of headlessEvents(parsed, this.turnState)) {
-          if (event.type === 'completion') this.completed = true
-          this.queue.emit(event)
+          const settled = settledByInterrupt(event, this.interrupted)
+          if (settled.type === 'completion') this.completed = true
+          this.queue.emit(settled)
         }
       }
     } catch { /* the exit handler is the backstop */ }
@@ -668,7 +670,7 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
           // a resumed process re-announces the same one, and taking it again is
           // harmless. What must not happen is losing it on a respawn.
           if (event.type === 'handle') this.sessionId = event.sessionId
-          this.queue.emit(event)
+          this.queue.emit(settledByInterrupt(event, this.interrupted))
         }
       }
     } catch { /* exit is the backstop */ }

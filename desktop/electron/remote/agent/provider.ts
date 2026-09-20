@@ -142,6 +142,31 @@ export type AgentProcessEvent =
    *  persistent driver keeps them, and because a clean exit has nothing to say. */
   | { type: 'exit'; exitCode: number; stderrTail?: readonly string[] }
 
+/**
+ * A STOP IS NOT A CRASH, AND ONLY THE DRIVER KNOWS WHICH IT WAS.
+ *
+ * SIGINT does not kill the CLI silently — it prints a final `result` line on
+ * the way out, and that line is never `subtype: 'success'`. `headlessEvents`
+ * reads it the only way it can, as a failure, because nothing in a stream of
+ * JSON says whether the process was asked to stop or fell over.
+ *
+ * That verdict then travelled: the supervisor found a failure with no code and
+ * stamped `provider-crashed`, and the person who had just pressed Stop was told
+ * "The Agent provider stopped unexpectedly. Retry this request in a fresh turn."
+ * Nothing unexpected had happened. They asked for it.
+ *
+ * The driver is the one layer holding both facts, so it is where they are put
+ * back together. `onExit` already did this — `interrupted && !completed` — but
+ * the CLI's own result line sets `completed` first, so that branch had stopped
+ * firing for the case it was written for.
+ */
+export function settledByInterrupt(event: AgentProcessEvent, interrupted: boolean): AgentProcessEvent {
+  if (!interrupted || event.type !== 'completion' || event.outcome !== 'failed') return event
+  // The CLI's parting account of a turn WE ended explains nothing the user
+  // needs, so it is dropped rather than carried into a failure they did not have.
+  return { type: 'completion', outcome: 'interrupted' }
+}
+
 export interface AgentProcessLaunch {
   model?: string
   /** Tried in order when `model` is unavailable. */

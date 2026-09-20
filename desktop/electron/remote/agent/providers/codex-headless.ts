@@ -1,7 +1,7 @@
 import { spawn as spawnProcess } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
-import type { AgentProcessDriver, AgentProcessEvent, AgentProcessLaunch } from '../provider'
+import { settledByInterrupt, type AgentProcessDriver, type AgentProcessEvent, type AgentProcessLaunch } from '../provider'
 
 const EXIT_DRAIN_CAP_MS = 2_000
 const liveTurns = new Set<{ kill(signal: NodeJS.Signals): void }>()
@@ -226,8 +226,9 @@ export class CodexHeadlessProcess implements AgentProcessDriver {
         let parsed: unknown
         try { parsed = JSON.parse(line) } catch { continue }
         for (const event of parser.events(parsed)) {
-          if (event.type === 'completion') this.completed = true
-          this.queue.emit(event)
+          const settled = settledByInterrupt(event, this.interrupted)
+          if (settled.type === 'completion') this.completed = true
+          this.queue.emit(settled)
         }
       }
     } catch { /* exit is the authoritative backstop */ }
