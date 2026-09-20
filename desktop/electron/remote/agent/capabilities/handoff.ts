@@ -8,6 +8,7 @@ import type { ProviderId } from '../../providers.ts'
 import { isAbsolute } from 'node:path'
 import { requireAgentMetadata } from '../metadata'
 import { diagnostic } from '../../diagnostics'
+import { indexFindings } from '../retrieval-ledger'
 
 /**
  * Handing outside work to the Orchestrator.
@@ -87,7 +88,10 @@ const tools = [
             + ' a one-sentence request becomes a one-sentence task. The session that picks'
             + ' this up is fully tooled, so every extra clause you invent is work it will'
             + ' actually go and do. Material carried from earlier work does not belong here —'
-            + ' that is what context is for.',
+            + ' that is what context is for. WHO OR WHICH ONE YOU WORKED OUT BY READING is'
+            + ' carried work, not part of their sentence: "the contact saved as Tanmay IIT GN"'
+            + ' is something you established, so it goes in context with the sessions that'
+            + ' established it, never appended to their request.',
         },
         context: {
           type: 'string', maxLength: MAX_CONTEXT_LENGTH,
@@ -96,7 +100,10 @@ const tools = [
             + ' harnesses and how several sessions become one — read what you need, then write'
             + ' the account yourself. It is BACKGROUND, never a list of instructions: the'
             + ' session is told to get familiar with it, not to carry it out. Never paste'
-            + ' bare session identifiers; the new session cannot look them up.',
+            + ' bare session identifiers; the new session cannot look them up. Whatever'
+            + ' index_search turned up that made you confident — which person, which project,'
+            + ' which file, what was decided — belongs here, with sourceSessions naming where'
+            + ' it came from.',
         },
         sourceSessions: {
           type: 'array', maxItems: MAX_SOURCES,
@@ -124,6 +131,13 @@ const tools = [
         cwd: {
           type: 'string', maxLength: 4096,
           description: 'Absolute working folder for the synthesized continuation, when prior work is project-bound.',
+        },
+        foundNothingRelevant: {
+          type: 'string', minLength: 3, maxLength: 200,
+          description: 'Only when this turn searched past sessions and NONE of what came back'
+            + ' bears on this work: say so in a few words. Required in that case, because a'
+            + ' search that returned sessions and a handoff that carries nothing is how a new'
+            + ' session ends up rediscovering what was already on disk.',
         },
         sameJobNewInstance: {
           type: 'string', maxLength: 300,
@@ -291,6 +305,31 @@ export class HandoffCapability implements CapabilityModule {
         const cwd = value.cwd
         if (cwd !== undefined && (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd.length > 4096)) {
           return fail('invalid-input', 'cwd must be an absolute path')
+        }
+        const rawNothing = value.foundNothingRelevant
+        if (rawNothing !== undefined && (typeof rawNothing !== 'string' || rawNothing.trim().length < 3 || rawNothing.length > 200)) {
+          return fail('invalid-input', 'foundNothingRelevant must be a few words saying why none of what you found bears on this work')
+        }
+        // WHAT THIS TURN FOUND DOES NOT GET LEFT ON THE FLOOR.
+        //
+        // On 2026-09-20 the Agent searched five spellings across two pages,
+        // established that "Tanmay" is the contact saved as "Tanmay IIT GN",
+        // and then created the task with no context and no sourceSessions,
+        // with that identification appended to the user's own sentence. The
+        // receiving session could not tell what had been established from what
+        // had been asked, and nothing recorded where it came from.
+        //
+        // The rule is only armed when a search in THIS turn actually returned
+        // sessions, so a request with nothing behind it hands off as freely as
+        // it ever did. see retrieval-ledger.ts.
+        const found = indexFindings(ctx.principal.kind === 'unmute-agent' ? ctx.principal.interactionId : undefined)
+        if (found && !carried && !(typeof rawNothing === 'string' && rawNothing.trim())) {
+          return fail('invalid-input',
+            `index_search returned ${found.matchedSessions} session${found.matchedSessions === 1 ? '' : 's'} this turn`
+            + ` for ${found.terms.slice(0, 4).map(term => JSON.stringify(term)).join(', ')}.`
+            + ' Put what they established in context — which person, which project, what was decided —'
+            + ` with sourceSessions naming them (ids you were given, e.g. ${found.sessionIds[0] ?? 'the ones returned'}).`
+            + ' If none of them bear on this work, say so in foundNothingRelevant and send it again.')
         }
         const rawInstance = value.sameJobNewInstance
         if (rawInstance !== undefined && (typeof rawInstance !== 'string' || rawInstance.length > 300)) {

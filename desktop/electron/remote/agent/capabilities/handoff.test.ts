@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildHandoffPrompt, HandoffCapability, type HandoffAdapters } from './handoff.ts'
 import type { CapabilityCallContext, McpPrincipal, ToolResult } from '../types.ts'
+import { clearIndexFindings, noteIndexFindings } from '../retrieval-ledger.ts'
 
 const NOW = 10_000
 test('handoff requires descriptive title and workspace before creating a task', async () => {
@@ -266,4 +267,65 @@ test('a handoff whose sources have no card is unaffected', async () => {
   const result = await new HandoffCapability(a).call(ctx, 'task_create', create)
   assert.equal(result.isError, undefined)
   assert.equal(a.created.length, 1)
+})
+
+/**
+ * THE 2026-09-20 HANDOFF. The search worked; the carrying did not. Five
+ * spellings, two pages, 45 sessions, and then a task with contextChars 0 and
+ * the identification appended to the user's own sentence.
+ */
+test('a task cannot go out empty-handed when this turn just found sessions', async () => {
+  const a = adapters()
+  const capability = new HandoffCapability(a)
+  noteIndexFindings(ctx.principal.kind === 'unmute-agent' ? ctx.principal.interactionId : '', {
+    matchedSessions: 45,
+    sessionIds: ['01a08aae-116d-7761-b605-184073a24a24'],
+    terms: ['Tanmay', 'Tanmay IIT GN'],
+  })
+  try {
+    const refused = parse(await capability.call(ctx, 'task_create', {
+      title: 'Message Tanmay on WhatsApp', group: 'WhatsApp messages', kind: 'oneoff',
+      intent: 'Send Tanmay a WhatsApp message saying "Hey, how are you?". He is the contact saved as "Tanmay IIT GN".',
+    }))
+    assert.equal(refused.ok, false)
+    // The refusal has to say which field and give an id to use, or the only
+    // move left is guessing — the 2026-09-08 lesson.
+    assert.match(refused.error.message, /context/)
+    assert.match(refused.error.message, /sourceSessions/)
+    assert.match(refused.error.message, /01a08aae-116d-7761-b605-184073a24a24/)
+    assert.match(refused.error.message, /foundNothingRelevant/)
+    assert.equal(a.created.length, 0)
+
+    const carried = parse(await capability.call(ctx, 'task_create', {
+      title: 'Message Tanmay on WhatsApp', group: 'WhatsApp messages', kind: 'oneoff',
+      intent: 'Send Tanmay a WhatsApp message saying "Hey, how are you?"',
+      context: 'The Tanmay they mean is the contact saved as "Tanmay IIT GN" (Tanmay Sharma), messaged on WhatsApp Desktop on 10 September.',
+      sourceSessions: [{ sessionId: '01a08aae-116d-7761-b605-184073a24a24', provider: 'codex' }],
+    }))
+    assert.equal(carried.ok, true)
+  } finally {
+    clearIndexFindings(ctx.principal.kind === 'unmute-agent' ? ctx.principal.interactionId : '')
+  }
+})
+
+test('a search that found nothing relevant is said out loud, and then it passes', async () => {
+  const capability = new HandoffCapability(adapters())
+  const id = ctx.principal.kind === 'unmute-agent' ? ctx.principal.interactionId : ''
+  noteIndexFindings(id, { matchedSessions: 12, sessionIds: ['01a08aae-116d-7761-b605-184073a24a24'], terms: ['pricing'] })
+  try {
+    const result = parse(await capability.call(ctx, 'task_create', {
+      title: 'Draft the pricing note', group: 'WhatsApp messages', kind: 'oneoff',
+      intent: 'Draft a pricing note',
+      foundNothingRelevant: 'the pricing matches were about a different product',
+    }))
+    assert.equal(result.ok, true)
+  } finally { clearIndexFindings(id) }
+})
+
+test('a turn that searched nothing hands off exactly as it always did', async () => {
+  const capability = new HandoffCapability(adapters())
+  const result = parse(await capability.call(ctx, 'task_create', {
+    title: 'Message Tanmay on WhatsApp', group: 'WhatsApp messages', kind: 'oneoff', intent: 'Say hi to Tanmay',
+  }))
+  assert.equal(result.ok, true)
 })

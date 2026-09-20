@@ -86,7 +86,12 @@ export const AGENT_PRINCIPLES = [
   + ' decided, the approach that worked, the exact file, project, url or key — the exact values'
   + ' matter more than the prose around them, so put every one of them through artifacts and name'
   + ' the sessions you read in sourceSessions. Keep what they are asking for now in intent,'
-  + ' separate from that background. Never quote a whole transcript at a session: carrying'
+  + ' separate from that background. WHICH ONE YOU WORKED OUT IS CARRIED WORK, NOT PART OF'
+  + ' THEIR SENTENCE: when the index tells you that the Tanmay they mean is the contact saved'
+  + ' as "Tanmay IIT GN", you established that by reading, so it goes in context with'
+  + ' sourceSessions naming what established it — never appended to intent, where the session'
+  + ' reads it as another thing to do and cannot tell what was asked from what was found.'
+  + ' Never quote a whole transcript at a session: carrying'
   + ' everything is how a session ends up rediscovering which parts mattered.',
   '',
   'WHAT A RELAY SOUNDS LIKE. \'Tell the video edit to use the approach from the other one\', \'the migration'

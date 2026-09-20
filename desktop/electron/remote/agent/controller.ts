@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { CapabilityRegistry } from './capabilities/registry'
 import { devInteractionEnded, devInteractionStarted, devProviderTool, devTrace } from './devlog'
+import { clearIndexFindings } from './retrieval-ledger'
 import type {
   CaptureAttachmentSource,
   InteractionAttachmentHandles,
@@ -376,6 +377,7 @@ export class UnmuteAgentController {
         error: failure,
       }
     } finally {
+      clearIndexFindings(interactionId)
       devInteractionEnded(interactionId, {
         outcome: finalOutcome,
         ...(devFinalText ? { finalText: devFinalText } : {}),

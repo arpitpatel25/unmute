@@ -9,6 +9,7 @@ import {
   searchTurnIndex, type TurnSearchInput, type TurnSearchResult,
 } from '../sessions/turn-search'
 import { devTrace } from '../devlog'
+import { noteIndexFindings } from '../retrieval-ledger'
 
 /**
  * The turn index, searched completely.
@@ -133,6 +134,13 @@ export class IndexSearchCapability implements CapabilityModule {
       devTrace('index-search.read-failed', { terms, error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) })
       return fail('search-failed', 'The session index could not be read. Grep ~/.unmute/remote/session-index/turns.jsonl instead.')
     }
+    // WHAT WAS FOUND IS NOW THIS TURN'S TO CARRY. task_create reads this and
+    // refuses to hand work off as though nothing had been found.
+    noteIndexFindings(ctx.principal.interactionId, {
+      matchedSessions: result.matchedSessions,
+      sessionIds: result.sessions.map(session => session.sessionId),
+      terms,
+    })
     return ok({
       ...result,
       sessions: result.sessions.map(session => ({
