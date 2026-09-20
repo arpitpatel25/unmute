@@ -56,6 +56,31 @@ export interface StubBehaviour {
   map?: Record<string, unknown>
   /** What memory_list returns for a named group. */
   groupEntries?: Array<Record<string, unknown>>
+  /** What index_search returns, per page. The Agent's own retrieval is a
+   *  stub like any other: what is under test is whether it REACHES for it,
+   *  with what terms, and whether it reads past the first page. */
+  indexPages?: IndexPage[]
+  /** What sessions_open reports Unmute is holding right now. */
+  openSessions?: Array<Record<string, unknown>>
+}
+
+export interface IndexPage {
+  matchedSessions: number
+  matchedTurns: number
+  remaining: number
+  nextCursor?: number
+  sessions: Array<Record<string, unknown>>
+}
+
+/** One matched session, shaped exactly as turn-search returns it. */
+export function indexSession(id: string, at: string, snippet: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    sessionId: id, provider: 'codex', provenance: 'main', cwd: '/Users/x/project',
+    firstAt: Date.parse(at), lastAt: Date.parse(at), turns: 6, matchedTurns: 1,
+    match: 'exact', matchedTerms: ['Tanmay'], lastMatchAt: Date.parse(at),
+    hits: [{ t: Date.parse(at), o: 4096, match: 'exact', term: 'Tanmay', snippet }],
+    ...extra,
+  }
 }
 
 const PROTOCOL_VERSION = '2024-11-05'
@@ -130,7 +155,23 @@ export async function startStub(behaviour: StubBehaviour): Promise<{
         const tool = String(msg.params?.name ?? '')
         const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
         calls.push({ tool, args })
-        if (tool === 'memory_list') {
+        if (tool === 'index_search') {
+          // Pages are served in call order, so a case can make the answer
+          // sit on page two and see whether the Agent goes and gets it.
+          const page = behaviour.indexPages?.[calls.filter(c => c.tool === 'index_search').length - 1]
+            ?? behaviour.indexPages?.[behaviour.indexPages.length - 1]
+            ?? { matchedSessions: 0, matchedTurns: 0, remaining: 0, sessions: [] }
+          send(toolText(JSON.stringify({ ok: true, result: { searched: { turns: 16112, sessions: 4669, unreadable: 0 }, ...page } })))
+        } else if (tool === 'sessions_open') {
+          send(toolText(JSON.stringify({ ok: true, result: behaviour.openSessions ?? [] })))
+        } else if (tool === 'workspaces_list') {
+          send(toolText(JSON.stringify({ ok: true, result: [
+            { id: 'ws-1', label: 'WhatsApp messages' },
+            { id: 'ws-2', label: 'unmute-cloud' },
+          ] })))
+        } else if (tool === 'task_create') {
+          send(toolText(JSON.stringify({ ok: true, result: { taskId: 'task-eval-1', status: 'created' } })))
+        } else if (tool === 'memory_list') {
           send(toolText(JSON.stringify(args.group === undefined
             ? { ok: true, result: { map: behaviour.map ?? { total: 0, groups: [], ungrouped: 0 } } }
             : { ok: true, result: { entries: behaviour.groupEntries ?? [] } })))

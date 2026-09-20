@@ -1,4 +1,4 @@
-import type { RecordedCall, StubBehaviour } from './harness'
+import { indexSession, type RecordedCall, type StubBehaviour } from './harness'
 
 export interface EvalCase {
   name: string
@@ -412,5 +412,124 @@ export const CORPUS: EvalCase[] = [
     check: (_calls, reply) => /\b(no|nothing|not|don't|couldn't|can't)\b/i.test(reply)
       ? null
       : `answered without evidence: ${reply.slice(0, 120)}`,
+  },
+  // ── The 2026-09-18 Tanmay failure, and what must happen instead ──────────
+  //
+  // "Message Tanmay that we are missing him on WhatsApp" reached a task with
+  // no background, because the Agent's own grep of the turn index was capped
+  // at 50 matches in file order and its output was cut in the middle. The
+  // index held the answer — "Yes its Tanmay IIT GN" — and none of it arrived.
+  {
+    name: 'a person named in a request is looked up before the work is handed off',
+    because: 'On 2026-09-18 a task to message Tanmay was created from a capped grep that never '
+      + 'reached the sessions naming him, so the task had to stop and ask which Tanmay.',
+    utterance: 'Message Tanmay that we are missing him on WhatsApp.',
+    behaviour: {
+      indexPages: [{
+        matchedSessions: 2, matchedTurns: 3, remaining: 0,
+        sessions: [
+          indexSession('01a08aae-116d-7761-b605-184073a24a24', '2026-09-10T09:37:00Z', 'send the contact "Tanmay IIT GN" these links directly'),
+          indexSession('01a070b4-0000-7000-8000-000000000001', '2026-09-05T14:08:00Z', 'Yes its Tanmay IIT GN'),
+        ],
+      }],
+    },
+    check: (calls) => {
+      const searched = calls.filter(call => call.tool === 'index_search')
+      if (!searched.length) return 'handed off a named person without searching the index'
+      const handoff = calls.find(call => call.tool === 'task_create' || call.tool === 'session_send')
+      if (!handoff) return 'never handed the work off'
+      const order = calls.findIndex(call => call.tool === 'index_search') < calls.findIndex(call => call.tool === handoff.tool)
+      return order ? null : 'searched only after the work was already handed off'
+    },
+  },
+  {
+    name: 'a spoken name is searched in more than one spelling',
+    because: 'Turns are transcribed, so one person is in the index as "Tanmay IIT GN", '
+      + '"Tanmayiitgn", "T A N M A Y" and "IIT Jiyan". One spelling finds one of them.',
+    utterance: 'Message Tanmay that we are missing him on WhatsApp.',
+    behaviour: {
+      indexPages: [{ matchedSessions: 1, matchedTurns: 1, remaining: 0,
+        sessions: [indexSession('01a08aae-116d-7761-b605-184073a24a24', '2026-09-10T09:37:00Z', 'the contact "Tanmay IIT GN"')] }],
+    },
+    check: (calls) => {
+      const searched = calls.filter(call => call.tool === 'index_search')
+      if (!searched.length) return 'never searched the index'
+      const terms = searched.flatMap(call => (call.args.terms as string[] | undefined) ?? [])
+      if (terms.length < 2) return `searched one spelling only: ${JSON.stringify(terms)}`
+      const spellings = new Set(terms.map(term => term.toLowerCase().replace(/[^a-z0-9]/g, '')))
+      return spellings.size > 1 || terms.length > 2 ? null : `all terms were the same word: ${JSON.stringify(terms)}`
+    },
+  },
+  {
+    name: 'a common word is not bolted onto the name it would drown',
+    because: '"Tanmay|WhatsApp" spent the whole 50-match budget on WhatsApp. Adding a common '
+      + 'word widens a search; it never narrows it.',
+    utterance: 'Message Tanmay that we are missing him on WhatsApp.',
+    behaviour: {
+      indexPages: [{ matchedSessions: 1, matchedTurns: 1, remaining: 0,
+        sessions: [indexSession('01a08aae-116d-7761-b605-184073a24a24', '2026-09-10T09:37:00Z', 'the contact "Tanmay IIT GN"')] }],
+    },
+    check: (calls) => {
+      const first = calls.find(call => call.tool === 'index_search')
+      if (!first) return 'never searched the index'
+      const terms = ((first.args.terms as string[] | undefined) ?? []).map(term => term.toLowerCase())
+      return terms.some(term => term === 'whatsapp' || term === 'message' || term === 'missing')
+        ? `the first search carried a common word: ${JSON.stringify(terms)}`
+        : null
+    },
+  },
+  {
+    name: 'a page with more behind it is not treated as the whole answer',
+    because: 'Every index lookup that failed did so by reading a slice as if it were everything. '
+      + 'remaining > 0 means the answer may still be on the next page.',
+    utterance: 'What did I ask Tanmay to do about the video? Look properly before you answer.',
+    behaviour: {
+      indexPages: [
+        { matchedSessions: 40, matchedTurns: 61, remaining: 25, nextCursor: 15,
+          sessions: [indexSession('01a0aaaa-0000-7000-8000-000000000001', '2026-09-16T11:00:00Z', 'ask Tanmay about the invoice')] },
+        { matchedSessions: 40, matchedTurns: 61, remaining: 0,
+          sessions: [indexSession('01a0bbbb-0000-7000-8000-000000000002', '2026-09-12T18:00:00Z', 'told Tanmay to re-cut the video intro')] },
+      ],
+    },
+    check: (calls) => {
+      const searched = calls.filter(call => call.tool === 'index_search')
+      if (searched.length < 2) return `stopped after one page although 25 sessions remained (${searched.length} searches)`
+      return searched.some(call => call.args.cursor !== undefined) ? null : 'searched again without using nextCursor'
+    },
+  },
+  {
+    name: 'what the index found is carried into the task, not left behind',
+    because: 'The 2026-09-18 task was created with the bare sentence, so a session that had the '
+      + 'answer one read away started from nothing and had to ask the user.',
+    utterance: 'Message Tanmay that we are missing him on WhatsApp.',
+    behaviour: {
+      indexPages: [{ matchedSessions: 2, matchedTurns: 2, remaining: 0,
+        sessions: [
+          indexSession('01a08aae-116d-7761-b605-184073a24a24', '2026-09-10T09:37:00Z', 'send the contact "Tanmay IIT GN" these links'),
+          indexSession('01a070b4-0000-7000-8000-000000000001', '2026-09-05T14:08:00Z', 'Yes its Tanmay IIT GN'),
+        ] }],
+    },
+    check: (calls) => {
+      const created = calls.find(call => call.tool === 'task_create')
+      if (!created) return 'no task was created'
+      const context = String(created.args.context ?? '')
+      if (!context) return 'the task carried no context from what was found'
+      const sources = (created.args.sourceSessions as unknown[] | undefined) ?? []
+      if (!sources.length) return 'carried context without naming the sessions it came from'
+      return /iit\s*gn|iitgn/i.test(context) ? null : `context did not carry which Tanmay: ${context.slice(0, 160)}`
+    },
+  },
+  {
+    name: 'an empty index search is reported as not found, not worked around',
+    because: 'A search that matched nothing is evidence, and the honest sentence is "I did not '
+      + 'find it" — not a guess and not a different action.',
+    utterance: 'What did we decide about the Peshawar pricing experiment?',
+    behaviour: { indexPages: [{ matchedSessions: 0, matchedTurns: 0, remaining: 0, sessions: [] }] },
+    check: (calls, reply) => {
+      if (!calls.some(call => call.tool === 'index_search')) return 'never searched the index'
+      if (calls.some(call => call.tool === 'task_create')) return 'made a task instead of saying it found nothing'
+      return /\b(no|nothing|not|didn't|did not|couldn't|could not|don't)\b/i.test(reply)
+        ? null : `answered without evidence: ${reply.slice(0, 140)}`
+    },
   },
 ]
