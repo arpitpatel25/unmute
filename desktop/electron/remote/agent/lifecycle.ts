@@ -40,6 +40,8 @@ export class AgentConversationLifecycle {
   private waiting = new Map<string, Waiting>()
   private pendingSettlement: AgentPendingSettlement | null = null
   private rotationDue = false
+  /** True only across settlePending's own publish — see view(). */
+  private settling = false
   /** A Stop that arrived before the run existed, held for the moment it does. */
   private interruptRequested: string | null = null
   constructor(private readonly options: Options) {}
@@ -76,7 +78,18 @@ export class AgentConversationLifecycle {
       snapshot: this.snapshot,
       selectedProvider: this.record.pendingProvider ?? this.record.provider ?? this.options.selectedProvider(),
     })
-    if (this.pendingSettlement) {
+    // NOT DURING THE SETTLING PUBLISH ITSELF.
+    //
+    // `publish` emits onView from inside settlePending, and `pendingSettlement`
+    // is not cleared until after it returns — so for that one frame the view
+    // announced a retained response, in red, over a snapshot that had ALREADY
+    // been settled and had its error deleted. On screen: a red line and a Retry
+    // that flash on every turn and disappear a moment later. Most visible on a
+    // stop, where the red is the one thing the person is watching for.
+    //
+    // The published snapshot carries the settled turn already. There is nothing
+    // retained at that instant, so there is nothing to say.
+    if (this.pendingSettlement && !this.settling) {
       applySettlement(view, this.pendingSettlement)
       view.snapshot.settlementPending = true
       view.snapshot.error = 'The completed response is retained. Retry saves it without sending the message again.'
@@ -501,7 +514,10 @@ export class AgentConversationLifecycle {
     const next = structuredClone({ record: this.record, snapshot: this.snapshot })
     applySettlement(next, pending)
     delete next.snapshot.error
-    await this.publish(next.record, next.snapshot)
+    this.settling = true
+    // A publish that THROWS leaves `pendingSettlement` set, and the next view
+    // must go back to announcing it — so the flag is released either way.
+    try { await this.publish(next.record, next.snapshot) } finally { this.settling = false }
     await this.options.store.clearSettlement()
     this.pendingSettlement = null
     this.options.onView?.(this.view())
