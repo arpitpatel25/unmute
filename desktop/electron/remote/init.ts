@@ -5492,7 +5492,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     if (unmuteAgentLifecycle instanceof AgentRuntimeClient) {
       const client = unmuteAgentLifecycle
       const runtime = agentRuntimeRouting!
-      void worker.call('hello').then(() => recoverAgentRuntime(runtime, async () => {
+      void agentWorker.call('hello').then(() => recoverAgentRuntime(runtime, async () => {
         if (settings.get('unmuteAgentAvailable') !== true || unmuteAgentLifecycle !== client) return false as const
         const root = join(app.getPath('userData'), 'unmute-agent')
         const keyProvider = new SafeStorageKeyProvider({ root: join(root, 'memory'), protectedValueStore: safeStorage })
@@ -5501,13 +5501,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           if (settings.get('unmuteAgentAvailable') !== true || unmuteAgentLifecycle !== client) return false as const
           await client.configure({ masterKey: key.toString('base64'), selectedProvider: settings.get('unmuteAgentProvider'),
             maxActiveProcesses: settings.get('unmuteAgentMaxProcesses'), conversationCeiling: settings.get('unmuteAgentConversationCeiling') ?? 20,
-            notetaker: !!notetakerAdapters, ...agentModelSettings() })
-            notetaker: !!notetakerAdapters, routines: settings.get('unmuteRoutinesEnabled') !== false })
+            notetaker: !!notetakerAdapters, routines: settings.get('unmuteRoutinesEnabled') !== false, ...agentModelSettings() })
         } finally { key.fill(0) }
       }, () => client.reconnect())).catch(error => log.warn('Agent runtime recovery failed', { error: (error as Error).message }))
     }
   })
-  worker.on('computer.activity', event => broadcastAxActivity(event as Parameters<typeof broadcastAxActivity>[0]))
+  agentWorker.on('computer.activity', event => broadcastAxActivity(event as Parameters<typeof broadcastAxActivity>[0]))
   persistentRuntime.on('computer.activity', event => broadcastAxActivity(event as Parameters<typeof broadcastAxActivity>[0]))
   // The initializer is deliberately synchronous, so make the runtime's ready
   // gate own the ordering: no helper (and therefore no replacement app-server)
