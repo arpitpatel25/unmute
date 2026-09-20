@@ -734,6 +734,8 @@ enum Event {
     case sendDraft(id: String, reference: QuestionReferenceP? = nil)
     case agentSend(submissionId: String, revision: Int)
     case agentRetry
+    /// Stop the Agent turn that is running.
+    case agentStop
     case agentSwitchProvider(provider: String)
     case agentSetModel(provider: String, model: String)
     /// End the Agent conversation and keep nothing; the next turn starts clean.
@@ -868,6 +870,7 @@ enum Event {
         case .agentSend(let submissionId, let revision):
             return ["type": "agentSend", "submissionId": submissionId, "revision": revision]
         case .agentRetry: return ["type": "agentRetry"]
+        case .agentStop: return ["type": "agentStop"]
         case .agentSwitchProvider(let provider): return ["type": "agentSwitchProvider", "provider": provider]
         case .agentSetModel(let provider, let model): return ["type": "agentSetModel", "provider": provider, "model": model]
         case .agentNewConversation: return ["type": "agentNewConversation"]

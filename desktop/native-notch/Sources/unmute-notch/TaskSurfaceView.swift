@@ -85,7 +85,11 @@ struct TaskSurfaceView: View {
                                       modelLabel: t.modelLabel, sending: t.sending ?? false,
                                       draft: t.draft, config: t.chatConfig, followup: t.followup, composerMode: t.composerMode, question: t.question,
                                       commands: t.commands ?? [],
-                                      onStop: taskShowsStop(t, blocks: model.taskBlocks) ? { model.emit(.kill(id: t.id)) } : nil)
+                                      // The Agent has no process of ours to kill; its turn
+                                      // ends by interrupting the provider through its own
+                                      // lifecycle. Every other card keeps `kill`.
+                                      onStop: taskShowsStop(t, blocks: model.taskBlocks)
+                                          ? { model.emit(t.id == "unmute-agent" ? .agentStop : .kill(id: t.id)) } : nil)
                             .id(t.id)
                             .padding(.top, 9)
                     case .notRunning:

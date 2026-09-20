@@ -513,6 +513,8 @@ export type NotchEvent =
   | { type: 'sendDraft'; id: string; reference?: import('../question-reference').QuestionReference }
   | { type: 'agentSend'; submissionId: string; revision: number }
   | { type: 'agentRetry' }
+  /** Stop the Agent turn that is running. */
+  | { type: 'agentStop' }
   | { type: 'agentSwitchProvider'; provider: 'claude' | 'codex' }
   /** The Agent's model for a provider. Same provider: the conversation continues. */
   | { type: 'agentSetModel'; provider: 'claude' | 'codex'; model: string }

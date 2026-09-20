@@ -170,6 +170,7 @@ export class AgentRuntimeService {
       this.lifecycle = new AgentConversationLifecycle({ journal, store: new AgentConversationStore({ root: join(this.root, 'runtime', 'conversations'), crypto }),
         controller: this.controller, selectedProvider, ceiling: () => this.config?.conversationCeiling ?? 20, prepareFresh,
         pin: ids => this.supervisor!.pinConversation(ids), close: id => this.supervisor!.closeRun(id),
+        interrupt: id => this.supervisor!.interrupt(id),
         onView: view => { if (view.record.phase === 'ready') this.activity = undefined; this.emit({ kind: 'view', view }) },
         alternateProvider: current => this.config?.switchWhenUnavailable === false ? undefined
           : this.probes.find(p => p.available && p.provider !== current)?.provider,
@@ -221,6 +222,10 @@ export class AgentRuntimeService {
       case 'submit': return this.lifecycle.submit(a[0])
       case 'retry': return this.lifecycle.retry()
       case 'discard': return this.lifecycle.discard()
+      // THE TURN THAT IS RUNNING, whichever run that is — the lifecycle knows,
+      // and the caller does not have to. `interrupt` below takes a run id and
+      // is the supervisor's; these are deliberately not the same command.
+      case 'interruptTurn': return this.lifecycle.interrupt()
       case 'setDraft': return this.lifecycle.setDraft(a[0], a[1])
       case 'requestProvider': this.config!.selectedProvider = a[0]; return this.lifecycle.requestProvider(a[0])
       case 'completion': return this.completions.get(a[0]) ?? null

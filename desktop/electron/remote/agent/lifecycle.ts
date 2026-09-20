@@ -18,6 +18,8 @@ interface Options {
   prepareFresh(): Promise<void>
   pin(ids: string[]): void
   close(id: string): Promise<void>
+  /** Signal the running provider turn to end — supervisor.interrupt. */
+  interrupt(id: string): Promise<void>
   onView?(view: AgentConversationView): void
   /** Another installed, usable provider to continue on when this one cannot
    *  answer at all — or undefined when switching is off or impossible. */
@@ -38,6 +40,8 @@ export class AgentConversationLifecycle {
   private waiting = new Map<string, Waiting>()
   private pendingSettlement: AgentPendingSettlement | null = null
   private rotationDue = false
+  /** A Stop that arrived before the run existed, held for the moment it does. */
+  private interruptRequested: string | null = null
   constructor(private readonly options: Options) {}
   /** Submissions re-sent to another provider, with why — said with the answer
    *  and never re-sent a second time. */
@@ -210,6 +214,50 @@ export class AgentConversationLifecycle {
   }
 
   /**
+   * STOP THE TURN THAT IS RUNNING.
+   *
+   * Every other chat in the app has had a Stop at the send position; this one
+   * did not, because nothing connected a surface to `supervisor.interrupt`.
+   * The provider path has always worked — the driver takes a SIGINT and the
+   * turn comes back `interrupted` — it simply had no caller.
+   *
+   * ONLY `sending` CAN BE SIGNALLED. A settled turn is already over and its run
+   * may have been closed out from under us, so signalling it would send a stale
+   * id into the supervisor and get back an error for something the user cannot
+   * act on. A PREPARED turn is the interesting case and is handled below.
+   *
+   * NOTHING IS UNDONE HERE. The message stays in the chat as a turn that was
+   * stopped, exactly as it would after any other failure, and the queue is left
+   * alone: stopping is not a retry, and re-sending what somebody just stopped
+   * is the one thing they did not ask for.
+   */
+  async interrupt(): Promise<{ interrupted: boolean; reason?: string }> {
+    await this.initialize()
+    const runId = this.record.runId
+    if (runId && this.record.phase === 'sending') {
+      try { await this.options.interrupt(runId) } catch (error) {
+        // REPORTED, NOT THROWN. This is a button; the worst honest outcome is
+        // that the turn finishes on its own, which needs no dialog.
+        diagnostic('agent-turn-interrupt-refused', { runId, reason: (error as Error).message })
+        return { interrupted: false, reason: (error as Error).message }
+      }
+      diagnostic('agent-turn-interrupted', { runId, generation: this.record.generation })
+      return { interrupted: true }
+    }
+    // STOP PRESSED WHILE THE PROVIDER IS STILL STARTING. There is no run to
+    // signal yet and the window is a real one — spawning a CLI takes seconds —
+    // so it is HELD rather than refused. Refusing would make the button do
+    // nothing for exactly as long as the wait that makes people press it.
+    const prepared = this.record.prepared
+    if (prepared) {
+      this.interruptRequested = prepared.submissionId
+      diagnostic('agent-turn-interrupt-held', { submissionId: prepared.submissionId })
+      return { interrupted: true }
+    }
+    return { interrupted: false, reason: 'nothing is running' }
+  }
+
+  /**
    * END THIS CONVERSATION AND KEEP NOTHING.
    *
    * There is exactly ONE Agent conversation at a time, and until now the only
@@ -377,6 +425,13 @@ export class AgentConversationLifecycle {
             accepted = true
             if (fresh) this.rotationDue = false
             if (oldRun && oldRun !== run.id) void this.options.close(oldRun).catch(() => {})
+            // The Stop that arrived while this was starting, delivered now that
+            // there is something to deliver it to.
+            if (this.interruptRequested === prepared.submissionId) {
+              this.interruptRequested = null
+              diagnostic('agent-turn-interrupted', { runId: run.id, generation: record.generation, held: true })
+              void this.options.interrupt(run.id).catch(() => {})
+            }
           })
         },
       })
@@ -387,6 +442,9 @@ export class AgentConversationLifecycle {
     if (acceptanceUncertain) result = failure('Provider acceptance could not be saved. Input is retained; automatic replay is disabled.', 'acceptance-uncertain')
     await this.lock(async () => {
       this.assertLive()
+      // A held Stop belongs to THIS turn. One that was never delivered — the
+      // turn failed to start — must not fire at whatever runs next.
+      if (this.interruptRequested === prepared.submissionId) this.interruptRequested = null
       const record = structuredClone(this.record), snapshot = structuredClone(this.snapshot)
       if (accepted) {
         if (record.generation !== prepared.generation || record.runId !== prepared.candidateRunId) return

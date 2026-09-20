@@ -14,10 +14,13 @@ async function harness(ceiling = 20) {
   const journal = new AgentJournal({ root })
   const store = new AgentConversationStore({ root: join(root, 'conversations'), crypto: new MemoryCrypto({ keyProvider: { getMasterKey: async () => Buffer.alloc(32, 4) } }) })
   const calls: Array<{ text: string; prior?: string; context: AgentSubmissionContext; settle(outcome?: AgentInteractionResult['outcome']): void }> = []
+  const interrupts: string[] = []
   let reject = false, uncertain = false, refreshes = 0
+  let interruptFails: string | null = null
   let now = 1_000
   const options = { journal, store, now: () => now, ceiling: () => ceiling, selectedProvider: () => 'claude' as const,
     prepareFresh: async () => { refreshes++ }, pin: (_ids: string[]) => {}, close: async (_id: string) => {},
+    interrupt: async (id: string) => { if (interruptFails) throw new Error(interruptFails); interrupts.push(id) },
     controller: { async submit(input: { transcript: string; priorRunId?: string }, context: AgentSubmissionContext) {
       const result = (outcome: AgentInteractionResult['outcome']): AgentInteractionResult => ({ interactionId: context.interactionId, agentRunId: context.runId, provider: context.provider, source: 'provider', presentation: 'transient', outcome, text: `answer ${input.transcript}` })
       if (reject || uncertain) return { ...result('failed'), error: { code: uncertain ? 'acceptance-uncertain' as const : 'provider-unavailable' as const, message: 'retained error' } }
@@ -30,8 +33,9 @@ async function harness(ceiling = 20) {
     const c = calls[index]
     await c.context.onAccepted({ id: c.context.runId, provider: c.context.provider, providerHandle: `handle-${c.context.runId}`, model: 'reported-model', state: 'running', createdAt: 1, lastUserAt: 1, lastActivityAt: 1, providerWorkEnded: false })
   }
-  return { root, journal, store, calls, get lifecycle() { return lifecycle }, waitCalls, accept,
+  return { root, journal, store, calls, interrupts, get lifecycle() { return lifecycle }, waitCalls, accept,
     advance: (ms: number) => { now += ms },
+    failInterrupt: (why: string | null) => { interruptFails = why },
     setReject: (value: boolean) => { reject = value }, setUncertain: (value: boolean) => { uncertain = value }, get refreshes() { return refreshes },
     restart: async () => { lifecycle.dispose(); lifecycle = new AgentConversationLifecycle(options); await lifecycle.initialize(); return lifecycle },
     cleanup: async () => { lifecycle.dispose(); await rm(root, { recursive: true, force: true }) } }
@@ -440,5 +444,98 @@ test('a discarded conversation stays discarded across a restart', async () => {
     const next = revived.submit({ transcript: 'two', submissionId: 't1' })
     await h.waitCalls(2); await h.accept(1); h.calls[1].settle(); await next
     assert.equal(h.calls[1].prior, undefined, 'the discard must survive a runtime restart')
+  } finally { await h.cleanup() }
+})
+
+/**
+ * STOPPING A TURN — FIELD REPORT (2026-09-20).
+ *
+ * Every other chat in the app draws a Stop at the send position while it is
+ * working. The Agent's chat did not, and the reason was here: nothing in the
+ * app connected a surface to `supervisor.interrupt`. The SIGINT path itself has
+ * always existed and always worked — `remote:agent-cancel` reaches it — but it
+ * had no caller, so a turn that went long could only be waited out.
+ *
+ * The lifecycle is the only thing that knows WHICH run is live, which is why
+ * the signal is sent from here rather than from the surface.
+ */
+test('stop interrupts the live run, and only while one is actually running', async () => {
+  const h = await harness()
+  try {
+    assert.deepEqual(await h.lifecycle.interrupt(), { interrupted: false, reason: 'nothing is running' },
+      'idle: there is no run to signal, and saying so is not an error')
+
+    const p = h.lifecycle.submit({ transcript: 'read every file in the repo', submissionId: 's1' })
+    await h.waitCalls(1)
+    await h.accept(0)
+    assert.deepEqual(await h.lifecycle.interrupt(), { interrupted: true })
+    assert.deepEqual(h.interrupts, [h.calls[0].context.runId], 'the LIVE run, named by the record')
+
+    // The provider answers the signal for itself; the lifecycle only settles
+    // what comes back — which is the ordinary accepted-then-failed path.
+    h.calls[0].settle('interrupted')
+    assert.equal((await p).outcome, 'interrupted')
+    const view = h.lifecycle.view()
+    assert.equal(view.snapshot.chat.turns.at(-1)!.failed, true, 'the stopped turn is marked, not hidden')
+    assert.equal(view.snapshot.queued.length, 0, 'stopping is not a retry — nothing is re-sent')
+    assert.equal(view.record.phase, 'ready', 'and the chat is ready for the next message')
+
+    assert.deepEqual(await h.lifecycle.interrupt(), { interrupted: false, reason: 'nothing is running' },
+      'settled: the turn is over, so there is nothing left to stop')
+  } finally { await h.cleanup() }
+})
+
+test('a refused interrupt is reported rather than thrown at the surface', async () => {
+  const h = await harness()
+  try {
+    const p = h.lifecycle.submit({ transcript: 'go', submissionId: 's1' })
+    await h.waitCalls(1); await h.accept(0)
+    h.failInterrupt('run-busy')
+    assert.deepEqual(await h.lifecycle.interrupt(), { interrupted: false, reason: 'run-busy' })
+    h.failInterrupt(null)
+    h.calls[0].settle(); await p
+  } finally { await h.cleanup() }
+})
+
+/**
+ * STOP DURING THE STARTUP WINDOW. A turn is busy — and draws a Stop — from the
+ * moment it is prepared, but the run it would be signalled on does not exist
+ * until the CLI is spawned and accepted, which takes seconds. Refusing there
+ * would make the button do nothing for exactly as long as the wait that makes
+ * people press it.
+ */
+test('a stop that arrives before the run exists is held and delivered on acceptance', async () => {
+  const h = await harness()
+  try {
+    const p = h.lifecycle.submit({ transcript: 'go', submissionId: 's1' })
+    await h.waitCalls(1)
+    assert.deepEqual(await h.lifecycle.interrupt(), { interrupted: true }, 'prepared: held, not refused')
+    assert.deepEqual(h.interrupts, [], 'there is nothing to signal yet')
+
+    await h.accept(0)
+    assert.deepEqual(h.interrupts, [h.calls[0].context.runId], 'delivered the moment the run exists')
+
+    h.calls[0].settle('interrupted'); await p
+    // And it is spent: the next turn starts clean rather than inheriting it.
+    const second = h.lifecycle.submit({ transcript: 'again', submissionId: 's2' })
+    await h.waitCalls(2); await h.accept(1)
+    assert.deepEqual(h.interrupts, [h.calls[0].context.runId], 'a held stop belongs to one turn only')
+    h.calls[1].settle(); await second
+  } finally { await h.cleanup() }
+})
+
+test('a held stop whose turn never started does not fire at the next one', async () => {
+  const h = await harness()
+  try {
+    h.setReject(true)
+    const failed = h.lifecycle.enqueue({ transcript: 'go', submissionId: 's1' })
+    await failed
+    assert.deepEqual(await h.lifecycle.interrupt(), { interrupted: false, reason: 'nothing is running' },
+      'the turn failed to start, so nothing is prepared and nothing is held')
+    h.setReject(false)
+    const retry = h.lifecycle.retry()
+    await h.waitCalls(1); await h.accept(0)
+    assert.deepEqual(h.interrupts, [], 'the retry runs untouched')
+    h.calls[0].settle(); await retry
   } finally { await h.cleanup() }
 })

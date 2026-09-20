@@ -69,8 +69,20 @@ public func composerState(alive: Bool, canCompose: Bool? = nil, canResume: Bool 
 ///   - lastTurnRunning: `BlockPresentation.lastTurnRunning(blocks)`.
 public func stopAvailable(isOwned: Bool, taskId: String, canStop: Bool?,
                           status: String, lastTurnRunning: Bool) -> Bool {
-    // The Agent's own chat has its own interrupt and never offered Stop.
-    guard isOwned, taskId != "unmute-agent" else { return false }
+    // THE AGENT'S CHAT IS NOT OWNED AND IS STILL STOPPABLE.
+    //
+    // It was excluded outright, on the grounds that it "has its own interrupt".
+    // It did not: `remote:agent-cancel` was wired end to end and had no caller
+    // anywhere in the app, so the one chat people use most was the only one a
+    // long answer could not be stopped in.
+    //
+    // It gets its own line rather than a relaxed `isOwned`, because there is no
+    // process of ours behind it and never will be — and the task signals below
+    // are signals it does not carry: no executor, so no `alive`, and no
+    // turn-start blocks to run. Its busy flag is `processing`, and the engine
+    // now says so outright in `canStop`.
+    if taskId == "unmute-agent" { return canStop ?? (status == "processing") }
+    guard isOwned else { return false }
     if canStop == true { return true }
     if status == "processing" || status == "needs-user" { return true }
     return lastTurnRunning && status != "done" && status != "failed"

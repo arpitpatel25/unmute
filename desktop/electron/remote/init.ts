@@ -1812,6 +1812,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
       },
       pin: (ids) => supervisor.pinConversation(ids),
       close: (id) => supervisor.closeRun(id),
+      interrupt: (id) => supervisor.interrupt(id),
       onView: (view) => { if (generation === unmuteAgentGeneration) notchController?.restoreAgentConversation(view) },
     })
     await lifecycle.initialize()
@@ -5972,6 +5973,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         }),
         agentDraftChanged: (text, revision) => unmuteAgentLifecycle?.setDraft(text, revision) ?? Promise.reject(new Error('Agent unavailable')),
         agentRetry: async () => { await unmuteAgentLifecycle?.retry() },
+        // STOP, from the chat's own send position. The lifecycle owns which run
+        // is live, so it decides whether there is anything to signal; a refusal
+        // is logged and goes no further, because the honest outcome of a Stop
+        // that arrived a moment too late is the answer arriving anyway.
+        agentStop: async () => {
+          const outcome = await unmuteAgentLifecycle?.interrupt()
+          log.event('agent-turn-stopped', { interrupted: outcome?.interrupted ?? false, ...(outcome?.reason ? { reason: outcome.reason } : {}) })
+        },
         agentModelsFor: (provider) => {
           if (!agentModelCatalog[provider]) void refreshAgentModelCatalog()
           return {

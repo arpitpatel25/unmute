@@ -3334,3 +3334,32 @@ test('opening a removed card puts it back: wall click, link tap', () => {
   assert.deepEqual(h.calls.setInPocket?.at(-1), ['b', true])
   assert.equal(h.client.last('showTask')?.task.id, 'b', 'the link lands on the card, in the pocket')
 })
+
+/**
+ * STOP IN THE AGENT'S CHAT — FIELD REPORT (2026-09-20).
+ *
+ * A cloud or Codex session draws Stop at the send position while it works. The
+ * Agent's chat — the one you talk to most — drew nothing, so a turn that went
+ * long had to be waited out. The surface asks the same question it asks of
+ * every other card, and the answer comes from the same place: the busy flag
+ * this controller already keeps.
+ */
+test('the Agent chat offers Stop while it is busy, and stopping reaches the host', () => {
+  const stops: string[] = []
+  const h = setup({ deps: { agentStop: async () => { stops.push('stop') } } as Partial<NotchControllerDeps> })
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketExpand' })
+  h.flush()
+  assert.equal(h.client.last('showTask')!.task.canStop, false, 'idle: nothing to stop')
+
+  h.controller.agentAsked('read every file in the repo')
+  h.flush()
+  assert.equal(h.client.last('showTask')!.task.canStop, true, 'a turn is running — Stop is the way out of it')
+
+  h.client.fire({ type: 'agentStop' } as NotchEvent)
+  assert.deepEqual(stops, ['stop'])
+
+  h.controller.agentAnswered('The Agent interaction was interrupted.', true)
+  h.flush()
+  assert.equal(h.client.last('showTask')!.task.canStop, false, 'and it goes as soon as the turn is over')
+})

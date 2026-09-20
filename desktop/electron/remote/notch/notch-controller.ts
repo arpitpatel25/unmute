@@ -118,8 +118,9 @@ export interface TaskLite {
  * The runtime's own busy flag is the strongest witness; state is a fallback.
  */
 export function canStopTask(t: TaskLite): boolean {
-  // The Agent's own chat has its own interrupt and never offered Stop. Cards
-  // the Agent OPENED are ordinary tasks and keep it.
+  // The Agent's own chat is not a task and never reaches this rule — its Stop
+  // is answered in sendAgentDetail, from the busy flag, because none of the
+  // task signals below exist for it. Cards the Agent OPENED are ordinary tasks.
   if (t.id === 'unmute-agent') return false
   if (providerOf(t.agent).transport !== 'structured' || t.chatOwned === false) return false
   return t.turnActive === true || t.state === 'processing' || t.state === 'needs-user'
@@ -200,6 +201,9 @@ export interface NotchControllerDeps {
   agentSend?(text: string, submission: { submissionId: string; revision: number }): Promise<void>
   agentDraftChanged?(text: string, revision: number): Promise<void>
   agentRetry?(): Promise<void>
+  /** Stop the Agent turn that is running. Optional: a host that does not wire
+   *  it leaves the chat with no way out of a long answer but waiting. */
+  agentStop?(): Promise<void>
   agentSwitchProvider?(provider: 'claude' | 'codex'): Promise<void>
   /** Every model a provider offers the Agent, and the one chosen. */
   agentModelsFor?(provider: 'claude' | 'codex'): { models: Array<{ id: string; label: string }>; selected: string }
@@ -664,6 +668,7 @@ export class NotchController {
       this.sendAgentDraft(event.submissionId, event.revision)
     })
     on('agentRetry', () => { void this.deps.agentRetry?.().catch(error => this.agentUnavailable((error as Error).message)) })
+    on('agentStop', () => { void this.deps.agentStop?.().catch(error => this.agentUnavailable((error as Error).message)) })
     on('agentSwitchProvider', e => {
       const provider = (e as { provider?: unknown }).provider
       if (provider !== 'claude' && provider !== 'codex') return
@@ -2041,6 +2046,11 @@ export class NotchController {
       deliveryError: this.agentError,
       agentCanRetry: this.agentCanRetry,
       canCompose: true,
+      // STOPPABLE WHILE IT IS WORKING, though it is not owned: there is no
+      // process of ours to kill, but the provider takes an interrupt and the
+      // chat is left with a turn that was stopped. `owned: false` below is why
+      // the surface needs this told to it rather than inferred.
+      canStop: this.agentBusy,
       status: this.agentBusy ? 'processing' : this.agentLine?.failed ? 'failed' : 'ready',
       kind: 'session',
       alive: true,
