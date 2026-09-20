@@ -777,6 +777,9 @@ export class TaskManager extends EventEmitter {
   private claudeHistoryWrites = new Map<string, Promise<void>>()
   private claudeStarting = new Map<string, Promise<void>>()
   private chatStopVersion = new Map<string, number>()
+  /** Tasks the user explicitly stopped, holding a one-shot claim on the next
+   *  terminal state they reach. See transition(). */
+  private stoppedByUser = new Set<string>()
   private executors = new Map<string, AgentExecutor>()
   /** One heartbeat for every task. Provider events use trigger() and the
    * heartbeat only repairs missed events / sleep gaps. */
@@ -3877,6 +3880,31 @@ export class TaskManager extends EventEmitter {
     if (!task) return
     const tlog = log.child({ taskId: id })
     const prev = task.state
+    // A TASK THE USER STOPPED DID NOT FAIL.
+    //
+    // status.json is written by Claude Code itself, through the hooks Unmute
+    // installs, and a session cut off mid-turn writes a FAILURE carrying its
+    // own account of the transcript as the reason — "[…_diagnostic]
+    // result_type=user last_content_type=n/a stop_reason=null". That is a true
+    // description of an interrupted transcript and a useless thing to read, in
+    // red, under "Errored", on a card you have just pressed Stop on.
+    //
+    // Unmute is the one that knows why the session ended, because Unmute ended
+    // it. `kill` already settles a stop this way when nothing was running
+    // (turnOutcome 'cancelled', no reason); this is the same verdict for the
+    // case where a turn WAS running and the backend got its word in first.
+    //
+    // A ONE-SHOT CLAIM ON THE NEXT TERMINAL STATE, never a time window. And it
+    // is dropped the moment the task runs again, so a genuine failure after a
+    // resume is still a failure.
+    if (!TERMINAL.includes(next)) this.stoppedByUser.delete(id)
+    else if (this.stoppedByUser.delete(id)) {
+      tlog.event('task-stopped-by-user', { reported: next, reason: payload?.error?.reason ?? null })
+      task.turnOutcome = 'cancelled'
+      task.error = undefined
+      payload = { ...payload, error: undefined }
+      if (next === 'failed') next = 'done'
+    }
     task.state = next
     // WHEN IT HAPPENED, not when we noticed. Stamping the clock made every
     // relaunch look like a fresh completion: rehydrate re-derived `ready` from
@@ -4259,6 +4287,7 @@ export class TaskManager extends EventEmitter {
     if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
     const tlog = log.child({ taskId: id })
     tlog.ui('task-row.killed', {})
+    this.stoppedByUser.add(id)
     const task = this.tasks.get(id)
     if (task?.claudeSessionSettings) {
       this.chatStopVersion.set(id, (this.chatStopVersion.get(id) ?? 0) + 1)
@@ -4318,11 +4347,19 @@ export class TaskManager extends EventEmitter {
       return
     }
     if (task && !SETTLED.includes(task.state)) {
-      task.state = 'failed'
-      task.error = { reason: 'Stopped by you' }
-      task.updatedAt = this.clock()
-      this.emit('updated', task)
-      this.emit('failed', task)
+      // STOPPING IS NOT FAILING.
+      //
+      // This settled an explicit stop as `failed` with "Stopped by you" as the
+      // reason — the card's red Errored state, carrying a sentence explaining
+      // that the user did the thing the user had just done. Red is for what
+      // they did not ask for.
+      //
+      // `done` + `turnOutcome: 'cancelled'` is not a new vocabulary: it is what
+      // the Claude and Codex branches above already settle a stop as when there
+      // was no turn running. This is the same verdict for the plain case, and
+      // going through transition() rather than assigning state here is what
+      // makes the record, the notification and the librarian handoff match it.
+      this.transition(id, 'done', { reason: 'stopped-by-you' } as Partial<StatusPayload>)
     }
     this.hardKill(id) // explicit stop ⇒ no warm window
   }

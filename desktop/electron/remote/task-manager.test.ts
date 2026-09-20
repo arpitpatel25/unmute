@@ -604,14 +604,19 @@ test('maintenance sweep retires ORPHAN records while preserving unidentified dir
   tm.kill(liveId)
 })
 
-test('kill marks a running task failed with "Stopped by you" (PRD §10.4)', async () => {
+// WAS: `failed`, reason "Stopped by you" (PRD §10.4). That put the card in its
+// red Errored state for the one outcome the user asked for by name, with a
+// sentence explaining that they had done the thing they had just done. The stop
+// is still recorded — `turnOutcome: 'cancelled'` — it simply is not an error.
+test('kill settles a running task as cancelled, not failed (PRD §10.4, amended)', async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   const id = await tm.dispatch('long task')
   tm.kill(id)
   const task = tm.get(id)!
-  assert.equal(task.state, 'failed')
-  assert.equal(task.error?.reason, 'Stopped by you')
+  assert.equal(task.state, 'done')
+  assert.equal(task.turnOutcome, 'cancelled')
+  assert.equal(task.error, undefined)
 })
 
 test('done task stays WARM (session alive) for follow-up, then idle-kills', { timeout: 5000 }, async () => {
@@ -2746,4 +2751,69 @@ test('a session that finishes and is never touched again is NEVER erased by the 
 
   assert.ok(tm.get(id), 'a session must never be auto-erased, no matter how long it sits idle')
   tm.kill(id)
+})
+
+/**
+ * FIELD REPORT (2026-09-20). Stop a running task and the card went red:
+ * "Errored", with "[…_diagnostic] result_type=user last_content_type=n/a
+ * stop_reason=null" under it.
+ *
+ * TWO THINGS PUT IT THERE. `kill` settled the stop as `failed` itself, with
+ * "Stopped by you" as the reason — a sentence explaining that the user did the
+ * thing the user had just done, in red. And where a session got its word in
+ * first, status.json — written by Claude Code through the hooks Unmute installs
+ * — reported a failure carrying its own account of the cut transcript.
+ *
+ * Unmute knows why the session ended, because Unmute ended it. `done` +
+ * `turnOutcome: 'cancelled'` is what the Claude and Codex branches of `kill`
+ * already settle a stop as when no turn is running.
+ */
+test('stopping a task settles it as cancelled, not as a failure', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, staleMs: 100_000,
+  })
+  const id = await tm.dispatch('read every file in the repo')
+  assert.equal(tm.get(id)!.state, 'processing')
+
+  const done = once(tm, 'done')
+  tm.kill(id)
+  await done
+
+  const settled = tm.get(id)!
+  assert.equal(settled.state, 'done', 'stopping is not failing')
+  assert.equal(settled.turnOutcome, 'cancelled', 'and it is on the record as what it was')
+  assert.equal(settled.error, undefined, 'nothing to explain — they asked for this')
+})
+
+/**
+ * THE OTHER HALF OF THE SAME STOP. Where a session is involved, `kill` does not
+ * settle the card itself — it signals the backend and returns, and the verdict
+ * lands later through transition(). That is the path the field report came in
+ * on: the card went red carrying status.json's own account of the cut
+ * transcript, which Claude Code writes through the hooks Unmute installs.
+ *
+ * The stop is a ONE-SHOT CLAIM on the next terminal state — never a time window
+ * — and it is dropped the moment the task runs again, so a genuine failure
+ * after a resume is still a failure.
+ */
+test('a session stop lands as cancelled even when the backend reports a failure', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  const id = await tm.dispatch('a chat-mode task')
+  // Session-backed: kill signals the runtime and returns rather than settling
+  // here, so the terminal state arrives through transition() as it does in the
+  // field. With no runtime attached that report is immediate.
+  tm.get(id)!.claudeSessionSettings = { permissionMode: 'bypassPermissions' } as never
+
+  tm.kill(id)
+
+  const settled = tm.get(id)!
+  assert.equal(settled.state, 'done', "the backend's verdict does not outrank the user's")
+  assert.equal(settled.turnOutcome, 'cancelled')
+  assert.equal(settled.error, undefined, 'its account of the cut transcript is not shown as an error')
 })
