@@ -275,15 +275,28 @@ struct TaskSurfaceView: View {
             }
             Spacer(minLength: 0)
             SurfaceSizeControls(model: model)
-            if t.agentOriginPresentation == nil {
-                KeyButton(label: "Prev", symbol: "arrow.left") { model.emit(.prev) }
-                // THE ONE TINTED PRIMARY — the crank.
-                ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
-                // The overflow menu lives in the header, top right, and nowhere
-                // else. A second one beside Next offered a subset of the same
-                // actions from the opposite corner, so the card had two places
-                // to look for one thing.
-            }
+            // ON EVERY CARD, because the arrow keys are on every card.
+            //
+            // These were hidden wherever `origin == "unmute-agent"`, which is
+            // both the Agent's own chat AND every task the Agent opened — a
+            // provenance test standing in for an identity one. The reason given
+            // was that "cranking from the chat would walk you into tasks by a
+            // control that looks like it moves within this one", and the engine
+            // has since decided the opposite: the Agent is a card on the same
+            // ring, the crank stops on it and hands the surface on when you
+            // crank off it.
+            //
+            // So the buttons were the only thing still saying otherwise, while
+            // ← and → did the same job on the same cards all along. A control
+            // the keyboard has and the surface hides is not a smaller surface;
+            // it is one that behaves differently depending on how you reach it.
+            KeyButton(label: "Prev", symbol: "arrow.left") { model.emit(.prev) }
+            // THE ONE TINTED PRIMARY — the crank.
+            ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
+            // The overflow menu lives in the header, top right, and nowhere
+            // else. A second one beside Next offered a subset of the same
+            // actions from the opposite corner, so the card had two places
+            // to look for one thing.
         }
         .padding(.top, 10)
     }
