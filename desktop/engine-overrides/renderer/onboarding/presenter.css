@@ -69,6 +69,18 @@ body:has(.ob-presenter),
 .ob-presenter__progress span.is-past { background: rgba(26,23,20,.48); }
 .ob-presenter__progress span.is-current { background: var(--ob-accent); }
 .ob-presenter__step { color: var(--ob-faint); font-size: 9px; font-variant-numeric: tabular-nums; }
+.ob-presenter__close {
+  width: 22px;
+  height: 22px;
+  margin: 0 0 0 2px;
+  padding: 0 !important;
+  display: grid;
+  place-items: center;
+  border-radius: 999px !important;
+  color: var(--ob-muted) !important;
+  font-size: 17px !important;
+  line-height: 1 !important;
+}
 
 .ob-presenter__film {
   position: relative;

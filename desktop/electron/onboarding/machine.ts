@@ -56,6 +56,19 @@ function observeCapture(progress: OnboardingProgress, event: Extract<OnboardingE
 }
 
 export function reduceOnboarding(progress: OnboardingProgress, event: OnboardingEvent): OnboardingProgress {
+  if (event.type === 'onboarding-dismissed') {
+    const remaining = ACTION_ORDER.filter(action => action !== 'complete' && !progress.completed.includes(action))
+    return {
+      ...progress,
+      action: 'complete',
+      completed: ACTION_ORDER.filter(action => action !== 'complete'),
+      skipped: [...new Set([...progress.skipped, ...remaining])],
+      captureId: undefined,
+      observedCaptureItemIds: [],
+      gesture: undefined,
+      notetakerActive: false,
+    }
+  }
   if (event.type === 'retry-requested') {
     if (progress.action !== 'orchestrator-task' && progress.action !== 'agent-task-link') return progress
     const taskIds = { ...progress.taskIds }

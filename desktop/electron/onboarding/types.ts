@@ -41,6 +41,7 @@ export type ShortcutLane = 'dictation' | 'orchestrator' | 'agent'
 export type OnboardingEvent =
   | { type: 'capability-satisfied'; action: ActionId }
   | { type: 'section-skipped'; action: ActionId }
+  | { type: 'onboarding-dismissed' }
   | { type: 'provider-selected'; provider: ProviderId }
   | { type: 'function-key-observed' }
   | { type: 'shortcut-started'; lane: ShortcutLane }

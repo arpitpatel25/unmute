@@ -77,7 +77,7 @@ type AppAPI = {
    *  focused this window, so landing on the meeting is the only thing left. */
   notetakerOnOpenRequested?: (cb: (meetingId: string) => void) => () => void
   onboardingOnNavigate?: (cb: (destination: 'orchestrator' | 'notetaker' | 'account') => void) => () => void
-  onboardingFinishAfterSignIn?: (signedIn: boolean) => Promise<unknown>
+  onboardingFinishAfterSignIn?: (signedIn: boolean) => Promise<{ action?: string }>
 }
 function api(): AppAPI {
   return (window as unknown as { electronAPI?: AppAPI }).electronAPI ?? {}
@@ -166,7 +166,23 @@ function AppInner() {
   }, [dictationKey, activationMode])
 
   useEffect(() => {
-    if (auth.signedIn) void api().onboardingFinishAfterSignIn?.(true)
+    if (!auth.signedIn) return
+    let cancelled = false
+    let retry: ReturnType<typeof setTimeout> | undefined
+    const finish = async () => {
+      try {
+        const result = await api().onboardingFinishAfterSignIn?.(true)
+        if (result?.action === 'complete') return
+      } catch {
+        // Main may still be registering onboarding IPC during app startup.
+      }
+      if (!cancelled) retry = setTimeout(finish, 750)
+    }
+    void finish()
+    return () => {
+      cancelled = true
+      if (retry) clearTimeout(retry)
+    }
   }, [auth.signedIn])
 
   // Re-read on any navigation that does not land on the Language section. One

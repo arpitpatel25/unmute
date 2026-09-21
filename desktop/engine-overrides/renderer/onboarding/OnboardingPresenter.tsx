@@ -6,7 +6,7 @@ import { emptyPresenter, reducePresenter, type PresenterCard, type PresenterMess
 import './presenter.css'
 
 type PresenterAction =
-  | { type: 'continue' | 'skip-section' | 'continue-anyway' | 'retry' | 'open-settings' | 'replay-clip' | 'complete-orientation' | 'open-sign-in' }
+  | { type: 'continue' | 'skip-section' | 'dismiss' | 'continue-anyway' | 'retry' | 'open-settings' | 'replay-clip' | 'complete-orientation' | 'open-sign-in' }
   | { type: 'choose-provider' | 'install-provider' | 'authenticate-provider' | 'retry-provider'; provider: 'claude' | 'codex' }
 
 type PresenterApi = {
@@ -107,6 +107,7 @@ export function OnboardingPresenter() {
           />)}
         </div>
         <span className="ob-presenter__step">{step}/{totalSteps}</span>
+        <button className="ob-presenter__close" type="button" aria-label="Close onboarding" title="Close onboarding" onClick={() => api().onboardingPresenterAction?.({ type: 'dismiss' })}>×</button>
       </header>
       <div
         className="ob-presenter__film"

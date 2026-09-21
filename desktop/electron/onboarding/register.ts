@@ -69,6 +69,13 @@ export class OnboardingRuntime {
     return command
   }
 
+  async dismiss(): Promise<PresenterCommand> {
+    const command = await this.accept({ type: 'onboarding-dismissed' })
+    this.deps.allowance.complete()
+    this.deps.presenter.close()
+    return command
+  }
+
   dispose(): void { this.unsubscribe?.(); this.unsubscribe = undefined }
 
   private publish(command: PresenterCommand): void {

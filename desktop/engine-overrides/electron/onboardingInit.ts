@@ -231,6 +231,10 @@ export async function initOnboarding(
         await configureAction(result)
       }
     }
+    if (action.type === 'dismiss') {
+      await runtime.dismiss()
+      await grantStore.reset()
+    }
     if (action.type === 'continue-anyway') {
       const escape = escapeEventFor(runtime.snapshot())
       if (escape) {
