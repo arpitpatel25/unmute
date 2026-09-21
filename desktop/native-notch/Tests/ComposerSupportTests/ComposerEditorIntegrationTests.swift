@@ -91,6 +91,38 @@ final class ComposerEditorIntegrationTests: XCTestCase {
         XCTAssertFalse(editor.manager.canUndo)
     }
 
+    // 2026-09-21 crash: dictated text into a task's composer, the card closed,
+    // ⌘Z then invoked an undo whose target had been freed. The window's undo
+    // manager does not retain targets, so an editor leaving must clear it.
+    func testEditorLeavingTheWindowTakesItsUndoHistoryWithIt() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let editor = AttachmentTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        editor.allowsUndo = true
+        window.contentView?.addSubview(editor)
+        editor.insertText("dictated words", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.breakUndoCoalescing()
+        XCTAssertTrue(window.undoManager?.canUndo == true)
+        editor.removeFromSuperview()
+        XCTAssertFalse(window.undoManager?.canUndo == true)
+    }
+
+    func testEditorMovingWithinTheWindowKeepsItsUndoHistory() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let host = NSView(frame: window.contentView!.bounds)
+        window.contentView?.addSubview(host)
+        let editor = AttachmentTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        editor.allowsUndo = true
+        window.contentView?.addSubview(editor)
+        editor.insertText("kept", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.breakUndoCoalescing()
+        host.addSubview(editor)
+        XCTAssertTrue(window.undoManager?.canUndo == true)
+    }
+
     func testStagingAcknowledgmentPrunesJobsAndAdmissionNeverEvictsPendingContent() {
         let store = ComposerStagingStore(maxActive: 1)
         let gate = DispatchSemaphore(value: 0)

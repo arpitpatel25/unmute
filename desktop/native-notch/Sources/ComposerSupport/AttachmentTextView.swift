@@ -44,6 +44,21 @@ open class AttachmentTextView: NSTextView {
         }
         undoManager?.setActionName("Attach content")
     }
+    /// LEAVING THE WINDOW TAKES THE UNDO HISTORY WITH IT.
+    ///
+    /// Every edit here — typing, a dictated paste, an attachment — is
+    /// registered on the WINDOW's undo manager, which does not retain its
+    /// targets. When the card closed, SwiftUI freed this editor and its text
+    /// network but left their undo actions behind, and the next ⌘Z (delivered
+    /// by AppController's key monitor as `undo:`) messaged freed memory: the
+    /// notch segfaulted in `-[_NSUndoStack popAndInvoke]` on 2026-09-21. Those
+    /// actions cannot be enumerated by target, so the whole stack goes; the
+    /// notch has one composer at a time, so nothing live is lost.
+    open override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow !== window { undoManager?.removeAllActions() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     /// Announced so dictation can hand images straight to this box rather than
     /// posting a synthetic ⌘V at it — see registerComposerImageSink.
     public var onFocusChange: ((Bool) -> Void)?
