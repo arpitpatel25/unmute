@@ -22,15 +22,17 @@ test('finished passive clips advance while exercises wait for proof', () => {
   assert.equal(clipEndActionFor('microphone'), null)
 })
 
-test('hands-on lessons can be skipped but permissions and providers cannot', () => {
+test('every visible section can be skipped one at a time, including while processing', () => {
   const canSkipAction = (presenterActions as unknown as { canSkipAction(action: string, phase?: string): boolean }).canSkipAction
+  assert.equal(canSkipAction('welcome'), true)
+  assert.equal(canSkipAction('microphone'), true)
+  assert.equal(canSkipAction('provider-choice'), true)
   assert.equal(canSkipAction('notes-dictation'), true)
   assert.equal(canSkipAction('orchestrator-task'), true)
   assert.equal(canSkipAction('notetaker-save'), true)
-  assert.equal(canSkipAction('notes-dictation', 'listening'), false)
-  assert.equal(canSkipAction('orchestrator-task', 'processing'), false)
-  assert.equal(canSkipAction('microphone'), false)
-  assert.equal(canSkipAction('provider-choice'), false)
+  assert.equal(canSkipAction('notes-dictation', 'listening'), true)
+  assert.equal(canSkipAction('orchestrator-task', 'processing'), true)
+  assert.equal(canSkipAction('complete'), false)
 })
 
 test('only processing task exercises offer a bounded escape', () => {

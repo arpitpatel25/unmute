@@ -56,6 +56,20 @@ test('legacy-shaped progress is normalized without skipping capabilities', async
   assert.deepEqual(recovered.completed, ['welcome', 'privacy'])
   assert.deepEqual(recovered.taskIds, {})
   assert.deepEqual(recovered.observedCaptureItemIds, [])
+  assert.deepEqual(recovered.skipped, [])
+})
+
+test('explicitly skipped sections survive storage normalization', async () => {
+  const path = await temporaryPath()
+  await writeFile(path, JSON.stringify({
+    schema: 1,
+    action: 'accessibility',
+    completed: ['welcome', 'privacy', 'microphone'],
+    skipped: ['microphone', 'not-a-section'],
+  }), 'utf8')
+
+  const recovered = await new ProgressStore(path).load()
+  assert.deepEqual(recovered.skipped, ['microphone'])
 })
 
 test('removed legacy actions resume at the nearest current capability', async () => {

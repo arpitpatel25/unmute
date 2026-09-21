@@ -29,6 +29,9 @@ export function migrateProgress(value: unknown): OnboardingProgress {
   let completed = Array.isArray(raw.completed)
     ? raw.completed.filter(isActionId).filter((action, index, all) => all.indexOf(action) === index)
     : []
+  const skipped = Array.isArray(raw.skipped)
+    ? raw.skipped.filter(isActionId).filter((action, index, all) => all.indexOf(action) === index)
+    : []
   if (action !== 'welcome' && !completed.includes('welcome')) {
     completed = ['welcome', ...completed]
   }
@@ -39,6 +42,7 @@ export function migrateProgress(value: unknown): OnboardingProgress {
   return initialProgress({
     action,
     completed,
+    skipped,
     provider: isProvider(raw.provider) ? raw.provider : undefined,
     captureId: typeof raw.captureId === 'string' ? raw.captureId : undefined,
     observedCaptureItemIds: Array.isArray(raw.observedCaptureItemIds)

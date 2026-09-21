@@ -53,22 +53,38 @@ test('presenter snapshots describe progress through the visible journey', () => 
   assert.equal(task.totalSteps, 16)
 })
 
-test('Continue may skip an exercise but cannot fake a permission or provider check', () => {
+test('Skip section advances every visible section without pretending its capability succeeded', () => {
   const skipEventFor = (chapters as unknown as {
     skipEventFor(command: ReturnType<typeof presenterSnapshot>): unknown
   }).skipEventFor
 
   assert.deepEqual(skipEventFor(presenterSnapshot('notes-dictation')), {
-    type: 'capability-satisfied', action: 'notes-dictation',
+    type: 'section-skipped', action: 'notes-dictation',
   })
-  assert.equal(skipEventFor(presenterSnapshot('microphone')), null)
-  assert.equal(skipEventFor(presenterSnapshot('provider-choice')), null)
-  assert.equal(skipEventFor(presenterSnapshot('notes-dictation', { started: true, stopped: false })), null)
+  assert.deepEqual(skipEventFor(presenterSnapshot('microphone')), {
+    type: 'section-skipped', action: 'microphone',
+  })
+  assert.deepEqual(skipEventFor(presenterSnapshot('provider-choice')), {
+    type: 'section-skipped', action: 'provider-choice',
+  })
+  assert.deepEqual(skipEventFor(presenterSnapshot('orchestrator-task', { started: true, stopped: true })), {
+    type: 'section-skipped', action: 'orchestrator-task',
+  })
   const recording = (presenterSnapshot as unknown as (
     action: 'notetaker-save', gesture: undefined, notetakerActive: boolean,
   ) => ReturnType<typeof presenterSnapshot>)('notetaker-save', undefined, true)
-  assert.equal(recording.phase, 'listening')
-  assert.equal(skipEventFor(recording), null)
+  assert.deepEqual(skipEventFor(recording), {
+    type: 'section-skipped', action: 'notetaker-save',
+  })
+  assert.equal(skipEventFor(presenterSnapshot('complete')), null)
+})
+
+test('processing task copy says what was sent and that waiting is optional', () => {
+  const orchestrator = presenterSnapshot('orchestrator-task', { started: true, stopped: true })
+  const agent = presenterSnapshot('agent-task-link', { started: true, stopped: true })
+
+  assert.equal(orchestrator.card?.detail, 'Request sent to Unmute. Your task is being processed. You can wait for it to finish or skip this section.')
+  assert.equal(agent.card?.detail, 'Request sent to Unmute Agent. Your task is being processed. You can wait for it to finish or skip this section.')
 })
 
 test('Continue anyway escapes only stalled task exercises', () => {

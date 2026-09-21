@@ -16,12 +16,8 @@ export function clipEndActionFor(action: string): 'continue' | 'complete-orienta
 }
 
 export function canSkipAction(action: string, phase: 'ready' | 'listening' | 'processing' = 'ready'): boolean {
-  return phase === 'ready' && (action === 'notes-dictation'
-    || action === 'clipboard-capture'
-    || action === 'screenshot-capture'
-    || action === 'orchestrator-task'
-    || action === 'agent-task-link'
-    || action === 'notetaker-save')
+  void phase
+  return action !== 'loading' && action !== 'complete'
 }
 
 export function processingEscapeDelayMs(action: string, phase?: 'ready' | 'listening' | 'processing'): number | null {

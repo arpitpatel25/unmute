@@ -107,8 +107,13 @@ export function presenterSnapshot(action: ActionId, gesture?: { started: boolean
   const phase = notetakerActive && action === 'notetaker-save'
     ? 'listening'
     : gesture?.stopped ? 'processing' : gesture?.started ? 'listening' : 'ready'
+  const processingDetail = action === 'agent-task-link'
+    ? 'Request sent to Unmute Agent. Your task is being processed. You can wait for it to finish or skip this section.'
+    : action === 'orchestrator-task'
+      ? 'Request sent to Unmute. Your task is being processed. You can wait for it to finish or skip this section.'
+      : 'Your request is being processed.'
   const card = chapter.card?.kind === 'speak' && phase !== 'ready'
-    ? { ...chapter.card, detail: phase === 'listening' ? 'Listening — perform the action, then tap the shortcut again to submit.' : 'Processing…' }
+    ? { ...chapter.card, detail: phase === 'listening' ? 'Listening — perform the action, then tap the shortcut again to submit.' : processingDetail }
     : chapter.card
   const totalSteps = ACTION_ORDER.length - 1
   const step = action === 'complete' ? totalSteps : ACTION_ORDER.indexOf(action) + 1
@@ -116,9 +121,7 @@ export function presenterSnapshot(action: ActionId, gesture?: { started: boolean
 }
 
 export function skipEventFor(command: PresenterCommand): OnboardingEvent | null {
-  return command.card?.kind === 'speak' && command.phase === 'ready'
-    ? { type: 'capability-satisfied', action: command.action }
-    : null
+  return command.action === 'complete' ? null : { type: 'section-skipped', action: command.action }
 }
 
 export function escapeEventFor(command: PresenterCommand): OnboardingEvent | null {

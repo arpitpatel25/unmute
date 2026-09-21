@@ -25,6 +25,7 @@ export interface OnboardingProgress {
   schema: 1
   action: ActionId
   completed: ActionId[]
+  skipped: ActionId[]
   provider?: ProviderId
   captureId?: string
   observedCaptureItemIds: string[]
@@ -39,6 +40,7 @@ export type ShortcutLane = 'dictation' | 'orchestrator' | 'agent'
 
 export type OnboardingEvent =
   | { type: 'capability-satisfied'; action: ActionId }
+  | { type: 'section-skipped'; action: ActionId }
   | { type: 'provider-selected'; provider: ProviderId }
   | { type: 'function-key-observed' }
   | { type: 'shortcut-started'; lane: ShortcutLane }

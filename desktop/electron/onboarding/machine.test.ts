@@ -83,6 +83,20 @@ test('boot revalidation removes revoked capabilities and returns to the first ga
   assert.equal(next.completed.includes('accessibility'), false)
 })
 
+test('an explicitly skipped permission stays skipped after relaunch', () => {
+  let progress = atAction('microphone')
+  progress = reduceOnboarding(progress, { type: 'section-skipped', action: 'microphone' })
+  assert.equal(progress.action, 'accessibility')
+  assert.deepEqual(progress.skipped, ['microphone'])
+
+  const relaunched = reduceOnboarding(progress, {
+    type: 'boot-revalidated',
+    satisfied: ['welcome', 'privacy'],
+  })
+  assert.equal(relaunched.action, 'accessibility')
+  assert.equal(relaunched.completed.includes('microphone'), true)
+})
+
 test('boot revalidation advances when every permission is now satisfied', () => {
   const progress = atAction('system-audio')
   const next = reduceOnboarding(progress, {

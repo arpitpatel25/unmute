@@ -221,11 +221,15 @@ export async function initOnboarding(
   ipcMain.on('onboarding:presenter-action', async (_event, value: unknown) => {
     const action = value as { type?: string; provider?: ProviderId }
     if (action.type === 'continue') {
+      await advancePermission()
+    }
+    if (action.type === 'skip-section') {
       const skip = skipEventFor(runtime.snapshot())
       if (skip) {
         const result = await runtime.accept(skip)
+        if (result.action === 'complete') await grantStore.reset()
         await configureAction(result)
-      } else await advancePermission()
+      }
     }
     if (action.type === 'continue-anyway') {
       const escape = escapeEventFor(runtime.snapshot())

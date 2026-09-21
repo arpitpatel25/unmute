@@ -35,7 +35,6 @@ body:has(.ob-presenter),
 
 .ob-presenter *, .ob-presenter *::before, .ob-presenter *::after { box-sizing: border-box; }
 
-.ob-presenter__glass,
 .ob-presenter__card {
   position: relative;
   overflow: hidden;
@@ -46,19 +45,11 @@ body:has(.ob-presenter),
   backdrop-filter: blur(20px) saturate(115%);
 }
 
-.ob-presenter__glass { border-radius: 20px; padding: 10px; }
-
-.ob-presenter__glass::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(120deg, rgba(255,255,255,.42), transparent 24%, transparent 76%, rgba(224,48,48,.025));
-}
+.ob-presenter__glass { position: relative; overflow: visible; border: 0; border-radius: 18px; padding: 0; background: transparent; box-shadow: none; }
 
 .ob-presenter__identity {
-  height: 36px;
-  padding: 0 8px 8px;
+  height: 24px;
+  padding: 0 4px 7px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -67,14 +58,12 @@ body:has(.ob-presenter),
   cursor: grab;
 }
 
-.ob-presenter__identity img { width: 76px; height: auto; display: block; }
-
 .ob-presenter__progress {
   flex: 1;
   min-width: 0;
   display: flex;
   gap: 3px;
-  padding: 0 8px;
+  padding: 0;
 }
 .ob-presenter__progress span { flex: 1; height: 3px; border-radius: 999px; background: rgba(26,23,20,.14); }
 .ob-presenter__progress span.is-past { background: rgba(26,23,20,.48); }
@@ -87,13 +76,14 @@ body:has(.ob-presenter),
   overflow: hidden;
   border-radius: 16px;
   background: #08080a;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.07);
+  border: 2px solid #050505;
+  box-shadow: 0 10px 30px rgba(0,0,0,.18);
   cursor: pointer;
   outline: none;
 }
 .ob-presenter__film:focus-visible { box-shadow: inset 0 0 0 2px var(--ob-accent); }
 
-.ob-presenter__film video { width: 100%; height: 100%; display: block; object-fit: cover; object-position: center; }
+.ob-presenter__film video { width: 100%; height: 100%; display: block; object-fit: cover; object-position: center; transform: scale(1.12); }
 .ob-presenter__filmshade { position: absolute; inset: 42% 0 0; background: linear-gradient(transparent, rgba(0,0,0,.86)); pointer-events: none; }
 
 .ob-presenter__standin {
@@ -107,9 +97,6 @@ body:has(.ob-presenter),
   font-size: 12px;
   background: #11100f;
 }
-.ob-presenter__logo-plate { width: 112px; height: 48px; display: grid; place-items: center; overflow: hidden; border-radius: 12px; background: #f0ede4; }
-.ob-presenter__logo-plate img { width: 92px; height: auto; display: block; }
-
 .ob-presenter__caption {
   position: absolute;
   z-index: 1;
@@ -125,7 +112,7 @@ body:has(.ob-presenter),
   color: white;
 }
 
-.ob-presenter__controls { height: 35px; display: flex; align-items: end; gap: 4px; padding: 7px 4px 0; }
+.ob-presenter__controls { height: 37px; display: flex; align-items: end; gap: 4px; padding: 7px 4px 0; }
 .ob-presenter button {
   -webkit-app-region: no-drag;
   appearance: none;
@@ -141,7 +128,7 @@ body:has(.ob-presenter),
 .ob-presenter button:disabled { cursor: default; opacity: .5; }
 .ob-presenter button:disabled:hover { background: transparent; color: var(--ob-muted); }
 .ob-presenter button:focus-visible { outline: 2px solid var(--ob-accent); outline-offset: 2px; }
-.ob-presenter__status { margin-left: auto; padding: 7px 7px 2px; color: var(--ob-faint); font-size: 10px; }
+.ob-presenter__skip { margin-left: auto; }
 
 .ob-presenter__card {
   flex: 0 0 auto;

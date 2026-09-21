@@ -8,6 +8,7 @@ export function initialProgress(overrides: Partial<OnboardingProgress> = {}): On
     schema: 1,
     action: 'welcome',
     completed: [],
+    skipped: [],
     observedCaptureItemIds: [],
     taskIds: {},
     notetakerActive: false,
@@ -72,17 +73,26 @@ export function reduceOnboarding(progress: OnboardingProgress, event: Onboarding
 
   if (event.type === 'boot-revalidated') {
     const permissionSet = new Set(event.satisfied)
-    const retained = progress.completed.filter(action => !PERMISSION_ACTIONS.includes(action) || permissionSet.has(action))
+    const skippedSet = new Set(progress.skipped)
+    const retained = progress.completed.filter(action => !PERMISSION_ACTIONS.includes(action) || permissionSet.has(action) || skippedSet.has(action))
     for (const action of PERMISSION_ACTIONS) {
-      if (permissionSet.has(action) && !retained.includes(action)) retained.push(action)
+      if ((permissionSet.has(action) || skippedSet.has(action)) && !retained.includes(action)) retained.push(action)
     }
-    const firstGap = PERMISSION_ACTIONS.find(action => !permissionSet.has(action))
+    const firstGap = PERMISSION_ACTIONS.find(action => !permissionSet.has(action) && !skippedSet.has(action))
     const currentIsPermission = PERMISSION_ACTIONS.includes(progress.action)
     return {
       ...progress,
       completed: retained,
       action: firstGap ?? (currentIsPermission ? 'provider-choice' : progress.action),
     }
+  }
+
+  if (event.type === 'section-skipped' && event.action === progress.action && progress.action !== 'complete') {
+    return completeCurrent(progress, {
+      skipped: progress.skipped.includes(progress.action)
+        ? progress.skipped
+        : [...progress.skipped, progress.action],
+    })
   }
 
   if (event.type === 'capability-satisfied' && event.action === progress.action) {
