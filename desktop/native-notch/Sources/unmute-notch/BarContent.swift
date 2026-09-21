@@ -260,27 +260,50 @@ struct BarContent: Equatable {
         var wants: Fact? = nil
         var runs: Fact? = nil
 
+        // THE TASK COUNT IS READ FIRST AND UNCONDITIONALLY.
+        //
+        // It used to be the last arm of an if/else chain behind the Agent and
+        // the router, so ANY agent state skipped it: "Thinking" with three tasks
+        // working dropped "Working 3", and "Confirming" hid the running work
+        // entirely — the exact failure this bar exists to end, back through a
+        // side door. The count is a fact about the world; the Agent's state is
+        // a fact about the Agent. Neither gets to delete the other.
+        //
+        // DORMANT IS THE CUTOUT, so a count has nowhere to be drawn — and the
+        // host only ever commands dormant when nothing is running.
+        let tasks = state != .dormant ? BarShoulders.running(m.working) : nil
+
         if let a = m.agentActivity {
             // The Agent is one thing, so it never carries a count: "and N more
-            // like this" is a lie about a single worker. An Agent that is
-            // CONFIRMING has stopped running and started asking, so it changes
-            // which fact it is — the placement rules below do the rest.
+            // like this" is a lie about a single worker.
             let (status, label) = agentWords(a.state)
-            if status.isYourMove { wants = (status, label, nil) } else { runs = (status, label, nil) }
+            if status.isYourMove {
+                // Asking is WANTING, so it takes the left — the running work
+                // is still true and keeps the right.
+                wants = (status, label, nil)
+            } else if tasks == nil {
+                // Thinking, listening, searching: in flight, so it is what is
+                // running — but only when nothing else is. Tasks working hold
+                // the right shoulder over it: they are what the user dispatched
+                // and is waiting on, the count is durable where the Agent's
+                // state lasts seconds, and the Agent's own card in the pocket
+                // carries its progress.
+                runs = (status, label, nil)
+            }
         } else if m.capturePhase == "routing" {
-            // ROUTING OUTRANKS EVERY RESTING STATE.
+            // ROUTING OUTRANKS EVERY RESTING STATE — and, unlike the Agent,
+            // the task count too.
             //
             // Between the recording pill vanishing and the task appearing, the
             // router is deciding where the words go — an LLM call, so it is not
             // instant. The pill is gone by then and the task does not exist
-            // yet, so the surface said nothing at all and the user was left
-            // wondering whether their words had landed.
+            // yet, so the surface said nothing and the user was left wondering
+            // whether their words had landed. That question is only open for
+            // the second or two the call takes, which is why this one may cover
+            // the count and the Agent may not.
             runs = (.processing, "Sending", nil)
-        } else if state != .dormant, let r = BarShoulders.running(m.working) {
-            // DORMANT IS THE CUTOUT, so a count has nowhere to be drawn — and
-            // the host only ever commands dormant when nothing is running. The
-            // overrides above DO outrank dormant: each is a thing happening
-            // right now that the user is waiting on a sign of.
+        }
+        if runs == nil, let r = tasks {
             runs = (r.status, Theme.statusLabel(r.status), r.count)
         }
 

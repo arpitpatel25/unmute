@@ -32,10 +32,10 @@ import SwiftUI
 // back on the mass's floor made it flush with the menu bar and invisible for a
 // third of its length.
 //
-// What actually made the drop look wrong was never the line: the MASS was
-// growing into the same room, and a 3pt black lip below the menu bar reads as
-// the whole surface sitting low. In fullscreen there is no menu bar to be out
-// of line with, which is why it looked right there and wrong everywhere else.
+// The room below the bar is the line's alone: the mass is pinned to menu-bar
+// height (NotchView.massPlane), because a black lip below the menu bar would
+// read as the whole surface sitting low — and would only show in apps that are
+// not fullscreen, where there is a menu bar to be out of line with.
 //
 // See docs/superpowers/specs/steps/hover-edge.html.
 struct BarRim: Shape {

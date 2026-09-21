@@ -117,36 +117,22 @@ struct NotchView: View {
     /// While the rim is showing the window extends below the bar, because the
     /// line has to clear the camera housing to be visible across the middle
     /// (see MassPlacement.rimDrop). Nothing but the line may grow into that
-    /// room: a 3pt black lip below the menu bar reads as the whole surface
-    /// sitting low, and that is what it did in every app that was not
-    /// fullscreen — fullscreen hides the menu bar, so there was nothing left to
-    /// be out of line with.
+    /// room: a black lip below the menu bar reads as the whole surface sitting
+    /// low.
     ///
-    /// A VStack with a trailing Spacer rather than a `.frame(height:alignment:)`
-    /// — the frame proposes a height but does not compel a Shape that ignores
-    /// the proposal, and `surface` is a Shape under `.ignoresSafeArea`. The
-    /// Spacer leaves it nowhere to grow into.
-    ///
-    /// Height zero means UNSET — the expanded surfaces and the open pocket size
-    /// themselves — so they are passed through untouched.
-    @ViewBuilder private var massPlane: some View {
-        let h = model.bar.height
-        if h > 0 {
-            VStack(spacing: 0) {
-                ZStack {
-                    surface
-                    content
-                }
-                .frame(height: h)
-                .clipped()
-                Spacer(minLength: 0)
-            }
-        } else {
-            ZStack {
-                surface
-                content
-            }
+    /// ONE STRUCTURE FOR EVERY STATE. This was an `if h > 0 { VStack } else
+    /// { ZStack }`, which gave the bar and the expanded surfaces different view
+    /// identities — so every bar↔pocket/task/dormant transition destroyed and
+    /// rebuilt the surface and everything inside it instead of morphing it, the
+    /// exact failure the root's own note records. A nil height means UNSET: the
+    /// expanded surfaces and the open pocket size themselves, and the same view
+    /// simply stops being constrained. PR #19 review.
+    private var massPlane: some View {
+        ZStack {
+            surface
+            content
         }
+        .frame(height: model.bar.height > 0 ? model.bar.height : nil, alignment: .top)
     }
 
     /// WHERE THE SURFACE ENDS — drawn only while the pointer is on it.

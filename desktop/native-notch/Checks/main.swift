@@ -505,6 +505,32 @@ let asking = BarContent.make(for: vm, state: .idle, hovering: false)
 check("an agent that is asking is still one fact, so it stays on the right",
       asking.rightDot == .needsUser && asking.right == "Confirming"
           && asking.emphasis == .wordmark && asking.alarm == .needsUser)
+// THE AGENT MAY NOT HIDE RUNNING TASKS — the bug this whole bar exists to end,
+// come back through a side door. Agent activity and the task count were one
+// if/else chain, so any agent state skipped the count: "Thinking" with three
+// tasks working dropped "Working 3", and "Confirming" hid the running work
+// entirely. Every agent check above runs at `working = 0`, which is how it got
+// through. PR #19 review.
+vm.working = 3
+vm.agentActivity = AgentActivityP(state: .thinking, summary: "reading the spec",
+                                  interactionId: nil, agentRunId: nil, provider: nil)
+let thinkingOverWork = BarContent.make(for: vm, state: .active, hovering: false)
+check("an agent thinking does not hide the tasks that are working",
+      thinkingOverWork.right == "Working" && thinkingOverWork.rightBadge == 3)
+check("...and the left stays the mark — thinking is not asking",
+      thinkingOverWork.emphasis == .wordmark && thinkingOverWork.alarm == nil)
+
+vm.agentActivity = AgentActivityP(state: .confirming, summary: "delete the branch?",
+                                  interactionId: nil, agentRunId: nil, provider: nil)
+let askingOverWork = BarContent.make(for: vm, state: .active, hovering: false)
+check("an agent asking takes the left, because it wants you",
+      askingOverWork.dot == .needsUser && askingOverWork.left == "Confirming"
+          && askingOverWork.alarm == .needsUser)
+check("...and the running work keeps the right, because that is still true",
+      askingOverWork.rightDot == .processing && askingOverWork.right == "Working"
+          && askingOverWork.rightBadge == 3)
+vm.working = 0
+
 vm.agentActivity = nil
 
 // ── THE ONE SENTENCE LEFT ON THE BAR ──
