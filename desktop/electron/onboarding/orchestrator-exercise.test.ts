@@ -13,3 +13,18 @@ test('only the armed onboarding task with expected output verifies', async () =>
   assert.equal(isOwnedOnboardingTask({ id: 'other', cwd: root }, 't1', root), false)
   assert.equal(await verifyHelloTask(root), true)
 })
+
+test('accepts the guided task when the user explicitly creates it on the Desktop', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'unmute-onboarding-workspace-'))
+  const desktop = await mkdtemp(join(tmpdir(), 'unmute-onboarding-desktop-'))
+  await writeFile(join(desktop, 'hello-unmute.txt'), 'My first Unmute task\n')
+
+  assert.equal(await verifyHelloTask(workspace, [desktop]), true)
+})
+
+test('accepts dictated task content when transcription changes capitalization', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'unmute-onboarding-workspace-'))
+  await writeFile(join(workspace, 'hello-unmute.txt'), 'my first unmute task\n')
+
+  assert.equal(await verifyHelloTask(workspace), true)
+})

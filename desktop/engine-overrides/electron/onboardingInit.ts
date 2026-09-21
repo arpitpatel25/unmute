@@ -105,7 +105,7 @@ export async function initOnboarding(
     presenter,
     allowance,
     onReceipt: receiptSource,
-    verifyOrchestratorTask: async () => verifyHelloTask(workspace),
+    verifyOrchestratorTask: async () => verifyHelloTask(workspace, [app.getPath('desktop')]),
     onNavigate: navigate,
   })
   activeRuntime = runtime
