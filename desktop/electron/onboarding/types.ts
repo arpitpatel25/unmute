@@ -30,6 +30,7 @@ export interface OnboardingProgress {
   observedCaptureItemIds: string[]
   taskIds: { orchestrator?: string; agent?: string }
   meetingId?: string
+  notetakerActive: boolean
   gesture?: { lane: ShortcutLane; started: boolean; stopped: boolean }
   updatedAt: number
 }
@@ -73,6 +74,8 @@ export type PresenterCommand = {
   clipId: string
   caption: string
   card: PresenterCard
+  step: number
+  totalSteps: number
   phase?: 'ready' | 'listening' | 'processing'
 }
 

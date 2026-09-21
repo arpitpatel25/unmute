@@ -8,24 +8,99 @@ export type PresenterCard = null | {
   providers?: Record<'claude' | 'codex', { state: ProviderUiState; detail?: string }>
 }
 
-export type PresenterState = {
+export type PresenterSnapshot = {
   action: string
   clipId: string
   caption: string
   card: PresenterCard
-  videoUnavailable: boolean
+  step: number
+  totalSteps: number
   phase?: 'ready' | 'listening' | 'processing'
 }
 
+export type PresenterState = PresenterSnapshot & {
+  videoUnavailable: boolean
+  checkpoint: PresenterSnapshot | null
+  history: PresenterSnapshot[]
+  historyIndex: number | null
+  reviewing: boolean
+}
+
 export type PresenterMessage =
-  | { type: 'snapshot'; action: string; clipId: string; caption: string; card: PresenterCard; phase?: 'ready' | 'listening' | 'processing' }
+  | ({ type: 'snapshot' } & PresenterSnapshot)
   | { type: 'video-unavailable' }
+  | { type: 'back' }
+  | { type: 'forward' }
+
+const loading: PresenterSnapshot = {
+  action: 'loading', clipId: '', caption: '', card: null, step: 0, totalSteps: 0,
+}
 
 export function emptyPresenter(): PresenterState {
-  return { action: 'loading', clipId: '', caption: '', card: null, videoUnavailable: false }
+  return {
+    ...loading,
+    videoUnavailable: false,
+    checkpoint: null,
+    history: [],
+    historyIndex: null,
+    reviewing: false,
+  }
+}
+
+function snapshotFrom(message: Extract<PresenterMessage, { type: 'snapshot' }>): PresenterSnapshot {
+  return {
+    action: message.action,
+    clipId: message.clipId,
+    caption: message.caption,
+    card: message.card,
+    step: message.step ?? 0,
+    totalSteps: message.totalSteps ?? 0,
+    phase: message.phase,
+  }
+}
+
+function display(state: PresenterState, snapshot: PresenterSnapshot, historyIndex: number | null): PresenterState {
+  return {
+    ...state,
+    ...snapshot,
+    historyIndex,
+    reviewing: historyIndex !== null,
+    videoUnavailable: false,
+  }
 }
 
 export function reducePresenter(state: PresenterState, message: PresenterMessage): PresenterState {
   if (message.type === 'video-unavailable') return { ...state, videoUnavailable: true }
-  return { ...message, videoUnavailable: false }
+
+  if (message.type === 'back') {
+    if (!state.history.length) return state
+    const index = state.historyIndex === null
+      ? state.history.length - 1
+      : Math.max(0, state.historyIndex - 1)
+    return display(state, state.history[index], index)
+  }
+
+  if (message.type === 'forward') {
+    if (state.historyIndex === null || !state.checkpoint) return state
+    const index = state.historyIndex + 1
+    return index < state.history.length
+      ? display(state, state.history[index], index)
+      : display(state, state.checkpoint, null)
+  }
+
+  const next = snapshotFrom(message)
+  if (!state.checkpoint) return display({ ...state, checkpoint: next }, next, null)
+
+  if (state.checkpoint.action === next.action) {
+    const updated = { ...state, checkpoint: next }
+    return state.reviewing ? updated : display(updated, next, null)
+  }
+
+  const resetJourney = next.step > 0 && next.step <= state.checkpoint.step
+  const history = resetJourney
+    ? []
+    : state.history.at(-1)?.action === state.checkpoint.action
+      ? state.history
+      : [...state.history, state.checkpoint]
+  return display({ ...state, checkpoint: next, history }, next, null)
 }

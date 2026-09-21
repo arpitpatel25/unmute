@@ -63,9 +63,23 @@ body:has(.ob-presenter),
   align-items: center;
   gap: 8px;
   position: relative;
+  -webkit-app-region: drag;
+  cursor: grab;
 }
 
 .ob-presenter__identity img { width: 76px; height: auto; display: block; }
+
+.ob-presenter__progress {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 3px;
+  padding: 0 8px;
+}
+.ob-presenter__progress span { flex: 1; height: 3px; border-radius: 999px; background: rgba(26,23,20,.14); }
+.ob-presenter__progress span.is-past { background: rgba(26,23,20,.48); }
+.ob-presenter__progress span.is-current { background: var(--ob-accent); }
+.ob-presenter__step { color: var(--ob-faint); font-size: 9px; font-variant-numeric: tabular-nums; }
 
 .ob-presenter__film {
   position: relative;
@@ -74,7 +88,10 @@ body:has(.ob-presenter),
   border-radius: 16px;
   background: #08080a;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.07);
+  cursor: pointer;
+  outline: none;
 }
+.ob-presenter__film:focus-visible { box-shadow: inset 0 0 0 2px var(--ob-accent); }
 
 .ob-presenter__film video { width: 100%; height: 100%; display: block; object-fit: cover; object-position: center; }
 .ob-presenter__filmshade { position: absolute; inset: 42% 0 0; background: linear-gradient(transparent, rgba(0,0,0,.86)); pointer-events: none; }
@@ -110,6 +127,7 @@ body:has(.ob-presenter),
 
 .ob-presenter__controls { height: 35px; display: flex; align-items: end; gap: 4px; padding: 7px 4px 0; }
 .ob-presenter button {
+  -webkit-app-region: no-drag;
   appearance: none;
   border: 0;
   border-radius: 10px;

@@ -142,7 +142,9 @@ test('agent prose is not proof; its structured task link must be opened', () => 
 test('notetaker save, not start or stop, completes the chapter', () => {
   let progress = atAction('notetaker-save')
   progress = reduceOnboarding(progress, { type: 'notetaker-started', meetingId: 'm1' })
+  assert.equal((progress as OnboardingProgress & { notetakerActive?: boolean }).notetakerActive, true)
   progress = reduceOnboarding(progress, { type: 'notetaker-stopped', meetingId: 'm1' })
+  assert.equal((progress as OnboardingProgress & { notetakerActive?: boolean }).notetakerActive, false)
   assert.equal(progress.action, 'notetaker-save')
 
   progress = reduceOnboarding(progress, { type: 'notetaker-saved', meetingId: 'm1' })

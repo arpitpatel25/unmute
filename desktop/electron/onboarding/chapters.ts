@@ -1,4 +1,4 @@
-import type { ActionId, ChapterDefinition, PresenterCommand } from './types'
+import type { ActionId, ChapterDefinition, OnboardingEvent, PresenterCommand } from './types'
 
 export const ACTION_ORDER: readonly ActionId[] = [
   'welcome',
@@ -102,11 +102,21 @@ export const CHAPTERS: Readonly<Record<ActionId, ChapterDefinition>> = {
   },
 }
 
-export function presenterSnapshot(action: ActionId, gesture?: { started: boolean; stopped: boolean }): PresenterCommand {
+export function presenterSnapshot(action: ActionId, gesture?: { started: boolean; stopped: boolean }, notetakerActive = false): PresenterCommand {
   const chapter = CHAPTERS[action]
-  const phase = gesture?.stopped ? 'processing' : gesture?.started ? 'listening' : 'ready'
+  const phase = notetakerActive && action === 'notetaker-save'
+    ? 'listening'
+    : gesture?.stopped ? 'processing' : gesture?.started ? 'listening' : 'ready'
   const card = chapter.card?.kind === 'speak' && phase !== 'ready'
     ? { ...chapter.card, detail: phase === 'listening' ? 'Listening — perform the action, then tap the shortcut again to submit.' : 'Processing…' }
     : chapter.card
-  return { type: 'snapshot', action, clipId: chapter.clipId, caption: chapter.caption, card, phase }
+  const totalSteps = ACTION_ORDER.length - 1
+  const step = action === 'complete' ? totalSteps : ACTION_ORDER.indexOf(action) + 1
+  return { type: 'snapshot', action, clipId: chapter.clipId, caption: chapter.caption, card, step, totalSteps, phase }
+}
+
+export function skipEventFor(command: PresenterCommand): OnboardingEvent | null {
+  return command.card?.kind === 'speak' && command.phase === 'ready'
+    ? { type: 'capability-satisfied', action: command.action }
+    : null
 }

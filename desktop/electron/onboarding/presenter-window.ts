@@ -10,6 +10,8 @@ export interface PresenterBrowserWindow {
   loadURL(url: string): Promise<unknown> | unknown
   showInactive(): void
   setFocusable?(focusable: boolean): void
+  setVisibleOnAllWorkspaces?(visible: boolean, options?: { visibleOnFullScreen?: boolean }): void
+  setAlwaysOnTop?(flag: boolean, level?: string): void
   setBounds(bounds: Rectangle): void
   isDestroyed(): boolean
   destroy(): void
@@ -58,9 +60,12 @@ export class PresenterWindow {
       skipTaskbar: true,
       alwaysOnTop: true,
       focusable: false,
+      movable: true,
       hasShadow: false,
       backgroundColor: '#00000000',
     })
+    this.window.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true })
+    this.window.setAlwaysOnTop?.(true, 'screen-saver')
     this.window.webContents.once('did-finish-load', () => {
       this.ready = true
       if (this.pending) this.deliver(this.pending)

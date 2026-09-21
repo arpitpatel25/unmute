@@ -45,3 +45,31 @@ test('gesture phase follows authoritative onboarding receipts', () => {
   assert.equal(listening.phase, 'listening')
   assert.equal(listening.card?.detail, 'Listening')
 })
+
+test('Back reviews the previous chapter without replacing the live checkpoint', () => {
+  let state = reducePresenter(emptyPresenter(), {
+    type: 'snapshot', action: 'welcome', clipId: 'welcome-v1', caption: 'Welcome.', card: null,
+  })
+  state = reducePresenter(state, {
+    type: 'snapshot', action: 'privacy', clipId: 'privacy-v1', caption: 'Privacy.', card: null,
+  })
+  state = reducePresenter(state, { type: 'back' } as never)
+
+  assert.equal(state.action, 'welcome')
+  assert.equal((state as unknown as { checkpoint: { action: string } }).checkpoint.action, 'privacy')
+  assert.equal((state as unknown as { reviewing: boolean }).reviewing, true)
+})
+
+test('Forward returns from chapter history to the live checkpoint', () => {
+  let state = reducePresenter(emptyPresenter(), {
+    type: 'snapshot', action: 'welcome', clipId: 'welcome-v1', caption: 'Welcome.', card: null,
+  })
+  state = reducePresenter(state, {
+    type: 'snapshot', action: 'privacy', clipId: 'privacy-v1', caption: 'Privacy.', card: null,
+  })
+  state = reducePresenter(state, { type: 'back' } as never)
+  state = reducePresenter(state, { type: 'forward' } as never)
+
+  assert.equal(state.action, 'privacy')
+  assert.equal((state as unknown as { reviewing: boolean }).reviewing, false)
+})

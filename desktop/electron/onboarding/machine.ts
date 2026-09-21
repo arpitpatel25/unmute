@@ -10,6 +10,7 @@ export function initialProgress(overrides: Partial<OnboardingProgress> = {}): On
     completed: [],
     observedCaptureItemIds: [],
     taskIds: {},
+    notetakerActive: false,
     updatedAt: Date.now(),
     ...overrides,
   }
@@ -30,6 +31,7 @@ function completeCurrent(progress: OnboardingProgress, patch: Partial<Onboarding
     captureId: undefined,
     observedCaptureItemIds: [],
     gesture: undefined,
+    notetakerActive: false,
   }
 }
 
@@ -125,7 +127,10 @@ export function reduceOnboarding(progress: OnboardingProgress, event: Onboarding
   }
 
   if (progress.action === 'notetaker-save') {
-    if (event.type === 'notetaker-started') return { ...progress, meetingId: event.meetingId }
+    if (event.type === 'notetaker-started') return { ...progress, meetingId: event.meetingId, notetakerActive: true }
+    if (event.type === 'notetaker-stopped' && progress.meetingId === event.meetingId) {
+      return { ...progress, notetakerActive: false }
+    }
     if (event.type === 'notetaker-saved' && (!progress.meetingId || progress.meetingId === event.meetingId)) {
       return completeCurrent(progress, { meetingId: event.meetingId })
     }

@@ -6,6 +6,7 @@ import { app, BrowserWindow, ipcMain, screen, shell, systemPreferences } from 'e
 
 import { AllowanceGrantStore, OnboardingAllowanceSession, InstallationIdentityStore, setOnboardingAllowanceSession } from './paywall/onboarding/allowance'
 import { OnboardingCoordinator } from './paywall/onboarding/coordinator'
+import { skipEventFor } from './paywall/onboarding/chapters'
 import { openNotesPractice, notesEventFromReceipt } from './paywall/onboarding/notes-practice'
 import { prepareOnboardingWorkspace, verifyHelloTask } from './paywall/onboarding/orchestrator-exercise'
 import { PresenterWindow } from './paywall/onboarding/presenter-window'
@@ -219,7 +220,14 @@ export async function initOnboarding(
   ipcMain.removeAllListeners('onboarding:presenter-action')
   ipcMain.on('onboarding:presenter-action', async (_event, value: unknown) => {
     const action = value as { type?: string; provider?: ProviderId }
-    if (action.type === 'continue' || action.type === 'retry') await advancePermission()
+    if (action.type === 'continue') {
+      const skip = skipEventFor(runtime.snapshot())
+      if (skip) {
+        const result = await runtime.accept(skip)
+        await configureAction(result)
+      } else await advancePermission()
+    }
+    if (action.type === 'retry') await advancePermission()
     if (action.type === 'open-settings' && runtime.snapshot().action === 'function-key') {
       await shell.openExternal('x-apple.systempreferences:com.apple.Keyboard-Settings.extension')
     }
