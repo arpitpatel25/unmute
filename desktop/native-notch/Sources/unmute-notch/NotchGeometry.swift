@@ -190,7 +190,13 @@ struct NotchGeometry: Equatable {
     // MARK: - The bar-level mass
 
     /// Gap between the two halves when there is no cutout to separate them.
-    static let segmentGap: CGFloat = 18
+    ///
+    /// THE BREATHING ROOM A CAMERA HOUSING WOULD OCCUPY. Off-notch there is no
+    /// hardware forcing the shoulders apart, and at the old 18pt the two status
+    /// words read as one crowded sentence rather than two separate facts. The
+    /// number is the spec's: enough air that the eye lands on one shoulder at a
+    /// time. See docs/superpowers/specs/steps/hover-cases.html.
+    static let segmentGap: CGFloat = 26
     /// Below this a right-hand segment cannot say anything genuinely useful, so
     /// it is DROPPED rather than shown as an ellipsis. A status line that can be
     /// cut off is not a status line.
@@ -198,6 +204,9 @@ struct NotchGeometry: Equatable {
     /// Breathing room kept between the mass and the far edge of the bar, so the
     /// mass can never collide with the clock or the leftmost app menu.
     static let barEdgeKeepOut: CGFloat = 24
+    /// How far below the menu bar the hover rim's bottom edge runs. Enough to
+    /// clear the camera housing, which is the only reason it exists.
+    static let rimDrop: CGFloat = 3
 
     /// The mass, resolved: how wide each half is allowed to be, what sits
     /// between them, and the shape numbers that go with it.
@@ -207,7 +216,7 @@ struct NotchGeometry: Equatable {
     ///     `minRightSegment`
     ///   * the LEFT segment carries status only, is short by construction, and
     ///     is never truncated — it is the thing that must stay readable
-    func mass(left: CGFloat, right: CGFloat) -> MassPlacement {
+    func mass(left: CGFloat, right: CGFloat, rimDrop: CGFloat = 0) -> MassPlacement {
         let fillet = barFillet
         let roomRight = max(rightUsable - fillet - Self.barEdgeKeepOut, 0)
         var r = min(right, roomRight)
@@ -224,6 +233,7 @@ struct NotchGeometry: Equatable {
         let middle = cutoutWidth > 0 ? cutoutWidth
                                      : (left > 0 && r > 0 ? Self.segmentGap : 0)
         return MassPlacement(left: left, middle: middle, right: r,
+                             height: barHeight, rimDrop: rimDrop,
                              fillet: fillet, bottomRadius: barCornerRadius)
     }
 
@@ -300,6 +310,7 @@ struct NotchGeometry: Equatable {
     /// exactly over the cutout or the whole illusion collapses. With no cutout
     /// there is nothing to align to and the mass centres instead.
     func barFrame(_ m: MassPlacement) -> NSRect {
+        let h = m.totalHeight > 0 ? m.totalHeight : barHeight
         let w = min(m.width, screenFrame.width)
         var x: CGFloat
         if cutout != nil {
@@ -308,8 +319,10 @@ struct NotchGeometry: Equatable {
             x = screenFrame.midX - w / 2
         }
         x = min(max(x, screenFrame.minX), screenFrame.maxX - w)
-        return NSRect(x: round(x), y: round(screenFrame.maxY - barHeight),
-                      width: round(w), height: round(barHeight))
+        // The window hangs from the screen's top edge, so the rim's extra room
+        // is taken off the BOTTOM — the mass stays where it has always been.
+        return NSRect(x: round(x), y: round(screenFrame.maxY - h),
+                      width: round(w), height: round(h))
     }
 
     /// Dormant is INVISIBLE — an always-visible idle indicator stops being an
@@ -446,6 +459,22 @@ struct MassPlacement: Equatable {
     var left: CGFloat = 0
     var middle: CGFloat = 0
     var right: CGFloat = 0
+    /// The mass proper — exactly menu-bar height at bar level.
+    var height: CGFloat = 0
+    /// ROOM BELOW THE MASS FOR THE HOVER RIM, and for nothing else.
+    ///
+    /// The camera housing is hardware: the pixels behind it are not displayed.
+    /// That is what lets the shape be drawn straight THROUGH the cutout, and it
+    /// is equally why a line on the mass's own floor is invisible across the
+    /// middle third — it is still inside the housing there. A bottom edge that
+    /// can actually be seen end to end has to be lower than the housing is.
+    ///
+    /// THE MASS MUST NOT GROW INTO IT. A 3pt black lip hanging below the menu
+    /// bar is far more visible than the 1pt white line it was added for, and it
+    /// reads as the whole surface sitting low — which is what it looked like in
+    /// any app that was not fullscreen, where there is a menu bar to be out of
+    /// line with. See NotchView, which pins the mass to `height`.
+    var rimDrop: CGFloat = 0
     /// Concave flare at each outer end. Part of the shape path (NotchShape),
     /// which is why it is included in the window's width and in the content's
     /// horizontal padding.
@@ -453,6 +482,8 @@ struct MassPlacement: Equatable {
     var bottomRadius: CGFloat = 0
 
     var width: CGFloat { fillet + left + middle + right + fillet }
+    /// What the WINDOW is: the mass, plus the room the line needs below it.
+    var totalHeight: CGFloat { height + rimDrop }
 
     static let empty = MassPlacement()
 }

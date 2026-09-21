@@ -32,9 +32,9 @@ struct NotchView: View {
     let topInset: CGFloat
 
     var body: some View {
-        ZStack {
-            surface
-            content
+        ZStack(alignment: .top) {
+            massPlane
+            hoverRim
             // BOTH OF THESE NEED ROOM, AND THE BAR HAS NONE.
             //
             // The unexpanded surface is exactly menu-bar height now, so a review
@@ -111,6 +111,67 @@ struct NotchView: View {
     }
 
     private var expanded: Bool { model.state == .task || model.state == .cockpit }
+
+    /// THE MASS IS MENU-BAR HEIGHT, WHATEVER THE WINDOW IS.
+    ///
+    /// While the rim is showing the window extends below the bar, because the
+    /// line has to clear the camera housing to be visible across the middle
+    /// (see MassPlacement.rimDrop). Nothing but the line may grow into that
+    /// room: a 3pt black lip below the menu bar reads as the whole surface
+    /// sitting low, and that is what it did in every app that was not
+    /// fullscreen — fullscreen hides the menu bar, so there was nothing left to
+    /// be out of line with.
+    ///
+    /// A VStack with a trailing Spacer rather than a `.frame(height:alignment:)`
+    /// — the frame proposes a height but does not compel a Shape that ignores
+    /// the proposal, and `surface` is a Shape under `.ignoresSafeArea`. The
+    /// Spacer leaves it nowhere to grow into.
+    ///
+    /// Height zero means UNSET — the expanded surfaces and the open pocket size
+    /// themselves — so they are passed through untouched.
+    @ViewBuilder private var massPlane: some View {
+        let h = model.bar.height
+        if h > 0 {
+            VStack(spacing: 0) {
+                ZStack {
+                    surface
+                    content
+                }
+                .frame(height: h)
+                .clipped()
+                Spacer(minLength: 0)
+            }
+        } else {
+            ZStack {
+                surface
+                content
+            }
+        }
+    }
+
+    /// WHERE THE SURFACE ENDS — drawn only while the pointer is on it.
+    ///
+    /// On a black menu bar the mass is black on black and has no visible edge at
+    /// all; the pointing-hand cursor only ever told you that you had ALREADY
+    /// arrived. This draws the two shoulders' outer geometry and stops dead at
+    /// the housing, so the middle stays the seamless black D5 requires — see
+    /// BarRim, and hover-edge.html option 3.
+    ///
+    /// Bar level only. The expanded surfaces have their own hairline, and an
+    /// open pocket is a card with its own edge.
+    @ViewBuilder private var hoverRim: some View {
+        if model.hovering, !expanded, !model.pocket.isOpen, !model.content.resting {
+            BarRim(placement: model.bar)
+                .stroke(Color.white.opacity(0.30), lineWidth: 1)
+                // The line lands ON the edge, and a stroke straddles its path —
+                // so half of it would fall outside the window and be clipped to
+                // a half-intensity smear. Inset by half the width to keep the
+                // whole line on screen.
+                .padding(0.5)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+        }
+    }
 
     /// The shape, from the placement the controller resolved. Both radii are
     /// animatable, so the fillets travel with the mass instead of being pinned
@@ -345,7 +406,9 @@ struct NotchView: View {
     private var barRow: some View {
         HStack(spacing: 0) {
             leftHalf
-                .frame(width: model.bar.left, alignment: .leading)
+                .frame(width: model.bar.left,
+                       alignment: model.content.centresMark(inShoulderOf: model.bar.left)
+                                  ? .center : .leading)
                 .clipped()
             Color.clear.frame(width: model.bar.middle)
             rightHalf
@@ -380,25 +443,52 @@ struct NotchView: View {
                         // by construction, and is the last thing that may be cut.
                         .fixedSize()
                 }
-                if let b = c.badge, b > 1 {
+                if let b = c.badge {
                     Badge(text: "\(b)", color: Theme.status(c.alarm ?? c.dot ?? .needsUser))
                 }
             }
-            .padding(.leading, BarContent.inset)
+            // One allowance at each outer edge — see BarContent.edgeInset. When
+            // the mark is being centred any leading pad would push it off
+            // centre, so it is dropped: centring already places it.
+            .padding(.leading, model.content.centresMark(inShoulderOf: model.bar.left)
+                               ? 0 : BarContent.edgeInset)
         }
     }
 
+    /// WHAT IS RUNNING. The same three pieces as the left, in the same fonts:
+    /// this half used to carry a task title or the text of a question, which is
+    /// what made the mass unsizeable and the widths jump. It draws from the
+    /// shared six-word vocabulary now, so nothing here can outgrow its shoulder.
     @ViewBuilder private var rightHalf: some View {
-        if let t = model.content.right, !t.isEmpty, model.bar.right > 0 {
+        let c = model.content
+        if let t = c.detail, !t.isEmpty, model.bar.right > 0 {
+            // The one sentence left on the bar — see BarContent.detail. It is
+            // the only thing here that may be cut, and it is cut here.
             Text(t)
                 .font(.system(size: BarContent.detailSize))
-                .foregroundColor(model.state == .attention ? Theme.text : Theme.textDim)
-                // Truncates first, and only ever here. Below the width at which
-                // it could say something useful it is not drawn at all — the
-                // controller has already set `bar.right` to zero.
+                .foregroundColor(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .padding(.trailing, BarContent.inset)
+        } else if c.rightDot != nil || (c.right?.isEmpty == false), model.bar.right > 0 {
+            HStack(spacing: BarContent.gap) {
+                if let d = c.rightDot {
+                    Dot(status: d, size: BarContent.dotSize, breathing: d == .processing)
+                }
+                if let t = c.right {
+                    Text(t)
+                        .font(.system(size: BarContent.statusSize, weight: .medium))
+                        .foregroundColor(Theme.text)
+                        // NEVER TRUNCATES, for the same reason the left does
+                        // not: it is a status word, and a status word that can
+                        // be cut off is not a status word.
+                        .fixedSize()
+                }
+                if let b = c.rightBadge {
+                    Badge(text: "\(b)", color: Theme.status(c.rightDot ?? .processing))
+                }
+            }
+            .padding(.trailing, BarContent.edgeInset)
         }
     }
 

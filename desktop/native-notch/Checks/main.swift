@@ -166,7 +166,8 @@ check("left half is NEVER truncated", squeeze.mass(left: 900, right: 0).left == 
 let plain = NotchGeometry(screenFrame: screen, hasNotch: false, cutout: nil,
                           barHeight: 24, leftUsable: 756, rightUsable: 756)
 let m3 = plain.mass(left: 120, right: 200)
-check("no cutout ⇒ the halves are separated by a plain gap", m3.middle == NotchGeometry.segmentGap)
+check("no cutout ⇒ the halves are separated by the air a housing would occupy",
+      m3.middle == NotchGeometry.segmentGap && NotchGeometry.segmentGap == 26)
 check("one half only ⇒ no gap at all", plain.mass(left: 120, right: 0).middle == 0)
 let f3 = plain.barFrame(m3)
 check("with no cutout the mass centres on the screen", near(f3.midX, screen.midX, 1))
@@ -243,7 +244,14 @@ check("content leaves before the shape and arrives after it",
 // ── WHAT THE BAR SAYS ────────────────────────────────────────────────────────
 
 let vm = NotchModel()
-vm.working = 2
+// NOTHING RUNNING, NOTHING WAITING — the resting rungs, on their own terms.
+//
+// These used to run with `working = 2` set, which is a combination the engine
+// cannot produce: reconcile commands `active` the moment anything is
+// processing, so a dormant or idle rung is the host stating that nothing is.
+// The checks below are about what the surface says when it has nothing to say,
+// and a phantom count made that question unanswerable.
+vm.working = 0
 check("dormant says nothing at all", BarContent.make(for: vm, state: .dormant, hovering: false).isEmpty)
 // IDLE SAYS DIFFERENT THINGS ON THE TWO DISPLAY KINDS, on purpose.
 //
@@ -287,27 +295,341 @@ let routing = BarContent.make(for: vm, state: .idle, hovering: false)
 // "Sending", not "creating task". The word changed when the bar settled on one
 // vocabulary — status words the whole surface shares — and this assertion was
 // never updated because the harness had stopped compiling.
-check("routing speaks even when idle would rest", routing.left == "Sending")
-check("routing shows a working dot", routing.dot == .processing)
+// ROUTING IS A THING IN FLIGHT, SO IT SPEAKS FROM THE RIGHT — the same
+// shoulder the task will appear on a moment later, so the bar does not shuffle
+// sideways as the words land. It was on the left back when the left was the
+// only shoulder that ever carried a status.
+check("routing speaks even when idle would rest", routing.right == "Sending")
+check("routing shows a working dot", routing.rightDot == .processing)
+check("...and the left is the mark, because routing is not asking anything",
+      routing.emphasis == .wordmark)
 check("routing outranks dormant too",
-      BarContent.make(for: vm, state: .dormant, hovering: false).left == "Sending")
+      BarContent.make(for: vm, state: .dormant, hovering: false).right == "Sending")
 check("routing never glows", routing.alarm == nil)
 vm.capturePhase = nil
 check("and clears cleanly", BarContent.make(for: vm, state: .dormant, hovering: false).isEmpty)
-let act = BarContent.make(for: vm, state: .active, hovering: false)
-// THE COUNT MOVED TO THE BADGE, and the left says the one status word.
+// ── TWO SHOULDERS: WHAT WANTS YOU, AND WHAT IS RUNNING ───────────────────────
 //
-// This asserted `left == "2 running"` while the very same slot says "Working"
-// for a single task — two vocabularies for one fact, which is what made the bar
-// read as arbitrary text. BarContent now carries the status word on the left
-// and the count in the badge, exactly as `attention` already did. Both halves
-// are pinned here so the count cannot quietly vanish either.
-check("active says the status word and puts the count in the badge",
-      act.left == "Working" && act.badge == 2 && act.dot == .processing)
-check("active never glows", act.alarm == nil)
-let att = BarContent.make(for: vm, state: .attention, hovering: false)
-check("attention says what it needs", att.left == "Needs you" && att.dot == .needsUser)
-check("attention is the ONLY state that glows", att.alarm != nil)
+// docs/superpowers/specs/steps/hover-cases.html. ONE FACT PER SHOULDER: the
+// left is the most urgent thing that wants you (the mark when nothing does),
+// the right is what is running. Colour is the status, the word names it, the
+// number counts it.
+//
+// The bar could previously say only ONE of those two facts. The waiting branch
+// returned above the state switch, so a pocket holding one question hid three
+// running tasks completely — the case the spec opens with.
+
+func slot(_ id: String, _ status: String, demanding: Bool, kind: String? = nil) -> PocketSlotP {
+    PocketSlotP(id: id, title: id, kind: kind, ask: nil, status: status,
+                demanding: demanding, backend: "claude", terminal: false)
+}
+func pocketOf(_ slots: [PocketSlotP]) -> PocketP {
+    PocketP(mode: "closed", at: 0,
+            waiting: slots.filter { ($0.demanding ?? false) && $0.kind != "agent" }.count,
+            remoteKey: "fn", slots: slots)
+}
+
+check("nothing wants you, so there is no rung to name",
+      BarShoulders.wanting([]) == nil)
+check("one blocked task names itself and counts itself",
+      BarShoulders.wanting([slot("a", "needs-user", demanding: true)])
+          == BarShoulders.Rung(status: .needsUser, count: 1))
+
+// THE LADDER: Errored / Stuck › Needs you › Ready. Everything below the top
+// rung folds into the pocket rather than competing for the one shoulder.
+check("red outranks amber",
+      BarShoulders.wanting([slot("a", "needs-user", demanding: true),
+                            slot("b", "failed", demanding: true)])?.status == .failed)
+check("amber outranks teal",
+      BarShoulders.wanting([slot("a", "done", demanding: true),
+                            slot("b", "needs-user", demanding: true)])?.status == .needsUser)
+check("stuck and failed share red, and the failure is the more final of the two",
+      BarShoulders.wanting([slot("a", "stuck", demanding: true),
+                            slot("b", "failed", demanding: true)])?.status == .failed)
+
+// THE NUMBER COUNTS WHAT THE WORD NAMES. Counting every waiting task under the
+// top rung's word would write "Errored 3" on a bar holding one failure.
+check("the count counts what the word names, not the whole queue",
+      BarShoulders.wanting([slot("a", "failed", demanding: true),
+                            slot("b", "needs-user", demanding: true),
+                            slot("c", "needs-user", demanding: true)])
+          == BarShoulders.Rung(status: .failed, count: 1))
+check("a finished-but-unseen task is Ready, not Done",
+      BarShoulders.wanting([slot("a", "done", demanding: true)])?.status == .ready)
+
+// The same two exclusions the badge already makes: the Agent is always in the
+// pocket, and a card you have already dealt with is not waiting on you.
+check("the agent is never counted at you",
+      BarShoulders.wanting([slot("a", "needs-user", demanding: true, kind: "agent")]) == nil)
+check("a slot that is not demanding is not counted",
+      BarShoulders.wanting([slot("a", "needs-user", demanding: false)]) == nil)
+
+check("nothing running, nothing to say on the right", BarShoulders.running(0) == nil)
+check("what is running is always the right shoulder",
+      BarShoulders.running(3) == BarShoulders.Rung(status: .processing, count: 3))
+
+// ── THE SAME LADDER, AS THE BAR SAYS IT ──
+
+// The spec's worked example: 1 needs you, 3 working.
+vm.pocket = pocketOf([slot("a", "needs-user", demanding: true)])
+vm.working = 3
+let both = BarContent.make(for: vm, state: .attention, hovering: false)
+check("the left names what wants you",
+      both.dot == .needsUser && both.left == "Needs you" && both.badge == 1)
+check("...and the right says what is running, at the same time",
+      both.rightDot == .processing && both.right == "Working" && both.rightBadge == 3)
+check("only the thing that wants you glows", both.alarm == .needsUser)
+// EACH SHOULDER IS SIZED TO WHAT IS IN IT, and this replaced the spec's
+// `SH = max(both)`.
+//
+// Symmetry was there to stop the widths running away, and with task titles off
+// the bar they cannot. What it cost was visible the moment the two sides were
+// unequal: the mark needs ~50pt and a status needs ~98, so the mark was handed
+// a 98pt shoulder and ~37pt of dead black sat between it and the housing while
+// the other side was packed tight against it. Reported from the field twice —
+// "the notch is not symmetrical, the right side there is a lot of gap".
+//
+// Nothing is lost by dropping it: barFrame anchors the mass on the MIDDLE, so
+// unequal shoulders still hang the surface dead centre on the housing.
+// BOTH SHOULDERS ARE ONE WIDTH — the spec's SH = max(left, right), restored.
+//
+// It was dropped because the mark sat stranded in a shoulder sized for three
+// words. That was the right complaint about the wrong cause: the fix is to
+// CENTRE the mark in the shoulder it was given, not to shrink the shoulder.
+// Shrinking it traded a gap for a visibly lopsided surface, which is worse —
+// the two halves of a thing that straddles a piece of hardware have to match.
+check("both shoulders are ONE width, sized to the wider of the two",
+      both.shoulders.left == both.shoulders.right
+          && both.shoulders.left == max(both.leftWidth, both.rightWidth))
+
+// THE RIGHT SHOULDER FILLS FIRST, and this is the case that says so.
+//
+// One fact goes on the RIGHT with the mark keeping the left. The left only
+// takes a status when the right is already holding running work — two facts,
+// two shoulders. Shipped the other way round first: a lone "Ready" sat on the
+// left against an empty right half, so the status word appeared to change sides
+// depending on whether anything happened to be running. See the spec's own
+// case table: 'Needs you only' and 'Ready' both draw mark-left, status-right.
+vm.pocket = pocketOf([slot("a", "done", demanding: true),
+                      slot("b", "done", demanding: true)])
+vm.working = 0
+let lone = BarContent.make(for: vm, state: .attention, hovering: false)
+check("a lone status sits on the right, and the mark keeps the left",
+      lone.emphasis == .wordmark && lone.rightDot == .ready
+          && lone.right == "Ready" && lone.rightBadge == 2)
+check("...so the left carries no status at all", lone.dot == nil && lone.badge == nil)
+check("...and it still glows, because it is still the thing that wants you",
+      lone.alarm == .ready)
+vm.working = 3
+
+// "Nothing wants you" — the left falls back to the mark.
+vm.pocket = .empty
+let running = BarContent.make(for: vm, state: .active, hovering: false)
+check("with nothing waiting the left falls back to the mark",
+      running.emphasis == .wordmark && running.dot == nil && running.badge == nil)
+check("...and the right still says what is running",
+      running.rightDot == .processing && running.right == "Working" && running.rightBadge == 3)
+check("a bar with only good news never glows", running.alarm == nil)
+
+// THE TWO OUTER EDGES HOLD THE SAME SPACE.
+//
+// The mark had a wider lead-in than the ordinary inset, on the reasoning that a
+// wordmark looks pinned where a small round dot reads as inset already. True in
+// isolation, and wrong across the whole bar: it put 21pt before the mark and
+// 13pt after the badge, so the surface sat lopsided inside its own silhouette.
+// One number, both ends — the concave flare eats the same space at each.
+let markOuter = running.leftWidth - BarContent.gap
+    - UnMark.width(for: BarContent.markHeight)
+let statusOuter = running.rightWidth - BarContent.gap
+    - (BarContent.dotSize + BarContent.gap
+       + BarContent.measure("Working", BarContent.statusFont)
+       + BarContent.gap + BarContent.badgeWidth(3))
+check("the outer edge holds the same space on both shoulders",
+      near(markOuter, statusOuter, 1.01) && markOuter > 0)
+check("...and it is the edge inset that sets it",
+      near(markOuter, BarContent.edgeInset, 1.01))
+
+// THE MARK IS NOT LEFT STRANDED IN A SHOULDER BUILT FOR THREE WORDS.
+//
+// Both shoulders are set to the wider of the two, so "unmute | Working 3" hands
+// the mark a shoulder sized for the status and pins it to the outer edge with
+// ~48pt of dead black between it and the housing. Reported from the field as
+// the mark "looking orphaned, nothing on its right". The slack is real and the
+// symmetry is deliberate — so it is spent on BOTH sides instead of all on one.
+// The centring guard survives as exactly that — a guard. With each shoulder
+// sized to its content it never fires, and it is what stops a mark drifting to
+// the outer edge if anything ever hands it a shoulder bigger than it needs.
+// The mark's shoulder is as wide as the status's, and the mark is centred in
+// it — which is what stops the surplus all landing on one side of the mark.
+let markSh = running.shoulders
+check("the mark gets the same shoulder as the status opposite it",
+      markSh.left == markSh.right && markSh.left > running.leftWidth)
+check("...and is centred in it rather than pinned to the outer edge",
+      running.centresMark(inShoulderOf: markSh.left))
+check("...and one that exactly fills it is not moved",
+      !running.centresMark(inShoulderOf: running.leftWidth))
+check("a status shoulder is never centred — it is a list, and lists start",
+      !both.centresMark(inShoulderOf: both.leftWidth + 40))
+
+// NO TASK NAMES ANYWHERE. The whole reason the shoulders can be sized to a
+// fixed pair of words is that the vocabulary is bounded — six status words and
+// a count. One task title on the bar and the arithmetic runs away again.
+vm.pocket = pocketOf([slot("a", "needs-user", demanding: true)])
+let hovered = BarContent.make(for: vm, state: .attention, hovering: true)
+check("hovering reveals no task name — there is nothing longer to reveal",
+      hovered.right == "Working" && hovered.left == "Needs you")
+
+// Idle: the mark, and nothing at all on the right.
+vm.pocket = .empty
+vm.working = 0
+let quiet = BarContent.make(for: vm, state: .idle, hovering: false)
+check("idle is the mark alone — nothing waiting, nothing running",
+      quiet.emphasis == .wordmark && quiet.right == nil && quiet.rightDot == nil)
+
+// ONE AGENT HAS NO COUNT. "and N more like this" is a lie about a single thing.
+vm.agentActivity = AgentActivityP(state: .thinking, summary: "reading the spec",
+                                  interactionId: nil, agentRunId: nil, provider: nil)
+let agent = BarContent.make(for: vm, state: .idle, hovering: false)
+check("the agent is what is running, so it speaks from the right",
+      agent.rightDot == .processing && agent.right == "Thinking" && agent.rightBadge == nil)
+check("...and the left is the mark, because the agent is not asking anything",
+      agent.emphasis == .wordmark)
+// An agent that is CONFIRMING has stopped running and started asking, so it
+// changes shoulders. The ladder does not care what kind of thing is asking.
+vm.agentActivity = AgentActivityP(state: .confirming, summary: "delete the branch?",
+                                  interactionId: nil, agentRunId: nil, provider: nil)
+let asking = BarContent.make(for: vm, state: .idle, hovering: false)
+// With nothing running it is still a LONE fact, so it stays on the right — but
+// it is now the thing that wants you, so it wears the your-move colour and it
+// glows. The shoulder did not change; the news did.
+check("an agent that is asking is still one fact, so it stays on the right",
+      asking.rightDot == .needsUser && asking.right == "Confirming"
+          && asking.emphasis == .wordmark && asking.alarm == .needsUser)
+vm.agentActivity = nil
+
+// ── THE ONE SENTENCE LEFT ON THE BAR ──
+//
+// A toast is feedback for something the user just did AT this surface, so the
+// reason has to stay where the action was — it is the one piece of free text
+// the bar still carries, and the spec's vocabulary has no word for "why".
+//
+// It is therefore a SENTENCE, not a shoulder, and the difference is load-
+// bearing: shoulders are symmetric, so mirroring an error sentence into the
+// left half would have doubled it. Measured in the field on the old build:
+// `mass=[401|185|401]`, a 1007pt bar. A sentence keeps the old policy instead —
+// it truncates, and it is dropped when it cannot say anything useful.
+vm.toast = "Background runtime connection lost; reconnect before sending again."
+let toast = BarContent.make(for: vm, state: .idle, hovering: false)
+check("a toast still says what went wrong, and why",
+      toast.left == "Couldn't complete" && toast.detail == vm.toast)
+check("...but a sentence is not a shoulder, so it claims no shoulder of its own",
+      toast.shoulders.right == 0 && toast.rightWidth == 0)
+check("...and it is the detail half that carries it, not the status half",
+      toast.right == nil && toast.detailWidth > toast.leftWidth)
+vm.toast = nil
+
+vm.working = 2
+
+// ── THE HOVER RIM: A LINE ON THE SHOULDERS, AND IT STOPS AT THE HOUSING ──
+//
+// On a black menu bar the mass is black on black and has NO visible edge at
+// rest — the only cue today is the cursor changing once you are already inside
+// it. A rim gives it one. It may not be a rim around the MASS, though:
+// NotchView's D5 forbids a stroke that would outline the black against the
+// hardware and put the join back. So the line is drawn on the two shoulders
+// and stops dead where the housing begins.
+
+func subpaths(_ p: Path) -> Int {
+    var n = 0
+    p.forEach { e in if case .move = e { n += 1 } }
+    return n
+}
+let rimMass = notched.mass(left: 98, right: 98, rimDrop: NotchGeometry.rimDrop)
+let rim0 = BarRim(placement: notched.mass(left: 0, right: 0, rimDrop: NotchGeometry.rimDrop))
+
+// THE MASS AND THE HOUSING SHARE A BOTTOM EDGE — the geometry says so outright:
+// barHeight IS the safe-area inset, which is the height of the housing. So a
+// line drawn at the mass's own floor would trace the bottom of the hardware,
+// which is the thing D5 forbids. The window therefore extends a little BELOW
+// the menu bar, and the line uses that room to pass underneath.
+// THE WINDOW IS THE MASS, AND NOTHING HANGS BELOW THE MENU BAR.
+//
+// The line used to run 3pt lower so it could pass UNDER the housing. It cleared
+// the hardware, but against a visible menu bar those 3pt hung down into the
+// desktop and the whole surface read as sitting too low — reported from the
+// field as "fullscreen is perfect, windowed shifts a little downwards", which
+// is exactly the asymmetry you would expect: fullscreen hides the menu bar, so
+// there is nothing left to be out of line with.
+//
+// The drop was never needed. The mass and the housing SHARE a bottom edge
+// (barHeight is the safe-area inset), so a line on that edge underlines both at
+// once and introduces no seam between them — there is no boundary there to
+// outline, which is the whole reason the shape is drawn straight through.
+// THE LINE HAS TO SIT BELOW THE MENU BAR TO BE SEEN AT ALL.
+//
+// The camera housing is hardware: the pixels behind it are not displayed, which
+// is the very fact that lets the shape be drawn straight through the cutout. So
+// a line on the mass's own floor is still INSIDE the housing across the middle
+// third and simply vanishes there — a straight line that is actually visible
+// end to end has no choice but to be lower. This was removed once, on the
+// reasoning that the shared bottom edge made the drop unnecessary, and it took
+// the middle of the line with it.
+//
+// What must NOT grow into that room is the mass. A 3pt black lip below the menu
+// bar is far more visible than a 1pt white line, and that is what read as the
+// whole surface sitting low in a windowed app.
+check("the mass is exactly menu-bar height", near(rimMass.height, notched.barHeight))
+check("...and the window is taller than the mass, by the drop and only that",
+      near(rimMass.totalHeight, rimMass.height + NotchGeometry.rimDrop)
+          && NotchGeometry.rimDrop > 0)
+
+let rimRect = CGRect(x: 0, y: 0, width: rimMass.width, height: rimMass.totalHeight)
+let rim = BarRim(placement: rimMass)
+
+// ONE LINE, END TO END. It was two lines stopping either side of the housing;
+// that left the surface looking cut in half. Continuous reads as one object.
+check("the rim is ONE continuous line, not two", subpaths(rim.path(in: rimRect)) == 1)
+check("it runs the full width of the mass",
+      near(rim.path(in: rimRect).boundingRect.minX, rimRect.minX, 0.01)
+          && near(rim.path(in: rimRect).boundingRect.maxX, rimRect.maxX, 0.01))
+
+// WHERE IT PASSES THE HARDWARE IT IS UNDERNEATH IT, and that is the whole
+// trick: the line never touches the housing's edge, it goes below it.
+// THE BOTTOM IS ONE STRAIGHT LINE, END TO END.
+//
+// It used to run along the shoulders' floor and dip under the housing to cross
+// — which cleared the hardware but left a stepped line with two kinks in it.
+// Dropping the WHOLE line by the same amount clears the housing just as well
+// and reads as one edge instead of three segments.
+check("the bottom of the line clears the housing rather than hiding inside it",
+      BarRim.floorY(in: rimRect, rimMass) > rimRect.minY + rimMass.height)
+check("...and that is the only y the bottom ever has — one straight run, no step",
+      near(BarRim.floorY(in: rimRect, rimMass), rimRect.maxY, 0.01))
+
+// The line lands inside whatever rect it is handed: the view insets it by half
+// a stroke width so the whole stroke stays on screen, and an absolute y derived
+// from the mass height would have fallen outside that.
+let insetRect = rimRect.insetBy(dx: 0.5, dy: 0.5)
+check("the whole line stays inside a rect the view has inset",
+      BarRim(placement: rimMass).path(in: insetRect).boundingRect.maxY <= insetRect.maxY + 0.01)
+
+// A shoulder that is not there must not be traced anyway: with one empty the
+// mass ends just past the housing, and the line simply outlines what is there.
+let oneSided = notched.mass(left: 98, right: 0, rimDrop: NotchGeometry.rimDrop)
+let oneRect = CGRect(x: 0, y: 0, width: oneSided.width, height: oneSided.totalHeight)
+check("with one shoulder empty the line still closes at the mass's corner",
+      BarRim(placement: oneSided).path(in: oneRect).boundingRect.maxX <= oneRect.maxX + 0.01)
+
+// It travels with the rect it is given: the view insets the rim by half a
+// stroke width so the whole line stays on screen, which moves the origin.
+let shifted = CGRect(x: 10, y: 0, width: rimMass.width, height: rimMass.totalHeight)
+check("the line still spans its rect when the rect is shifted",
+      near(rim.path(in: shifted).boundingRect.minX, shifted.minX, 0.01))
+
+// A mass with no shoulders is the collapse animation's last frame. It must
+// degenerate to nothing rather than draw a lone underline in the cutout.
+check("a mass with no shoulders draws nothing",
+      subpaths(rim0.path(in: rimRect)) == 0)
 
 // ── WHEN THE SURFACE MAY PUT ITSELF DOWN ──
 //

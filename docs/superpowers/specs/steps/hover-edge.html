@@ -1,0 +1,109 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>A border around the notch</title>
+<style>
+ body{margin:0;background:#151514;color:#fff;padding:32px 40px 70px;
+      font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
+ h1{font-size:16px;font-weight:600;margin:0 0 3px}
+ h2{font-size:13px;font-weight:600;margin:32px 0 4px;color:#95c4f5}
+ .sub{color:#8a897f;font-size:12px;margin:0 0 16px;max-width:94ch}
+ .sub b{color:#fff}
+ .head{display:grid;grid-template-columns:168px 1fr 1fr;gap:22px;color:#6e6d66;
+       font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+       padding-bottom:7px;border-bottom:1px solid #2a2a27}
+ .row{display:grid;grid-template-columns:168px 1fr 1fr;gap:22px;align-items:center;
+      padding:14px 0;border-bottom:1px solid #1b1b19}
+ .lab{font-size:12.5px;font-weight:500}
+ .lab em{display:block;font-style:normal;font-size:10.5px;color:#8a897f;font-weight:400;margin-top:3px}
+ /* YOUR menu bar: black. Not a gradient, not a wallpaper — the case where the
+    mass and the bar are the same colour and the edge has nothing to say. */
+ .strip{position:relative;height:46px;overflow:hidden;border-radius:6px;background:#000;
+        box-shadow:inset 0 0 0 1px #232320}
+ .mb{position:absolute;inset:0 0 auto 0;z-index:1;display:flex;align-items:center;
+     gap:13px;padding:0 11px;height:32px;font-size:10px;color:rgba(255,255,255,.9)}
+ .mb .sp{margin-left:auto;display:flex;gap:11px;align-items:center}
+ .mb b{font-weight:600}
+ .un{font-weight:700;letter-spacing:-.04em;font-size:11px}
+ .m{position:absolute;top:0;z-index:2;background:#000;display:flex;align-items:center}
+ .cut{position:absolute;top:0;left:50%;transform:translateX(-50%);background:#000;z-index:3}
+ .cut::after{content:'camera';position:absolute;left:0;right:0;bottom:3px;text-align:center;
+      font-size:7px;letter-spacing:.14em;color:rgba(255,255,255,.26);text-transform:uppercase}
+ .L{display:flex;align-items:center;justify-content:flex-start;height:100%}
+ .R{display:flex;align-items:center;justify-content:flex-end;gap:6px;height:100%}
+ .wm{height:13px;width:21px;display:block;transform:translateY(-1.5px)}
+ .dot{width:7px;height:7px;border-radius:50%;flex:none;background:#32d74b}
+ .w{font-size:11px;font-weight:500;color:rgba(255,255,255,.92);white-space:nowrap}
+ .pill{background:rgba(255,255,255,.16);border-radius:6px;padding:1px 5px;font-size:10px;font-weight:600}
+ .n{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:#5f5e58;margin-top:6px}
+ .key{color:#8a897f;font-size:11.5px;margin:14px 0 0;max-width:94ch}
+ .key b{color:#fff}
+</style></head><body>
+
+<h1>A border around the notch &mdash; on a black menu bar</h1>
+<p class="sub">Drawn against <b>your</b> menu bar, not a wallpaper. The mass is opaque black and the
+bar behind it is black, so at rest the surface has <b>no visible edge at all</b> &mdash; the first row
+is not a rendering mistake. Every option below is a way of giving it one.</p>
+<p class="sub">The constraint, from NotchView: <i>&ldquo;there is NO rim on the bar-level mass &mdash; a stroke
+around it would outline the black against the housing and put back the join.&rdquo;</i> That objection is
+about the <b>middle</b>, where the mass meets the hardware. The outer ends are nowhere near it.</p>
+
+<div class="head"><div>Option</div><div>Resting</div><div>Hovered</div></div>
+<div id="rows"></div>
+
+<p class="key">— <b>1</b> is today: the only cue is the cursor becoming a pointing hand once you are
+already inside it. <b>2</b> is the literal reading of your question and the one that breaks the rule:
+the hairline runs under the camera and outlines the hardware. <b>3</b> keeps the line on the two
+shoulders and stops it dead at the housing &mdash; same legibility, no seam. <b>4</b> is 3 without the
+hover gate, so the surface is always findable but the menu bar always carries a shape.</p>
+
+<script>
+const CUT=185,BAR=32,INSET=13,GAP=6,DOT=7,F=10,MARK=23;
+const mc=document.createElement('canvas').getContext('2d');
+const FW='500 11px -apple-system,sans-serif',FN='600 11px -apple-system,sans-serif';
+const mw=(t,f)=>{mc.font=f;return mc.measureText(t).width;};
+function wid(ps){let w=INSET;ps.forEach((p,i)=>{if(i)w+=GAP;
+  w+= p.k==='dot'?DOT : p.k==='mark'?MARK : p.k==='num'?Math.ceil(mw(String(p.v),FN))+10
+      : mw(p.v,FW);});return Math.ceil(w+GAP);}
+function draw(ps){return ps.map(p=>
+  p.k==='dot'?`<span class="dot"></span>`:
+  p.k==='mark'?`<img class="wm" src="unmark.png">`:
+  p.k==='num'?`<span class="pill">${p.v}</span>`:
+  `<span class="w">${p.v}</span>`).join('');}
+
+const L=[{k:'mark'}], R=[{k:'dot'},{k:'t',v:'Working'},{k:'num',v:3}];
+const SH=Math.max(wid(L),wid(R));
+
+// rim: 'none' | 'full' (all the way across, under the camera) | 'ends' (shoulders only)
+function strip(rim,grow){
+  const sh=SH+grow, tot=F*2+sh+CUT+sh, ink='rgba(255,255,255,.30)';
+  // A full rim is one box around everything. An ends rim is two, each stopping
+  // where the housing begins — the line never crosses the hardware.
+  const full = rim==='full'
+    ? `box-shadow:inset 0 0 0 1px ${ink};` : '';
+  const ends = rim==='ends'
+    ? `<div style="position:absolute;left:0;top:0;bottom:0;width:${F+sh}px;z-index:4;
+         border-left:1px solid ${ink};border-bottom:1px solid ${ink};
+         border-bottom-left-radius:${F}px;pointer-events:none"></div>
+       <div style="position:absolute;right:0;top:0;bottom:0;width:${sh+F}px;z-index:4;
+         border-right:1px solid ${ink};border-bottom:1px solid ${ink};
+         border-bottom-right-radius:${F}px;pointer-events:none"></div>` : '';
+  return `<div><div class="strip">
+    <div class="mb"><b>Terminal</b><span>File</span><span>Edit</span><span>View</span>
+      <span class="sp"><span class="un">un</span><span>100%</span><span>2:05</span></span></div>
+    <div class="m" style="left:calc(50% - ${CUT/2}px - ${sh+F}px);width:${tot}px;height:${BAR}px;
+         border-radius:0 0 ${F}px ${F}px;${full}">
+      <div class="L" style="width:${F+sh}px;padding-left:${INSET+8}px">${draw(L)}</div>
+      <div style="width:${CUT}px"></div>
+      <div class="R" style="width:${sh+F}px;padding-right:${INSET}px">${draw(R)}</div>
+      ${ends}</div>
+    <div class="cut" style="width:${CUT}px;height:${BAR}px;border-radius:0 0 ${F}px ${F}px"></div>
+  </div><div class="n">${tot} &times; 32</div></div>`;
+}
+const ROWS=[
+ ['1 · today','no rim, hover only grows it 6pt a side','none','none'],
+ ['2 · full border on hover','one line around the whole mass','none','full'],
+ ['3 · shoulders only, on hover','the line stops at the housing','none','ends'],
+ ['4 · shoulders always','no hover gate — always findable','ends','ends'],
+];
+document.getElementById('rows').innerHTML = ROWS.map(([n,s,rest,hov])=>
+ `<div class="row"><div class="lab">${n}<em>${s}</em></div>
+  ${strip(rest,0)}${strip(hov,6)}</div>`).join('');
+</script></body></html>

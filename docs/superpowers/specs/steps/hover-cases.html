@@ -1,0 +1,169 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Hover — every case</title>
+<style>
+ body{margin:0;background:#0c0c0b;color:#fff;padding:32px 40px 70px;
+      font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
+ h1{font-size:16px;font-weight:600;margin:0 0 3px}
+ h2{font-size:13px;font-weight:600;margin:30px 0 10px;color:#95c4f5}
+ .sub{color:#8a897f;font-size:12px;margin:0 0 20px;max-width:90ch}
+ .sub b{color:#fff}
+ .head{display:grid;grid-template-columns:190px 1fr 1fr;gap:20px;color:#6e6d66;
+       font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+       padding-bottom:7px;border-bottom:1px solid #2a2a27}
+ .row{display:grid;grid-template-columns:190px 1fr 1fr;gap:20px;align-items:center;
+      padding:11px 0;border-bottom:1px solid #1b1b19}
+ .lab{font-size:12.5px;font-weight:500}
+ .lab em{display:block;font-style:normal;font-size:10.5px;color:#8a897f;font-weight:400;margin-top:2px}
+ .strip{position:relative;height:38px;overflow:hidden;border-radius:6px;
+        background:linear-gradient(120deg,#3b2a6d 0%,#2d5a7a 45%,#2f6b52 100%)}
+ .mb{position:absolute;inset:0 0 auto 0;z-index:1;display:flex;align-items:center;
+     gap:11px;padding:0 11px;font-size:9.5px;color:rgba(255,255,255,.9)}
+ .mb .sp{margin-left:auto;display:flex;gap:10px}
+ .m{position:absolute;top:0;z-index:2;background:#000;display:flex;align-items:center}
+ .cut{position:absolute;top:0;left:50%;transform:translateX(-50%);background:#000;z-index:3;
+      box-shadow:inset 0 0 0 1px rgba(255,255,255,.13)}
+ .cut::after{content:'camera';position:absolute;left:0;right:0;bottom:3px;text-align:center;
+      font-size:7px;letter-spacing:.14em;color:rgba(255,255,255,.3);text-transform:uppercase}
+ .L{display:flex;align-items:center;justify-content:flex-start;gap:6px;height:100%}
+ .R{display:flex;align-items:center;justify-content:flex-end;gap:6px;height:100%}
+ .wm{height:13px;width:21px;display:block;transform:translateY(-1.5px)}
+ .dot{width:7px;height:7px;border-radius:50%;flex:none}
+ .w{font-size:11px;font-weight:500;color:rgba(255,255,255,.92);white-space:nowrap}
+ .num{font-size:11px;font-weight:600;color:#fff}
+ .pill{background:rgba(255,255,255,.16);border-radius:6px;padding:1px 5px;font-size:10px;font-weight:600}
+ .n{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:#5f5e58;margin-top:5px}
+</style></head><body>
+<h1>Hover — every case the six statuses can produce</h1>
+<p class="sub">Option <b>B</b>: one fact per shoulder. <b>Left = what wants you</b>,
+<b>right = what is running</b>. Colour is the status; the word names it; the number counts it.
+Width is <b>fixed</b> — sized once for the longest label, so none of these resize.</p>
+<div class="head"><div>Case</div><div>With notch</div><div>No notch</div></div>
+<div id="rows"></div>
+
+<h2>Format — how the number and the word sit together</h2>
+<p class="sub">Both shoulders filled &mdash; <b>1 needs you, 3 working</b> &mdash; four ways.</p>
+<div class="head"><div>Format</div><div>With notch</div><div>No notch</div></div>
+<div id="fmts"></div>
+
+<h2>Which two &mdash; the priority ladder</h2>
+<p class="sub">Two shoulders, six statuses. <b>Right is always what is running.</b>
+<b>Left is the most urgent thing that wants you</b>, and everything below it folds into the
+pocket. The ladder: <b style="color:#ff453a">Errored / Stuck</b> &rsaquo;
+<b style="color:#ff9f0a">Needs you</b> &rsaquo; <b style="color:#64d2ff">Ready</b>
+&rsaquo; then the mark.</p>
+<div class="head"><div>Situation</div><div>With notch</div><div>No notch</div></div>
+<div id="pri"></div>
+
+<script>
+const CUT=185,BAR=32,BAR2=30,INSET=13,GAP=6,DOT=7,F=10,F2=9,MARK=23;
+const C={work:'#32d74b',needs:'#ff9f0a',ready:'#64d2ff',err:'#ff453a',done:'#98989d'};
+const mc=document.createElement('canvas').getContext('2d');
+const FW='500 11px -apple-system,sans-serif',FN='600 11px -apple-system,sans-serif';
+const mw=(t,f)=>{mc.font=f;return mc.measureText(t).width;};
+function wid(ps){let w=INSET;ps.forEach((p,i)=>{if(i)w+=GAP;
+  w+= p.k==='dot'?DOT : p.k==='mark'?MARK : p.k==='num'?Math.ceil(mw(String(p.v),FN))+10
+      : mw(p.v,FW);});return Math.ceil(w+GAP);}
+function draw(ps){return ps.map(p=>
+  p.k==='dot'?`<span class="dot" style="background:${p.c}"></span>`:
+  p.k==='mark'?`<img class="wm" src="unmark.png">`:
+  p.k==='num'?`<span class="pill">${p.v}</span>`:
+  `<span class="w">${p.v}</span>`).join('');}
+
+/* THE SHOULDER IS WHAT IS ON SCREEN, not the worst case.
+   Fixing it at the widest the vocabulary can produce meant the idle bar paid
+   for words it was not showing — a slab of black either side of the mark. With
+   variable-length task names gone the content is bounded by a six-word
+   vocabulary, so sizing to the wider of the two sides cannot run away: the
+   whole range is now ~291-420pt against the 205-1461pt it used to be. */
+function rowHTML(name,sub,L,R,note){
+  const SH=Math.max(L.length?wid(L):0, R.length?wid(R):0);
+  // The mark alone sat hard against the leading edge. A status starts with a
+  // dot, which is small and round and reads as inset already; the mark is a
+  // wordmark and needs a little more room to not look pinned.
+  const markOnly = L.length===1 && L[0].k==='mark';
+  const leadIn = markOnly ? INSET+8 : INSET;
+  const lone = !(L.length && R.length);
+  const tot=F*2+SH+CUT+SH;
+  const notch=`<div><div class="strip"><div class="mb"><span>Terminal</span>
+    <span class="sp"><span>2:05</span></span></div>
+   <div class="m" style="left:calc(50% - ${CUT/2}px - ${SH+F}px);width:${tot}px;height:${BAR}px;border-radius:0 0 ${F}px ${F}px">
+     <div class="L" style="width:${F+SH}px;padding-left:${leadIn}px">${draw(L)}</div>
+     <div style="width:${CUT}px"></div>
+     <div class="R" style="width:${SH+F}px;padding-right:${INSET}px">${draw(R)}</div></div>
+   <div class="cut" style="width:${CUT}px;height:${BAR}px;border-radius:0 0 ${F}px ${F}px"></div></div>
+   <div class="n">${tot} &times; 32</div></div>`;
+  const MIDAIR=26;                       // the breathing room the camera occupies on a notch
+  const fw=Math.ceil(INSET + wid(L)-INSET + MIDAIR + wid(R)-INSET + INSET);
+  const flat=`<div><div class="strip"><div class="mb" style="height:${BAR2}px"><span>Terminal</span>
+    <span class="sp"><span>2:05</span></span></div>
+   <div class="m" style="left:calc(50% - ${(lone?wid(L.length?L:R)+F2*2-INSET:fw)/2}px);
+        width:${lone?wid(L.length?L:R)+F2*2-INSET:fw}px;height:${BAR2}px;border-radius:0 0 10px 10px;
+        background:rgba(0,0,0,.62);backdrop-filter:blur(10px);padding:0 ${INSET}px;
+        ${lone?'justify-content:center':''}">
+     ${lone
+       ? `<div style="display:flex;align-items:center;gap:6px">${draw(L.length?L:R)}</div>`
+       : `<div style="display:flex;align-items:center;gap:6px">${draw(L)}</div>
+          <div style="width:${MIDAIR}px"></div>
+          <div style="display:flex;align-items:center;gap:6px;margin-left:auto">${draw(R)}</div>`}
+   </div></div>
+   <div class="n">${lone?(wid(L.length?L:R)+F2*2-INSET)+' &times; 30 &middot; centred, nothing else to say'
+                        :fw+' &times; 30 &middot; mark front, status trailing, '+MIDAIR+'pt of air'}</div></div>`;
+  return `<div class="row"><div class="lab">${name}<em>${sub}</em>
+    ${note?`<div class="n" style="margin-top:6px">${note}</div>`:''}</div>${notch}${flat}</div>`;
+}
+const M=[{k:'mark'}];
+const CASES=[
+ ['Idle','nothing at all',M,[],'the mark alone'],
+ ['Working only','3 processing',M,[{k:'dot',c:C.work},{k:'t',v:'Working'},{k:'num',v:3}],''],
+ ['Needs you only','2 waiting',M,[{k:'dot',c:C.needs},{k:'t',v:'Needs you'},{k:'num',v:2}],''],
+ ['Both','1 needs you + 3 working',
+   [{k:'dot',c:C.needs},{k:'t',v:'Needs you'},{k:'num',v:1}],
+   [{k:'dot',c:C.work},{k:'t',v:'Working'},{k:'num',v:3}],'your example'],
+ ['Ready','2 finished, unseen',M,[{k:'dot',c:C.ready},{k:'t',v:'Ready'},{k:'num',v:2}],''],
+ ['Stuck / Errored','1 failed + 2 working',
+   [{k:'dot',c:C.err},{k:'t',v:'Errored'},{k:'num',v:1}],
+   [{k:'dot',c:C.work},{k:'t',v:'Working'},{k:'num',v:2}],'stuck and failed share red'],
+ ['Mixed your-move','1 needs you + 2 ready',
+   M,[{k:'dot',c:C.needs},{k:'t',v:'Waiting'},{k:'num',v:3}],
+   'four statuses want you. Collapse to one word + total, or name the most urgent?'],
+ ['Agent','thinking',M,[{k:'dot',c:C.work},{k:'t',v:'Thinking'}],'no count — one agent'],
+ ['Routing','words in flight',M,[{k:'dot',c:C.work},{k:'t',v:'Sending'}],''],
+];
+document.getElementById('rows').innerHTML=CASES.map(c=>rowHTML(...c)).join('');
+
+const FMT=[
+ ['1 \u00b7 number then word','1 Needs you  |  3 Working',
+   [{k:'dot',c:C.needs},{k:'t',v:'Needs you'},{k:'num',v:1}],
+   [{k:'dot',c:C.work},{k:'t',v:'Working'},{k:'num',v:3}]],
+ ['2 \u00b7 word then number','Needs you 1  |  Working 3',
+   [{k:'dot',c:C.needs},{k:'t',v:'Needs you'},{k:'num',v:1}],
+   [{k:'dot',c:C.work},{k:'t',v:'Working'},{k:'num',v:3}]],
+ ['3 \u00b7 number as a badge','Needs you (1)  |  Working (3)',
+   [{k:'dot',c:C.needs},{k:'t',v:'Needs you'},{k:'num',v:1,pill:1}],
+   [{k:'dot',c:C.work},{k:'t',v:'Working'},{k:'num',v:3,pill:1}]],
+ ['4 \u00b7 lowercase','1 needs you  |  3 working',
+   [{k:'dot',c:C.needs},{k:'t',v:'needs you'},{k:'num',v:1}],
+   [{k:'dot',c:C.work},{k:'t',v:'working'},{k:'num',v:3}]],
+];
+document.getElementById('fmts').innerHTML=FMT.map(f=>rowHTML(f[0],f[1],f[2],f[3],'')).join('');
+
+/* ── WHICH TWO? ── */
+const PRI=[
+ ['All three present','1 errored + 2 needs you + 3 working',
+   [{k:'dot',c:C.err},{k:'t',v:'Errored'},{k:'num',v:1}],
+   [{k:'dot',c:C.work},{k:'t',v:'Working'},{k:'num',v:3}],
+   'red wins the left. The 2 needing you are not named \u2014 they are in the pocket.'],
+ ['No failure','2 needs you + 1 ready + 3 working',
+   [{k:'dot',c:C.needs},{k:'t',v:'Needs you'},{k:'num',v:2}],
+   [{k:'dot',c:C.work},{k:'t',v:'Working'},{k:'num',v:3}],
+   'amber wins. The 1 ready waits its turn.'],
+ ['Only good news','2 ready + 3 working',
+   [{k:'dot',c:C.ready},{k:'t',v:'Ready'},{k:'num',v:2}],
+   [{k:'dot',c:C.work},{k:'t',v:'Working'},{k:'num',v:3}],
+   'teal is the highest thing present.'],
+ ['Nothing wants you','3 working only',
+   [{k:'mark'}],
+   [{k:'dot',c:C.work},{k:'t',v:'Working'},{k:'num',v:3}],
+   'the left falls back to the mark.'],
+];
+document.getElementById('pri').innerHTML=PRI.map(r=>rowHTML(r[0],r[1],r[2],r[3],r[4])).join('');
+</script></body></html>

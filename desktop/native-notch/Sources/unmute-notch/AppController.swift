@@ -919,12 +919,25 @@ final class AppController: NSObject, NotchResizing {
             // actually there — enough to register as a response, nowhere near
             // enough to read as opening.
             let grow: CGFloat = model.hovering ? 6 : 0
-            let l = c.leftWidth > 0 ? c.leftWidth + grow : 0
-            let r = c.wantsRightWidth > 0 ? c.wantsRightWidth + grow : 0
-            let m = geometry.mass(left: l, right: r)
+            // ONE SHOULDER WIDTH, WORN BY BOTH. The mass is anchored on the
+            // camera housing, so two different shoulder widths would hang the
+            // surface off-centre from the one piece of hardware it is
+            // impersonating. A shoulder with nothing in it still stays empty —
+            // symmetry is about the halves that are THERE.
+            let sh = c.shoulders
+            let l = sh.left > 0 ? sh.left + grow : 0
+            // A SENTENCE IS NOT A SHOULDER: the detail half is unbounded text
+            // and keeps its own overflow policy — it truncates, and it is
+            // dropped whole when it cannot say anything useful.
+            let r = c.detailWidth > 0 ? c.detailWidth + grow
+                                      : (sh.right > 0 ? sh.right + grow : 0)
+            // The drop is asked for only while the line is being drawn, so the
+            // resting window is never taller than the menu bar.
+            let m = geometry.mass(left: l, right: r,
+                                  rimDrop: model.hovering ? NotchGeometry.rimDrop : 0)
             // Dropped rather than ellipsised: if the right half did not survive
             // the fit, the view must not render it either.
-            if m.right == 0 { c.right = nil }
+            if m.right == 0 { c.right = nil; c.detail = nil }
             return (geometry.barFrame(m), m, c)
 
         case .task, .cockpit:
@@ -1040,7 +1053,11 @@ final class AppController: NSObject, NotchResizing {
             model.content = r.content
         }
         window.applyFrame(r.frame, animated: animated, completion: completion)
-        NotchLog.log("bar \(model.state.rawValue) window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] left=\(r.content.left ?? "—") right=\(r.content.right ?? "—")")
+        // THE SHOULDERS, IN FULL. "left=… right=…" said what the content WANTED
+        // to say and nothing about whether it had room to; a shoulder that is
+        // present but empty and a shoulder that is absent looked identical in
+        // the log, which is two very different bugs wearing one line.
+        NotchLog.log("bar \(model.state.rawValue) window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] left=\(r.content.left ?? "—")/\(Int(r.content.leftWidth)) right=\(r.content.right ?? "—")/\(Int(r.content.rightWidth)) sh=\(Int(r.content.shoulders.left))/\(Int(r.content.shoulders.right)) massH=\(Int(r.placement.height))+\(Int(r.placement.rimDrop)) badge=\(r.content.badge.map(String.init) ?? "—")/\(r.content.rightBadge.map(String.init) ?? "—") centred=\(r.content.centresMark(inShoulderOf: r.placement.left))")
         armStandDown(r.content)
     }
 
@@ -1121,8 +1138,11 @@ final class AppController: NSObject, NotchResizing {
         switch region {
         case .bar:
             var content = BarContent.make(for: model, state: model.state, hovering: false)
-            let mass = geometry.mass(left: content.leftWidth, right: content.wantsRightWidth)
-            if mass.right == 0 { content.right = nil }
+            let sh = content.shoulders
+            let mass = geometry.mass(
+                left: sh.left,
+                right: content.detailWidth > 0 ? content.detailWidth : sh.right)
+            if mass.right == 0 { content.right = nil; content.detail = nil }
             return geometry.barFrame(mass)
         }
     }

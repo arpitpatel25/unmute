@@ -31,9 +31,34 @@ struct BarContent: Equatable {
     var dot: TaskStatus? = nil
     var left: String? = nil
     var emphasis: Emphasis = .status
+    /// THE RIGHT SHOULDER IS A STATUS TOO, NOT A SENTENCE.
+    ///
+    /// It used to carry free text — a task title, an activity line, the text of
+    /// the question being asked. That is what made the mass unsizeable: the
+    /// content was unbounded, so the width was either computed per-frame (and
+    /// visibly jumped) or fixed at the worst case the vocabulary could produce
+    /// (and the idle bar paid for words it was not showing). With titles gone
+    /// both shoulders draw from the same six-word vocabulary.
+    var rightDot: TaskStatus? = nil
     var right: String? = nil
-    /// "and N more like this" — only ever drawn when it is greater than 1.
+    /// THE ONE SENTENCE THE BAR STILL CARRIES, and it is not a shoulder.
+    ///
+    /// A toast is feedback for something the user just did at this surface, so
+    /// the reason must stay where the action was — and the six-word vocabulary
+    /// has no word for "why". It keeps the policy the right half used to have
+    /// for everything: it truncates, and it is dropped whole when it cannot say
+    /// anything useful (NotchGeometry.mass).
+    ///
+    /// Kept apart from `right` because shoulders are SYMMETRIC. Mirroring an
+    /// error sentence into the left half would double it; the field build that
+    /// prompted this separation logged `mass=[401|185|401]` — a 1007pt bar.
+    var detail: String? = nil
+    /// HOW MANY, and it is drawn even at 1. It used to mean "and N MORE like
+    /// this", so it was hidden below 2; it now means "this many", which is a
+    /// fact about one task as much as about five. A shoulder that names a
+    /// status without saying how many leaves the user to guess.
     var badge: Int? = nil
+    var rightBadge: Int? = nil
     /// Attention is the ONE state that glows, and this is what says so.
     var alarm: TaskStatus? = nil
     /// RESTING: idle, off-notch, pointer elsewhere. Nothing to say, so nothing
@@ -47,7 +72,16 @@ struct BarContent: Equatable {
     /// Outer breathing room at each far end of the mass.
     static let inset: CGFloat = 13
     /// Gap between elements inside a half, and between a half and the middle.
-    static let gap: CGFloat = 7
+    static let gap: CGFloat = 6
+    /// SPACE AT EACH OUTER EDGE OF THE MASS, and it is ONE number.
+    ///
+    /// The mark used to get a wider lead-in than everything else, on the
+    /// reasoning that a wordmark looks pinned where a small round dot reads as
+    /// inset already. True about the mark on its own, and wrong about the bar:
+    /// it left 21pt before the mark and 13pt after the badge, so the content
+    /// sat visibly lopsided inside its own silhouette. The concave flare takes
+    /// the same bite out of both ends, so both ends get the same allowance.
+    static let edgeInset: CGFloat = inset + 8
     /// The wordmark is tracked out; tracking is width and has to be counted.
     static let wordmarkTracking: CGFloat = 2.1
 
@@ -75,7 +109,9 @@ struct BarContent: Equatable {
     var leftWidth: CGFloat {
         if resting { return Self.restingWidth }
         guard dot != nil || (left?.isEmpty == false) else { return 0 }
-        var w = Self.inset
+        // The mark alone is the one thing that is placed rather than listed,
+        // and it is the only user of the wider lead-in.
+        var w = Self.edgeInset
         if dot != nil { w += Self.dotSize + Self.gap }
         if emphasis == .wordmark {
             // The identity is DRAWN now (UnMark), so its width is a geometric
@@ -84,20 +120,64 @@ struct BarContent: Equatable {
         } else if let t = left, !t.isEmpty {
             w += Self.measure(t, Self.statusFont)
         }
-        if let b = badge, b > 1 { w += Self.gap + Self.badgeWidth(b) }
+        if let b = badge { w += Self.gap + Self.badgeWidth(b) }
         return ceil(w + Self.gap)
     }
 
-    /// Width the right half WANTS. What it gets is decided by the screen —
-    /// see NotchGeometry.mass.
-    var wantsRightWidth: CGFloat {
-        guard let t = right, !t.isEmpty else { return 0 }
+    /// Width the right half needs. Same arithmetic as the left, because it is
+    /// now the same kind of thing.
+    var rightWidth: CGFloat {
+        guard rightDot != nil || (right?.isEmpty == false) else { return 0 }
+        var w = Self.edgeInset
+        if rightDot != nil { w += Self.dotSize + Self.gap }
+        if let t = right, !t.isEmpty { w += Self.measure(t, Self.statusFont) }
+        if let b = rightBadge { w += Self.gap + Self.badgeWidth(b) }
+        return ceil(w + Self.gap)
+    }
+
+    /// SHOULD THE MARK BE CENTRED IN THE SHOULDER IT WAS GIVEN?
+    ///
+    /// Both shoulders are set to the wider of the two, so a bar saying
+    /// "unmute | Working 3" hands the mark a shoulder sized for the status and
+    /// — left-aligned, like the list of pieces a status shoulder is — pins it
+    /// to the outer edge with the whole surplus as dead black between it and
+    /// the housing. It reads as abandoned rather than placed.
+    ///
+    /// Only the MARK moves. A status shoulder is a list of pieces that starts
+    /// at its inset and grows; centring that would make the dot drift with the
+    /// length of the word next to it.
+    func centresMark(inShoulderOf width: CGFloat) -> Bool {
+        emphasis == .wordmark && dot == nil && width > leftWidth + 1
+    }
+
+    /// Width the detail sentence WANTS. What it gets is decided by the screen.
+    var detailWidth: CGFloat {
+        guard let t = detail, !t.isEmpty else { return 0 }
         return ceil(Self.gap + Self.measure(t, Self.detailFont) + Self.inset)
+    }
+
+    /// WHAT BOTH SHOULDERS ARE SET TO — the wider of the two, worn by each.
+    ///
+    /// This was briefly per-shoulder, because the mark sat stranded in a
+    /// shoulder sized for three words. That was the right complaint about the
+    /// wrong cause: the answer is to CENTRE the mark in the shoulder it was
+    /// given (see `centresMark`), not to shrink the shoulder around it.
+    /// Shrinking traded a gap for a visibly lopsided surface, which is worse —
+    /// a thing that straddles a piece of hardware has to match on both sides of
+    /// it, and the mass is the only part of this app the eye can compare
+    /// against something physical.
+    ///
+    /// Sizing to the CONTENT rather than to the worst case the vocabulary could
+    /// produce is what keeps it honest: with task titles off the bar the range
+    /// is roughly 291-420pt against the 205-1461pt it used to span.
+    var shoulders: (left: CGFloat, right: CGFloat) {
+        let sh = max(leftWidth, rightWidth)
+        return (leftWidth > 0 ? sh : 0, rightWidth > 0 ? sh : 0)
     }
 
     /// The count badge: two digits at most before it stops being a count.
     static func badgeWidth(_ n: Int) -> CGFloat {
-        ceil(measure("\(n)", NSFont.systemFont(ofSize: 9.5, weight: .semibold)) + 12)
+        ceil(measure("\(n)", NSFont.systemFont(ofSize: 9.5, weight: .semibold)) + 10)
     }
 
     /// WHAT THIS SAYS, as one comparable value. The key the two-second rule is
@@ -109,10 +189,15 @@ struct BarContent: Equatable {
     /// carries the question, so a genuinely new question in an unchanged status
     /// is new news. `resting` is not — a nub says nothing.
     var signature: String {
-        "\(dot?.rawValue ?? "-")|\(left ?? "")|\(right ?? "")|\(badge ?? 0)"
+        "\(dot?.rawValue ?? "-")|\(left ?? "")|\(badge ?? 0)"
+        + "|\(rightDot?.rawValue ?? "-")|\(right ?? "")|\(rightBadge ?? 0)"
+        + "|\(detail ?? "")"
     }
 
-    var isEmpty: Bool { dot == nil && (left?.isEmpty != false) && (right?.isEmpty != false) }
+    var isEmpty: Bool {
+        dot == nil && rightDot == nil && (left?.isEmpty != false)
+            && (right?.isEmpty != false) && (detail?.isEmpty != false)
+    }
 
     // MARK: - What each state says
 
@@ -152,139 +237,129 @@ struct BarContent: Equatable {
 
     /// The state table from the spec, in code and nowhere else. Everything
     /// above decides whether to SAY this; this decides what it is.
+    ///
+    /// TWO SHOULDERS, AND THEY ARE NOT INTERCHANGEABLE. Left is the most urgent
+    /// thing that wants you; right is what is running. Both are filled from the
+    /// same six-word vocabulary, and neither is derived from the RUNG — the
+    /// content is resolved from what is actually there, and the rung only gets
+    /// to decide what happens when both shoulders come back empty. See
+    /// BarShoulders, and docs/superpowers/specs/steps/hover-cases.html.
     private static func resolve(for m: NotchModel, state: NotchState, hovering: Bool) -> BarContent {
         // Feedback must remain visible at the surface where the action began.
         // Previously collapsed errors were logged and otherwise disappeared.
         if let toast = m.toast, !toast.isEmpty, !isExpandedState(state) {
-            return BarContent(dot: .failed, left: "Couldn't complete", right: toast, alarm: .failed)
+            return BarContent(dot: .failed, left: "Couldn't complete", detail: toast, alarm: .failed)
         }
-        if let activity = m.agentActivity, !isExpandedState(state) {
-            let status: TaskStatus
-            let label: String
-            switch activity.state {
-            case .listening:  status = .processing; label = "Listening"
-            case .searching:  status = .processing; label = "Searching"
-            case .thinking:   status = .processing; label = "Thinking"
-            case .confirming: status = .needsUser;  label = "Confirming"
-            case .complete:   status = .done;       label = "Done"
-            case .failed:     status = .failed;     label = "Couldn't complete"
-            }
-            return BarContent(dot: status, left: label,
-                              emphasis: .status,
-                              right: activity.summary,
-                              alarm: activity.state == .confirming || activity.state == .failed ? status : nil)
+        // The expanded panels carry their own chrome — no shoulders to fill.
+        if isExpandedState(state) { return BarContent() }
+
+        // TWO FACTS, AT MOST. "What wants you" and "what is running" — resolved
+        // first, PLACED second, because where each one goes depends on whether
+        // the other exists.
+        typealias Fact = (status: TaskStatus, label: String, count: Int?)
+        var wants: Fact? = nil
+        var runs: Fact? = nil
+
+        if let a = m.agentActivity {
+            // The Agent is one thing, so it never carries a count: "and N more
+            // like this" is a lie about a single worker. An Agent that is
+            // CONFIRMING has stopped running and started asking, so it changes
+            // which fact it is — the placement rules below do the rest.
+            let (status, label) = agentWords(a.state)
+            if status.isYourMove { wants = (status, label, nil) } else { runs = (status, label, nil) }
+        } else if m.capturePhase == "routing" {
+            // ROUTING OUTRANKS EVERY RESTING STATE.
+            //
+            // Between the recording pill vanishing and the task appearing, the
+            // router is deciding where the words go — an LLM call, so it is not
+            // instant. The pill is gone by then and the task does not exist
+            // yet, so the surface said nothing at all and the user was left
+            // wondering whether their words had landed.
+            runs = (.processing, "Sending", nil)
+        } else if state != .dormant, let r = BarShoulders.running(m.working) {
+            // DORMANT IS THE CUTOUT, so a count has nowhere to be drawn — and
+            // the host only ever commands dormant when nothing is running. The
+            // overrides above DO outrank dormant: each is a thing happening
+            // right now that the user is waiting on a sign of.
+            runs = (r.status, Theme.statusLabel(r.status), r.count)
         }
-        // ROUTING OUTRANKS EVERY RESTING STATE.
+
+        // ONLY WHAT IS WAITING MAY SPEAK FROM THE CLOSED SURFACE. This once read
+        // `taskCount`, i.e. every slot — so a pocket holding tasks you had merely
+        // opened announced them in the your-move colour as though work were
+        // waiting. That is exactly the way to teach someone to ignore the one
+        // channel that matters.
         //
-        // Between the recording pill vanishing and the task appearing, the
-        // router is deciding where the words go — an LLM call, so it is not
-        // instant. The pill is gone by then and the task does not exist yet, so
-        // the surface said nothing at all and the user was left wondering
-        // whether their words had landed.
-        //
-        // The phase is already broadcast (`broadcastCapturePhase('routing')` in
-        // remote/init.ts, inside a try/finally so it always clears). It was only
-        // ever rendered inside the expanded wall, where nobody is looking at
-        // that moment. This is that same signal, at bar level.
-        if m.capturePhase == "routing", !isExpandedState(state) {
-            return BarContent(dot: .processing, left: "Sending", emphasis: .status)
+        // An OPEN pocket is excluded because it is drawing itself: the cards are
+        // on screen, in front of you, already saying this.
+        if wants == nil, !m.pocket.isOpen, let w = BarShoulders.wanting(m.pocket.slots) {
+            wants = (w.status, Theme.statusLabel(w.status), w.count)
         }
-        // THE POCKET AT REST IS THE NOTCH ITSELF.
+
+        // ── WHERE THE FACTS GO: THE RIGHT SHOULDER FILLS FIRST ──
         //
-        // This is why the pocket costs nothing: no new window, no floating
-        // widget — just the surface that was already on screen, tinted and
-        // counting. Any card big enough to READ is a card big enough to be in
-        // the way, and what you need it for lasts a few seconds, so it earns
-        // its pixels only while you are speaking or once you tap it open.
+        // One fact is drawn on the RIGHT with the mark keeping the left. The
+        // left only takes a status when the right is already holding running
+        // work. Filling the left first instead put a lone "Ready" against an
+        // empty right half, which made the status word appear to change sides
+        // depending on whether anything happened to be running — the left
+        // shoulder alternating between identity and status with nothing in the
+        // content to explain the swap.
         //
-        // Ranked below `routing` (that is happening now, and briefly) and above
-        // the resting states, because something waiting on you outranks a
-        // wordmark.
-        // ONLY WHAT IS WAITING MAY SPEAK FROM THE CLOSED SURFACE.
-        //
-        // This read `taskCount`, i.e. every slot — so a pocket holding tasks you
-        // had merely opened announced them in the bar, in the your-move colour,
-        // as though work were waiting. It was attention-grabbing on behalf of
-        // things that had already been seen and settled, which is exactly the
-        // way to teach someone to ignore the one channel that matters.
-        if m.pocket.waiting > 0, !isExpandedState(state), !m.pocket.isOpen {
-            let n = m.pocket.waiting
-            var c = BarContent(dot: .needsUser,
-                               // SAY WHAT THE NUMBER COUNTS. It reads
-                               // `pocket.waiting` — things actually waiting on
-                               // you — but still called them "in your pocket",
-                               // which is the larger list and includes work you
-                               // have already dealt with. Two different sets
-                               // sharing one sentence.
-                               left: n == 1 ? "1 waiting on you" : "\(n) waiting on you",
-                               emphasis: .status,
-                               alarm: .needsUser)
-            // Hovering names the one your voice would reach — the only question
-            // a bare count raises.
-            if hovering, let first = m.pocket.slots.first {
-                c.right = first.title
-            }
-            return c
+        // The glow follows the thing that WANTS you, whichever shoulder it
+        // landed on. It is a property of the news, not of a position.
+        var c = BarContent()
+        switch (wants, runs) {
+        case let (w?, r?):
+            c.dot = w.status; c.left = w.label; c.badge = w.count; c.alarm = w.status
+            c.rightDot = r.status; c.right = r.label; c.rightBadge = r.count
+        case let (w?, nil):
+            c.left = "unmute"; c.emphasis = .wordmark
+            c.rightDot = w.status; c.right = w.label; c.rightBadge = w.count; c.alarm = w.status
+        case let (nil, r?):
+            c.left = "unmute"; c.emphasis = .wordmark
+            c.rightDot = r.status; c.right = r.label; c.rightBadge = r.count
+        case (nil, nil):
+            break
         }
+        guard c.right == nil else { return c }
+
         switch state {
         case .dormant:
             // Nothing. Not a hairline, not a sliver — an always-visible idle
             // indicator stops being an indicator.
             return BarContent()
-
-        case .idle:
+        default:
             // OFF-NOTCH AND UNTOUCHED: a nub, not a nameplate.
             //
-            // Idle here exists because a display with no cutout has no landmark,
-            // so the surface must stay findable. That is a much smaller job than
-            // it was being given: a full-height black bar with "unmute" written
-            // in it announces the app on every screen it is not needed on. What
-            // is required is somewhere to aim, not a signature.
+            // Idle exists because a display with no cutout has no landmark, so
+            // the surface must stay findable. That is a much smaller job than a
+            // full-height black bar with "unmute" written in it, which
+            // announces the app on every screen it is not needed on. What is
+            // required is somewhere to aim, not a signature.
             //
-            // On a notched display idle keeps the wordmark — there the mass is
+            // On a notched display idle keeps the mark — there the mass is
             // continuous with the hardware, so it reads as the notch saying
             // something rather than as a badge sitting on the desktop.
+            //
+            // NO HOVER TEXT EITHER. "Ready" cannot be borrowed here: it already
+            // means a finished task awaiting you. The mark alone is the state.
             if !m.hasNotch && !hovering { return BarContent(resting: true) }
-            // One segment: there is no second thing to say. Hovering adds the
-            // count, which is the answer to the only question idle raises.
-            // NO HOVER TEXT. The controller sends `active` the moment anything
-            // is running, so idle's count was always zero — hovering "revealed"
-            // the words "Nothing running", which is a surface volunteering an
-            // absence. And "Ready" cannot be borrowed here: it already means a
-            // finished task awaiting you. The mark alone is the state.
             return BarContent(left: "unmute", emphasis: .wordmark)
+        }
+    }
 
-        case .active:
-            // ONE WORD FOR ONE STATE. This said "1 running" while the very same
-            // slot says "Working" for a single task's status — two vocabularies
-            // for the same fact, which is what made the bar read as arbitrary
-            // text. The count moves to the badge, which is exactly how attention
-            // already carries "and N more like this".
-            var c = BarContent(dot: .processing,
-                               left: Theme.statusLabel(.processing),
-                               emphasis: .status,
-                               badge: m.working)
-            // Left is the count; right is what is actually happening. Hovering a
-            // running task shows its NAME, which is the one thing the activity
-            // line does not carry.
-            if m.working == 1, let t = m.task, t.status == .processing {
-                c.right = hovering ? t.title : (t.activity ?? t.title)
-            }
-            return c
-
-        case .attention:
-            let status = m.task?.status ?? .needsUser
-            var c = BarContent(dot: status,
-                               left: Theme.statusLabel(status),
-                               emphasis: .status,
-                               badge: m.attention,
-                               alarm: status)
-            c.right = m.task.map { t in t.question?.text ?? t.activity ?? t.title }
-            return c
-
-        case .task, .cockpit:
-            // The expanded panel carries its own chrome.
-            return BarContent()
+    /// The Agent's own vocabulary, mapped onto the shared one. Its states are
+    /// not task states and never become tasks, but they are said in the same
+    /// six words so the surface reads as one thing.
+    private static func agentWords(_ s: AgentActivityState) -> (TaskStatus, String) {
+        switch s {
+        case .listening:  return (.processing, "Listening")
+        case .searching:  return (.processing, "Searching")
+        case .thinking:   return (.processing, "Thinking")
+        case .confirming: return (.needsUser,  "Confirming")
+        case .complete:   return (.done,       "Done")
+        case .failed:     return (.failed,     "Couldn't complete")
         }
     }
 

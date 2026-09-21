@@ -62,6 +62,7 @@ swiftc -o "$out/decode-check" \
   "$src/IPC.swift" "$src/PillModel.swift" "$src/ScratchpadModel.swift" \
   "$src/NotchModel.swift" "$src/Theme.swift" "$src/NotchLog.swift" \
   "$src/NotchGeometry.swift" "$src/NotchShape.swift" "$src/BarContent.swift" \
+  "$src/BarShoulders.swift" "$src/BarRim.swift" \
   "$src/Lifecycle.swift" "$src/UnMark.swift" "$src/UnMarkArt.swift" \
   "$here/main.swift" $objs
 "$out/decode-check"
