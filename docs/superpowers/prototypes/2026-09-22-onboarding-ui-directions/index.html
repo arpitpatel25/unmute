@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Unmute onboarding — UI directions</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #09090b;
+      --glass: rgba(15, 15, 18, .82);
+      --line: rgba(255,255,255,.12);
+      --muted: rgba(255,255,255,.58);
+      --purple: #7357ff;
+      --red: #ff5a57;
+      --green: #8ee6b0;
+      --shadow: 0 30px 90px rgba(0,0,0,.48), inset 0 1px rgba(255,255,255,.08);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #0a090d; color: #fff; }
+    body {
+      background:
+        radial-gradient(circle at 16% 8%, rgba(102,69,255,.18), transparent 30%),
+        radial-gradient(circle at 92% 42%, rgba(211,36,91,.13), transparent 31%),
+        linear-gradient(145deg, #0b0a0e, #121016 52%, #08080a);
+      overflow-x: hidden;
+    }
+    button { font: inherit; }
+    .page { width: min(1440px, 100%); margin: auto; padding: 44px 40px 72px; }
+    header { display: grid; grid-template-columns: 1fr auto; gap: 40px; align-items: end; margin-bottom: 34px; }
+    .eyebrow { color: #a99cfb; font-size: 12px; font-weight: 650; letter-spacing: .08em; margin-bottom: 12px; }
+    h1 { font-size: clamp(34px, 4vw, 58px); letter-spacing: -.055em; line-height: .98; margin: 0; max-width: 760px; font-weight: 630; }
+    .intro { color: var(--muted); max-width: 620px; margin: 18px 0 0; line-height: 1.55; font-size: 15px; }
+    .recommendation { padding: 12px 15px; border: 1px solid rgba(142,230,176,.2); background: rgba(142,230,176,.07); border-radius: 14px; color: #b7eeca; font-size: 13px; white-space: nowrap; }
+    .toolbar { display: flex; align-items: center; gap: 7px; margin: 0 0 26px; padding: 6px; border: 1px solid var(--line); background: rgba(255,255,255,.035); width: fit-content; border-radius: 14px; }
+    .toolbar button { border: 0; color: rgba(255,255,255,.56); background: transparent; border-radius: 9px; padding: 8px 13px; cursor: pointer; }
+    .toolbar button.active { color: #fff; background: rgba(255,255,255,.11); box-shadow: inset 0 1px rgba(255,255,255,.08); }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; align-items: start; }
+    .direction { min-width: 0; }
+    .meta { min-height: 92px; margin-bottom: 13px; padding: 0 3px; }
+    .meta-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .number { color: rgba(255,255,255,.32); font-size: 12px; font-variant-numeric: tabular-nums; }
+    h2 { margin: 5px 0 6px; font-size: 20px; letter-spacing: -.025em; }
+    .meta p { margin: 0; color: rgba(255,255,255,.48); font-size: 13px; line-height: 1.4; }
+    .tag { color: #b8f0cb; background: rgba(142,230,176,.09); padding: 4px 7px; border-radius: 99px; font-size: 10px; }
+    .stage {
+      position: relative; height: 660px; border-radius: 27px; overflow: hidden;
+      border: 1px solid rgba(255,255,255,.12); box-shadow: var(--shadow);
+      background: rgba(10,10,12,.84); isolation: isolate;
+    }
+    .stage::before { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 10; box-shadow: inset 0 1px rgba(255,255,255,.09); border-radius: inherit; }
+    video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .video-wrap { position: relative; overflow: hidden; background: #17151c; cursor: pointer; }
+    .video-wrap::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.1), transparent 25%, transparent 67%, rgba(0,0,0,.82)); pointer-events: none; }
+    .play-mark { position: absolute; inset: 0; margin: auto; width: 48px; height: 48px; border-radius: 50%; background: rgba(8,8,10,.58); backdrop-filter: blur(12px); display: grid; place-items: center; z-index: 4; opacity: 0; transform: scale(.86); transition: .2s; }
+    .video-wrap:hover .play-mark { opacity: 1; transform: scale(1); }
+    .play-mark::before { content:""; width: 0; height: 0; border-top: 7px solid transparent; border-bottom: 7px solid transparent; border-left: 11px solid white; margin-left: 3px; }
+    .logo { font-size: 20px; font-weight: 760; letter-spacing: -.055em; }
+    .logo i { display: inline-block; width: 7px; height: 7px; border-top: 2px solid #8c75ff; border-radius: 50%; transform: rotate(42deg); margin-left: 1px; }
+    .icon-btn { width: 31px; height: 31px; border-radius: 50%; border: 1px solid var(--line); color: rgba(255,255,255,.72); background: rgba(255,255,255,.06); cursor: pointer; }
+    .quote { font-size: 18px; line-height: 1.28; letter-spacing: -.025em; }
+    .quote::before { content: "“"; color: var(--red); }
+    .quote::after { content: "”"; color: var(--red); }
+    .status { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    .status::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #888; margin-right: 7px; vertical-align: 1px; }
+    [data-state="processing"] .status::before { background: #c5b8ff; box-shadow: 0 0 0 5px rgba(197,184,255,.08); animation: pulse 1.2s infinite; }
+    [data-state="recovery"] .status::before { background: #ffbd72; }
+    @keyframes pulse { 50% { opacity: .35; } }
+    .recovery { display: none; gap: 8px; margin-top: 13px; }
+    [data-state="recovery"] .recovery { display: flex; }
+    .recovery button { border: 1px solid var(--line); background: rgba(255,255,255,.06); color: #fff; padding: 8px 10px; border-radius: 9px; font-size: 11px; cursor: pointer; }
+    .recovery .continue { background: #fff; color: #111; }
+
+    /* A — Obsidian Glass */
+    .obsidian { padding: 11px; background: rgba(10,10,12,.76); backdrop-filter: blur(40px) saturate(1.35); }
+    .obsidian .top { height: 46px; padding: 0 8px; display: flex; align-items: center; gap: 12px; }
+    .obsidian .top .close { margin-left: auto; }
+    .hairline { height: 2px; flex: 1; background: rgba(255,255,255,.12); overflow: hidden; border-radius: 2px; }
+    .hairline i { display: block; width: 74%; height: 100%; background: linear-gradient(90deg, #8068ff, #ff625d); box-shadow: 0 0 10px rgba(255,98,93,.5); }
+    .count { font-size: 11px; color: rgba(255,255,255,.42); font-variant-numeric: tabular-nums; }
+    .obsidian .video-wrap { height: 465px; border-radius: 19px; }
+    .obsidian .glass-tray { position: absolute; left: 21px; right: 21px; bottom: 18px; z-index: 3; padding: 18px; background: rgba(14,14,17,.75); border: 1px solid rgba(255,255,255,.1); backdrop-filter: blur(28px) saturate(1.25); border-radius: 17px; box-shadow: 0 15px 40px rgba(0,0,0,.35); }
+    .obsidian .tray-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .obsidian .quote { font-size: 15px; max-width: 88%; }
+    .obsidian .next { width: 32px; height: 32px; border: 0; border-radius: 50%; background: #fff; color: #111; font-size: 17px; cursor: pointer; }
+
+    /* B — Cinema Rail */
+    .cinema { background: #060607; display: grid; grid-template-columns: 49px 1fr; }
+    .cinema .rail { border-right: 1px solid var(--line); padding: 18px 0; display: flex; flex-direction: column; align-items: center; z-index: 3; background: rgba(5,5,6,.87); }
+    .rail-mark { width: 21px; height: 21px; border: 2px solid white; border-radius: 7px 3px 7px 3px; transform: rotate(-8deg); margin-bottom: 40px; }
+    .steps { display: flex; flex-direction: column; align-items: center; gap: 9px; }
+    .steps i { width: 4px; height: 4px; background: rgba(255,255,255,.21); border-radius: 5px; }
+    .steps i.done { height: 18px; background: rgba(255,255,255,.45); }
+    .steps i.now { height: 38px; background: var(--red); box-shadow: 0 0 12px rgba(255,90,87,.42); }
+    .rail .back { margin-top: auto; background: none; border: 0; color: rgba(255,255,255,.52); font-size: 19px; cursor: pointer; }
+    .cinema .body { position: relative; min-width: 0; }
+    .cinema .video-wrap { height: 100%; }
+    .cinema .hud { position: absolute; left: 22px; right: 22px; top: 20px; z-index: 3; display: flex; justify-content: space-between; align-items: center; }
+    .chapter { font-size: 11px; color: rgba(255,255,255,.58); padding: 7px 9px; border: 1px solid rgba(255,255,255,.13); background: rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius: 8px; }
+    .cinema .prompt { position: absolute; left: 22px; right: 22px; bottom: 22px; z-index: 4; padding: 20px 0 0; border-top: 1px solid rgba(255,255,255,.22); }
+    .cinema .quote { font-size: 20px; max-width: 310px; }
+    .cinema .recovery button { background: rgba(0,0,0,.38); }
+    .cinema .recovery .continue { background: #fff; }
+
+    /* C — Floating Stage */
+    .floating { background: transparent; border-color: transparent; box-shadow: none; overflow: visible; }
+    .floating::before { display: none; }
+    .floating .video-card { position: relative; height: 510px; border-radius: 25px; overflow: hidden; border: 1px solid rgba(255,255,255,.16); box-shadow: var(--shadow); }
+    .floating .video-wrap { height: 100%; }
+    .floating .top { position: absolute; top: 16px; left: 17px; right: 17px; z-index: 4; display: flex; justify-content: space-between; align-items: center; }
+    .floating .mini-progress { display: flex; gap: 4px; }
+    .mini-progress i { width: 12px; height: 2px; background: rgba(255,255,255,.22); border-radius: 3px; }
+    .mini-progress i.on { width: 29px; background: #fff; }
+    .floating .capsule { position: absolute; left: 7px; right: 7px; top: 526px; padding: 17px 18px; border-radius: 19px; background: rgba(17,17,21,.83); border: 1px solid rgba(255,255,255,.13); backdrop-filter: blur(34px) saturate(1.2); box-shadow: 0 20px 60px rgba(0,0,0,.38), inset 0 1px rgba(255,255,255,.08); }
+    .floating .quote { font-size: 15px; }
+    .floating .status { margin-top: 7px; }
+    .drag-hint { position: absolute; bottom: -33px; left: 0; right: 0; text-align: center; color: rgba(255,255,255,.27); font-size: 10px; }
+    footer { margin-top: 38px; border-top: 1px solid var(--line); padding-top: 22px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; color: rgba(255,255,255,.46); font-size: 12px; line-height: 1.5; }
+    footer strong { display: block; color: rgba(255,255,255,.8); margin-bottom: 4px; font-weight: 550; }
+    @media (max-width: 1050px) { .grid { grid-template-columns: 1fr; max-width: 500px; margin: auto; gap: 48px; } header { grid-template-columns: 1fr; } footer { grid-template-columns: 1fr; max-width: 500px; margin-inline: auto; } }
+    @media (max-width: 560px) { .page { padding: 28px 16px 60px; } .recommendation { white-space: normal; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div>
+        <div class="eyebrow">UNMUTE · ONBOARDING UI STUDY</div>
+        <h1>The founder stays present. The chrome gets out of the way.</h1>
+        <p class="intro">Three dark, video-first directions using the same real onboarding moment. Click any video to play or pause. Change the state below to compare the calm, waiting, and recovery experiences.</p>
+      </div>
+      <div class="recommendation">Recommendation · Obsidian Glass</div>
+    </header>
+
+    <nav class="toolbar" aria-label="Preview state">
+      <button class="active" data-preview="ready">Ready</button>
+      <button data-preview="processing">Processing</button>
+      <button data-preview="recovery">Needs attention</button>
+    </nav>
+
+    <section class="grid" id="directions" data-state="ready">
+      <article class="direction">
+        <div class="meta">
+          <div class="meta-line"><span class="number">01</span><span class="tag">RECOMMENDED</span></div>
+          <h2>Obsidian Glass</h2>
+          <p>Closest to the notch: one adaptive glass object, quiet progress, and no pale frame around the founder.</p>
+        </div>
+        <div class="stage obsidian">
+          <div class="top"><div class="logo">unmute<i></i></div><div class="hairline"><i></i></div><span class="count">12 / 16</span><button class="icon-btn close">×</button></div>
+          <div class="video-wrap"><video muted loop playsinline src="../../../../desktop/engine-overrides/renderer/onboarding/clips/agent-explain-v1.mp4"></video><span class="play-mark"></span></div>
+          <div class="glass-tray">
+            <div class="tray-top"><div class="quote">Create a follow-up task to add today’s date to hello-unmute.txt.</div><button class="next">›</button></div>
+            <div class="status"><span class="status-copy">Ready when you are</span></div>
+            <div class="recovery"><button>Try again</button><button class="continue">Continue anyway</button></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="direction">
+        <div class="meta">
+          <div class="meta-line"><span class="number">02</span></div>
+          <h2>Cinema Rail</h2>
+          <p>The most immersive option: the video is the window, while navigation lives in a narrow permanent rail.</p>
+        </div>
+        <div class="stage cinema">
+          <aside class="rail"><div class="rail-mark"></div><div class="steps"><i class="done"></i><i class="done"></i><i class="now"></i><i></i><i></i></div><button class="back">‹</button></aside>
+          <div class="body">
+            <div class="video-wrap"><video muted loop playsinline src="../../../../desktop/engine-overrides/renderer/onboarding/clips/agent-explain-v1.mp4"></video><span class="play-mark"></span></div>
+            <div class="hud"><span class="chapter">Unmute agent · 12 of 16</span><button class="icon-btn">×</button></div>
+            <div class="prompt"><div class="quote">Create a follow-up task to add today’s date to hello-unmute.txt.</div><div class="status"><span class="status-copy">Ready when you are</span></div><div class="recovery"><button>Try again</button><button class="continue">Continue anyway</button></div></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="direction">
+        <div class="meta">
+          <div class="meta-line"><span class="number">03</span></div>
+          <h2>Floating Stage</h2>
+          <p>The lightest footprint: a frameless founder tile and a separate command capsule that feels native to Unmute.</p>
+        </div>
+        <div class="stage floating">
+          <div class="video-card">
+            <div class="video-wrap"><video muted loop playsinline src="../../../../desktop/engine-overrides/renderer/onboarding/clips/agent-explain-v1.mp4"></video><span class="play-mark"></span></div>
+            <div class="top"><div class="logo">unmute<i></i></div><div class="mini-progress"><i></i><i></i><i class="on"></i><i></i></div><button class="icon-btn">×</button></div>
+          </div>
+          <div class="capsule"><div class="quote">Create a follow-up task to add today’s date to hello-unmute.txt.</div><div class="status"><span class="status-copy">Ready when you are</span></div><div class="recovery"><button>Try again</button><button class="continue">Continue anyway</button></div></div>
+          <div class="drag-hint">Each direction represents a draggable, always-on-top window.</div>
+        </div>
+      </article>
+    </section>
+
+    <footer>
+      <div><strong>Shared rule</strong>The video itself is the play/pause target. Controls surface on intent, not permanently.</div>
+      <div><strong>Progress</strong>One continuous signal replaces sixteen equal pills. The exact count remains available but secondary.</div>
+      <div><strong>Recovery</strong>“Continue anyway” appears only when an exercise has genuinely stalled, preserving momentum without weakening the default flow.</div>
+    </footer>
+  </main>
+  <script>
+    const root = document.querySelector('#directions');
+    const labels = { ready: 'Ready when you are', processing: 'Working on your request…', recovery: 'This is taking longer than expected' };
+    document.querySelectorAll('[data-preview]').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('[data-preview]').forEach(item => item.classList.toggle('active', item === button));
+      root.dataset.state = button.dataset.preview;
+      document.querySelectorAll('.status-copy').forEach(item => item.textContent = labels[button.dataset.preview]);
+    }));
+    document.querySelectorAll('.video-wrap').forEach(wrap => wrap.addEventListener('click', () => {
+      const video = wrap.querySelector('video');
+      if (video.paused) video.play(); else video.pause();
+    }));
+  </script>
+</body>
+</html>
