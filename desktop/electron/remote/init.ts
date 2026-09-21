@@ -6121,6 +6121,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         converseStop: (id) => { curatorConversations.get(id)?.stop(); curatorConversations.delete(id) },
         // chrome
         openArtifact: (type, value) => {
+          // Logged because a link click left no trace at all: on 2026-09-21 links
+          // went to an orphaned headless Chrome, the card vanished, and the log
+          // could not say a link had been clicked. Host only, not the full URL.
+          let host = ''
+          try { host = type === 'url' ? new URL(value).host : '' } catch { /* logged as '' */ }
+          log.event('open-artifact', { type, host })
           void (async () => {
             try {
               if (type === 'path') await openChatArtifactPath(value)
