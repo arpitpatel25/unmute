@@ -23,3 +23,9 @@ export function canSkipAction(action: string, phase: 'ready' | 'listening' | 'pr
     || action === 'agent-task-link'
     || action === 'notetaker-save')
 }
+
+export function processingEscapeDelayMs(action: string, phase?: 'ready' | 'listening' | 'processing'): number | null {
+  return phase === 'processing' && (action === 'orchestrator-task' || action === 'agent-task-link')
+    ? 10_000
+    : null
+}

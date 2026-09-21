@@ -23,7 +23,7 @@ export interface PresenterWindowDeps {
   displayWorkArea(): Rectangle
 }
 
-const PRESENTER_SIZE = { width: 432, height: 700 }
+const PRESENTER_SIZE = { width: 432, height: 744 }
 
 export function presenterBounds(workArea: Rectangle, size = PRESENTER_SIZE): Rectangle {
   const sideInset = 28

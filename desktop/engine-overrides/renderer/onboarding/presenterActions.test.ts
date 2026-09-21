@@ -32,3 +32,15 @@ test('hands-on lessons can be skipped but permissions and providers cannot', () 
   assert.equal(canSkipAction('microphone'), false)
   assert.equal(canSkipAction('provider-choice'), false)
 })
+
+test('only processing task exercises offer a bounded escape', () => {
+  const processingEscapeDelayMs = (presenterActions as unknown as {
+    processingEscapeDelayMs(action: string, phase?: string): number | null
+  }).processingEscapeDelayMs
+
+  assert.equal(processingEscapeDelayMs('orchestrator-task', 'processing'), 10_000)
+  assert.equal(processingEscapeDelayMs('agent-task-link', 'processing'), 10_000)
+  assert.equal(processingEscapeDelayMs('notes-dictation', 'processing'), null)
+  assert.equal(processingEscapeDelayMs('orchestrator-task', 'listening'), null)
+  assert.equal(processingEscapeDelayMs('microphone', 'processing'), null)
+})

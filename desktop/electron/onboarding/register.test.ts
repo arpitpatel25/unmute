@@ -60,3 +60,19 @@ test('orchestrator completion advances only after output verification', async ()
   await h.runtime.accept({ type: 'task-completed', taskId: 't1' })
   assert.equal(h.runtime.snapshot().action, 'agent-task-link')
 })
+
+test('orchestrator verification receives the current attempt timestamp', async () => {
+  const h = harness(initialProgress({ action: 'orchestrator-task', taskIds: { orchestrator: 't1' } }))
+  await h.runtime.boot()
+  await h.runtime.accept({ type: 'shortcut-started', lane: 'orchestrator' })
+  await h.runtime.accept({ type: 'shortcut-stopped', lane: 'orchestrator' })
+  let verified: { taskId: string; notBeforeMs: number } | undefined
+  h.runtime.setVerifyOrchestratorTask(async (taskId, notBeforeMs) => {
+    verified = { taskId, notBeforeMs }
+    return false
+  })
+
+  await h.runtime.accept({ type: 'task-completed', taskId: 't1' })
+
+  assert.deepEqual(verified, { taskId: 't1', notBeforeMs: 10 })
+})

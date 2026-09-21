@@ -55,7 +55,19 @@ function observeCapture(progress: OnboardingProgress, event: Extract<OnboardingE
 }
 
 export function reduceOnboarding(progress: OnboardingProgress, event: OnboardingEvent): OnboardingProgress {
-  if (event.type === 'retry-requested') return progress
+  if (event.type === 'retry-requested') {
+    if (progress.action !== 'orchestrator-task' && progress.action !== 'agent-task-link') return progress
+    const taskIds = { ...progress.taskIds }
+    if (progress.action === 'orchestrator-task') delete taskIds.orchestrator
+    if (progress.action === 'agent-task-link') delete taskIds.agent
+    return {
+      ...progress,
+      captureId: undefined,
+      observedCaptureItemIds: [],
+      gesture: undefined,
+      taskIds,
+    }
+  }
   if (event.type === 'reset-requested') return initialProgress({ updatedAt: progress.updatedAt })
 
   if (event.type === 'boot-revalidated') {

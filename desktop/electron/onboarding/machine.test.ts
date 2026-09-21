@@ -139,6 +139,21 @@ test('agent prose is not proof; its structured task link must be opened', () => 
   assert.equal(progress.action, 'notetaker-save')
 })
 
+test('retrying a stuck task exercise clears only its transient attempt', () => {
+  const progress = atAction('agent-task-link', {
+    completed: ['welcome', 'privacy'],
+    gesture: { lane: 'agent', started: true, stopped: true },
+    taskIds: { orchestrator: 'task-1', agent: 'task-2' },
+  })
+
+  const retried = reduceOnboarding(progress, { type: 'retry-requested' })
+
+  assert.equal(retried.action, 'agent-task-link')
+  assert.deepEqual(retried.completed, ['welcome', 'privacy'])
+  assert.equal(retried.gesture, undefined)
+  assert.deepEqual(retried.taskIds, { orchestrator: 'task-1' })
+})
+
 test('notetaker save, not start or stop, completes the chapter', () => {
   let progress = atAction('notetaker-save')
   progress = reduceOnboarding(progress, { type: 'notetaker-started', meetingId: 'm1' })

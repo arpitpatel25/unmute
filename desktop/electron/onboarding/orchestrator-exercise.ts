@@ -5,10 +5,12 @@ export const HELLO_TASK_PHRASE = 'Create a file called hello-unmute.txt and writ
 export const HELLO_TASK_CONTENT = 'My first Unmute task'
 
 export async function prepareOnboardingWorkspace(root: string): Promise<void> { await fs.mkdir(root, { recursive: true, mode: 0o700 }) }
-export async function verifyHelloTask(root: string, alternateRoots: readonly string[] = []): Promise<boolean> {
+export async function verifyHelloTask(root: string, alternateRoots: readonly string[] = [], notBeforeMs?: number): Promise<boolean> {
   for (const candidateRoot of [root, ...alternateRoots]) {
     try {
-      const content = (await fs.readFile(join(candidateRoot, 'hello-unmute.txt'), 'utf8')).trim()
+      const candidate = join(candidateRoot, 'hello-unmute.txt')
+      if (notBeforeMs !== undefined && (await fs.stat(candidate)).mtimeMs < notBeforeMs) continue
+      const content = (await fs.readFile(candidate, 'utf8')).trim()
       if (content.localeCompare(HELLO_TASK_CONTENT, undefined, { sensitivity: 'accent' }) === 0) return true
     } catch {}
   }

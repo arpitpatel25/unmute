@@ -6,7 +6,7 @@ export interface OnboardingRuntimeDeps {
   presenter: { show(): void; send(command: PresenterCommand): void; close(): void }
   allowance: { arm(action: PresenterCommand['action']): void; complete(): void }
   onReceipt(listener: (event: OnboardingEvent) => void): () => void
-  verifyOrchestratorTask(taskId: string): Promise<boolean>
+  verifyOrchestratorTask(taskId: string, notBeforeMs: number): Promise<boolean>
   onNavigate(destination: 'orchestrator' | 'notetaker' | 'account'): void
 }
 
@@ -39,7 +39,7 @@ export class OnboardingRuntime {
     const before = this.deps.coordinator.currentProgress()
     if (event.type === 'task-created' && before.action === 'orchestrator-task' && !event.cwd) return this.snapshot()
     if (event.type === 'task-completed' && before.action === 'orchestrator-task') {
-      if (event.taskId !== before.taskIds.orchestrator || !(await this.verifyTask(event.taskId))) return this.snapshot()
+      if (event.taskId !== before.taskIds.orchestrator || !(await this.verifyTask(event.taskId, before.updatedAt))) return this.snapshot()
     }
     const command = await this.deps.coordinator.dispatch(event)
     this.publish(command)

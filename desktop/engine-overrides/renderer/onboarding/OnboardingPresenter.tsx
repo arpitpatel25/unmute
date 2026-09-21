@@ -2,12 +2,12 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 
 import unmuteLogo from '../assets/unmute-logo.png'
 import { clipUrl } from './clips'
-import { canSkipAction, clipEndActionFor, successButtonForAction } from './presenterActions'
+import { canSkipAction, clipEndActionFor, processingEscapeDelayMs, successButtonForAction } from './presenterActions'
 import { emptyPresenter, reducePresenter, type PresenterCard, type PresenterMessage } from './presenterState'
 import './presenter.css'
 
 type PresenterAction =
-  | { type: 'continue' | 'retry' | 'open-settings' | 'replay-clip' | 'complete-orientation' | 'open-sign-in' }
+  | { type: 'continue' | 'continue-anyway' | 'retry' | 'open-settings' | 'replay-clip' | 'complete-orientation' | 'open-sign-in' }
   | { type: 'choose-provider' | 'install-provider' | 'authenticate-provider' | 'retry-provider'; provider: 'claude' | 'codex' }
 
 type PresenterApi = {
@@ -31,7 +31,7 @@ function ProviderButton({ provider, card }: { provider: 'claude' | 'codex'; card
   return <button type="button" onClick={() => send({ type: 'retry-provider', provider })}>Check {label} again</button>
 }
 
-function CompanionCard({ action, card, reviewing, phase }: { action: string; card: NonNullable<PresenterCard>; reviewing: boolean; phase?: 'ready' | 'listening' | 'processing' }) {
+function CompanionCard({ action, card, reviewing, phase, escapeReady }: { action: string; card: NonNullable<PresenterCard>; reviewing: boolean; phase?: 'ready' | 'listening' | 'processing'; escapeReady: boolean }) {
   const send = (action: PresenterAction) => api().onboardingPresenterAction?.(action)
   const successButton = successButtonForAction(action)
   return <section className={`ob-presenter__card ob-presenter__card--${card.kind}`} aria-label={card.title ?? 'Next action'}>
@@ -48,6 +48,10 @@ function CompanionCard({ action, card, reviewing, phase }: { action: string; car
       </button>}
     {!reviewing && card.kind === 'speak' && canSkipAction(action, phase) &&
       <button className="ob-presenter__primary" type="button" onClick={() => send({ type: 'continue' })}>Continue</button>}
+    {!reviewing && card.kind === 'speak' && escapeReady && <div className="ob-presenter__escape">
+      <button type="button" onClick={() => send({ type: 'retry' })}>Try again</button>
+      <button className="ob-presenter__primary" type="button" onClick={() => send({ type: 'continue-anyway' })}>Continue anyway</button>
+    </div>}
     {!reviewing && card.kind === 'success' && <button className="ob-presenter__primary" type="button" onClick={() => send({ type: successButton.type })}>
       {successButton.label}
     </button>}
@@ -57,6 +61,7 @@ function CompanionCard({ action, card, reviewing, phase }: { action: string; car
 export function OnboardingPresenter() {
   const [state, dispatch] = useReducer(reducePresenter, undefined, emptyPresenter)
   const [paused, setPaused] = useState(false)
+  const [escapeReady, setEscapeReady] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const videoUrl = clipUrl(state.clipId)
   const hasVideo = !state.videoUnavailable && Boolean(videoUrl)
@@ -64,6 +69,15 @@ export function OnboardingPresenter() {
   const step = Math.max(1, state.step)
 
   useEffect(() => api().onboardingOnPresenterCommand?.(dispatch), [])
+
+  useEffect(() => {
+    setEscapeReady(false)
+    if (state.reviewing) return
+    const delay = processingEscapeDelayMs(state.action, state.phase)
+    if (delay === null) return
+    const timeout = window.setTimeout(() => setEscapeReady(true), delay)
+    return () => window.clearTimeout(timeout)
+  }, [state.action, state.phase, state.reviewing])
 
   const togglePlayback = () => {
     const video = videoRef.current
@@ -137,6 +151,6 @@ export function OnboardingPresenter() {
         <span className="ob-presenter__status">{state.reviewing ? 'Reviewing' : hasVideo ? 'Captions included' : 'Script mode'}</span>
       </footer>
     </section>
-    {state.card && <CompanionCard action={state.action} card={state.card} reviewing={state.reviewing} phase={state.phase} />}
+    {state.card && <CompanionCard action={state.action} card={state.card} reviewing={state.reviewing} phase={state.phase} escapeReady={escapeReady} />}
   </main>
 }

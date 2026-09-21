@@ -6,7 +6,7 @@ import { app, BrowserWindow, ipcMain, screen, shell, systemPreferences } from 'e
 
 import { AllowanceGrantStore, OnboardingAllowanceSession, InstallationIdentityStore, setOnboardingAllowanceSession } from './paywall/onboarding/allowance'
 import { OnboardingCoordinator } from './paywall/onboarding/coordinator'
-import { skipEventFor } from './paywall/onboarding/chapters'
+import { escapeEventFor, skipEventFor } from './paywall/onboarding/chapters'
 import { openNotesPractice, notesEventFromReceipt } from './paywall/onboarding/notes-practice'
 import { prepareOnboardingWorkspace, verifyHelloTask } from './paywall/onboarding/orchestrator-exercise'
 import { PresenterWindow } from './paywall/onboarding/presenter-window'
@@ -14,7 +14,7 @@ import { defaultProviderProbeDeps, probeProvider, probeProviders, type ProviderP
 import { installProvider, launchProviderLogin } from './paywall/onboarding/provider-setup'
 import { ProgressStore } from './paywall/onboarding/progress-store'
 import { OnboardingRuntime } from './paywall/onboarding/register'
-import { onOnboardingReceipt } from './paywall/onboarding/receipts'
+import { acceptsAgentTaskLink, onOnboardingReceipt } from './paywall/onboarding/receipts'
 import type { ActionId, OnboardingEvent, PresenterCommand, ProviderId, ProviderUiStatus } from './paywall/onboarding/types'
 import { keyboardManager } from './keyboard'
 import { preflightNotetakerSystemAudio } from './notetakerInit'
@@ -97,7 +97,7 @@ export async function initOnboarding(
   const receiptSource = (listener: (event: OnboardingEvent) => void) => onOnboardingReceipt(event => {
     if (event.type === 'task-created' && event.cwd !== workspace) return
     if (event.type === 'task-created' && event.source === 'agent') ownedAgentTasks.add(event.taskId)
-    if (event.type === 'agent-task-linked' && event.cwd !== workspace && !ownedAgentTasks.has(event.taskId)) return
+    if (event.type === 'agent-task-linked' && !acceptsAgentTaskLink(event, workspace, ownedAgentTasks)) return
     void Promise.resolve(listener(event)).then(() => afterReceipt?.()).catch(error => console.warn('[onboarding] receipt failed:', error))
   })
 
@@ -106,7 +106,7 @@ export async function initOnboarding(
     presenter,
     allowance,
     onReceipt: receiptSource,
-    verifyOrchestratorTask: async () => verifyHelloTask(workspace, [app.getPath('desktop')]),
+    verifyOrchestratorTask: async (_taskId, notBeforeMs) => verifyHelloTask(workspace, [app.getPath('desktop')], notBeforeMs),
     onNavigate: navigate,
   })
   activeRuntime = runtime
@@ -227,7 +227,17 @@ export async function initOnboarding(
         await configureAction(result)
       } else await advancePermission()
     }
-    if (action.type === 'retry') await advancePermission()
+    if (action.type === 'continue-anyway') {
+      const escape = escapeEventFor(runtime.snapshot())
+      if (escape) {
+        const result = await runtime.accept(escape)
+        await configureAction(result)
+      }
+    }
+    if (action.type === 'retry') {
+      const result = await runtime.accept({ type: 'retry-requested' })
+      await configureAction(result)
+    }
     if (action.type === 'open-settings' && runtime.snapshot().action === 'function-key') {
       await shell.openExternal('x-apple.systempreferences:com.apple.Keyboard-Settings.extension')
     }

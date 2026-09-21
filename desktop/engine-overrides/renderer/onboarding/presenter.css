@@ -156,6 +156,8 @@ body:has(.ob-presenter),
 .ob-presenter__card blockquote::before { content: "“"; color: var(--ob-accent); }
 .ob-presenter__card blockquote::after { content: "”"; color: var(--ob-accent); }
 .ob-presenter__primary { float: right; margin-top: 10px; background: var(--ob-ink) !important; color: white !important; }
+.ob-presenter__escape { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 10px; }
+.ob-presenter__escape .ob-presenter__primary { float: none; margin-top: 0; }
 .ob-presenter__choices { display: flex; gap: 7px; margin-top: 12px; }
 .ob-presenter__choices button { flex: 1; min-height: 36px; border: 1px solid var(--ob-line); background: white; color: var(--ob-ink); }
 

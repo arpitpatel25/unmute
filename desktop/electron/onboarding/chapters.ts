@@ -120,3 +120,10 @@ export function skipEventFor(command: PresenterCommand): OnboardingEvent | null 
     ? { type: 'capability-satisfied', action: command.action }
     : null
 }
+
+export function escapeEventFor(command: PresenterCommand): OnboardingEvent | null {
+  return command.phase === 'processing'
+    && (command.action === 'orchestrator-task' || command.action === 'agent-task-link')
+    ? { type: 'capability-satisfied', action: command.action }
+    : null
+}

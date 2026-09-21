@@ -25,6 +25,19 @@ test('presenter is a compact transparent utility surface, not a full-screen page
   assert.ok(Number(created[0].height) < 760)
 })
 
+test('presenter leaves enough vertical room for task recovery controls', () => {
+  const created: Record<string, unknown>[] = []
+  const presenter = new PresenterWindow({
+    create: options => { created.push(options); return fakeWindow() },
+    routeUrl: () => 'file:///app/index.html#/onboarding-presenter',
+    displayWorkArea: () => ({ x: 0, y: 0, width: 1440, height: 900 }),
+  })
+
+  presenter.show()
+
+  assert.ok(Number(created[0].height) >= 740)
+})
+
 test('presenter placement stays clear of the physical notch', () => {
   const bounds = presenterBounds({ x: 0, y: 0, width: 1512, height: 982 }, { width: 432, height: 650 })
   assert.ok(bounds.y >= 76)
@@ -56,6 +69,21 @@ test('Continue may skip an exercise but cannot fake a permission or provider che
   ) => ReturnType<typeof presenterSnapshot>)('notetaker-save', undefined, true)
   assert.equal(recording.phase, 'listening')
   assert.equal(skipEventFor(recording), null)
+})
+
+test('Continue anyway escapes only stalled task exercises', () => {
+  const escapeEventFor = (chapters as unknown as {
+    escapeEventFor(command: ReturnType<typeof presenterSnapshot>): unknown
+  }).escapeEventFor
+
+  assert.deepEqual(escapeEventFor(presenterSnapshot('orchestrator-task', { started: true, stopped: true })), {
+    type: 'capability-satisfied', action: 'orchestrator-task',
+  })
+  assert.deepEqual(escapeEventFor(presenterSnapshot('agent-task-link', { started: true, stopped: true })), {
+    type: 'capability-satisfied', action: 'agent-task-link',
+  })
+  assert.equal(escapeEventFor(presenterSnapshot('notes-dictation', { started: true, stopped: true })), null)
+  assert.equal(escapeEventFor(presenterSnapshot('microphone')), null)
 })
 
 test('snapshots are sent only after the presenter route is ready', () => {

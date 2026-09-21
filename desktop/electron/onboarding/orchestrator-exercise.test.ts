@@ -28,3 +28,11 @@ test('accepts dictated task content when transcription changes capitalization', 
 
   assert.equal(await verifyHelloTask(workspace), true)
 })
+
+test('does not accept a matching file left behind by an earlier onboarding attempt', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'unmute-onboarding-workspace-'))
+  const desktop = await mkdtemp(join(tmpdir(), 'unmute-onboarding-desktop-'))
+  await writeFile(join(desktop, 'hello-unmute.txt'), 'My first Unmute task')
+
+  assert.equal(await verifyHelloTask(workspace, [desktop], Date.now() + 1_000), false)
+})

@@ -5,6 +5,7 @@ import type {
   ToolResult,
 } from '../types.ts'
 import { requireAgentMetadata, requireWorkspaceLabel } from '../metadata'
+import { emitOnboardingReceipt } from '../../../onboarding/receipts'
 
 /**
  * `sessions_list`, `sessions_search` and `session_read` were MCP tools over
@@ -355,7 +356,10 @@ export class SessionsCapability implements CapabilityModule {
         ...(context ? { context } : {}),
         ...(sourceSessions ? { sourceSessions } : {}),
         ...(artifacts ? { artifacts } : {}),
-      }).then(ok, (error: unknown) => fail('send-failed',
+      }).then(result => {
+        emitOnboardingReceipt({ type: 'agent-task-linked', taskId: result.taskId, href: `unmute://task/${result.taskId}` })
+        return ok(result)
+      }, (error: unknown) => fail('send-failed',
         `${(error as Error).message || 'That session could not be spoken into'}. Do not retry this relay in this interaction.`))
       this.operations.set(key, { expiresAt: ctx.principal.expiresAt, result: pending })
       return pending
@@ -394,6 +398,7 @@ export class SessionsCapability implements CapabilityModule {
       if (operation === 'fork' && result.sessionId === sessionId) {
         throw new Error('Fork reused the source provider session identity')
       }
+      emitOnboardingReceipt({ type: 'agent-task-linked', taskId: result.taskId, href: `unmute://task/${result.taskId}` })
       return ok(result)
     } catch (error) {
       return fail(`${tool === 'session_resume' ? 'resume' : 'fork'}-failed`,
