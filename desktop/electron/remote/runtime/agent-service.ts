@@ -174,6 +174,7 @@ export class AgentRuntimeService {
       }, 0, registry)
       await this.supervisor.initialize()
       this.lifecycle = new AgentConversationLifecycle({ journal, store: new AgentConversationStore({ root: join(this.root, 'runtime', 'conversations'), crypto }),
+        attachmentsDir: join(this.root, 'runtime', 'chat-attachments'),
         controller: this.controller, selectedProvider, ceiling: () => this.config?.conversationCeiling ?? 20, prepareFresh,
         pin: ids => this.supervisor!.pinConversation(ids), close: id => this.supervisor!.closeRun(id),
         interrupt: id => this.supervisor!.interrupt(id),

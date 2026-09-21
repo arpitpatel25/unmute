@@ -9,6 +9,7 @@ import {
 import { traceStreamLine, type AgentTrace } from '../trace'
 import { claudeFallbackReason, claudeModelUnavailable } from '../modelAvailability'
 import { agentModelName } from '../modelPolicy'
+import { claudeImageBlocks } from '../turnImages'
 
 /**
  * Headless Claude driver — the Agent as one thing, not as a session.
@@ -422,12 +423,15 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
     if (launch.session.id) this.queue.emit({ type: 'handle', sessionId: launch.session.id })
   }
 
-  async submitUserTurn(text: string): Promise<void> {
+  async submitUserTurn(text: string, images?: readonly string[]): Promise<void> {
     const launch = this.pending
     if (!launch) throw new Error('not started')
     if (this.closed) throw new Error('closed')
     const systemPrompt = await this.readSystemPrompt(launch.systemContext.path)
-    const argv = headlessArgv(launch, systemPrompt, this.allowedTools)
+    // A plain prompt on stdin cannot carry a picture. With images, the one turn
+    // is written as a stream-json message instead — same process, same exit.
+    const imageBlocks = await claudeImageBlocks(images)
+    const argv = headlessArgv(launch, systemPrompt, this.allowedTools, imageBlocks.length > 0)
     this.onSpawn({ argv, cwd: launch.cwd, session: launch.session })
     const child = this.spawn(
       argv,
@@ -439,7 +443,9 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
     child.onExit((code) => { void this.onExit(code) })
     void this.readStderr(child)
     this.hasDispatched = true
-    child.writePrompt(text)
+    child.writePrompt(imageBlocks.length
+      ? `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }, ...imageBlocks] } })}\n`
+      : text)
   }
 
   /** SIGINT so the CLI can shut its session down cleanly rather than be torn out. */
@@ -576,10 +582,11 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
     }
   }
 
-  async submitUserTurn(text: string): Promise<void> {
+  async submitUserTurn(text: string, images?: readonly string[]): Promise<void> {
     const launch = this.pending
     if (!launch) throw new Error('not started')
     if (this.closed) throw new Error('closed')
+    const imageBlocks = await claudeImageBlocks(images)
     this.interrupted = false
     this.hasDispatched = false
     await this.ensureChild(launch)
@@ -588,7 +595,7 @@ export class PersistentHeadlessAgentProcess implements AgentProcessDriver {
     // The user turn, in the shape stream-json input expects. One line, one turn.
     this.child?.writeTurn(`${JSON.stringify({
       type: 'user',
-      message: { role: 'user', content: [{ type: 'text', text }] },
+      message: { role: 'user', content: [{ type: 'text', text }, ...imageBlocks] },
     })}\n`)
   }
 

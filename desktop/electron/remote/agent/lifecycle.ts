@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { copyFile, mkdir, stat } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { AGENT_TURN_CEILING } from './continuity'
 import { AgentProviderError, type AgentProviderId } from './provider'
 import type { AgentConversationHandoff, AgentInteractionInput, AgentInteractionResult, AgentSubmissionContext } from './controller'
 import type { AgentConversationRecord, AgentJournal, JournalAgentRun } from './journal'
 import type { AgentConversationSnapshot, AgentConversationStore, AgentPendingSettlement } from './conversation-store'
+import type { AgentChatAttachment } from './conversation'
 import { diagnostic } from '../diagnostics'
 
 export interface AgentConversationView { record: AgentConversationRecord; snapshot: AgentConversationSnapshot; selectedProvider?: AgentProviderId }
@@ -24,6 +27,10 @@ interface Options {
   /** Another installed, usable provider to continue on when this one cannot
    *  answer at all — or undefined when switching is off or impossible. */
   alternateProvider?(current: AgentProviderId): AgentProviderId | undefined
+  /** Where captured attachments are copied for the life of the chat. Without
+   *  it the capture's own paths are used, and those are deleted when the next
+   *  capture begins — the chat would show broken images. */
+  attachmentsDir?: string
 }
 interface Waiting { promise: Promise<AgentInteractionResult>; resolve(result: AgentInteractionResult): void }
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
@@ -108,6 +115,7 @@ export class AgentConversationLifecycle {
     await this.initialize()
     const submissionId = input.submissionId ?? randomUUID()
     if (!ID.test(submissionId) || typeof input.transcript !== 'string' || !input.transcript.trim()) throw new Error('Invalid Agent input')
+    input = await this.keepAttachments(input, submissionId)
     let completion!: Promise<AgentInteractionResult>
     await this.lock(async () => {
       this.assertLive()
@@ -164,6 +172,31 @@ export class AgentConversationLifecycle {
     })
     void this.drain()
     return { submissionId, completion }
+  }
+
+  /**
+   * THE CHAT'S OWN COPIES. A capture's files live in the capture buffer, which
+   * is emptied when the next capture starts; the chat keeps showing them long
+   * after. Copied once, at enqueue, so the provider, a retry and the view all
+   * read the same file. A file that cannot be copied keeps its original path —
+   * the turn is never refused over a thumbnail.
+   */
+  private async keepAttachments(input: AgentInteractionInput, submissionId: string): Promise<AgentInteractionInput> {
+    const dir = this.options.attachmentsDir
+    if (!dir || !input.attachments?.length) return input
+    const target = join(dir, submissionId)
+    const kept = await Promise.all(input.attachments.map(async (attachment, index) => {
+      if (attachment.path.startsWith(target)) return attachment
+      try {
+        await mkdir(target, { recursive: true, mode: 0o700 })
+        const copy = join(target, `${index}-${basename(attachment.path)}`)
+        await copyFile(attachment.path, copy)
+        return { ...attachment, path: copy }
+      } catch {
+        return attachment
+      }
+    }))
+    return { ...input, attachments: kept }
   }
 
   async setDraft(text: string, revision: number): Promise<void> {
@@ -426,7 +459,10 @@ export class AgentConversationLifecycle {
             record.accepted.push({ submissionId: prepared.submissionId, interactionId: prepared.interactionId, acceptedAt: Date.now() })
             record.phase = 'sending'; delete record.prepared
             snapshot.chat.runId = run.id
-            snapshot.chat.turns.push({ role: 'user', text: input.transcript, at: Date.now() })
+            snapshot.chat.turns.push({
+              role: 'user', text: input.transcript, at: Date.now(),
+              ...(input.attachments?.length ? { attachments: await chatAttachments(input.attachments) } : {}),
+            })
             snapshot.queued = snapshot.queued.filter(q => q.submissionId !== prepared.submissionId)
             delete snapshot.error
             delete snapshot.retryRequired
@@ -639,3 +675,15 @@ function failure(message: string, code: NonNullable<AgentInteractionResult['erro
 function bits(id: string): number[] { const hash = createHash('sha256').update(id).digest(); return [0, 4, 8, 12].map(i => hash.readUInt32BE(i) % 32768) }
 function retired(filter: string | undefined, id: string): boolean { if (!filter) return false; const bytes = Buffer.from(filter, 'hex'); return bits(id).every(b => (bytes[b >> 3] & (1 << (b & 7))) !== 0) }
 function retire(filter: string | undefined, ids: string[]): string { const bytes = filter ? Buffer.from(filter, 'hex') : Buffer.alloc(4096); for (const id of ids) for (const b of bits(id)) bytes[b >> 3] |= 1 << (b & 7); return bytes.toString('hex') }
+
+async function chatAttachments(attachments: NonNullable<AgentInteractionInput['attachments']>): Promise<AgentChatAttachment[]> {
+  return Promise.all(attachments.map(async (a) => {
+    const bytes = await stat(a.path).then(s => s.size).catch(() => undefined)
+    return {
+      path: a.path,
+      name: a.name ?? basename(a.path),
+      mimeType: a.mimeType ?? 'application/octet-stream',
+      ...(bytes !== undefined ? { bytes } : {}),
+    }
+  }))
+}

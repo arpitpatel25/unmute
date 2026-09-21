@@ -34,7 +34,14 @@ export interface AgentChatTurn {
   /** Said about this answer — e.g. that it came from a fallback model or
    *  another provider because the chosen one was unavailable. */
   notice?: string
+  /** What was captured with a user turn — a screenshot, a copied file — drawn
+   *  under the message the way a task draws what you attached to it. Paths are
+   *  the Agent's own copies (see AgentConversationLifecycle), so they outlive
+   *  the capture buffer that produced them. */
+  attachments?: AgentChatAttachment[]
 }
+
+export interface AgentChatAttachment { path: string; name: string; mimeType: string; bytes?: number }
 
 /**
  * How much is kept.

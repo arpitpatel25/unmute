@@ -2605,6 +2605,12 @@ export class NotchController {
       turn.failed
         ? { kind: 'error' as const, message: turn.text }
         : { kind: 'message' as const, role: turn.role === 'user' ? 'user' as const : 'assistant' as const, text: turn.text, at: turn.at },
+      // What you captured with it, under your message — the same tiles a task
+      // draws for what you attached, in the same place.
+      ...(turn.attachments ?? []).map(a => ({
+        kind: 'attachment' as const, path: a.path, name: a.name, mimeType: a.mimeType,
+        ...(a.bytes !== undefined ? { bytes: a.bytes } : {}), role: 'user' as const,
+      })),
     ]
     // WHAT YOU SEE STOPS WHERE THE MODEL'S MEMORY STOPS. A fresh provider
     // session — a switch, a rotation — keeps every earlier message on screen,

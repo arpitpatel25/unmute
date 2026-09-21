@@ -7,6 +7,7 @@ import type {
   CaptureAttachmentSource,
   InteractionAttachmentHandles,
 } from './memory/attachments'
+import { isTurnImage } from './turnImages'
 import type { AgentJournalStore, AppendExchangeInput } from './journal'
 import type { AgentActivity, AgentCompletion, AgentProviderId } from './provider'
 import type {
@@ -227,6 +228,10 @@ export class UnmuteAgentController {
       const handles = validated.attachments.map((attachment) => (
         this.options.attachmentHandles.mintCapture(principal, attachment, principal.expiresAt)
       ))
+      // THE PICTURES THEMSELVES. A handle lets the Agent file a capture into
+      // memory; it does not let it look. Images go to the provider as images,
+      // exactly as a task receives them, and the handles stay for storing.
+      const images = validated.attachments.map(a => a.path).filter(isTurnImage)
       const callContext: CapabilityCallContext = {
         principal,
         now: at,
@@ -268,6 +273,7 @@ export class UnmuteAgentController {
         interactionId,
         cwd: runtime.cwd,
         transcript,
+        ...(images.length ? { images } : {}),
         constitutionPath: runtime.constitutionPath,
         environment: runtime.environment,
         mcp: runtime.mcp,
@@ -554,7 +560,8 @@ export function providerTranscript(
   }
   if (attachmentHandles.length > 0) {
     sections.push(
-      'Opaque capture attachment handles for this interaction:\n'
+      'Captured attachments for this interaction. Images among them are attached to this message — look at them directly. '
+      + 'These opaque handles are only for storing an attachment in memory:\n'
       + attachmentHandles.map((handle) => `- ${handle}`).join('\n'),
     )
   }

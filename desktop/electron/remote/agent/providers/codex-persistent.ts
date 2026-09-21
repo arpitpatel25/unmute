@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { isTurnImage } from '../turnImages'
 import { createInterface } from 'node:readline'
 import { AgentSetupError, type AgentProcessDriver, type AgentProcessEvent, type AgentProcessLaunch } from '../provider'
 import { clampPosture, learnFromRejection, mergeRequirements, requirementsFrom, type CodexRequirements } from '../../codex/requirements'
@@ -159,17 +160,20 @@ export class CodexPersistentProcess implements AgentProcessDriver {
   private turnError?: { codexErrorInfo?: unknown; message?: string }
   /** Told to the user with this turn's answer. */
   private turnNotice?: string
+  /** This turn's captured images, resent with it on a model fallback retry. */
+  private lastImages: string[] = []
   /** Learned before the first turn (the default was not on this account). */
   private pendingNotice?: string
 
   constructor(private readonly options: Options = {}) {}
   async start(launch: AgentProcessLaunch): Promise<void> { this.launch = launch }
 
-  async submitUserTurn(text: string): Promise<void> {
+  async submitUserTurn(text: string, images?: readonly string[]): Promise<void> {
     if (!this.launch || this.closed || this.turnId || this.startingTurn) throw new Error('Codex session unavailable')
     this.hasDispatched = false
     if (!this.connection) await this.initialize()
     this.lastText = text
+    this.lastImages = [...(images ?? [])].filter(isTurnImage)
     this.tried = new Set(this.model ? [this.model] : [])
     this.turnNotice = this.pendingNotice
     this.pendingNotice = undefined
@@ -186,7 +190,9 @@ export class CodexPersistentProcess implements AgentProcessDriver {
     this.turnError = undefined
     try {
       const response = await this.connection!.request<{ turn: { id: string } }>('turn/start', {
-        threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }], effort: 'medium',
+        threadId: this.threadId,
+        input: [{ type: 'text', text, text_elements: [] }, ...this.lastImages.map(path => ({ type: 'localImage', path }))],
+        effort: 'medium',
         ...(model ? { model } : {}),
       })
       if (!response.turn?.id) throw new Error('Missing accepted turn')

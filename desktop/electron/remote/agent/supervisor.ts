@@ -438,6 +438,7 @@ export class AgentRunSupervisor {
       interactionId: input.interactionId,
       cwd: input.cwd,
       transcript: input.transcript,
+      ...(input.images?.length ? { images: input.images } : {}),
       constitutionPath: input.constitutionPath,
       environment: input.environment,
       mcp: { endpoint: input.mcp.endpoint, config: input.mcp.config, token: sessionToken ?? token, sessionScoped: !!sessionToken },

@@ -1,6 +1,7 @@
 import { spawn as spawnProcess } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
+import { isTurnImage } from '../turnImages'
 import { settledByInterrupt, type AgentProcessDriver, type AgentProcessEvent, type AgentProcessLaunch } from '../provider'
 
 const EXIT_DRAIN_CAP_MS = 2_000
@@ -18,7 +19,7 @@ function delay(ms: number): Promise<void> {
 }
 
 /** Build an isolated, unattended Codex turn with only Unmute's MCP available. */
-export function codexHeadlessArgv(launch: AgentProcessLaunch, systemPrompt: string): string[] {
+export function codexHeadlessArgv(launch: AgentProcessLaunch, systemPrompt: string, images: readonly string[] = []): string[] {
   const endpoint = launch.environment.UNMUTE_MCP_ENDPOINT
   if (!endpoint) throw new Error('UNMUTE_MCP_ENDPOINT is required')
   return [
@@ -52,6 +53,8 @@ export function codexHeadlessArgv(launch: AgentProcessLaunch, systemPrompt: stri
     '--ignore-rules',
     '--skip-git-repo-check',
     '--json',
+    // Captured images, as pictures. `exec --image` attaches each to the prompt.
+    ...images.filter(isTurnImage).flatMap(path => ['--image', path]),
     '-',
   ]
 }
@@ -186,13 +189,13 @@ export class CodexHeadlessProcess implements AgentProcessDriver {
     this.pending = launch
   }
 
-  async submitUserTurn(text: string): Promise<void> {
+  async submitUserTurn(text: string, images?: readonly string[]): Promise<void> {
     const launch = this.pending
     if (!launch) throw new Error('not started')
     if (this.closed) throw new Error('closed')
     const systemPrompt = await this.readSystemPrompt(launch.systemContext.path)
     const child = this.spawn(
-      codexHeadlessArgv(launch, systemPrompt),
+      codexHeadlessArgv(launch, systemPrompt, images),
       { binary: launch.binary, cwd: launch.cwd, env: launch.environment },
     )
     this.child = child

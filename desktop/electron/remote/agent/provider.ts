@@ -32,6 +32,9 @@ export interface AgentStartInput {
   interactionId: string
   cwd: string
   transcript: string
+  /** Image files captured with this turn, handed to the model as pictures —
+   *  not only as handles. See turnImages.ts. */
+  images?: readonly string[]
   /** A generated file shared by every provider and consumed as system context. */
   constitutionPath: string
   environment: NodeJS.ProcessEnv
@@ -197,7 +200,7 @@ export interface AgentProcessDriver {
   readonly hasDispatched?: boolean
   readonly events: AsyncIterable<AgentProcessEvent>
   start(launch: AgentProcessLaunch): Promise<void>
-  submitUserTurn(text: string): Promise<void>
+  submitUserTurn(text: string, images?: readonly string[]): Promise<void>
   interrupt(): Promise<void>
   close(): Promise<void>
 }
@@ -357,7 +360,7 @@ export class CliProviderRuntime implements AgentProvider {
       current.sequence = 0
       current.settled = false
       try {
-        await current.driver.submitUserTurn(input.transcript)
+        await current.driver.submitUserTurn(input.transcript, input.images)
         if (input.requireObservedAcceptance) await withTimeout(current.observed.promise, this.options.handleTimeoutMs ?? 8_000)
         return { handle, activity: current.activity, completion: current.completion.promise, ...(current.model ? { model: current.model } : {}) }
       } catch (error) {
@@ -442,7 +445,7 @@ export class CliProviderRuntime implements AgentProvider {
     let submitted = false
     if (!handle && this.options.submitBeforeFreshHandle) {
       try {
-        await driver.submitUserTurn(input.transcript)
+        await driver.submitUserTurn(input.transcript, input.images)
         submitted = true
       } catch (error) {
         await this.closeDriver(live)
@@ -469,7 +472,7 @@ export class CliProviderRuntime implements AgentProvider {
 
     if (!submitted) {
       try {
-        await driver.submitUserTurn(input.transcript)
+        await driver.submitUserTurn(input.transcript, input.images)
       } catch (error) {
         this.active.delete(key)
         await this.closeDriver(live)
@@ -735,13 +738,17 @@ export class ExecutorBackedAgentProcess implements AgentProcessDriver {
     if (observation && typeof observation !== 'function') await observation.afterSpawn()
   }
 
-  async submitUserTurn(text: string): Promise<void> {
+  async submitUserTurn(text: string, images?: readonly string[]): Promise<void> {
     if (!this.executor) throw new Error('not started')
     await this.executor.isReady()
     await this.observation?.beforeSubmit?.()
     if (this.closed) throw new Error('closed')
     this.observationArmed = true
-    this.executor.writeStdin(text)
+    // A terminal takes no image blocks. The paths are named so the model can
+    // open them with its own file reader.
+    this.executor.writeStdin(images?.length
+      ? `${text}\n\nCaptured images (open these files to see them):\n${images.map(p => `- ${p}`).join('\n')}`
+      : text)
   }
 
   async interrupt(): Promise<void> {

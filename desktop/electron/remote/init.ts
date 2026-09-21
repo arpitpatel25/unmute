@@ -1822,6 +1822,7 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
     const lifecycle = new AgentConversationLifecycle({
       journal,
       store: new AgentConversationStore({ root: join(root, 'runtime', 'conversations'), crypto }),
+      attachmentsDir: join(root, 'runtime', 'chat-attachments'),
       controller,
       selectedProvider: () => resolveAgentProvider(),
       ceiling: () => settings.get('unmuteAgentConversationCeiling') ?? 20,
