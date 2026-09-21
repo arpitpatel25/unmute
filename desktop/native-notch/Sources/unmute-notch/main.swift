@@ -20,6 +20,10 @@ app.setActivationPolicy(.accessory)
 // what dark mode renders, everywhere, with nothing to keep in sync per view.
 app.appearance = NSAppearance(named: .darkAqua)
 
+// Development only: renders the bar offscreen, prints where the black ends,
+// and exits. Inert unless UNMUTE_NOTCH_PROBE is set. See BarProbe.
+BarProbe.runIfRequested()
+
 let controller = AppController()
 
 IPC.startReadLoop { command in
