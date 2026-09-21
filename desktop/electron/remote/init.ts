@@ -296,6 +296,9 @@ interface SessionManagerLike {
    *  junk STT. Declared here so the lane locks can be cleared however a capture
    *  dies, rather than only by its own stop tap. */
   onSessionEnded?: ((identity?: { sessionId: string; composerDictationToken?: string }) => void) | null
+  /** Appended listeners for every ending — unlike the slot above, main.ts
+   *  cannot overwrite them (it assigns onSessionEnded after initRemote). */
+  readonly sessionEndObservers?: Array<(identity?: { sessionId: string; composerDictationToken?: string }) => void>
 }
 interface KeyboardManagerLike {
   on(event: 'keyboard', cb: (e: { type: string }) => void): unknown
@@ -4095,6 +4098,13 @@ function typedInputRoute(): 'agent' | 'task' {
 
 async function beginTypedInputForLiveCapture(): Promise<void> {
   const sm = sessionManagerRef
+  // A box whose capture is gone is not open. Belt to the observer's braces:
+  // if an ending is ever missed again, one press of the button heals it
+  // instead of the button going dead until relaunch.
+  if (typedInputToken && sm?.typingSessionId !== typedInputToken) {
+    log.warn('typed input: clearing a box whose capture already ended', { token: typedInputToken })
+    endTypedInput()
+  }
   if (!sm?.beginTypedInput || !notchClient || typedInputToken || typedInputPending) return
   typedInputPending = true
   try {
@@ -5387,8 +5397,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // drains. A queued token stays claimable; every other ending abandons the
   // active token so empty/error/cancel paths cannot wedge or leak dictation.
   const previousSessionEnded = deps.sessionManager.onSessionEnded
-  deps.sessionManager.onSessionEnded = (identity) => {
+  // The typed box closes with its capture. An OBSERVER, not the slot below:
+  // main.ts reassigns onSessionEnded after this runs, which is exactly how the
+  // box's cleanup went missing and the keyboard button died after one cancel.
+  deps.sessionManager.sessionEndObservers?.push(() => {
     try { endTypedInput() } catch { /* never blocks the ending */ }
+  })
+  deps.sessionManager.onSessionEnded = (identity) => {
     try { previousSessionEnded?.(identity) }
     finally {
       const abandoned = identity?.composerDictationToken

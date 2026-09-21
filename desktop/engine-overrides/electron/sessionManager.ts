@@ -365,6 +365,25 @@ export class SessionManager {
   // Called when a session is fully terminated (cancel, Escape, processing done)
   // Used to reset keyboard state so it doesn't get stuck
   public onSessionEnded: ((identity?: SessionEndIdentity) => void) | null = null
+  /**
+   * EVERY ENDING, FOR LISTENERS THAT MUST NOT BE REPLACED.
+   *
+   * `onSessionEnded` is a single slot, and the engine's main.ts assigns it in
+   * setupKeyboard() — which runs AFTER initRemote(). Anything the remote layer
+   * wrapped into that slot was silently thrown away at startup: the typed-input
+   * box's cleanup never ran, so after one cancel the keyboard button did
+   * nothing for the rest of the app's life. Observers are appended, never
+   * assigned, so no later setup can remove them.
+   */
+  readonly sessionEndObservers: Array<(identity?: SessionEndIdentity) => void> = []
+  private announceEnded(identity?: SessionEndIdentity): void {
+    try { this.onSessionEnded?.(identity) }
+    finally {
+      for (const observer of this.sessionEndObservers) {
+        try { observer(identity) } catch (e) { console.warn('[session] end observer failed:', e) }
+      }
+    }
+  }
   /** Fired synchronously when a composer delivery enters remoteDispatchQueue,
    * before onSessionEnded releases recording UI state. */
   public onComposerDictationQueued: ((token: string) => void) | null = null
@@ -405,7 +424,7 @@ export class SessionManager {
       return false
     }
     this.currentSession = null
-    this.onSessionEnded?.({
+    this.announceEnded({
       sessionId: session.sessionId,
       ...(session.composerDictation ? { composerDictationToken: session.composerDictation.token } : {}),
     })
@@ -2929,7 +2948,7 @@ export class SessionManager {
     this.scheduleAutoHide(4000)
     this.onRecordingStopped?.()
     if (session) this.endSession(session)
-    else this.onSessionEnded?.()
+    else this.announceEnded()
   }
 
   /** Cancel session — simple cancel without undo (used by widget cancel button) */
@@ -2954,7 +2973,7 @@ export class SessionManager {
     setTrayIdle()
     this.onRecordingStopped?.()
     if (session) this.endSession(session)
-    else this.onSessionEnded?.()
+    else this.announceEnded()
     hideNativePill()
     hideHUD()
   }
