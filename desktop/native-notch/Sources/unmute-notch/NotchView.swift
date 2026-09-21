@@ -69,7 +69,13 @@ struct NotchView: View {
                 if let toast = model.toast { toastView(toast) }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // PINNED TO THE TOP, NEVER CENTRED. The window can be taller than the
+        // mass — it keeps the rim's extra room while it animates back down
+        // after a hover — and with nothing filling that room a centred frame
+        // put the 32pt mass in the middle of a 35pt window: 2pt below the menu
+        // bar. That was the "shifts a little down in a windowed app", twice.
+        // Measured, not guessed: see BarProbe.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea(.all)
         .contentShape(shape)
         // CLICK OPENS. Hover never does — see .onHover below.

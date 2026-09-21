@@ -66,3 +66,9 @@ swiftc -o "$out/decode-check" \
   "$src/Lifecycle.swift" "$src/UnMark.swift" "$src/UnMarkArt.swift" \
   "$here/main.swift" $objs
 "$out/decode-check"
+
+# WHERE THE BLACK ENDS, MEASURED. The layout maths above cannot see SwiftUI's
+# alignment, and the mass drifting below the menu bar came back twice through
+# exactly that gap. This renders the real NotchView offscreen and reads back
+# the pixels. Needs a display, which a Mac running this always has.
+UNMUTE_NOTCH_PROBE=1 "$bin/unmute-notch" 2>/dev/null
