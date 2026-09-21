@@ -173,7 +173,9 @@ struct Badge: View {
         Text(text)
             .font(.system(size: 9.5, weight: .semibold))
             .foregroundColor(color)
-            .padding(.horizontal, 6).padding(.vertical, 1.5)
+            // 5 a side = the +10 BarContent.badgeWidth measures. One number,
+            // two places, and they may never drift.
+            .padding(.horizontal, 5).padding(.vertical, 1.5)
             .background(RoundedRectangle(cornerRadius: 5).fill(color.opacity(0.17)))
             .overlay(RoundedRectangle(cornerRadius: 5).stroke(color.opacity(0.26), lineWidth: 0.5))
             .fixedSize()

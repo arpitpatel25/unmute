@@ -1,0 +1,105 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Hover — what the bar says</title>
+<style>
+ body{margin:0;background:#0c0c0b;color:#fff;padding:34px 42px 70px;
+      font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
+ h1{font-size:16px;font-weight:600;margin:0 0 4px}
+ .sub{color:#8a897f;font-size:12px;margin:0 0 24px;max-width:88ch}
+ .sub b{color:#fff}
+ .head{display:grid;grid-template-columns:150px 1fr 1fr;gap:22px;color:#6e6d66;
+       font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+       padding-bottom:8px;border-bottom:1px solid #2a2a27}
+ .row{display:grid;grid-template-columns:150px 1fr 1fr;gap:22px;align-items:start;
+      padding:16px 0;border-bottom:1px solid #1b1b19}
+ .lab{font-size:13px;font-weight:600;padding-top:10px}
+ .lab em{display:block;font-style:normal;font-size:10.5px;color:#8a897f;font-weight:400;margin-top:3px}
+ .strip{position:relative;height:40px;overflow:hidden;border-radius:6px;
+        background:linear-gradient(120deg,#3b2a6d 0%,#2d5a7a 45%,#2f6b52 100%)}
+ .mb{position:absolute;inset:0 0 auto 0;z-index:1;display:flex;align-items:center;
+     gap:11px;padding:0 11px;font-size:9.5px;color:rgba(255,255,255,.9)}
+ .mb .sp{margin-left:auto;display:flex;gap:10px}
+ .m{position:absolute;top:0;z-index:2;background:#000;display:flex;align-items:center}
+ .cut{position:absolute;top:0;left:50%;transform:translateX(-50%);background:#000;z-index:3}
+ .L{display:flex;align-items:center;justify-content:flex-end;gap:7px;height:100%}
+ .R{display:flex;align-items:center;justify-content:flex-start;gap:7px;height:100%}
+ .wm{height:13px;width:21px;display:block}
+ .dot{width:7px;height:7px;border-radius:50%;flex:none}
+ .w{font-size:11px;font-weight:500;color:rgba(255,255,255,.92);white-space:nowrap}
+ .num{font-size:11px;font-weight:600;color:rgba(255,255,255,.95)}
+ .big{font-size:11px;color:#c3c2b7;white-space:nowrap}
+ .n{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:#5f5e58;margin-top:7px}
+ .n b{color:#95c4f5;font-weight:400}.n i{color:#ff9f0a;font-style:normal}
+</style></head><body>
+<h1>Hover — what the bar says when <b>1 needs approval and 3 are working</b></h1>
+<p class="sub">Today the waiting branch returns before the state switch, so
+<i style="color:#ff9f0a">the 3 working are invisible</i>. Every option below shows both facts.
+Widths are computed with the real <b>BarContent</b> arithmetic; each is <b>fixed</b> — the
+same in every state.</p>
+<div class="head"><div></div><div>With notch</div><div>No notch</div></div>
+<div id="rows"></div>
+
+<script>
+const CUT=185, BAR=32, BAR2=30, INSET=13, GAP=7, DOT=7, F=10, F2=9, MARK=23;
+const mc=document.createElement('canvas').getContext('2d');
+const FW='500 11px -apple-system,sans-serif', FN='600 11px -apple-system,sans-serif';
+const mw=(t,f)=>{mc.font=f;return mc.measureText(t).width;};
+const badge=n=>Math.ceil(mw(String(n),FN)+12);
+
+/* piece list -> width, mirroring inset + items + gaps + trailing gap */
+function wid(parts){
+  let w=INSET;
+  parts.forEach((p,i)=>{ if(i) w+=GAP;
+    w += p.k==='dot'?DOT : p.k==='mark'?MARK : p.k==='num'?badge(p.v) : mw(p.v,FW); });
+  return Math.ceil(w+GAP);
+}
+function render(parts){
+  return parts.map(p=>
+    p.k==='dot'  ? `<span class="dot" style="background:${p.c}"></span>` :
+    p.k==='mark' ? `<img class="wm" src="unmark.png">` :
+    p.k==='num'  ? `<span class="num">${p.v}</span>` :
+                   `<span class="w">${p.v}</span>`).join('');
+}
+const A={amber:'#ff9f0a',green:'#32d74b'};
+const OPTIONS=[
+ {name:'Today', sub:'for reference', left:[{k:'dot',c:A.amber},{k:'t',v:'1 waiting on you'}],
+  right:[], note:'the 3 working are not shown at all', today:true},
+ {name:'A · counters', sub:'no words',
+  left:[{k:'mark'}], right:[{k:'dot',c:A.amber},{k:'num',v:1},{k:'dot',c:A.green},{k:'num',v:3}],
+  note:'identity one side, both counts the other. Colour is the state.'},
+ {name:'B · word + counts', sub:'split across the two sides',
+  left:[{k:'dot',c:A.amber},{k:'num',v:1},{k:'t',v:'waiting'}],
+  right:[{k:'dot',c:A.green},{k:'num',v:3},{k:'t',v:'working'}],
+  note:'both facts, both named. The widest option.'},
+ {name:'C · mark + one word', sub:'urgent wins, working as a count',
+  left:[{k:'mark'}], right:[{k:'dot',c:A.amber},{k:'num',v:1},{k:'t',v:'waiting'},{k:'dot',c:A.green},{k:'num',v:3}],
+  note:'names only what needs you; working stays a number.'}
+];
+const out=[];
+for(const o of OPTIONS){
+  const lw=o.left.length?wid(o.left):0, rw=o.right.length?wid(o.right):0;
+  const sh=o.today?null:Math.max(lw,rw);
+  const L=o.today?lw:sh, R=o.today?rw:sh;
+  const total=F*2+L+CUT+R;
+  const flat=F2*2+(o.today?lw:Math.max(lw,rw)*2+18);
+  const notch=`<div class="strip"><div class="mb"><span>Terminal</span><span>Shell</span>
+      <span class="sp"><span>100%</span><span>2:05</span></span></div>
+    <div class="m" style="left:calc(50% - ${CUT/2}px - ${L+F}px);width:${total}px;height:${BAR}px;
+         border-radius:0 0 ${F}px ${F}px">
+      <div class="L" style="width:${F+L}px;padding-right:${GAP}px">${render(o.left)}</div>
+      <div style="width:${CUT}px"></div>
+      <div class="R" style="width:${R+F}px;padding-left:${GAP}px">${render(o.right)}</div></div>
+    <div class="cut" style="width:${CUT}px;height:${BAR}px;border-radius:0 0 ${F}px ${F}px"></div></div>
+    <div class="n">${total} &times; 32 &middot; [${L} | ${CUT} | ${R}]</div>`;
+  const fw=o.today?lw+F2*2:F2*2+lw+GAP*2+rw;
+  const flatBar=`<div class="strip"><div class="mb" style="height:${BAR2}px"><span>Terminal</span><span>Shell</span>
+      <span class="sp"><span>100%</span><span>2:05</span></span></div>
+    <div class="m" style="left:calc(50% - ${fw/2}px);width:${fw}px;height:${BAR2}px;
+         border-radius:0 0 10px 10px;background:rgba(0,0,0,.62);backdrop-filter:blur(10px);
+         justify-content:center;gap:${GAP}px;padding:0 ${INSET}px">
+      ${render(o.left)}${o.right.length?render(o.right):''}</div></div>
+    <div class="n">${fw} &times; 30 &middot; one pill, no cutout to straddle</div>`;
+  out.push(`<div class="row"><div class="lab">${o.name}<em>${o.sub}</em>
+     <div class="n" style="margin-top:8px;color:#8a897f">${o.note}</div></div>
+    <div>${notch}</div><div>${flatBar}</div></div>`);
+}
+document.getElementById('rows').innerHTML=out.join('');
+</script></body></html>
