@@ -125,6 +125,9 @@ export function AgentSettings() {
   const setSwitch = async (on: boolean) => {
     setSettings((current) => current ? { ...current, switchWhenUnavailable: on } : current)
     await api().remoteSetUnmuteAgentSwitch?.(on)
+    load()
+  }
+
   const setRoutinesEnabled = async (on: boolean) => {
     setRoutinesEnabledState(on)
     await api().remoteSetRoutinesEnabled?.(on)
