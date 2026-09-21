@@ -12,6 +12,16 @@ final class SurfaceFrameTransitionTests: XCTestCase {
         XCTAssertEqual(departure.receive(isExpanded: false), .applyNormally)
     }
 
+    // 2026-09-21: links opened in an orphaned headless Chrome, whose
+    // activation collapsed the card although nothing appeared on screen.
+    func testAnAppWithNoWindowOnScreenDoesNotCollapseTheCard() {
+        XCTAssertEqual(DepartureTarget.decide(hasWindowOnScreen: true, rechecked: false), .leave)
+        XCTAssertEqual(DepartureTarget.decide(hasWindowOnScreen: false, rechecked: false), .lookAgain,
+                       "an app still launching gets one more look")
+        XCTAssertEqual(DepartureTarget.decide(hasWindowOnScreen: true, rechecked: true), .leave)
+        XCTAssertEqual(DepartureTarget.decide(hasWindowOnScreen: false, rechecked: true), .stay)
+    }
+
     func testAutomaticDepartureDoesNothingOutsideALargeSurface() {
         var departure = SurfaceDepartureTransition()
 

@@ -710,6 +710,7 @@ private struct SourcesSection: View {
     /// must not become one.
     private func open(_ url: String) {
         guard let u = URL(string: url), u.scheme == "https" || u.scheme == "http" else { return }
+        AppController.CardLink.clicked()
         NSWorkspace.shared.open(u)
     }
 }

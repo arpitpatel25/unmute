@@ -194,3 +194,16 @@ public enum SurfacePresentationPolicy {
         autoPresent || surfaceIsAlreadyExpanded || hasRecentGesture
     }
 }
+
+/// Whether an activated app is somewhere the user actually went. See
+/// AppController.leaveIfShown.
+public enum DepartureTarget: Equatable {
+    case leave
+    case lookAgain
+    case stay
+
+    public static func decide(hasWindowOnScreen: Bool, rechecked: Bool) -> DepartureTarget {
+        if hasWindowOnScreen { return .leave }
+        return rechecked ? .stay : .lookAgain
+    }
+}
