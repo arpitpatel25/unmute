@@ -14,6 +14,7 @@ export const ACTION_ORDER: readonly ActionId[] = [
   'orchestrator-task',
   'agent-task-link',
   'notetaker-save',
+  'agent-notes',
   'product-orientation',
   'sign-in',
   'complete',
@@ -31,8 +32,8 @@ export const PERMISSION_ACTIONS: readonly ActionId[] = [
 export const CHAPTERS: Readonly<Record<ActionId, ChapterDefinition>> = {
   welcome: {
     action: 'welcome', clipId: 'welcome-product-v1',
-    caption: 'Welcome to Unmute. Unmute lets you speak instead of type, turn requests into real work with Claude Code or Codex, and capture meeting notes without breaking your flow. In the next few minutes, you’ll use each part yourself.',
-    card: { kind: 'success', title: 'Meet Unmute', detail: 'Dictate, delegate, and remember—without leaving what you are doing.' },
+    caption: 'Welcome to Unmute. Ideas happen while you browse the web, watch a video, or read a message. Unmute turns those thoughts into actions with a key press.',
+    card: { kind: 'success', title: 'Meet Unmute', detail: 'Turn thoughts into actions from anywhere on your Mac.' },
   },
   privacy: {
     action: 'privacy', clipId: 'privacy-v1',
@@ -72,7 +73,7 @@ export const CHAPTERS: Readonly<Record<ActionId, ChapterDefinition>> = {
     card: { kind: 'speak', phrase: 'Include this screenshot in my note.' },
   },
   'orchestrator-task': {
-    action: 'orchestrator-task', clipId: 'orchestrator-explain-v1', caption: 'Starting a new Claude Code or Codex session—or finding the right existing one—creates friction between having a thought and acting on it. Orchestrator removes that friction. If you’re reading a tweet, article, or document and a question comes to mind, select the useful context, tap Right Option, say your question, then tap Right Option again. Unmute creates or continues the task without making you manage terminals or sessions. Let’s try it now.',
+    action: 'orchestrator-task', clipId: 'orchestrator-explain-v1', caption: 'Turn a thought into a task. Tap Right Option, say the request shown here, then tap Right Option again. Unmute will create a Claude Code or Codex session or route the request to the right existing one.',
     card: { kind: 'speak', phrase: 'Create hello-unmute.txt containing My first Unmute task.' },
   },
   'agent-task-link': {
@@ -83,8 +84,12 @@ export const CHAPTERS: Readonly<Record<ActionId, ChapterDefinition>> = {
     action: 'notetaker-save', clipId: 'notetaker-explain-v1', caption: 'Unmute also includes Notetaker. It uses the strong models you already pay for through Claude Code or Codex to create useful notes you can interact with later. Double-tap Left Control, say the line shown here, and save the recording from the pill.',
     card: { kind: 'speak', phrase: 'This is my first Unmute note.' },
   },
+  'agent-notes': {
+    action: 'agent-notes', clipId: 'agent-notes-v1', caption: 'The Unmute Agent can also find and summarize information from notes you captured with Notetaker.',
+    card: { kind: 'success', title: 'Ask about your notes', detail: 'Once a note is ready, the Unmute Agent can find details or summarize it for you.' },
+  },
   'product-orientation': {
-    action: 'product-orientation', clipId: 'orientation-v1', caption: 'This is your Unmute home. Orchestrator shows today’s tasks and automatically groups related work into workspaces. Notetaker keeps your recordings, transcripts, and summaries here. And when your notes are ready, you can ask the Unmute Agent to find information in them.',
+    action: 'product-orientation', clipId: 'orientation-v1', caption: 'This is your Unmute dashboard. It lists the tasks you started with Unmute and automatically groups related work into workspaces.',
     card: { kind: 'success', title: 'Your workspace is ready' },
   },
   'sign-in': {

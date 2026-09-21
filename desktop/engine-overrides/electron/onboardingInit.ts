@@ -195,7 +195,7 @@ export async function initOnboarding(
   const advancePermission = async (): Promise<void> => {
     const action = runtime.snapshot().action
     let granted = false
-    if (action === 'welcome' || action === 'privacy') granted = true
+    if (action === 'welcome' || action === 'privacy' || action === 'agent-notes') granted = true
     if (action === 'microphone') granted = await systemPreferences.askForMediaAccess('microphone')
     if (action === 'accessibility') granted = systemPreferences.isTrustedAccessibilityClient(true)
     if (action === 'system-audio') granted = await preflightNotetakerSystemAudio() === 'granted'

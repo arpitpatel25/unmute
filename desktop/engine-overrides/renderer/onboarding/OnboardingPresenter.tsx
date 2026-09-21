@@ -2,6 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 
 import unmuteLogo from '../assets/unmute-logo.png'
 import { clipUrl } from './clips'
+import { successButtonForAction } from './presenterActions'
 import { emptyPresenter, reducePresenter, type PresenterCard, type PresenterMessage } from './presenterState'
 import './presenter.css'
 
@@ -30,8 +31,9 @@ function ProviderButton({ provider, card }: { provider: 'claude' | 'codex'; card
   return <button type="button" onClick={() => send({ type: 'retry-provider', provider })}>Check {label} again</button>
 }
 
-function CompanionCard({ card }: { card: NonNullable<PresenterCard> }) {
+function CompanionCard({ action, card }: { action: string; card: NonNullable<PresenterCard> }) {
   const send = (action: PresenterAction) => api().onboardingPresenterAction?.(action)
+  const successButton = successButtonForAction(action)
   return <section className={`ob-presenter__card ob-presenter__card--${card.kind}`} aria-label={card.title ?? 'Next action'}>
     {card.title && <h1>{card.title}</h1>}
     {card.phrase && <blockquote>{card.phrase}</blockquote>}
@@ -44,8 +46,8 @@ function CompanionCard({ card }: { card: NonNullable<PresenterCard> }) {
       <button className="ob-presenter__primary" type="button" onClick={() => send({ type: card.kind === 'repair' ? 'open-settings' : 'continue' })}>
         {card.kind === 'repair' ? 'Open Keyboard Settings' : 'Continue'}
       </button>}
-    {card.kind === 'success' && <button className="ob-presenter__primary" type="button" onClick={() => send({ type: card.title === 'One last step' ? 'open-sign-in' : 'complete-orientation' })}>
-      {card.title === 'One last step' ? 'Sign in' : 'Explore Unmute'}
+    {card.kind === 'success' && <button className="ob-presenter__primary" type="button" onClick={() => send({ type: successButton.type })}>
+      {successButton.label}
     </button>}
   </section>
 }
@@ -54,6 +56,8 @@ export function OnboardingPresenter() {
   const [state, dispatch] = useReducer(reducePresenter, undefined, emptyPresenter)
   const [paused, setPaused] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const videoUrl = clipUrl(state.clipId)
+  const hasVideo = !state.videoUnavailable && Boolean(videoUrl)
 
   useEffect(() => api().onboardingOnPresenterCommand?.(dispatch), [])
 
@@ -74,27 +78,31 @@ export function OnboardingPresenter() {
     <section className="ob-presenter__glass">
       <header className="ob-presenter__identity"><img src={unmuteLogo} alt="Unmute" /></header>
       <div className="ob-presenter__film">
-        {!state.videoUnavailable && state.clipId
+        {hasVideo
           ? <video
               ref={videoRef}
               key={state.clipId}
-              src={clipUrl(state.clipId)}
+              src={videoUrl}
+              aria-label={state.caption}
               autoPlay
               playsInline
+              preload="auto"
               onPlay={() => setPaused(false)}
               onPause={() => setPaused(true)}
               onError={() => dispatch({ type: 'video-unavailable' })}
             />
-          : <div className="ob-presenter__standin"><span className="ob-presenter__logo-plate"><img src={unmuteLogo} alt="" /></span><span>Founder video will appear here</span></div>}
-        <div className="ob-presenter__filmshade" />
-        <div className="ob-presenter__caption" aria-live="polite">{state.caption || 'Preparing your introduction…'}</div>
+          : <div className="ob-presenter__standin">
+              <span className="ob-presenter__logo-plate"><img src={unmuteLogo} alt="" /></span>
+              <div className="ob-presenter__filmshade" />
+              <div className="ob-presenter__caption" aria-live="polite">{state.caption || 'Preparing your introduction…'}</div>
+            </div>}
       </div>
       <footer className="ob-presenter__controls">
         <button type="button" onClick={togglePlayback}>{paused ? 'Play' : 'Pause'}</button>
         <button type="button" onClick={replay}>Replay</button>
-        <span className="ob-presenter__status">{state.videoUnavailable ? 'Script mode' : 'Captions on'}</span>
+        <span className="ob-presenter__status">{hasVideo ? 'Captions included' : 'Script mode'}</span>
       </footer>
     </section>
-    {state.card && <CompanionCard card={state.card} />}
+    {state.card && <CompanionCard action={state.action} card={state.card} />}
   </main>
 }

@@ -146,6 +146,12 @@ test('notetaker save, not start or stop, completes the chapter', () => {
   assert.equal(progress.action, 'notetaker-save')
 
   progress = reduceOnboarding(progress, { type: 'notetaker-saved', meetingId: 'm1' })
+  assert.equal(progress.action, 'agent-notes')
+})
+
+test('the recorded notes lesson precedes product orientation', () => {
+  let progress = atAction('agent-notes')
+  progress = reduceOnboarding(progress, { type: 'capability-satisfied', action: 'agent-notes' })
   assert.equal(progress.action, 'product-orientation')
 })
 

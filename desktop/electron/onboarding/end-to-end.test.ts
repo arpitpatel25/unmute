@@ -36,6 +36,8 @@ test('fresh install completes only after every real receipt and sign-in', () => 
   accept({ type: 'notetaker-stopped', meetingId: 'meeting1' })
   assert.equal(progress.action, 'notetaker-save')
   accept({ type: 'notetaker-saved', meetingId: 'meeting1' })
+  assert.equal(progress.action, 'agent-notes')
+  accept({ type: 'capability-satisfied', action: 'agent-notes' })
   accept({ type: 'capability-satisfied', action: 'product-orientation' })
   assert.equal(progress.action, 'sign-in')
   accept({ type: 'capability-satisfied', action: 'sign-in' })

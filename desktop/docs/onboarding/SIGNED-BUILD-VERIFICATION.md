@@ -24,10 +24,10 @@ Use a signed and notarized build. Test with a clean macOS account and with an ac
 5. Confirm provider detection launches an isolated ephemeral readiness check, terminates it, and reports missing versus authentication-required accurately.
 6. Complete Dictation in Apple Notes with Function start and Function submit. Confirm a missing or out-of-order tap, transcription alone, or delivery into another app cannot advance.
 7. Copy text and take a normal screenshot between Function start and Function submit. Confirm only a composition containing the observed item advances.
-8. Complete Orchestrator with Right Option start and submit. Confirm the task runs only in `userData/onboarding/workspace` and `hello-unmute.txt` contains exactly `My first Unmute task`.
+8. Start an Unmute task with Right Option start and submit. Confirm the task runs only in `userData/onboarding/workspace` and `hello-unmute.txt` contains exactly `My first Unmute task`.
 9. Complete the Agent follow-up with its real start and submit sequence, then open its matching native task link. Plain text resembling a link must not advance.
 10. Start Notetaker with the real Left Control gesture and save from the real pill. Discard must not advance; summary generation may remain honestly processing.
-11. Inspect Orchestrator and Notetaker in the real Electron app, sign in, and confirm the presenter closes only after authenticated state arrives.
+11. Continue through the Agent-notes explanation, inspect Tasks and Notetaker in the real Electron app, sign in, and confirm the presenter closes only after authenticated state arrives.
 12. Use Settings → Replay onboarding. Confirm the durable main-process progress resets and no duplicate Cloudflare grant is required after a relaunch.
 
 Record app logs, macOS version, display arrangement, build version, Cloudflare worker version, and pass/fail for every matrix cell. A release fails if any step can advance from a timer, prose, a mocked surface, or an unrelated event.

@@ -9,5 +9,5 @@ test('starting and stopping without Save does not complete Notetaker', () => {
   progress = reduceOnboarding(progress, notetakerEvent('notetaker-stopped', 'm1'))
   assert.equal(progress.action, 'notetaker-save')
   progress = reduceOnboarding(progress, notetakerEvent('notetaker-saved', 'm1'))
-  assert.equal(progress.action, 'product-orientation')
+  assert.equal(progress.action, 'agent-notes')
 })

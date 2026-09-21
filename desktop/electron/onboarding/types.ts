@@ -16,6 +16,7 @@ export type ActionId =
   | 'orchestrator-task'
   | 'agent-task-link'
   | 'notetaker-save'
+  | 'agent-notes'
   | 'product-orientation'
   | 'sign-in'
   | 'complete'
