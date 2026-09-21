@@ -1105,6 +1105,49 @@ export function composeWithInserts(
   return rendered.text
 }
 
+/**
+ * TYPED INPUT: WHAT THE BOX ALREADY SAYS IS NOT CAPTURED TWICE.
+ *
+ * A link copied during a typed capture is recorded as an insert — and if the
+ * user then pastes it into the box, it is in the text as well. Copying a
+ * phrase out of the box itself does the same thing from the other side. Speech
+ * cannot contain a pasted string verbatim, which is why the voice path never
+ * needed this; typed text routinely does.
+ *
+ * Text inserts only. An image never appears in the text, so it is never
+ * "covered" by it. Returns how many were dropped.
+ */
+export function dropInsertsCoveredBy(text: string, now: number): number {
+  if (!pad) return 0
+  const typed = text.trim()
+  if (!typed) return 0
+  const covered = pad.entries.filter((e) =>
+    e.type === 'insert' && e.kind !== 'image' && e.content.trim() !== '' && typed.includes(e.content.trim()))
+  for (const e of covered) pad = removeEntry(pad, e.id, now)
+  if (covered.length) schedulePersist()
+  return covered.length
+}
+
+/** The typed-input box received a paste. See ClipboardWatch.adoptCurrent. */
+export async function adoptPastedClipboard(): Promise<void> {
+  if (!openSegmentId) return
+  await clipboardWatch?.adoptCurrent()
+}
+
+/** What the capture in progress has collected so far, for the typed-input box
+ *  to show. Counts only — the box never renders the content itself. */
+export function openCaptureInserts(): { images: number; texts: number } {
+  if (!pad || !openSegmentId) return { images: 0, texts: 0 }
+  let images = 0
+  let texts = 0
+  for (const e of pad.entries) {
+    if (e.type !== 'insert') continue
+    if (e.kind === 'image') images++
+    else texts++
+  }
+  return { images, texts }
+}
+
 /** Drop the segment in progress without touching the rest of the pad. Escape
  *  must cancel an utterance, never destroy held work — discard is the only
  *  path that does that, and it confirms.

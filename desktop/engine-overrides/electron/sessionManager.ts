@@ -23,7 +23,7 @@ import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 import { dispatchFromCapture, hideNativePill, recordCapturedDictation, type ComposerDictationDelivery } from './paywall/remote/init'
 import {
   attachTranscript, beginOwnClipboardSequence, beginSegment, cancelOpenSegment,
-  composeWithInserts, endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed,
+  composeWithInserts, dropInsertsCoveredBy, endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed,
   registerFormat, registerHistoryCopy, registerPaste, removeFromPad, setPadOrigin,
 } from './paywall/remote/capture/index'
 import type { CaptureRoute } from './captureRoute'
@@ -193,6 +193,20 @@ interface SessionState {
   // and only when a composition actually happened — on the fast path it stays
   // empty and delivery is byte-for-byte what it always was.
   captureAttachments: string[]
+  /**
+   * THIS INVOCATION IS BEING TYPED, NOT SPOKEN.
+   *
+   * Absent on every capture until the user presses the pill's keyboard button,
+   * and it lives on the session for the reason `route` does: the session is
+   * nulled on every ending, so typing can never outlive the one invocation it
+   * was chosen for. The next key press builds a fresh session without it and
+   * starts on the microphone. There is deliberately no setting behind this.
+   *
+   * `text` is the box's latest draft, pushed on every edit, so whichever way
+   * the capture is finished — Return in the box, the trigger key, the pill —
+   * delivers what is on screen.
+   */
+  typed?: { text: string }
 }
 
 export interface SessionEndIdentity {
@@ -1112,6 +1126,119 @@ export class SessionManager {
   }
 
   /**
+   * THE MICROPHONE STOPS AND A TEXT BOX TAKES ITS PLACE — for this invocation.
+   *
+   * NOTHING ENDS HERE. The session, its route, its open capture segment and
+   * the watchers behind it all carry straight through, which is what lets a
+   * link copied or a screenshot taken while typing land in the same input it
+   * would have landed in while speaking. Only the audio side stops: the
+   * recorder is told to let go, anything already heard is dropped, and audio
+   * that is still in flight is refused on arrival (see typedAudio).
+   *
+   * THE SELECTION IS TAKEN NOW, not at submit. A held-key capture defers its
+   * Cmd+C to the release that finishes it, but by then the text box would hold
+   * the keyboard and the grab would copy out of our own field. The trigger key
+   * is already up, so there is no Cmd+Opt+C to fear.
+   *
+   * Returns the session id once the box may be shown, or null when there is no
+   * live Orchestrator/Agent capture to type into.
+   */
+  async beginTypedInput(): Promise<string | null> {
+    const session = this.currentSession
+    if (!session || session.kind !== 'remote' || session.status !== 'recording'
+      || this.isProcessing || session.composerDictation) {
+      console.warn('[session] ⛔ typed input refused', {
+        hasSession: Boolean(session), kind: session?.kind ?? null, status: session?.status ?? null,
+        processing: this.isProcessing, composer: Boolean(session?.composerDictation),
+      })
+      return null
+    }
+    if (session.typed) return session.sessionId
+    session.typed = { text: '' }
+    console.log('[session] ⌨️  typed input for', session.sessionId, '| route:', session.route)
+    logTelemetry('typed-input-start', { sessionId: session.sessionId, route: session.route })
+    // The audio side, and only the audio side. The streaming STT socket opened
+    // at key-down would otherwise sit open until it timed out.
+    try { if (isStreaming()) abortStream('typed-input') } catch { /* best-effort */ }
+    this.resetChunkState()
+    session.dictationAudio = null
+    session.dictationTranscript = null
+    this.arbiter?.recordingEnded()
+    resumeAfterCapture()
+    setTrayIdle()
+    sendToWidget('pill:event', { type: 'typing', value: session.sessionId })
+    if (session.openedByHeldKey && !session.selectedText) {
+      await new Promise((r) => setTimeout(r, 60))
+      if (!this.isCurrentSession(session)) return null
+      await this.captureSelection('dictation')
+    }
+    return this.isCurrentSession(session) && session.typed ? session.sessionId : null
+  }
+
+  /** The box's latest draft. Refused for any session but the live typed one. */
+  setTypedDraft(sessionId: string, text: string): boolean {
+    const session = this.currentSession
+    if (!session?.typed || session.sessionId !== sessionId || session.status !== 'recording') return false
+    session.typed.text = text
+    return true
+  }
+
+  /** True while the live capture is being typed. */
+  get typingSessionId(): string | null {
+    const session = this.currentSession
+    return session?.typed && session.status === 'recording' ? session.sessionId : null
+  }
+
+  /** Audio for a typed capture is refused: the recorder was told to stop, and
+   *  anything it sends on the way out is what was heard BEFORE the switch. */
+  private typedAudio(sessionId?: string): boolean {
+    const session = this.currentSession
+    return !!session?.typed && (!sessionId || sessionId === session.sessionId)
+  }
+
+  /**
+   * DELIVER THE TYPED TEXT EXACTLY WHERE A TRANSCRIPT GOES.
+   *
+   * Everything after this point is the voice path, untouched: the scratchpad
+   * hold, universal capture's inserts, the per-destination dispatch queue, and
+   * dispatchFromCapture's routing and cleanup. What is skipped is only what
+   * exists because of audio — STT, and cleanTranscript's scrub of Whisper
+   * artefacts, which on typed text would delete a sincere trailing "Thank you."
+   *
+   * A selection taken at the switch rides along the way the quote flow carries
+   * one for speech.
+   */
+  private async deliverTypedInput(session: SessionState): Promise<void> {
+    if (this.isProcessing) {
+      console.log('[session] ⛔ typed delivery ignored — already processing')
+      return
+    }
+    this.isProcessing = true
+    session.status = 'processing'
+    try { endSegment(Date.now()) } catch (e) { console.warn('[session] capture disarm failed:', e) }
+    this.onRecordingStopped?.()
+    const typed = (session.typed?.text ?? '').trim()
+    console.log('[session] ⌨️  typed delivery:', session.sessionId, `(${typed.length} chars)`, '| route:', session.route)
+    logTelemetry('typed-input-submit', { sessionId: session.sessionId, route: session.route, chars: typed.length })
+    try {
+      const dropped = dropInsertsCoveredBy(typed, Date.now())
+      if (dropped) console.log('[session] ⌨️  dropped', dropped, 'captured text insert(s) already in the typed text')
+    } catch (e) { console.warn('[session] typed insert dedup failed:', e) }
+    session.dictationTranscript = typed
+    const output = typed && session.selectedText ? `> ${session.selectedText}\n\n${typed}` : typed
+    const apiTimeout = setTimeout(() => {}, 0)
+    if (this.holdIfArmed(output, session, apiTimeout)) return
+    if (session.kind === 'remote') {
+      await this.dispatchRemoteAndFinish(output, session, apiTimeout)
+      return
+    }
+    // Unreachable: a typed capture cannot be moved to the cursor lane (see
+    // setCaptureRoute). Ending it is the honest answer if it ever is.
+    console.warn('[session] ⛔ typed capture on a non-remote route — cancelling')
+    this.cancelSession()
+  }
+
+  /**
    * The live capture changed lanes.
    *
    * WHAT THIS MUST NOT DO is the whole of its design. It does not stop or
@@ -1141,6 +1268,12 @@ export class SessionManager {
       return false
     }
     if (session.route === route) return true
+    // A TYPED CAPTURE STAYS WITH THE AGENT AND ITS TASKS. The cursor lane is
+    // dictation — it pastes, and the text box it would paste from is ours.
+    if (session.typed && route === 'cursor') {
+      console.warn('[session] ⛔ route switch ignored — typed input cannot move to the cursor')
+      return false
+    }
 
     const from = session.route
     stampRoute(session, route)
@@ -1220,6 +1353,12 @@ export class SessionManager {
    * a chain window that will never resolve it.
    */
   async finishCapture(): Promise<void> {
+    // Typed: the recorder stopped at the switch and the selection was taken
+    // then, so there is no audio to wait for and nothing to grab.
+    if (this.currentSession?.typed) {
+      await this.processSession()
+      return
+    }
     await this.stopRecording('dictation')
 
     // Deferred selection grab — see startSession. The held trigger has now been
@@ -1526,6 +1665,10 @@ export class SessionManager {
   // ─── Chunked transcription methods ───
 
   receiveAudioChunk(buffer: Buffer, chunkIndex: number, mode: 'dictation' | 'instruction', sessionId?: string): void {
+    if (this.typedAudio(sessionId)) {
+      console.log(`[session] ⏭️ Dropping chunk ${chunkIndex} — this capture is being typed`)
+      return
+    }
     if (this.isForeignSessionAudio(sessionId)) {
       console.warn(`[session] ⏭️ Dropping stale chunk ${chunkIndex} for ended session ${sessionId} (current: ${this.currentSession?.sessionId || 'none'})`)
       return
@@ -1563,6 +1706,10 @@ export class SessionManager {
   }
 
   receiveAudioFinalChunk(buffer: Buffer, chunkIndex: number, totalChunks: number, duration: number, mode: 'dictation' | 'instruction', sessionId?: string): void {
+    if (this.typedAudio(sessionId)) {
+      console.log(`[session] ⏭️ Dropping final chunk ${chunkIndex} — this capture is being typed`)
+      return
+    }
     if (this.isForeignSessionAudio(sessionId)) {
       console.warn(`[session] ⏭️ Dropping stale final chunk ${chunkIndex} for ended session ${sessionId} (current: ${this.currentSession?.sessionId || 'none'})`)
       return
@@ -1725,6 +1872,10 @@ export class SessionManager {
   }
 
   receiveAudio(buffer: Buffer, duration: number, mode: 'dictation' | 'instruction', sessionId?: string): void {
+    if (this.typedAudio(sessionId)) {
+      console.log('[session] ⏭️ Dropping audio — this capture is being typed')
+      return
+    }
     // Reject a late buffer from a dictation that already ended — it would
     // otherwise land in (and overwrite) the slot of whatever session is current.
     if (this.isForeignSessionAudio(sessionId)) {
@@ -1774,6 +1925,10 @@ export class SessionManager {
     const session = this.currentSession
     if (!session) {
       console.warn('[session] processSession called but no current session!')
+      return
+    }
+    if (session.typed) {
+      await this.deliverTypedInput(session)
       return
     }
 
@@ -2730,6 +2885,12 @@ export class SessionManager {
     }
 
     const session = this.currentSession
+    // The recorder's silence verdict on audio it was told to drop. The capture
+    // it would end is the one being typed right now.
+    if (session.typed) {
+      console.log('[session] ⏭️ Ignoring discard — this capture is being typed:', session.sessionId)
+      return
+    }
     console.log('[session] Session DISCARDED (too short):', session.sessionId)
 
     // Backstop on the consent invariant: whatever route got us here, the mic is
@@ -2801,6 +2962,9 @@ export class SessionManager {
   /** Cancel session with 3-second undo window (triggered by Escape key) */
   cancelSessionWithUndo(): void {
     if (!this.currentSession) return
+    // Undo re-processes the captured AUDIO. A typed capture has none, so its
+    // Escape is a plain cancel — and the panel goes with it.
+    if (this.currentSession.typed) { this.cancelSession(); return }
 
     const session = this.currentSession
     console.log('[session] Session CANCELLED with undo window:', session.sessionId)
@@ -2929,8 +3093,9 @@ export class SessionManager {
       // the user was doing before, and no lane gets to guess that it was meant
       // for this utterance. A copy made DURING the capture is a different
       // thing entirely — clipboardWatch sees it and it lands where it happened.
+      const owner = this.currentSession
       const selectedText = await captureSelectedText()
-      if (selectedText && this.currentSession) {
+      if (selectedText && this.currentSession && this.currentSession === owner) {
         this.currentSession.selectedText = selectedText
         this.currentSession.selectedTextRole = mode === 'dictation' ? 'quote' : 'context'
         console.log('[session] Captured selected text:', JSON.stringify(selectedText.substring(0, 80)))

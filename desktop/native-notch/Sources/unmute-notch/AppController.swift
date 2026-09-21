@@ -19,6 +19,8 @@ final class AppController: NSObject, NotchResizing {
     // already covers the pill.
     private let pillModel = PillModel()
     private var pillWindow: PillWindow!
+    /// The typed-input box. Created on first use — most sessions never type.
+    private lazy var typedInputPanel = TypedInputPanel()
     private var pillHost: NSHostingView<AnyView>!
     // The pad — held work, waiting for a destination. It is drawn INSIDE the
     // pill's panel, as one more element in the cluster's row (PillView.pad), so
@@ -652,7 +654,20 @@ final class AppController: NSObject, NotchResizing {
             let sharing: NSWindow.SharingType = show ? .readOnly : .none
             window.sharingType = sharing
             pillWindow.sharingType = sharing
+            typedInputPanel.sharingType = sharing
             NotchLog.log("CMD screenCaptureVisibility show=\(show)")
+
+        case let .typedCapture(action, token, route, images, texts):
+            NotchLog.log("CMD typedCapture \(action) token=\(token.prefix(8)) route=\(route) images=\(images) texts=\(texts)")
+            switch action {
+            case "show":
+                typedInputPanel.sharingType = pillWindow.sharingType
+                typedInputPanel.show(token: token, route: route, images: images, texts: texts, geometry: geometry)
+            case "update":
+                typedInputPanel.update(token: token, route: route, images: images, texts: texts)
+            default:
+                typedInputPanel.close(token: token)
+            }
 
         case let .pill(state):
             // Logged at phase granularity only — the level field changes every

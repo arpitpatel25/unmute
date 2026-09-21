@@ -44,6 +44,10 @@ export interface ClipboardWatch {
   noteOwnWrite: () => void
   /** One poll. Exposed so tests drive it deterministically instead of waiting. */
   tick: () => Promise<void>
+  /** The user pasted the pasteboard into Unmute's own typed-input box. An
+   *  image there is part of the input even when it was copied before the
+   *  window opened; anything this watcher already captured is not added twice. */
+  adoptCurrent: () => Promise<void>
   start: () => void
   stop: () => void
 }
@@ -55,6 +59,10 @@ export function createClipboardWatch(deps: ClipboardWatchDeps): ClipboardWatch {
   let armed = false
   let padDir = ''
   let lastSeen = -1
+  // The change that last produced an insert, and the last one adopted by a
+  // paste. Together they make "already part of this capture" one comparison.
+  let lastInserted = -1
+  let adopted = -1
   let timer: ReturnType<typeof setInterval> | null = null
   let busy = false
 
@@ -66,6 +74,8 @@ export function createClipboardWatch(deps: ClipboardWatchDeps): ClipboardWatch {
     // defended against.
     lastSeen = deps.changeCount()
     armed = true
+    lastInserted = -1
+    adopted = -1
   }
 
   function disarm(): void {
@@ -112,11 +122,12 @@ export function createClipboardWatch(deps: ClipboardWatchDeps): ClipboardWatch {
         // just at detection time — an insert must never land after the mic
         // has gone cold.
         if (!armed) return
-        if (path) deps.onInsert({ kind: 'image', content: path, atMs: seenAt })
+        if (path) { lastInserted = c; deps.onInsert({ kind: 'image', content: path, atMs: seenAt }) }
         return
       }
       const text = deps.readText()
       if (!text.trim()) return
+      lastInserted = c
       deps.onInsert({ kind: classifyText(text, deps.exists), content: text, atMs: seenAt })
     } catch (err) {
       // A detection tick must never be able to take the process down, no
@@ -134,8 +145,40 @@ export function createClipboardWatch(deps: ClipboardWatchDeps): ClipboardWatch {
     }
   }
 
+  /**
+   * A PASTE INTO THE TYPED BOX IS A CAPTURE, BUT ONLY ONCE.
+   *
+   * Text needs nothing here: it is already in the box, and the box is the
+   * input. An image cannot live in a text field, so it has to become an insert
+   * — unless this watcher already made it one, which is the ordinary case of
+   * copying a screenshot during the capture and then pasting it too.
+   *
+   * The baseline rule in arm() cannot answer this: the selection grab restores
+   * the pasteboard, which moves the change count without the content being
+   * new. So the question is asked directly — did THIS change produce an insert?
+   */
+  async function adoptCurrent(): Promise<void> {
+    if (!armed) return
+    // Anything detected but not yet ticked is ordinary detection's job.
+    await tick()
+    const c = deps.changeCount()
+    if (!armed || busy || c < 0 || c === lastInserted || c === adopted) return
+    if (!deps.hasImage()) return
+    adopted = c
+    busy = true
+    try {
+      let path: string | null = null
+      try { path = await deps.rescueImage(padDir) } catch { path = null }
+      if (armed && path) deps.onInsert({ kind: 'image', content: path, atMs: deps.now() })
+    } catch (err) {
+      console.warn('[capture] clipboardWatch adopt failed:', err)
+    } finally {
+      busy = false
+    }
+  }
+
   return {
-    arm, disarm, noteOwnWrite, tick,
+    arm, disarm, noteOwnWrite, tick, adoptCurrent,
     start() { if (!timer) timer = setInterval(() => { void tick() }, POLL_MS) },
     stop() { if (timer) { clearInterval(timer); timer = null } },
   }

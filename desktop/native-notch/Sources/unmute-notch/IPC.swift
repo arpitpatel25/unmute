@@ -527,6 +527,8 @@ enum Command {
     /// including the per-frame level during a capture — one float, which is the
     /// only new traffic the capture path gains.
     case pill(PillState)
+    /// The typed-input box: show / update / hide, bound to one capture's token.
+    case typedCapture(action: String, token: String, route: String, images: Int, texts: Int)
     /// The scratchpad: a capture HELD instead of delivered, plus where it can
     /// go. See ScratchpadModel — every field on that payload decodes leniently,
     /// so a partial or older push still draws instead of being dropped.
@@ -587,6 +589,13 @@ enum Command {
         case "pill":
             guard let p = sub("state", PillState.self) else { return .unknown }
             return .pill(p)
+        case "typedCapture":
+            guard let token = obj["token"] as? String, !token.isEmpty else { return .unknown }
+            return .typedCapture(action: obj["action"] as? String ?? "hide",
+                                 token: token,
+                                 route: obj["route"] as? String ?? "agent",
+                                 images: obj["images"] as? Int ?? 0,
+                                 texts: obj["texts"] as? Int ?? 0)
         case "scratchpad":
             // A payload that fails to decode falls back to EMPTY rather than
             // .unknown: every field is optional with a default, so the only way

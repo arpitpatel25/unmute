@@ -189,6 +189,9 @@ struct PillState: Codable, Equatable {
     var canUndo: Bool = false
     /// Monotonic token; main increments it after a screenshot is saved.
     var captureFlashToken: Int? = nil
+    /// This Orchestrator/Agent capture may switch to typing. Main owns it: set
+    /// at key-down, cleared the moment typing opens and at every ending.
+    var canType: Bool = false
 
     /// THE UNMUTE AGENT'S OWN LANE — a double-tap of the right command key,
     /// not an ordinary remote capture.
@@ -253,11 +256,13 @@ struct PillState: Codable, Equatable {
         offline      = try? c.decodeIfPresent(PillOfflineReason.self, forKey: .offline)
         canUndo      = v(.canUndo, false)
         captureFlashToken = try? c.decodeIfPresent(Int.self, forKey: .captureFlashToken)
+        canType      = v(.canType, false)
     }
 }
 
 /// Gestures the input surface sends back.
 enum PillEvent {
+    case typeInstead                // stop the mic, type this one instead
     case stop                       // finish this capture now
     case cancel                     // discard it
     case undo
@@ -276,6 +281,7 @@ enum PillEvent {
 
     var json: [String: Any] {
         switch self {
+        case .typeInstead:          return ["type": "pillTypeInstead"]
         case .stop:                 return ["type": "pillStop"]
         case .cancel:               return ["type": "pillCancel"]
         case .undo:                 return ["type": "pillUndo"]

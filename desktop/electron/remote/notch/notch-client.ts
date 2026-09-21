@@ -435,6 +435,9 @@ export type NotchCommand =
   | { type: 'capturePhase'; phase: string; target?: string }
   | { type: 'pocket'; data: PocketP }
   | { type: 'pill'; state: PillStateP }
+  /** The typed-input box (see TYPED INPUT in init.ts). `token` is the session
+   *  it types into; every event it sends back carries the same token. */
+  | { type: 'typedCapture'; action: 'show' | 'update' | 'hide'; token: string; route?: 'agent' | 'task'; images?: number; texts?: number }
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
   | { type: 'agentActivity'; activity: UnmuteAgentActivityP }
   | { type: 'helpGuide'; guide: HelpGuideP }

@@ -731,6 +731,12 @@ export default function WidgetApp() {
   // the answer is only ever needed at the moment the pill appears.
   const [agentPicker, setAgentPicker] = useState<{ current: string; options: Array<{ id: string; label: string; available: boolean }> } | null>(null)
   const stateRef = useRef<WidgetState>('hidden')
+  // TYPED INPUT, PER SESSION. The session whose capture the user switched to
+  // typing, and the session the recorder was last started for. Keyed by id so
+  // it cannot carry into the next invocation: a new key press is a new session,
+  // and a new session always opens the microphone.
+  const typingSessionRef = useRef<string | null>(null)
+  const recordingSessionRef = useRef<string | null>(null)
 
   const { analyserNode, maxDurationSeconds, noisyEnvironment, tooQuiet, startRecording, stopRecording } = useAudioRecorder()
   const mic = useMicSource()
@@ -930,6 +936,7 @@ export default function WidgetApp() {
 
     api.onRecordingStart(async (mode, sessionId) => {
       console.log(`[widget:ux] EVENT recording:start mode=${mode} session=${sessionId ?? 'none'} (state was ${stateRef.current})`)
+      recordingSessionRef.current = sessionId ?? null
       clearAutoHide()
       // Resolve the capture device for THIS recording: the iPhone mic when
       // the user opted in and the phone is around, otherwise the system
@@ -950,6 +957,13 @@ export default function WidgetApp() {
       setState(mode === 'dictation' ? 'dictation-active' : 'instruction-active')
       try {
         await startRecording(resolvedDeviceId, mode, sessionId)
+        // The user chose to type while the mic was still opening. The stop
+        // below ran against a recorder that did not exist yet, so let go now.
+        if (sessionId && typingSessionRef.current === sessionId) {
+          console.log(`[widget:ux] typed input chose while the mic opened — releasing it (session=${sessionId})`)
+          await stopRecording()
+          return
+        }
         if (resolvedDeviceId) playClickSound('start') // phone mic is live NOW
         // Labels are permission-gated: before the first capture the device
         // list may carry empty labels (iPhone undetectable). Now that a
@@ -1204,6 +1218,19 @@ export default function WidgetApp() {
   usePillState(pillState, nativePill)
   usePillTicker(recordingNow, elapsedSec, nativePill, analyserNode)
   usePillEvents({
+    // THE MICROPHONE LETS GO; THE CAPTURE DOES NOT END. Main has already
+    // marked the session typed and refuses whatever the recorder sends on its
+    // way out, including the silence verdict — so this is a plain stop, and the
+    // pill steps aside for the text box.
+    typing: (value) => {
+      const sid = typeof value === 'string' && value ? value : recordingSessionRef.current
+      console.log(`[widget:ux] EVENT typing session=${sid ?? 'none'} (state was ${stateRef.current})`)
+      typingSessionRef.current = sid
+      clearAutoHide()
+      setShowDiscardHint(false)
+      setState('hidden')
+      void stopRecording()
+    },
     stop: () => { void handleStop() },
     cancel: () => { void handleCancel() },
     undo: handleUndo,

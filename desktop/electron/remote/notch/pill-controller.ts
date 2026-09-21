@@ -49,6 +49,10 @@ export interface PillCoachingP {
 /** Everything the surface draws. Every field optional — the helper decodes
  *  partial payloads, so a level-only update is one tiny line. */
 export interface PillStateP {
+  /** The live capture may switch to typing — Orchestrator and Agent lanes
+   *  only, and only until it has. Main sets it at key-down and clears it at
+   *  every ending; the pill draws the keyboard button from it. */
+  canType?: boolean
   phase?: PillPhase
   kind?: PillKind
   /** Immutable address captured at Right Option key-down. When present, model
@@ -95,6 +99,8 @@ export interface PillStateP {
 
 /** Gestures the surface sends back. Each maps 1:1 onto an existing handler. */
 export interface PillControllerDeps {
+  /** Stop the microphone and type this invocation instead. */
+  typeInstead?(): void
   /** Finish the current capture now (the pill's stop button). */
   stop(): void
   /** Discard it. */
@@ -182,6 +188,9 @@ export class PillController {
   private onEvent(e: { type: string; [k: string]: unknown }): void {
     const value = typeof e.value === 'string' ? e.value : ''
     switch (e.type) {
+      // Honoured only while the surface is offering it, so a stale tap from a
+      // pill that has since moved on cannot turn some other capture into typing.
+      case 'pillTypeInstead': if (this.last.canType && this.last.phase === 'recording') this.deps.typeInstead?.(); break
       case 'pillStop':        this.deps.stop(); break
       case 'pillCancel':      this.deps.cancel(); break
       case 'pillUndo':        this.deps.undo(); break

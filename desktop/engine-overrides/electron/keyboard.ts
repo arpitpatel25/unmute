@@ -260,7 +260,17 @@ export class KeyboardManager extends EventEmitter {
     } as unknown as KeyboardEvent)
   }
 
+  /** Pushed by the remote layer while the live capture is being typed. Cleared
+   *  by every ending (resetState / onCaptureEnded), so it is never carried into
+   *  the next invocation. */
+  private typedInputActive = false
+  setTypedInputActive(active: boolean): void {
+    this.typedInputActive = active === true
+    console.log('[keyboard] typed input active:', this.typedInputActive)
+  }
+
   onCaptureEnded(): void {
+    this.typedInputActive = false
     if (this.agentActive || this.remoteActive) {
       console.log('[keyboard] capture ended externally — clearing lane locks',
         '(agent:', this.agentActive, 'remote:', this.remoteActive, ')')
@@ -276,6 +286,7 @@ export class KeyboardManager extends EventEmitter {
   /** Reset ALL routing state — call when session ends externally (cancel, processing complete, etc.).
    *  Every mutable variable that influences the next keystroke MUST be reset here. */
   resetState(): void {
+    this.typedInputActive = false
     console.log('[keyboard] State RESET (was dictationActive:', this.dictationActive, 'instructionActive:', this.instructionActive, ')')
     this.dictationActive = false
     this.instructionActive = false
@@ -341,6 +352,14 @@ export class KeyboardManager extends EventEmitter {
    * scratchpad all carry straight through.
    */
   private applyRouteSwitch(to: CaptureRoute): void {
+    // A TYPED CAPTURE CANNOT BECOME DICTATION. The cursor lane pastes, and what
+    // it would paste is sitting in Unmute's own text box. Refused HERE, before
+    // a flag moves, so the keyboard and the session never disagree about which
+    // lane is live. Task ↔ Agent is still a free choice while typing.
+    if (to === 'cursor' && this.typedInputActive) {
+      console.log('[keyboard] Capture route SWITCH to cursor ignored — this capture is being typed')
+      return
+    }
     const from = this.liveRoute()
     this.dictationActive = to === 'cursor'
     this.remoteActive = to === 'task'

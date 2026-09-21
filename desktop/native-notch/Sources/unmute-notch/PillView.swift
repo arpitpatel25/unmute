@@ -556,6 +556,15 @@ struct PillView: View {
                     // on the bars' height, never on how many there are.
                     Waveform(level: s.level)
                 }
+                // TYPE IT INSTEAD — this capture only. Offered on the
+                // Orchestrator and Agent lanes (main decides, via canType), and
+                // beside the ✓ because it is the other way to finish: the mic
+                // stops and a text box takes the pill's place. Never a mode —
+                // the next press of the key is a microphone again.
+                if s.canType {
+                    PillRoundButton(symbol: "keyboard",
+                                    help: "Type instead of speaking") { model.emit(.typeInstead) }
+                }
                 // FINISH IT. The one filled control on the surface, because it
                 // is the one the trigger key also performs — the pointer's copy
                 // of the default action, and it should look like the default.

@@ -204,6 +204,7 @@ import {
   segmentOpen,
   registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot,
   registerComposerImageSink, endOwnClipboardSequence,
+  adoptPastedClipboard, openCaptureInserts,
   type DeliveryTarget,
 } from './capture/index'
 import {
@@ -271,6 +272,14 @@ import type { ScratchpadEntryP, ScratchpadPayloadP, ChatConfigP } from './notch/
 interface SessionManagerLike {
   startRemoteCapture(targetTaskId?: string | null, agentAddressed?: boolean, composerDictation?: ComposerDictationDelivery): void
   stopRemoteCapture(): Promise<void>
+  /** Switch the live Orchestrator/Agent capture from the microphone to a text
+   *  box, for this invocation only. Resolves the session id once the box may
+   *  be shown, or null. See TYPED INPUT below. */
+  beginTypedInput?(): Promise<string | null>
+  /** The box's latest text, for the typed session only. */
+  setTypedDraft?(sessionId: string, text: string): boolean
+  /** The live capture's id while it is being typed, else null. */
+  readonly typingSessionId?: string | null
   cancelSession?(): void
   onComposerDictationQueued?: ((token: string) => void) | null
   /** Move the LIVE capture to another lane. Returns false when there is
@@ -306,6 +315,8 @@ interface KeyboardManagerLike {
    *  lane it is on. Returns false if nothing is recording. See the pill's
    *  `stop` dep below for why the tick needs this and not a widget event. */
   submitActiveCapture?(): boolean
+  /** While typing, the dictation key may not move the capture to the cursor. */
+  setTypedInputActive?(active: boolean): void
   getDictationKey?(): DictationKey
   getActivationMode?(): ActivationMode
 }
@@ -4049,6 +4060,119 @@ function onInsertRecorded(
 ): void {
   if (!recordInsert({ ...i, detector }, Date.now())) return
   broadcastScratchpad()
+  announceTypedInserts()
+}
+
+// ─── TYPED INPUT ─────────────────────────────────────────────────────────
+//
+// The Orchestrator and Agent keys always open the MICROPHONE. The pill offers
+// a keyboard button; pressing it stops the mic and puts a text box where the
+// pill was, for this one invocation. There is no setting and nothing is
+// remembered — the next press is a new session, and a new session is voice.
+// (A remembered mode is what made the first attempt at this feel broken.)
+//
+// The capture itself never changes shape. The session, its route, its open
+// capture segment and the clipboard/screenshot watchers carry straight through,
+// so a link copied or a screenshot taken while typing joins the input exactly
+// as it would while speaking. On submit the text enters the session where a
+// transcript would, and from there it is the voice path (sessionManager's
+// deliverTypedInput).
+//
+// THE BOX LEAVES WITH THE CAPTURE. It is hidden from onSessionEnded, which
+// every ending passes through — submit, cancel, Escape, a failure — so it
+// cannot hang on screen after the thing it was typing into is gone. That was
+// the other half of what got the first attempt reverted.
+
+/** The session whose box is open, or null. */
+let typedInputToken: string | null = null
+/** The switch is in flight (the selection grab runs first). */
+let typedInputPending = false
+
+function typedInputRoute(): 'agent' | 'task' {
+  return sessionManagerRef?.captureRoute === 'task' ? 'task' : 'agent'
+}
+
+async function beginTypedInputForLiveCapture(): Promise<void> {
+  const sm = sessionManagerRef
+  if (!sm?.beginTypedInput || !notchClient || typedInputToken || typedInputPending) return
+  typedInputPending = true
+  try {
+    const sid = await sm.beginTypedInput()
+    // The capture may have ended while the selection was being taken.
+    if (!sid || sm.typingSessionId !== sid) {
+      log.event('typed-input', { phase: 'refused', sessionId: sid ?? null })
+      return
+    }
+    typedInputToken = sid
+    keyboardManagerRef?.setTypedInputActive?.(true)
+    pillController?.push({ canType: false })
+    notchClient?.send({ type: 'typedCapture', action: 'show', token: sid, route: typedInputRoute(), ...openCaptureInserts() })
+    log.event('typed-input', { phase: 'show', sessionId: sid, route: typedInputRoute() })
+  } catch (error) {
+    log.warn('typed input failed to open', { error: error instanceof Error ? error.message : String(error) })
+  } finally {
+    typedInputPending = false
+  }
+}
+
+/** Every ending. Idempotent — safe to call when no box is open. */
+function endTypedInput(): void {
+  const token = typedInputToken
+  typedInputToken = null
+  keyboardManagerRef?.setTypedInputActive?.(false)
+  pillController?.push({ canType: false })
+  if (token) {
+    notchClient?.send({ type: 'typedCapture', action: 'hide', token })
+    log.event('typed-input', { phase: 'hide', sessionId: token })
+  }
+}
+
+/** The box shows how much the capture has collected alongside the text. */
+function announceTypedInserts(): void {
+  if (!typedInputToken) return
+  try {
+    notchClient?.send({ type: 'typedCapture', action: 'update', token: typedInputToken, route: typedInputRoute(), ...openCaptureInserts() })
+  } catch { /* the box is decoration here; the inserts are already recorded */ }
+}
+
+/** Events from the box. Every one is bound to the session it was opened for,
+ *  so a late event from a box that has since closed can never touch the next
+ *  capture. */
+function onTypedInputEvent(e: { type: string; [k: string]: unknown }): void {
+  if (!e.type.startsWith('typedCapture')) return
+  const token = typeof e.token === 'string' ? e.token : ''
+  const sm = sessionManagerRef
+  if (!sm || !token || token !== typedInputToken) {
+    if (token) log.event('typed-input', { phase: 'stale-event', type: e.type })
+    return
+  }
+  const text = typeof e.text === 'string' ? e.text : null
+  switch (e.type) {
+    case 'typedCaptureDraft':
+      if (text !== null) sm.setTypedDraft?.(token, text)
+      return
+    case 'typedCaptureSubmit': {
+      if (text !== null) sm.setTypedDraft?.(token, text)
+      log.event('typed-input', { phase: 'submit', sessionId: token, chars: text?.trim().length ?? 0 })
+      // THE SAME ACT AS PRESSING THE TRIGGER KEY AGAIN. The keyboard knows
+      // which lane is live and how it ends, and its stop handlers below settle
+      // the destination before finishing the capture — so Return in the box
+      // and a second tap of the key are one code path, not two.
+      if (keyboardManagerRef?.submitActiveCapture?.() === true) return
+      log.warn('typed submit: keyboard reports no live lane — finishing directly', { sessionId: token })
+      void sm.stopRemoteCapture()
+      return
+    }
+    case 'typedCaptureCancel':
+      log.event('typed-input', { phase: 'cancel', sessionId: token })
+      sm.cancelSession?.()
+      return
+    case 'typedCapturePaste':
+      void adoptPastedClipboard().catch((error) => {
+        log.warn('typed paste adopt failed', { error: error instanceof Error ? error.message : String(error) })
+      })
+      return
+  }
 }
 
 /** Construct both watchers and hand them to the façade. Idempotent. */
@@ -5263,6 +5387,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // active token so empty/error/cancel paths cannot wedge or leak dictation.
   const previousSessionEnded = deps.sessionManager.onSessionEnded
   deps.sessionManager.onSessionEnded = (identity) => {
+    try { endTypedInput() } catch { /* never blocks the ending */ }
     try { previousSessionEnded?.(identity) }
     finally {
       const abandoned = identity?.composerDictationToken
@@ -6203,7 +6328,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           if (!w.isDestroyed()) w.webContents.send('pill:event', { type, value })
         }
       }
+      notchClient.on('event', (event) => onTypedInputEvent(event as { type: string; [k: string]: unknown }))
       pillController = new PillController(notchClient, {
+        typeInstead: () => { void beginTypedInputForLiveCapture() },
         // THE TICK IS THE TRIGGER KEY, NOT A WIDGET GESTURE.
         //
         // This was `toWidget('stop')`, which reached the RENDERER only: it
@@ -6578,6 +6705,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   deps.sessionManager.onCaptureRouteChanged = (route: CaptureRoute) => {
     void pushPillChips(route === 'task' ? liveVoiceTarget() : null, route)
     pillController?.push({ kind: route === 'cursor' ? 'dictation' : 'remote' })
+    // Typing is offered on the Orchestrator and Agent lanes only; a box already
+    // open follows Task ↔ Agent (the cursor is refused while typing).
+    if (!typedInputToken && !typedInputPending) pillController?.push({ canType: route !== 'cursor' })
+    announceTypedInserts()
   }
 
   // ── Wire the Remote trigger key → capture (PRD §2.4.4 / §5) ──
@@ -6621,6 +6752,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // snapshots the card selected at that final press and writes it onto the
       // live session before audio processing begins.
       deps.sessionManager.startRemoteCapture(null)
+      // EVERY PRESS STARTS ON THE MICROPHONE; the pill merely offers typing.
+      pillController?.push({ canType: true })
       broadcastCapturePhase('listening', liveVoiceTarget()) // ADDITIVE observer — the capture itself is untouched
     } else if (e.type === 'agent-start') {
       log.event('agent-key', { phase: 'start', lane: 'agent', address: 'agent' })
@@ -6641,6 +6774,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // that is the whole point of giving it its own key. The session carries
       // that address itself now; there is no module-level copy to set.
       deps.sessionManager.startRemoteCapture(null, true)
+      pillController?.push({ canType: true })
       broadcastCapturePhase('listening', null)
     } else if (e.type === 'capture-route') {
       // THE LIVE CAPTURE CHANGED LANES. Nothing here starts, stops or touches
