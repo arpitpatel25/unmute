@@ -56,6 +56,9 @@ interface FnAddon {
   start(cb: (event: KeyEvent) => void): boolean
   stop(): boolean
   isAccessibilityTrusted(): boolean
+  /** Added after isAccessibilityTrusted; optional for old packaged addons. */
+  isInputMonitoringTrusted?(): boolean
+  requestInputMonitoring?(): boolean
 }
 
 let cachedAddon: FnAddon | null | undefined = undefined
@@ -289,3 +292,15 @@ class KeyListener extends EventEmitter {
 }
 
 export const keyListener = new KeyListener()
+
+/** Authoritative TCC probe for the NSEvent global monitor used by shortcuts.
+ *  Deliberately separate from Accessibility: they are different macOS grants. */
+export function isGlobalKeyMonitoringReady(): boolean {
+  try { return getFnAddon()?.isInputMonitoringTrusted?.() ?? false } catch { return false }
+}
+
+/** Ask macOS for Input Monitoring through the same signed in-process addon
+ *  that will consume the grant. Older addons safely return false. */
+export function requestGlobalKeyMonitoring(): boolean {
+  try { return getFnAddon()?.requestInputMonitoring?.() ?? false } catch { return false }
+}

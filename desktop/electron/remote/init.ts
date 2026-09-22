@@ -3354,6 +3354,22 @@ let orchestrateFocusId: string | null = null
  *  only thing that knows what the pocket is showing. Deliberately NOT folded
  *  into orchestrateFocusId: that names a task, and the Agent is not one. */
 let orchestrateAgentAddressed = false
+/** First-run exercises are confined to an Unmute-owned directory. Null during
+ * normal product use, so this cannot alter post-onboarding task routing. */
+let onboardingTaskWorkspace: string | null = null
+export function setOnboardingTaskWorkspace(root: string | null): void {
+  onboardingTaskWorkspace = root
+}
+
+/** Reveal only the task created by the active guided exercise. */
+export function openOnboardingTask(taskId: string): void {
+  notchController?.openTask(taskId)
+}
+
+/** Open the real Agent chat for the guided Agent lesson. */
+export function openOnboardingAgent(): void {
+  notchController?.openAgent()
+}
 /** The voice lifecycle, observed (never driven) for the wall's listening surface:
  *  listening (key held) → transcribing (key up, STT running) → routing (deciding
  *  where it lands) → idle (landed; taskId says where). PURELY ADDITIVE — a
@@ -5837,6 +5853,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       const model = await modelForDispatch(opts.agent)
       const id = await origDispatch(intent, {
         ...opts,
+        ...(onboardingTaskWorkspace ? { cwd: onboardingTaskWorkspace } : {}),
         extraEnv: { ...env, ...(opts.extraEnv ?? {}) },
         ...(model ? { model } : {}),
       })

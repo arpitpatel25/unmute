@@ -12,7 +12,7 @@ for the real product to prove that it worked before continuing.
 
 The experience begins on first launch, before sign-in. It is not a slideshow, a
 settings wizard, or a simulated product tour. Apple Notes, the native notch and
-pill, Dictation, Instruct, Orchestrator, the Unmute Agent, and Notetaker are the
+pill, Dictation, Orchestrator, the Unmute Agent, and Notetaker are the
 real shipping systems throughout.
 
 The interaction model is inspired by MiniMe's founder-video onboarding, but its
@@ -42,7 +42,7 @@ There is no onboarding notch, fake pill, fake task, simulated transcript, or
 internal practice editor. The native notch and pill start normally with the app.
 The onboarding coordinator observes them; it does not replace them.
 
-Apple Notes is the real destination for Dictation, Instruct, clipboard capture,
+Apple Notes is the real destination for Dictation, clipboard capture,
 and screenshot capture. Orchestrator and the Unmute Agent create real tasks
 through the user's detected CLI. Notetaker creates a real saved recording.
 
@@ -141,9 +141,19 @@ The required first-run permission surface is:
 1. **Microphone** for voice capture.
 2. **Accessibility** for reading selection state and delivering text into other
    applications.
-3. **Input Monitoring** for global modifier-key triggers, unless signed-build
-   verification proves the shipping listener works from Accessibility alone.
-4. **System Audio Recording** for Notetaker.
+3. **System Audio Recording** for Notetaker.
+
+Immediately after Accessibility, onboarding performs a separate **Function-key
+readiness** check. Dictation has one supported activation contract: tap
+Function once to start, then tap Function again to submit. Holding Function and
+releasing it is never taught or accepted as the onboarding path.
+
+macOS commonly assigns the Globe/Function key to the emoji and symbol picker.
+The readiness card checks the current keyboard preference where macOS exposes
+it, opens the Keyboard Settings route when repair is required, and instructs
+the user to set **“Press 🌐 key to” → “Do Nothing.”** A preference read is only
+diagnostic; the authoritative proof is a real Function-key event observed by
+Unmute's shipping listener. The user cannot continue until that event arrives.
 
 System Audio has no standalone request API. During the permission chapter,
 Unmute starts and immediately stops a controlled native system-audio tap so
@@ -182,19 +192,22 @@ the presenter asks which should be the default. If neither is ready, the card
 shows the exact official installation and login instructions and can rerun one
 provider's test without rerunning onboarding.
 
-### 4.4 Dictation and Instruct in Apple Notes
+### 4.4 Dictation in Apple Notes
 
 Unmute opens Apple Notes without creating a fake in-app editor. The presenter
 does not resize; it remains beside Notes.
 
-The user places the cursor in Notes and follows a displayed phrase. They press
-their configured Dictation trigger, speak, finish, and see the real text arrive.
-Completion requires the actual delivery event and observable text at the target,
-not merely a successful transcription response.
+The user places the cursor in Notes and follows a displayed phrase. They tap
+Function once. The card changes from **Tap Function to start** to **Listening**
+only after the shipping keyboard path emits a Dictation-start receipt. The user
+speaks without holding any key, then taps Function again. The card changes to
+**Processing** only after the Dictation-stop receipt.
 
-The founder then explains Instruct. The user selects the text, presses Caps
-Lock, speaks the displayed rewrite instruction, and sees the selected text
-change in place. Completion requires the real instruction delivery.
+Completion requires this ordered chain from one capture: start receipt, stop
+receipt, and actual delivery into Apple Notes. A video ending, a timeout, a
+transcription response, or delivery into another application cannot advance the
+chapter. If no first tap is observed, the card remains on the start instruction.
+If start is observed but no second tap arrives, it remains Listening.
 
 ### 4.5 Clipboard and screenshot capture
 
@@ -209,18 +222,32 @@ Each exercise uses the shipping capture pipeline. The coordinator verifies the
 capture event and final delivery independently so a captured-but-lost attachment
 cannot be counted as success.
 
+Both exercises use the same ordered tap-toggle contract: Function start,
+expected clipboard or screenshot receipt while the capture is live, Function
+submit, and verified final delivery containing that exact captured item. The UI
+reflects the currently missing event rather than giving a generic retry.
+
 ### 4.6 Orchestrator
 
-The founder explains that Right Option—the trigger opposite Dictation—hands a
-job to the selected coding agent. A compact phrase card asks the user to say:
+The founder first explains why Orchestrator exists. Starting a new Claude Code
+or Codex session, finding the relevant existing session, and moving selected
+context into it creates friction between having a thought and acting on it.
+Orchestrator removes that session-management work. A user can be reading a
+tweet, article, or document, select useful context, tap Right Option, speak the
+question that occurred to them, and continue what they were doing. Unmute
+creates or continues the appropriate task and keeps it available in the app.
+
+A compact phrase card then asks the user to tap Right Option once to begin and
+again to submit:
 
 > Create a file called `hello-unmute.txt` and write "My first Unmute task"
 > inside it.
 
 The task runs through the real Orchestrator in its isolated onboarding
-workspace. Completion requires successful task creation and the expected file
-content. The task is safe, deterministic, and does not request access to the
-user's Desktop or Downloads.
+workspace. Onboarding requires the ordered Right Option start and stop receipts,
+successful task creation, task completion, and the expected file content. The
+task is safe, deterministic, and does not request access to the user's Desktop
+or Downloads.
 
 ### 4.7 Unmute Agent
 
@@ -228,11 +255,13 @@ The founder explains the distinction: Orchestrator sends work to a coding
 agent; the Unmute Agent understands Unmute history, meetings, and tasks and can
 create or resume work on the user's behalf.
 
-The user invokes the Unmute Agent with Right Command and asks it to create a
-follow-up task that adds today's date to `hello-unmute.txt`. The Agent must
-create a real task and return its real clickable task link. Onboarding advances
-only after both the task receipt and link exist. Opening the link demonstrates
-that it leads to the actual task.
+The user double-taps Right Command to invoke the Unmute Agent, asks it to create
+a follow-up task that adds today's date to `hello-unmute.txt`, and taps Right
+Command once to submit. Onboarding observes the real Agent-start and Agent-stop
+receipts. The Agent must create a real task and return its real clickable task
+link. Onboarding advances only after the gesture receipts, structured task
+receipt, and link exist. Opening the link demonstrates that it leads to the
+actual task.
 
 ### 4.8 Notetaker
 
@@ -240,10 +269,12 @@ The founder explains that Notetaker uses the user's existing Claude Code or
 Codex CLI for note generation, allowing the user to benefit from the models and
 provider account they already use.
 
-The user double-taps **Left Control** to start a real Notetaker recording. The
-native pill appears. The founder explains Save and Discard, and the user saves
-the short onboarding recording with the real control. Saving the recording is
-the chapter's completion event.
+The user double-taps **Left Control** to start a real Notetaker recording.
+Onboarding waits for the real start receipt before showing that recording is
+active. The native pill appears. The founder explains Save and Discard, and the
+user saves the short onboarding recording with the real control. Saving the
+same recording is the chapter's completion event; merely performing the key
+gesture or stopping without Save does not advance.
 
 Summary generation remains asynchronous and does not block onboarding. The
 founder points to the Notetaker section, explains that the note and summary will
@@ -315,12 +346,14 @@ The coordinator consumes normalized events from existing systems, including:
 - permission status changed;
 - CLI probe started, succeeded, failed, or timed out;
 - provider default selected;
+- Function-key preference inspected, repair requested, and real Function event
+  observed;
+- Dictation start and stop receipts carrying the same capture ID;
 - capture route and phase changed;
 - Dictation delivered at the target;
-- Instruct rewrite delivered;
 - clipboard or screenshot captured and included in delivery;
-- Orchestrator task created, completed, or failed;
-- Unmute Agent task receipt and task link created;
+- Orchestrator start, stop, task-created, completed, or failed;
+- Unmute Agent start, stop, task receipt, and task link created;
 - Notetaker started, stopped, saved, or failed;
 - notch/pill opened or acted upon;
 - sign-in and subscription changed.
@@ -362,7 +395,14 @@ readiness can be safely revalidated.
   official installation/login instructions; retry only that provider.
 - **Provider timeout:** terminate the disposable process, report timeout rather
   than absence, and allow retry.
-- **Dictation or Instruct failure:** preserve Notes content and retry only the
+- **Function key opens emoji or is not observed:** remain at Function readiness,
+  open Keyboard Settings, show the exact “Press 🌐 key to → Do Nothing” repair,
+  and retry the live-key check.
+- **Start gesture missing:** remain on the start instruction; never begin an
+  onboarding-only recording.
+- **Stop gesture missing:** keep the live recording state visible and wait for
+  the real submit gesture or explicit cancellation.
+- **Dictation failure:** preserve Notes content and retry only the
   failed action.
 - **Spoken phrase differs:** accept safe variation and verify the resulting
   action. Exact transcription matching is not required.
@@ -388,6 +428,8 @@ Table-test every chapter transition and branch:
 - neither provider ready;
 - provider timeout, authentication failure, and retry;
 - permission denial and relaunch;
+- Function-key preference conflict, repair, and live-key verification;
+- missing, duplicated, and out-of-order start/stop gestures for every exercise;
 - each exercise's failure and retry;
 - quit/resume at every mutation boundary;
 - replay after completion;
@@ -398,9 +440,15 @@ Table-test every chapter transition and branch:
 Prove that only the authoritative event advances each chapter. In particular:
 
 - transcription without target delivery does not complete Dictation;
+- Dictation delivery without the matching Function start and stop receipts does
+  not complete Dictation;
 - screenshot capture without final attachment delivery does not complete the
   screenshot exercise;
+- Orchestrator task completion without matching Right Option start and stop
+  receipts does not complete Orchestrator;
 - Agent prose without a real task link does not complete the Agent exercise;
+- Agent output without matching Right Command lifecycle receipts does not
+  complete the Agent exercise;
 - Notetaker start without Save does not complete Notetaker.
 
 ### 7.3 Visual verification
@@ -418,13 +466,14 @@ one uninterrupted run:
 1. install and launch;
 2. grant every real TCC permission;
 3. survive any required relaunch;
-4. detect and test Claude Code and/or Codex CLI;
-5. complete Dictation, Instruct, clipboard, and screenshot exercises in Notes;
-6. create and verify the Orchestrator task;
-7. create and open the Unmute Agent's linked task;
-8. start and save a Notetaker recording;
-9. inspect the real Orchestrator and Notetaker destinations;
-10. sign in, choose a plan, and land in the functioning app.
+4. repair the Globe/Function setting if needed and prove a real Function event;
+5. detect and test Claude Code and/or Codex CLI;
+6. complete tap-toggle Dictation, clipboard, and screenshot exercises in Notes;
+7. create and verify the Orchestrator task through the real Right Option cycle;
+8. create and open the Unmute Agent's linked task through the real gesture;
+9. start and save a Notetaker recording;
+10. inspect the real Orchestrator and Notetaker destinations;
+11. sign in, choose a plan, and land in the functioning app.
 
 The run fails if any success is simulated, inferred only from elapsed time, or
 displayed by an onboarding-only copy of a shipping surface.

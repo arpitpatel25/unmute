@@ -9,6 +9,7 @@ import { isAbsolute } from 'node:path'
 import { requireAgentMetadata } from '../metadata'
 import { diagnostic } from '../../diagnostics'
 import { indexFindings } from '../retrieval-ledger'
+import { emitOnboardingReceipt } from '../../../onboarding/receipts'
 
 /**
  * Handing outside work to the Orchestrator.
@@ -368,7 +369,12 @@ export class HandoffCapability implements CapabilityModule {
           ...(typeof cwd === 'string' ? { cwd } : {}),
           ...(newInstance ? { sameJobNewInstance: newInstance } : {}),
         })
-        return ok({ taskId: created.taskId, status: 'created' })
+        const href = `unmute://task/${created.taskId}`
+        emitOnboardingReceipt({ type: 'agent-task-linked', taskId: created.taskId, href, ...(typeof cwd === 'string' ? { cwd } : {}) })
+        return ok({
+          taskId: created.taskId,
+          status: 'created',
+        })
       }
 
       if (tool === 'task_status') {

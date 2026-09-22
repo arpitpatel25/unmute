@@ -3,7 +3,6 @@ import unmuteLogo from '../assets/unmute-logo.png'
 import History from './History'
 import Settings from './Settings'
 import Account from './Account'
-import Onboarding, { WhatsNew } from './Onboarding'
 import { SETTINGS_SECTIONS, SegmentedControl } from './_shared'
 import type { SettingsSection } from './_shared'
 import { BalancePill } from '../paywall/BalancePill'
@@ -59,77 +58,7 @@ type OrchestratorPage = 'tasks' | 'how' | 'setup' | 'settings'
  *  the wrong place for the one part of Unmute you address directly. */
 type AgentPage = 'settings' | 'how'
 
-type AppView = 'loading' | 'onboarding' | 'whats-new' | 'main'
-
-/* ─── The onboarding gate (decision D4) ───────────────────────────────
- *
- * The gate used to be `unmute_onboarding_complete` alone, an unversioned
- * boolean. Every existing user has it set, so any revamp of the flow would have
- * reached new installs only. Two keys now share the job:
- *
- *   unmute_onboarding_complete  'true' ⇔ this user has been through onboarding
- *                               at all. Unchanged meaning, unchanged name.
- *   unmute_onboarding_version   which flow they saw. Absent but complete='true'
- *                               ⇒ the old eight-step flow ⇒ version 1.
- *
- * Resolving to:
- *   not complete → the full nine-step flow (a new install, or a replay)
- *   version < 2  → a three-screen "what's new", then version 2 is written
- *   version >= 2 → straight into the app
- *
- * WHY THE LEGACY KEY IS STILL WRITTEN rather than migrated away. Settings →
- * Help's "Replay onboarding" — which this pack does not own — clears exactly
- * that key and reloads. If completion were recorded only in the new key, that
- * button would silently stop working the day this shipped: the version would
- * survive at 2 and the app would go straight back in. Keeping the legacy key as
- * the presence flag means the existing button keeps working untouched, and
- * `resetOnboarding()` below (which clears both) is the tidier equivalent for
- * Pack B to move to.
- */
-
-/** Bump this when onboarding changes materially enough that existing users
- *  need to be told. Every bump needs a matching "what's new" for the step. */
-export const ONBOARDING_VERSION = 2
-export const ONBOARDING_VERSION_KEY = 'unmute_onboarding_version'
-export const LEGACY_ONBOARDING_COMPLETE_KEY = 'unmute_onboarding_complete'
-
-/** The version of onboarding this user has seen, or null if they have seen
- *  none. A completion flag with no version is the old flow, i.e. version 1. */
-export function readOnboardingVersion(): number | null {
-  try {
-    if (localStorage.getItem(LEGACY_ONBOARDING_COMPLETE_KEY) !== 'true') return null
-    const raw = localStorage.getItem(ONBOARDING_VERSION_KEY)
-    if (raw !== null) {
-      const parsed = Number.parseInt(raw, 10)
-      if (Number.isFinite(parsed)) return parsed
-    }
-    return 1
-  } catch {
-    // localStorage unavailable — treat as current so we never trap a user in
-    // an onboarding loop whose completion can never be recorded.
-    return ONBOARDING_VERSION
-  }
-}
-
-/** Clears both keys, so the user gets the full flow rather than the three-screen
- *  summary. Exported for Settings → Help & about's "Replay onboarding" to call.
- *  NOTHING CALLS IT YET: that button lives in `Settings.tsx`, which this pack
- *  does not own, and still inlines `removeItem('unmute_onboarding_complete')`.
- *  That inline version keeps working — see the note on the legacy key above —
- *  so this is the tidier replacement, not a fix for something broken. */
-export function resetOnboarding(): void {
-  try {
-    localStorage.removeItem(ONBOARDING_VERSION_KEY)
-    localStorage.removeItem(LEGACY_ONBOARDING_COMPLETE_KEY)
-  } catch { /* ignore — nothing we can do, and nothing breaks */ }
-}
-
-function markOnboardingSeen(): void {
-  try {
-    localStorage.setItem(LEGACY_ONBOARDING_COMPLETE_KEY, 'true')
-    localStorage.setItem(ONBOARDING_VERSION_KEY, String(ONBOARDING_VERSION))
-  } catch { /* ignore */ }
-}
+type AppView = 'loading' | 'main'
 
 /** The renderer types in this project do not declare `window.electronAPI`, so
  *  reaching for it directly is a type error on every line. Same runtime access,
@@ -147,6 +76,8 @@ type AppAPI = {
   /** The Unmute Agent's notetaker_open tool fired — main already showed and
    *  focused this window, so landing on the meeting is the only thing left. */
   notetakerOnOpenRequested?: (cb: (meetingId: string) => void) => () => void
+  onboardingOnNavigate?: (cb: (destination: 'orchestrator' | 'notetaker' | 'account') => void) => () => void
+  onboardingFinishAfterSignIn?: (signedIn: boolean) => Promise<{ action?: string }>
 }
 function api(): AppAPI {
   return (window as unknown as { electronAPI?: AppAPI }).electronAPI ?? {}
@@ -161,6 +92,7 @@ export default function App() {
 }
 
 function AppInner() {
+  const auth = useAuth()
   const [view, setView] = useState<AppView>('loading')
   const [activeTab, setActiveTab] = useState<Tab>('history')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
@@ -202,13 +134,9 @@ function AppInner() {
       if (mode === 'tap-toggle' || mode === 'push-to-talk' || mode === 'double-tap-push') setActivationMode(mode)
     }).catch(() => {})
 
-    // Onboarding gate — no sign-in in local BYO-key mode
-    const seen = readOnboardingVersion()
-    setView(
-      seen === null ? 'onboarding'
-        : seen < ONBOARDING_VERSION ? 'whats-new'
-          : 'main',
-    )
+    // Main owns the durable first-run gate. The real app remains available
+    // beneath the compact presenter so exercises use shipping surfaces.
+    setView('main')
 
     // Listen for downloaded updates and surface a "Restart" banner.
     api().onUpdateDownloaded?.((version) => setPendingUpdate(version))
@@ -220,9 +148,15 @@ function AppInner() {
       setActiveTab('notetaker')
       setPendingMeetingId(meetingId)
     })
+    const unsubscribeOnboardingNavigate = api().onboardingOnNavigate?.((destination) => {
+      setView('main')
+      if (destination === 'orchestrator') { setActiveTab('orchestrator'); setOrchestratorPage('tasks') }
+      if (destination === 'notetaker') setActiveTab('notetaker')
+      if (destination === 'account') { setActiveTab('account'); auth.openSignIn() }
+    })
 
     refreshLanguageBadge()
-    return () => unsubscribeOpenRequested?.()
+    return () => { unsubscribeOpenRequested?.(); unsubscribeOnboardingNavigate?.() }
   }, [])
 
   useEffect(() => {
@@ -231,6 +165,28 @@ function AppInner() {
       .catch(() => setHelpGuide(null))
   }, [dictationKey, activationMode])
 
+  useEffect(() => {
+    if (!auth.signedIn) return
+    let cancelled = false
+    let retry: ReturnType<typeof setTimeout> | undefined
+    const finish = async () => {
+      try {
+        const result = await api().onboardingFinishAfterSignIn?.(true)
+        // Main handles the eventual sign-in chapter on entry. Only retry
+        // until IPC is available; never poll the whole tour every 750ms.
+        if (result) return
+      } catch {
+        // Main may still be registering onboarding IPC during app startup.
+      }
+      if (!cancelled) retry = setTimeout(finish, 750)
+    }
+    void finish()
+    return () => {
+      cancelled = true
+      if (retry) clearTimeout(retry)
+    }
+  }, [auth.signedIn])
+
   // Re-read on any navigation that does not land on the Language section. One
   // or two IPC calls (the second only when auto-detect is off), which is cheap
   // enough to beat introducing a pub/sub channel just for this badge.
@@ -238,21 +194,6 @@ function AppInner() {
     const onLanguage = activeTab === 'settings' && settingsSection === 'language'
     if (!onLanguage) refreshLanguageBadge()
   }, [activeTab, settingsSection])
-
-  function handleOnboardingComplete() {
-    markOnboardingSeen()
-    setView('main')
-  }
-
-  /** "Connect an agent" in onboarding, and the same from the what's-new
-   *  summary: finish the flow and land on the setup page rather than dumping
-   *  the user on History to find it themselves. */
-  function handleOpenAgentSetup() {
-    markOnboardingSeen()
-    setActiveTab('orchestrator')
-    setOrchestratorPage('setup')
-    setView('main')
-  }
 
   if (view === 'loading') {
     return (
@@ -264,24 +205,6 @@ function AppInner() {
           <div className="w-[5px] h-[5px] rounded-full bg-ink/30 animate-dot-bounce" style={{ animationDelay: '0.3s' }} />
         </div>
       </div>
-    )
-  }
-
-  if (view === 'onboarding') {
-    return (
-      <>
-        <Onboarding onComplete={handleOnboardingComplete} onOpenAgentSetup={handleOpenAgentSetup} />
-        <SignInOverlay />
-      </>
-    )
-  }
-
-  if (view === 'whats-new') {
-    return (
-      <>
-        <WhatsNew onComplete={handleOnboardingComplete} onOpenAgentSetup={handleOpenAgentSetup} />
-        <SignInOverlay />
-      </>
     )
   }
 

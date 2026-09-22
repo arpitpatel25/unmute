@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { SessionsCapability, type SessionAdapters } from './sessions.ts'
 import type { CapabilityCallContext, McpPrincipal, ToolResult } from '../types.ts'
+import { onOnboardingReceipt } from '../../../onboarding/receipts.ts'
 
 const NOW = 10_000
 test('resume and fork refuse missing or placeholder presentation before dispatch', async () => {
@@ -96,6 +97,30 @@ test('a past session is reopened as a card, and the id is reported back', async 
   })
   assert.equal(a.asked[0].sessionId, 'aaaaaaaa-1111-2222-3333-444444444444')
   assert.equal(a.asked[0].intent, 'carry on with the migration')
+})
+
+test('successful Agent continuations expose their destination task to onboarding', async () => {
+  const receipts: unknown[] = []
+  const unsubscribe = onOnboardingReceipt(event => receipts.push(event))
+  try {
+    await new SessionsCapability(adapters()).call(ctx, 'session_resume', {
+      sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+      title: 'Hello Unmute file',
+      group: 'Unmute',
+      intent: "add today's date",
+    })
+    await new SessionsCapability(adapters()).call(ctx, 'session_send', {
+      taskId: 'task-7',
+      intent: "add today's date",
+    })
+  } finally {
+    unsubscribe()
+  }
+
+  assert.deepEqual(receipts, [
+    { type: 'agent-task-linked', taskId: 'task-9', href: 'unmute://task/task-9' },
+    { type: 'agent-task-linked', taskId: 'task-7', href: 'unmute://task/task-7' },
+  ])
 })
 
 test('fork is a separate operation and reports the provider child identity', async () => {

@@ -103,6 +103,7 @@ const notesLog = createNotetakerLogger('keyboard')
 // Exported (was module-private) so tests can construct an isolated instance
 // instead of sharing the process-wide `keyboardManager` singleton below.
 export class KeyboardManager extends EventEmitter {
+  private functionReadinessProbe: (() => void) | null = null
   private dictationActive = false
   private instructionActive = false
   private agentActive = false
@@ -776,6 +777,12 @@ export class KeyboardManager extends EventEmitter {
   // ─── Dictation key-down/up dispatchers ───
 
   private handleDictationKeyDown(): void {
+    if (this.functionReadinessProbe && this.dictationKey === 'fn') {
+      const probe = this.functionReadinessProbe
+      this.functionReadinessProbe = null
+      probe()
+      return
+    }
     // Mutual exclusion (PRD §2.4.4) — for the HELD modes only.
     //
     // Tap-toggle now routes through decidePress, which moves a live task or
@@ -799,6 +806,11 @@ export class KeyboardManager extends EventEmitter {
         this.handleDualModeDown()
         break
     }
+  }
+
+  /** Consume the next Function press as a readiness check without recording. */
+  setFunctionReadinessProbe(listener: (() => void) | null): void {
+    this.functionReadinessProbe = listener
   }
 
   private handleDictationKeyUp(): void {

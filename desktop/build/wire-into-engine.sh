@@ -559,6 +559,28 @@ import { getAgentAvailability } from './paywall/remote/init'
       log "WARN: initNotetaker call injection did not land in main.ts"
     fi
   fi
+
+  # ─── Immersive first-run onboarding ────────────────────────────────
+  # Start on the next main-loop turn: the Remote and Notetaker calls above are
+  # synchronous registrations, so every real product surface exists before
+  # the presenter begins observing it.
+  if ! grep -q 'initOnboarding' "$main_ts"; then
+    sed -i.bak "/^import { initNotetaker } from '\.\/notetakerInit'/a\\
+import { initOnboarding } from './onboardingInit'
+" "$main_ts"
+    rm -f "$main_ts.bak"
+    node -e "
+      const fs = require('fs'); const p = '$main_ts'; let s = fs.readFileSync(p, 'utf-8')
+      const anchor = /^.*initRemote\(\{[^\n]*\}\)\n/m
+      s = s.replace(anchor, line => line +
+        '  setImmediate(() => { void initOnboarding(sessionManager, (destination) => {\n' +
+        '    const win = getMainWindow() ?? createMainWindow()\n' +
+        '    showMainWindow()\n' +
+        '    win.webContents.send(\'onboarding:navigate\', destination)\n' +
+        '  }).catch(error => console.error(\'[onboarding] init failed:\', error)) })\n')
+      fs.writeFileSync(p, s)
+    "
+  fi
   # Keep the generated engine's widget import canonical across repeated wires.
   node -e "
     const fs = require('fs'); const p = '$main_ts'; let s = fs.readFileSync(p, 'utf-8')

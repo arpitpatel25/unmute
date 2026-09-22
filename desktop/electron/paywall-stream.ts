@@ -24,6 +24,7 @@
 import { getPaywallAccessToken, getPaywallEngineMode, getSTTLanguageForRequest, refreshAccessToken } from './paywall-glue'
 import { updateBalanceFromResponse } from './balance-ipc'
 import { paywallFetch } from './paywall-net'
+import { onboardingAllowanceHeaders } from './onboarding/allowance'
 // STATIC import (bundled-main rule: lazy require() dies silently in the
 // packaged build — cost us the stream-timing telemetry on 2026-07-15).
 // Path resolves in the wired engine: this file lands in engine/electron/
@@ -81,9 +82,10 @@ export function setStreamPromptProvider(fn: (chunkIndex: number) => string): voi
  */
 export function openStream(opts: { flowType: string; chunkIndex?: number; estimatedDurationSeconds?: number }): boolean {
   const mode = getPaywallEngineMode()
-  if (mode !== 'managed' && mode !== 'auto') return false
+  const allowanceHeaders = onboardingAllowanceHeaders()
+  if (mode !== 'managed' && mode !== 'auto' && !allowanceHeaders) return false
   const token = getPaywallAccessToken()
-  if (!token) return false
+  if (!token && !allowanceHeaders) return false
 
   const chunkIndex = opts.chunkIndex ?? 0
 
@@ -120,7 +122,7 @@ export function openStream(opts: { flowType: string; chunkIndex?: number; estima
   const fetchInit: RequestInit & { duplex?: 'half' } = {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...(token ? { Authorization: `Bearer ${token}` } : allowanceHeaders!),
       'Content-Type': 'application/octet-stream',
     },
     body: stream,

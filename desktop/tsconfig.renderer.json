@@ -27,10 +27,13 @@
     "engine-overrides/renderer/app/**/*.tsx",
     "engine-overrides/renderer/app/**/*.ts",
     "engine-overrides/renderer/notetaker/**/*.tsx",
-    "engine-overrides/renderer/notetaker/**/*.ts"
+    "engine-overrides/renderer/notetaker/**/*.ts",
+    "engine-overrides/renderer/onboarding/**/*.tsx",
+    "engine-overrides/renderer/onboarding/**/*.ts"
   ],
   "exclude": [
     "engine-overrides/renderer/remote/**/*.test.ts",
-    "engine-overrides/renderer/notetaker/**/*.test.ts"
+    "engine-overrides/renderer/notetaker/**/*.test.ts",
+    "engine-overrides/renderer/onboarding/**/*.test.ts"
   ]
 }

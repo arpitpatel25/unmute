@@ -39,6 +39,7 @@ ENT="$ENGINE/build/entitlements.mac.plist"
 IDENTITY="${UNMUTE_SIGN_IDENTITY:-Developer ID Application: Arpit Patel (D8ZHT5S2XQ)}"
 TEAM_OU="${UNMUTE_TEAM_OU:-D8ZHT5S2XQ}"
 DEST="/Applications/unmute.app"
+RESET_ONBOARDING="${1:-}"
 
 : "${PAYWALL_VERSION:?PAYWALL_VERSION required, e.g. PAYWALL_VERSION=1.5.23-dev.13 $0}"
 
@@ -121,6 +122,21 @@ echo "==> installing"
 osascript -e 'tell application "unmute" to quit' 2>/dev/null || true
 sleep 3; pkill -f "unmute.app/Contents/MacOS/unmute" 2>/dev/null || true; sleep 1
 rm -rf "$DEST"; cp -R "$STAGE" "$DEST"; rm -rf "$(dirname "$STAGE")"
+
+if [[ "$RESET_ONBOARDING" == "--reset-onboarding" ]]; then
+  USER_HOME_DIR="$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '{print $2}')"
+  ONBOARDING_STATE="$USER_HOME_DIR/Library/Application Support/unmute/onboarding"
+  if [[ "$USER_HOME_DIR" == /Users/* && "$ONBOARDING_STATE" == /Users/*/Library/Application\ Support/unmute/onboarding ]]; then
+    echo "==> clearing onboarding test state"
+    rm -rf "$ONBOARDING_STATE"
+  else
+    echo "FATAL: refusing to clear unexpected onboarding path: $ONBOARDING_STATE" >&2
+    exit 1
+  fi
+elif [[ -n "$RESET_ONBOARDING" ]]; then
+  echo "FATAL: unknown option '$RESET_ONBOARDING' (supported: --reset-onboarding)" >&2
+  exit 1
+fi
 
 echo "==> installed:"
 codesign -d -r- "$DEST" 2>&1 | grep '^designated'

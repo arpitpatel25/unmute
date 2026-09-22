@@ -31,6 +31,7 @@ import type { AgentConversationView } from '../agent/lifecycle'
 import { agentModel, agentModelLabel } from '../agent/modelPolicy'
 import type { RoutineRun, RoutinesView } from '../agent/routines/types'
 import { mergeRoutineBlocks, routineEntries, routinesPayload } from './routine-blocks'
+import { emitOnboardingReceipt } from '../../onboarding/receipts'
 
 const log = createLogger('notch-controller')
 const ROUTINE_TERMINAL: ReadonlySet<RoutineRun['status']> = new Set(['done', 'failed', 'cancelled', 'skipped'])
@@ -818,7 +819,11 @@ export class NotchController {
       const fill = (e as { fill: number }).fill
       if (Number.isFinite(fill)) this.deps.setSurfaceFill?.(fill)
     })
-    on('pocketFocusTask', (e) => this.onPocketFocusTask((e as { id: string }).id))
+    on('pocketFocusTask', (e) => {
+      const id = (e as { id: string }).id
+      emitOnboardingReceipt({ type: 'task-link-opened', taskId: id })
+      this.onPocketFocusTask(id)
+    })
     on('tap', () => this.onTap())
     on('collapsed', () => {
       // THE HOLD DIES WITH THE CARD. Whether or not they pressed it again, a
@@ -2225,7 +2230,7 @@ export class NotchController {
    * reading the reply, and demoting it for a glance is how you lose an answer
    * you asked for.
    */
-  private openAgent(): void {
+  openAgent(): void {
     this.cameFromPocket = this.pocketMode === 'open'
     const wasUnread = this.agentUnread
     this.agentUnread = false
