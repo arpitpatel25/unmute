@@ -2,7 +2,7 @@ import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import {
-  NotchController, classify, relativeAge, headlineFor, POCKET_OPEN_IDLE_MS,
+  NotchController, classify, relativeAge, headlineFor, POCKET_OPEN_IDLE_MS, POCKET_LANDING_CAP,
   type TaskLite, type NotchClientLike, type NotchControllerDeps, type ProposalLite,
 } from './notch-controller'
 import type { NotchCommand, NotchEvent, CockpitPayload } from './notch-client'
@@ -3845,4 +3845,117 @@ test('the first seed with an unread run puts the Agent in front', () => {
   const slot = pocketOf(h)!.slots[0]
   assert.equal(slot.kind, 'agent')
   assert.equal(slot.demanding, true)
+})
+
+// ── A resumed or forked session lands in the pocket ─────────────────────────
+
+const DAY = 24 * 60 * 60 * 1000
+/** A session last touched yesterday: outside the pocket's 12h window. */
+const stale = (id: string, extra: Partial<TaskLite> = {}) => makeTask({
+  id, kind: 'session', state: 'done', alive: false,
+  createdAt: T0 - 3 * DAY, updatedAt: T0 - DAY, lastUserInputAt: T0 - DAY, ...extra,
+})
+const pocketIds = (h: Harness) =>
+  (h.client.last('pocket')?.data.slots ?? []).filter((s) => s.kind !== 'agent').map((s) => s.id)
+
+test('a bare resume of an old session puts its card at the front of the pocket without opening it', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'recent', state: 'done', kind: 'session', lastUserInputAt: T0 - 1000 }))
+  put(h, stale('old'))
+  h.client.fire({ type: 'pocketOpen' }); h.flush()
+  assert.deepEqual(pocketIds(h), ['recent'], 'precondition: the old session is not in the pocket')
+  h.client.fire({ type: 'pocketRelease' }); h.flush()
+  h.client.sent = []
+
+  h.controller.landInPocket('old')
+  h.flush()
+
+  assert.equal(h.client.last('pocket')?.data.mode, 'closed', 'the pocket is not forced open')
+  assert.deepEqual(h.client.last('pocketLanded'), { type: 'pocketLanded', title: 'do the thing' }, 'a quiet cue says so')
+  assert.equal(h.calls.sendInput, undefined, 'nothing is sent to the session')
+  assert.equal(h.calls.answer, undefined, 'nothing is sent to the session')
+
+  h.client.fire({ type: 'pocketOpen' }); h.flush()
+  const pocket = h.client.last('pocket')!.data
+  assert.deepEqual(pocketIds(h), ['old', 'recent'], 'front of the pocket')
+  assert.equal(pocket.slots[pocket.at]?.id, 'old', 'the next visit lands on it')
+  assert.deepEqual(h.calls.focus?.at(-1), ['old'], 'and the voice is aimed at it')
+})
+
+test('the next visit lands on the resumed card even ahead of an unread Agent answer', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'recent', state: 'done', kind: 'session' }))
+  put(h, stale('old'))
+  h.controller.agentAsked('pick up the migration session')
+  h.controller.landInPocket('old')
+  h.controller.agentAnswered('Reopened it: [Migration](unmute://task/old)')
+  h.flush()
+
+  h.client.fire({ type: 'pocketOpen' }); h.flush()
+  const pocket = h.client.last('pocket')!.data
+  assert.equal(pocket.slots[0]?.kind, 'agent', 'the unread Agent still sits in front')
+  assert.equal(pocket.slots[pocket.at]?.id, 'old', 'but the aim is on the card it brought back')
+})
+
+test('with the pocket open, a landing moves the carousel and the voice to it now', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session' }))
+  put(h, stale('old'))
+  h.client.fire({ type: 'pocketOpen' }); h.flush()
+  h.client.sent = []
+
+  h.controller.landInPocket('old')
+  h.flush()
+
+  const pocket = h.client.last('pocket')!.data
+  assert.equal(pocket.mode, 'open')
+  assert.equal(pocket.slots[pocket.at]?.id, 'old')
+  assert.deepEqual(h.calls.focus?.at(-1), ['old'])
+  assert.equal(h.client.last('pocketLanded'), undefined, 'the card itself is the cue')
+})
+
+test('a landing does not take over an expanded card', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session' }))
+  put(h, stale('old'))
+  h.client.fire({ type: 'focusTask', id: 'a' }); h.flush()
+
+  h.controller.landInPocket('old')
+  h.flush()
+
+  assert.deepEqual(h.calls.focus?.at(-1), ['a'], 'still reading a')
+})
+
+test('the unmute://task link to a resumed old session opens it in the pocket, not the orchestrator', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'recent', state: 'done', kind: 'session' }))
+  put(h, stale('old'))
+  h.client.sent = []
+
+  h.client.fire({ type: 'pocketFocusTask', id: 'old' })
+
+  assert.equal(h.client.last('showTask')?.task.id, 'old', 'expanded from the pocket')
+  assert.equal(h.client.last('stageDetail'), undefined, 'never the cockpit')
+  h.client.fire({ type: 'collapsed' }); h.flush()
+  assert.equal(h.client.last('pocket')?.data.mode, 'open', 'Escape returns to the pocket')
+})
+
+test('a full pocket lets go of its least recently used card that is not waiting on you', () => {
+  const h = setup()
+  // The oldest card is waiting on you and must stay; the next oldest leaves.
+  put(h, makeTask({ id: 'asks', state: 'needs-user', kind: 'session', lastUserInputAt: T0 - 100_000 }))
+  for (let i = 0; i < POCKET_LANDING_CAP - 1; i++) {
+    put(h, makeTask({ id: `t${i}`, state: 'done', kind: 'session', lastUserInputAt: T0 - 90_000 + i * 1000 }))
+  }
+  put(h, stale('old'))
+
+  h.controller.landInPocket('old')
+  h.flush()
+
+  assert.deepEqual(h.calls.setInPocket?.filter(([, inPocket]) => inPocket === false), [['t0', false]])
+  assert.ok(h.tasks.has('t0'), 'left the pocket, not deleted')
+  assert.equal(h.calls.remove, undefined)
+  const ids = [...h.controller.pocketTaskIds()]
+  assert.equal(ids.length, POCKET_LANDING_CAP)
+  assert.ok(ids.includes('asks') && ids.includes('old'))
 })

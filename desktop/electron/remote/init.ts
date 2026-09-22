@@ -968,6 +968,7 @@ const agentContinuations = new AgentContinuationService({
     opened: (id: string) => manager!.opened(id),
     isLive: (id: string) => manager!.isLive(id),
     returnToPocket: (id: string) => manager!.setInPocket(id, true),
+    landInPocket: (id: string) => { if (notchController) notchController.landInPocket(id); else manager!.setInPocket(id, true) },
     setKind: (id: string, kind: 'oneoff' | 'session') => manager!.setKind(id, kind),
   },
   locate: locateSession,

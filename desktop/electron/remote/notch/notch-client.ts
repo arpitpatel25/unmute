@@ -451,6 +451,8 @@ export type NotchCommand =
    * notch — the notch stays independent of anything the Agent says.
    */
   | { type: 'toast'; text: string }
+  /** A resume or fork put this card in the pocket; the pocket stays shut. */
+  | { type: 'pocketLanded'; title: string }
   | { type: 'newChatStatus'; pending: boolean; error?: string }
   | { type: 'newChatPreview'; token: string; preview?: import('../managed-project').ChatPreview; error?: string }
   | { type: 'questionAnswerStatus'; id: string; reference: import('../question-reference').QuestionReference; state: 'pending' | 'accepted' | 'rejected' }

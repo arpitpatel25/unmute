@@ -252,6 +252,11 @@ struct BarContent: Equatable {
         }
         // The expanded panels carry their own chrome — no shoulders to fill.
         if isExpandedState(state) { return BarContent() }
+        // A resumed or forked card is ready in the pocket. Settled colour and no
+        // alarm: it is news, not a demand, and the pocket was left shut for it.
+        if let landed = m.pocketLanded, !landed.isEmpty, !m.pocket.isOpen {
+            return BarContent(dot: .done, left: "In pocket", detail: landed)
+        }
 
         // TWO FACTS, AT MOST. "What wants you" and "what is running" — resolved
         // first, PLACED second, because where each one goes depends on whether

@@ -239,6 +239,9 @@ final class NotchModel: ObservableObject {
 
     // Transient toast (accept errors etc.).
     @Published var toast: String? = nil
+    /// A resumed or forked session just landed in the pocket: the card's title.
+    /// A quiet cue, not a toast — nothing went wrong, and the pocket stays shut.
+    @Published var pocketLanded: String? = nil
     @Published var newChatPending = false
     @Published var newChatError: String? = nil
     @Published var newChatPreview: ChatPreviewP? = nil

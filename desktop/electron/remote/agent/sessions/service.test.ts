@@ -301,3 +301,18 @@ test('an empty relay is refused before anything is woken', async () => {
   await assert.rejects(service.send({ taskId: 'existing-task', message: '   ' }), /something to say/i)
   assert.deepEqual(calls, [])
 })
+
+test('every resume and fork lands its card in the pocket, and a bare resume sends nothing', async () => {
+  const landed = (calls: Array<{ op: string; input?: unknown }>) => calls.filter(c => c.op === 'land').map(c => c.input)
+  for (const [existing, operation, expected] of [
+    [true, 'resume', 'existing-task'], [false, 'resume', 'new-task'], [false, 'fork', 'child-task'],
+  ] as const) {
+    const { service, calls } = fixture(existing)
+    const manager = service.deps.manager()!
+    service.deps.manager = () => ({ ...manager, landInPocket: (id: string) => { calls.push({ op: 'land', input: id }) } })
+    await service[operation]({ ...metadata, sessionId: 'source-session' })
+    assert.deepEqual(landed(calls), [expected], `${operation} (existing=${existing})`)
+    assert.equal(calls.some(c => c.op === 'deliver'), false, 'no message, no prompt')
+    assert.equal(calls.at(-1)?.op, 'land', 'lands once the operation succeeded')
+  }
+})

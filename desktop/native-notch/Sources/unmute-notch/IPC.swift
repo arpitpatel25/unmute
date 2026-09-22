@@ -595,6 +595,7 @@ enum Command {
     case capturePhase(phase: String, target: String?)
     case pocket(PocketP)                       // what your next words could land on
     case toast(String)                         // transient message (e.g. accept error)
+    case pocketLanded(title: String)           // a resume/fork put this card in the pocket
     case newChatStatus(pending: Bool, error: String?)
     case newChatPreview(token: String, preview: ChatPreviewP?, error: String?)
     case questionAnswerStatus(id: String, reference: QuestionReferenceP, state: String)
@@ -752,6 +753,8 @@ enum Command {
             return .pocket(sub("data", PocketP.self) ?? .empty)
         case "toast":
             return .toast(obj["text"] as? String ?? "")
+        case "pocketLanded":
+            return .pocketLanded(title: obj["title"] as? String ?? "")
         case "newChatStatus":
             return .newChatStatus(pending: obj["pending"] as? Bool ?? false, error: obj["error"] as? String)
         case "newChatPreview":

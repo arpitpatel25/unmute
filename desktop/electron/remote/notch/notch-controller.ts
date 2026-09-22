@@ -460,6 +460,18 @@ const TODAY_MS = 24 * 60 * 60 * 1000
  * untouched for half a day. */
 const POCKET_IDLE_MS = 12 * 60 * 60 * 1000
 
+/**
+ * HOW MANY TASKS A RESUME OR FORK MAY LAND BESIDE.
+ *
+ * Not a cap on the pocket as a whole — see above for why that was removed. It
+ * is enforced only at the one moment something is PUT into the pocket on your
+ * behalf rather than by your own hand: a session the Agent (or anything else)
+ * reopened or forked. Past this, the card you touched longest ago that is not
+ * waiting on you leaves the pocket to make room. Leaves, not deleted: it keeps
+ * running, stays in the orchestrator, and comes back by itself when it needs you.
+ */
+export const POCKET_LANDING_CAP = 8
+
 /** How long a SETTLED card stays on the wall before folding into "show all".
  *  48h, not 24: a one-day cutoff hides Friday's work on Monday morning, which
  *  is exactly when you want it. */
@@ -661,6 +673,10 @@ export class NotchController {
   /** Set while an expanded task came FROM an open pocket, so closing it goes
    *  back there rather than dumping you onto the bare notch. */
   private cameFromPocket = false
+  /** The card a resume or fork last put in the pocket, while the pocket could
+   *  not be aimed at it (shut, or something expanded). The next visit to the
+   *  pocket lands on it instead of card 1. See landInPocket. */
+  private landing: string | null = null
   /** id → presence-clock ms at which it began demanding. See demandSince(). */
   private demandStamp = new Map<string, number>()
   /** When a task entered `processing`, to tell a real turn from a blip. */
@@ -865,7 +881,7 @@ export class NotchController {
     on('userLeft', (e) => this.onUserLeft((e as { reason: 'blur' | 'screenshot' | 'space' }).reason))
     on('userReturned', () => this.onUserReturned())
     on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
-    on('pocketOpen', () => { this.pocketAt = 0; this.setPocketMode('open'); this.reconcile() })
+    on('pocketOpen', () => { this.pocketAt = this.freshVisitAt(); this.setPocketMode('open'); this.reconcile() })
     // THE HANDLING IS THE STIR. `on` re-arms the idle clock for every event
     // from the surface, and a pointer resting on the card has nothing else to
     // say — so this registration exists purely to let hover through that door.
@@ -1471,7 +1487,7 @@ export class NotchController {
       //
       // WHICH ONE FIRST? — your clock. See `addressedStamp`.
       .filter((t) => !already.has(t.id) && this.addressable(t)
-        && now - this.engagedAt(t) < POCKET_IDLE_MS)
+        && now - Math.max(this.engagedAt(t), this.addressedStamp.get(t.id) ?? 0) < POCKET_IDLE_MS)
       .sort(this.byAddressed)
 
     // RECENCY IS ABSOLUTE. Demand changes how loudly a card is drawn and
@@ -2501,6 +2517,11 @@ export class NotchController {
     // flag would outlive its reason and the card could only be reached from
     // the orchestrator.
     this.deps.setInPocket(id, true)
+    // Opening it is touching it. Without the stamp a session last spoken to
+    // more than POCKET_IDLE_MS ago is not in the list at all — which is how a
+    // link to a freshly resumed card fell through to the orchestrator.
+    if (this.deps.getTask(id)) this.addressed(id)
+    if (this.landing === id) this.landing = null
     const at = this.pocketSlots().findIndex((slot) => slot.kind !== 'agent' && slot.id === id)
     if (at < 0) { this.onFocusTask(id); return }
     this.engaged = 'none'
@@ -2512,6 +2533,87 @@ export class NotchController {
     // morphs straight into the task and Escape still returns to this card.
     this.pocketMode = 'open'
     this.onPocketExpand(id)
+  }
+
+  /**
+   * A RESUMED OR FORKED SESSION LANDS IN THE POCKET, at the front, with the
+   * voice aimed at it — whether or not anything was said to it.
+   *
+   * Before this, only a resume that CARRIED a message reached the pocket: the
+   * message stamped the task's input clock, and nothing else did. A bare resume
+   * of yesterday's session left it outside POCKET_IDLE_MS, so the card was
+   * nowhere to be found and its link opened the orchestrator instead.
+   *
+   * It never opens the pocket. Something reopened on your behalf is news, not
+   * a demand, so the bar says so quietly (`pocketLanded`) and the aim waits:
+   *
+   *   pocket open, nothing expanded  ->  the carousel moves to it now
+   *   anything else                  ->  the next visit lands on it (`landing`)
+   *
+   * Sends the session nothing. Delivery is the caller's business and a resume
+   * with no message must stay silent — this only moves cards.
+   */
+  landInPocket(id: string): void {
+    const task = this.deps.getTask(id)
+    if (!task) return
+    this.deps.setInPocket(id, true)
+    this.addressed(id)
+    this.makeRoomFor(id)
+    this.frozenOrder = null
+    const slots = this.pocketSlots()
+    const at = slots.findIndex((slot) => slot.kind !== 'agent' && slot.id === id)
+    const aimNow = at >= 0 && this.pocketMode === 'open' && this.engaged === 'none'
+    log.event('pocket-landed', { taskId: id, at, aimed: aimNow ? 'now' : 'next-visit', slots: slots.length })
+    if (aimNow) {
+      this.landing = null
+      this.pocketAt = at
+      this.stirPocket()
+      this.applyVoiceTarget()
+    } else {
+      this.landing = id
+      this.client.send({ type: 'pocketLanded', title: task.name ?? truncate(task.intent) })
+    }
+    this.reconcile()
+  }
+
+  /** Where a fresh visit to the pocket starts: on the landed card if one is
+   *  pending, else card 1. */
+  private freshVisitAt(): number {
+    const landed = this.takeLanding(this.pocketSlots())
+    return landed >= 0 ? landed : 0
+  }
+
+  /** The landed card's slot, consumed. Honoured only while it is still the task
+   *  you touched last — touch another and that one is what you meant. */
+  private takeLanding(slots: PocketSlotP[]): number {
+    const id = this.landing
+    this.landing = null
+    if (!id) return -1
+    const landed = this.deps.getTask(id)
+    if (!landed) return -1
+    const newer = this.pocketList().some((t) => t.id !== id && this.addressedAt(t) > this.addressedAt(landed))
+    if (newer) return -1
+    return slots.findIndex((slot) => slot.kind !== 'agent' && slot.id === id)
+  }
+
+  /** Over POCKET_LANDING_CAP, the least recently addressed card that is not
+   *  waiting on you leaves the pocket. Never the one landing; never deleted. */
+  private makeRoomFor(id: string): void {
+    const inPocket = this.pocketList()
+    let excess = inPocket.length - POCKET_LANDING_CAP
+    if (excess <= 0) return
+    const evictable = inPocket
+      // WAITING ON YOU means BLOCKED on you — a question or an approval. A card
+      // that merely finished is `demanding` for a while too, but nothing stops
+      // for it, and protecting those would make the cap unreachable on a busy
+      // day. The card on screen stays too.
+      .filter((t) => t.id !== id && t.id !== this.focusedId && t.state !== 'needs-user' && !t.question)
+      .sort((a, b) => this.addressedAt(a) - this.addressedAt(b))
+    for (const t of evictable) {
+      if (excess-- <= 0) break
+      log.event('pocket-evicted', { taskId: t.id, for: id, cap: POCKET_LANDING_CAP })
+      this.deps.setInPocket(t.id, false)
+    }
   }
 
   private onFocusTask(id: string): void {
@@ -2559,7 +2661,7 @@ export class NotchController {
     // thing tapping the pocket open does, and the reason the order is worth
     // getting right.
     this.frozenOrder = null
-    this.pocketAt = 0
+    this.pocketAt = this.freshVisitAt()
     log.event('pocket-chord', { did: 'open', slots: this.pocketSlots().length })
     this.setPocketMode('open')
     this.reconcile()
@@ -2931,7 +3033,11 @@ export class NotchController {
         // exactly what moves it from the front of the pocket to the back, so
         // the index you left on now points at some other card entirely. Follow
         // the thing you were looking at.
-        const back = this.pocketSlots().findIndex((sl) => sl.kind === 'agent')
+        // Unless the Agent just reopened a session for you: then the card it
+        // brought back is the one you came back for.
+        const slots = this.pocketSlots()
+        const landed = this.takeLanding(slots)
+        const back = landed >= 0 ? landed : slots.findIndex((sl) => sl.kind === 'agent')
         if (back >= 0) this.pocketAt = back
         this.setPocketMode('open')
         this.applyVoiceTarget()

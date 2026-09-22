@@ -112,6 +112,7 @@ final class AppController: NSObject, NotchResizing {
     private var departureReturnTimer: Timer?
     private var expandedContentGeneration: UInt64 = 0
     private var toastTimer: Timer?
+    private var pocketLandedTimer: Timer?
     private var agentActivityTimer: Timer?
 
 
@@ -605,6 +606,8 @@ final class AppController: NSObject, NotchResizing {
 
         case let .toast(text):
             showToast(text)
+        case let .pocketLanded(title):
+            showPocketLanded(title)
         case let .newChatStatus(pending, error):
             model.newChatError = error
             model.newChatPending = pending
@@ -1321,6 +1324,22 @@ final class AppController: NSObject, NotchResizing {
             self.model.toast = nil
             if self.model.pocket.isOpen { self.refit(animated: false) }
             else if !self.isExpanded(self.model.state) { self.refreshBar() }
+        }
+    }
+
+    /// A SESSION CAME BACK AND IT IS WAITING IN THE POCKET. Said once, quietly,
+    /// on the bar — the pocket is deliberately not opened for it. An open pocket
+    /// already shows the card, so there is nothing to add there.
+    private func showPocketLanded(_ title: String) {
+        guard !model.pocket.isOpen, !isExpanded(model.state) else { return }
+        NotchLog.log("pocket landed: \(title)")
+        model.pocketLanded = title
+        refreshBar()
+        pocketLandedTimer?.invalidate()
+        pocketLandedTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.model.pocketLanded = nil
+            if !self.model.pocket.isOpen, !self.isExpanded(self.model.state) { self.refreshBar() }
         }
     }
 

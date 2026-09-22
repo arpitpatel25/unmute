@@ -22,6 +22,9 @@ interface ContinuationManager {
   /** Bringing a session back is what puts its card back in the pocket; see
    *  the notch's counterpart (onPocketFocusTask). */
   returnToPocket?(taskId: string): void
+  /** A resume or fork is done: its card goes to the FRONT of the pocket with
+   *  the voice aimed at it, message or not. Moves cards; sends nothing. */
+  landInPocket?(taskId: string): void
   setKind?(taskId: string, kind: 'oneoff' | 'session'): void
   attachProviderSession(input: {
     harness: 'claude' | 'codex'; sessionId: string; cwd: string; intent?: string; title?: string; group?: string; groupId?: string
@@ -153,6 +156,7 @@ export class AgentContinuationService {
       if (plan.followUp) manager.setKind?.(plan.taskId, 'session')
       if (plan.followUp) await this.waitUntilLive(plan.taskId)
       const delivered = plan.followUp ? await this.deliverWhenReady(plan.taskId, plan.followUp) : true
+      manager.landInPocket?.(plan.taskId)
       return {
         taskId: plan.taskId, operation: 'resume',
         sourceSessionId: input.sessionId, sessionId: input.sessionId,
@@ -163,6 +167,7 @@ export class AgentContinuationService {
     const { action: _action, ...attachment } = plan
     const result = await manager.attachProviderSession({ ...attachment, ...metadata })
     if (result.sessionId !== input.sessionId) throw new Error('Resume changed the provider session identity')
+    manager.landInPocket?.(result.taskId)
     return {
       ...result, operation: 'resume', sourceSessionId: input.sessionId,
     }
@@ -308,6 +313,7 @@ export class AgentContinuationService {
     const { action: _action, ...fork } = plan
     const result = await manager.forkProviderSession({ ...fork, ...metadata })
     if (result.sessionId === input.sessionId) throw new Error('Fork reused the source provider session identity')
+    manager.landInPocket?.(result.taskId)
     return {
       ...result, operation: 'fork', sourceSessionId: input.sessionId,
     }
