@@ -19,9 +19,9 @@ struct HelpGuideView: View {
             Rectangle().fill(Theme.hairlineSoft).frame(height: 1)
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                LazyVStack(alignment: .leading, spacing: 28) {
                     ForEach(guide.sections) { section in
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 12) {
                             Text(section.title).font(Theme.fTitle).foregroundColor(Theme.text)
                             Text(section.intro).font(Theme.fSub).foregroundColor(Theme.textDim)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -35,8 +35,8 @@ struct HelpGuideView: View {
                         .font(Theme.fSub).foregroundColor(Theme.textDim)
                         .padding(.bottom, 8)
                 }
-                .padding(.horizontal, Theme.gutter)
-                .padding(.vertical, 16)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 24)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -44,7 +44,7 @@ struct HelpGuideView: View {
     }
 
     private func entryCard(_ entry: HelpGuideEntryP) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(entry.title).font(Theme.fBody.weight(.semibold)).foregroundColor(Theme.text)
             Text(entry.summary).font(Theme.fSub).foregroundColor(Theme.textDim)
                 .fixedSize(horizontal: false, vertical: true)
@@ -58,10 +58,10 @@ struct HelpGuideView: View {
                 Text("• \(step)").font(Theme.fSub).foregroundColor(Theme.textDim)
             }
             if let example = entry.example {
-                Text("Example: \(example)").font(Theme.fSub).italic().foregroundColor(Theme.textFaint)
+                Text("Example: \(example)").font(Theme.fSub).foregroundColor(Theme.textFaint)
             }
         }
-        .padding(12)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.raised))
     }

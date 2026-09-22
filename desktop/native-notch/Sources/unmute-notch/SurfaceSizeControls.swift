@@ -35,15 +35,20 @@ struct SurfaceSizeControls: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(Theme.controlIcon)
+                .foregroundColor(Theme.textFaint)
+            track
             Text("\(Int((shown * 100).rounded()))%")
-                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                .font(Theme.fCap)
                 .monospacedDigit()
-                .foregroundColor(Theme.text)
+                .foregroundColor(Theme.textDim)
                 // Fixed width: the label sits beside the track and must not
                 // shove it sideways as the number changes width mid-drag.
                 .frame(width: 34, alignment: .trailing)
-            track
         }
+        .frame(minHeight: Theme.controlHeight)
+        .help("Window size")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Expanded size")
         .accessibilityValue("\(Int((shown * 100).rounded())) percent of screen")
@@ -63,9 +68,10 @@ struct SurfaceSizeControls: View {
 
             ZStack(alignment: .leading) {
                 Capsule().fill(Theme.raised)
+                    .frame(height: 4)
                     .overlay(Capsule().stroke(Theme.hairline, lineWidth: 0.5))
                 Capsule().fill(Theme.accent.opacity(0.55))
-                    .frame(width: max(x, 0))
+                    .frame(width: max(x, 0), height: 4)
                 Circle()
                     .fill(Theme.accent)
                     .frame(width: 12, height: 12)
@@ -90,7 +96,7 @@ struct SurfaceSizeControls: View {
                     },
             )
         }
-        .frame(width: 116, height: 28)
+        .frame(width: 88, height: 28)
     }
 
     /// Hand the choice to the controller, then let the control read from the

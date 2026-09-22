@@ -1,0 +1,96 @@
+/* Presentation only. All color and material values come from the engine theme. */
+:root {
+  --ui-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  --ui-space: 4px;
+  --ui-control-radius: 8px;
+  --ui-panel-radius: 14px;
+}
+
+.desktop-app {
+  font-family: var(--ui-font);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.desktop-app :where(button, input, select, textarea) { font-family: inherit; }
+.desktop-app :where(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+.desktop-app :where(button) { cursor: pointer; }
+.desktop-app :where(button:disabled) { cursor: default; }
+.desktop-app :where(button:not(:disabled)):active { filter: brightness(.96); }
+.desktop-app :where(h1, h2) { letter-spacing: -.035em; line-height: 1.2; font-weight: 650; }
+.desktop-app :where(h3, h4) { letter-spacing: -.012em; }
+.desktop-app :where(input:not([type='range']):not([type='checkbox']):not(.bg-transparent), select, textarea) {
+  border-radius: var(--ui-control-radius);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.desktop-app :where(input[type='range']) { accent-color: var(--color-ink); height: 20px; }
+.desktop-app :where(button.rounded-full):not([role='switch']) { border-radius: var(--ui-control-radius); }
+.desktop-app :where(main button.rounded-full):not([role='switch']) { min-height: 30px; }
+.desktop-app :where(main button.border[class*='px-']) { min-height: 28px; border-radius: var(--ui-control-radius); }
+.desktop-app :where(main .rounded-2xl) { border-radius: var(--ui-panel-radius); }
+.desktop-app :where(main .uppercase) { text-transform: none; letter-spacing: .015em; }
+.desktop-app :where(main .text-ink-35) { color: var(--color-ink-60); }
+.desktop-app :where(main h2.font-display) { font-size: 26px; margin-bottom: 20px; }
+.desktop-app :where(main p) { text-wrap: pretty; }
+.desktop-app :where(main code, main pre) { text-wrap: initial; }
+
+.app-sidebar { width: 208px; min-width: 208px; padding: 46px 12px 20px; }
+.app-brand { align-items: flex-start; padding: 8px 12px 24px; margin-bottom: 16px; }
+.app-brand img { height: 37px; }
+.app-brand p { margin-top: 8px; font-size: 10px; }
+.app-nav { gap: 4px; padding: 0; }
+.app-nav-button { min-height: 38px; border-radius: 8px; padding: 8px 10px; gap: 10px; }
+.app-nav-button > span:first-child { width: 20px; display: grid; place-items: center; flex-shrink: 0; }
+.app-content { padding: 56px clamp(24px, 4vw, 56px) 0; min-width: 0; scrollbar-gutter: stable; }
+.app-content-column { max-width: 800px; padding-bottom: 40px; }
+.settings-navigation { max-width: 768px; margin-bottom: 28px; }
+.settings-navigation h1 { font-size: 28px; margin: 0 0 20px; }
+.settings-navigation-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.settings-navigation-grid button { min-height: 42px; padding: 10px 12px; gap: 8px; border-radius: 8px; font-size: 12px; }
+.settings-navigation-grid button > svg { flex-shrink: 0; }
+.settings-navigation-grid button > span:first-of-type { white-space: normal; line-height: 1.3; }
+.settings-navigation-grid button[aria-current='page'] { background: var(--color-surface-2); box-shadow: 0 1px 3px var(--color-border); }
+.ui-section-header { margin: 28px 2px 10px; gap: 8px; }
+.ui-section-header h3 { font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--color-ink-60); }
+.ui-setting-row { gap: 24px; padding: 18px 20px; }
+.ui-setting-row p:first-child { font-size: 13px; font-weight: 550; }
+.ui-setting-row p + p { font-size: 12px; line-height: 1.5; margin-top: 4px; max-width: 52ch; }
+.ui-segments { display: flex; flex-wrap: wrap; gap: 2px; border-radius: 9px; padding: 3px; }
+.ui-segments button { flex: 1 0 auto; min-height: 28px; border-radius: 6px; padding: 5px 12px; font-size: 12px; }
+.ui-task-ticket { border-radius: 14px; margin-bottom: 12px; }
+.ui-task-ticket > div:first-child { padding: 18px 20px; }
+.ui-task-ticket > div:first-child > p:first-child { font-size: 15px; font-weight: 600; }
+.ui-task-facts { gap: 6px 16px; line-height: 1.6; }
+.desktop-app .notetaker-notes-document { border-radius: var(--ui-panel-radius); }
+.desktop-app .notetaker-note-paragraph, .desktop-app .notetaker-note-list { font-size: 14px; line-height: 1.7; }
+.desktop-app .notetaker-notes-kicker { font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; }
+.desktop-app .notetaker-note-title { font-size: 24px; font-weight: 650; letter-spacing: -.025em; }
+.desktop-app .notetaker-note-heading { margin-top: 28px; font-size: 18px; font-weight: 600; letter-spacing: -.015em; }
+.desktop-app .notetaker-note-subheading { margin-top: 20px; font-size: 15px; font-weight: 600; }
+
+/* The optional Electron overlay keeps its original dark/glass material. */
+.ui-floating { font-family: var(--ui-font); -webkit-font-smoothing: antialiased; }
+.ui-floating :where(button, input, textarea) { font-family: inherit; }
+.ui-floating :where(button, input, textarea):focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.ui-floating :where(button:not(:disabled)):active { opacity: .8; }
+.ui-floating .ui-floating-actions { gap: 6px; flex-wrap: wrap; }
+.ui-floating .ui-floating-actions button { padding: 5px 9px; min-height: 28px; border: 1px solid var(--color-unmute-border); border-radius: 7px; }
+.ui-floating :where(.uppercase) { text-transform: none; letter-spacing: 0; font-size: 11px; }
+
+@media (max-width: 820px) {
+  .app-sidebar { width: 186px; min-width: 186px; padding-inline: 8px; }
+  .app-content { padding-inline: 24px; }
+  .settings-navigation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ui-setting-row { align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+  .ui-setting-row > div:first-child { flex-basis: 220px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .desktop-app *, .desktop-app *::before, .desktop-app *::after,
+  .ui-floating *, .ui-floating *::before, .ui-floating *::after,
+  .ob *, .ob *::before, .ob *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}

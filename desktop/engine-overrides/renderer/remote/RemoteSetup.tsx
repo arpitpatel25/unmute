@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from 'react'
 import { Toggle } from '../app/_shared'
+import { UIIcon } from '../app/UIIcon'
 import installExtImg from '../assets/setup-install-extension.png'
 import extActiveImg from '../assets/setup-extension-active.png'
 
@@ -55,7 +56,7 @@ function CopyButton({ text }: { text: string }) {
         setTimeout(() => setCopied(false), 1200)
       }}
     >
-      {copied ? 'copied' : 'copy'}
+      {copied ? 'Copied' : 'Copy'}
     </button>
   )
 }
@@ -106,12 +107,12 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <div className="p-4 max-w-[640px]">
+    <div className="max-w-2xl">
       <button
-        className="text-[11px] text-ink/50 hover:text-ink mb-3 flex items-center gap-1"
+        className="text-[12px] text-ink-60 hover:text-ink mb-5 inline-flex items-center gap-2 border border-border rounded-lg px-3 py-1.5"
         onClick={onBack}
       >
-        ← Back
+        <UIIcon name="back" size={14} /> Back
       </button>
 
       <div className="text-[16px] font-semibold text-ink mb-1">Agents &amp; setup</div>

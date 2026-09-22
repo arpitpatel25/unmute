@@ -51,7 +51,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
 
 export function SectionHeader({ icon, title }: { icon: React.ReactNode; title: string }) {
   return (
-    <div className="flex items-center gap-1.5 mb-2.5 mt-5">
+    <div className="ui-section-header flex items-center">
       <span className="text-ink-35">{icon}</span>
       <h3 className="text-[10px] font-bold text-ink-35 uppercase tracking-[0.11em]">{title}</h3>
     </div>
@@ -75,6 +75,9 @@ export function Toggle({ checked, onChange, disabled = false, title }: {
       disabled={disabled}
       title={title}
       aria-disabled={disabled}
+      role="switch"
+      aria-checked={checked}
+      aria-label={title}
       className={`w-[38px] h-[22px] rounded-full transition-all duration-200 relative shrink-0 ${
         checked ? 'bg-ink' : 'bg-cream-dark'
       } ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
@@ -96,10 +99,11 @@ export function SegmentedControl({ options, value, onChange }: {
   onChange: (value: string) => void
 }) {
   return (
-    <div className="flex bg-cream-mid border border-border rounded-[9px] p-[3px] gap-0.5">
+    <div className="ui-segments bg-cream-mid border border-border">
       {options.map((opt) => (
         <button
           key={opt.value}
+          aria-pressed={value === opt.value}
           onClick={() => onChange(opt.value)}
           className={`px-3 py-1.5 rounded-md text-[12.5px] font-medium transition-all duration-120 ${
             value === opt.value
@@ -122,7 +126,7 @@ export function SegmentedControlDark({ options, value, onChange }: {
   onChange: (value: string) => void
 }) {
   return (
-    <div className="flex bg-white/[0.06] border border-white/[0.08] rounded-[9px] p-[3px] gap-0.5">
+    <div className="ui-segments bg-white/[0.06] border border-white/[0.08]">
       {options.map((opt) => (
         <button
           key={opt.value}
@@ -200,7 +204,7 @@ export function SettingRow({ label, description, children }: {
     // one word per line, as a tall thin ribbon. Seen the moment a third swatch
     // was added to Surface tone; the row had simply never been asked to hold
     // anything wide before.
-    <div className="flex items-center justify-between gap-6 px-5 py-4 border-b border-border last:border-b-0">
+    <div className="ui-setting-row flex items-center justify-between border-b border-border last:border-b-0">
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-medium text-ink">{label}</p>
         <p className="text-[11px] text-ink-35 mt-0.5">{description}</p>

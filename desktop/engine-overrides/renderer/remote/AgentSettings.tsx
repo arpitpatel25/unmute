@@ -149,13 +149,13 @@ export function AgentSettings() {
       <div className="bg-white border border-border rounded-[12px] overflow-hidden mb-3">
         <SettingRow
           label="Unmute Agent"
-          description="Hold right Command and talk to Unmute itself — what it remembers, what you have been working on, and what to pick back up."
+          description="Hold right Command to talk to Unmute about your work and what to pick up next."
         >
           <Toggle checked={enabled} onChange={(on) => void setEnabled(on)} />
         </SettingRow>
         <SettingRow
           label="Routines"
-          description="Saved prompts that run on their own — on a schedule or when meeting notes are ready — and post their results in the Agent’s chat. Say “every weekday at 9, tell me what I worked on yesterday” to make one."
+          description="Run saved prompts on a schedule or when meeting notes are ready. Results appear in the Agent’s chat."
         >
           <Toggle checked={routinesEnabled} disabled={!enabled} onChange={(on) => void setRoutinesEnabled(on)} />
         </SettingRow>

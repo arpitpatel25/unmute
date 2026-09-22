@@ -141,13 +141,12 @@ struct StatusLabel: View {
 
 // MARK: - Labels
 
-/// A rail / section label: small, semibold, uppercase, tracked.
+/// Quiet section hierarchy, using the same sentence case as navigation.
 struct SectionLabel: View {
     let text: String
     var body: some View {
-        Text(text.uppercased())
-            .font(Theme.fMicro)
-            .tracking(0.75)
+        Text(text)
+            .font(Theme.fStatus)
             .foregroundColor(Theme.textFaint)
     }
 }
@@ -195,23 +194,30 @@ struct KeyButton: View {
     let label: String
     var danger: Bool = false
     var symbol: String? = nil
+    var compact: Bool = false
+    var trailingSymbol: Bool = false
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 3.5) {
-                if let symbol { Image(systemName: symbol).font(.system(size: 9.5, weight: .medium)) }
-                Text(label).font(.system(size: 11, weight: .medium))
+            HStack(spacing: 6) {
+                if let symbol, !trailingSymbol { Image(systemName: symbol).font(Theme.controlIcon) }
+                if !compact { Text(label).font(Theme.controlFont) }
+                if let symbol, trailingSymbol { Image(systemName: symbol).font(Theme.controlIcon) }
             }
+            .lineLimit(1)
             .foregroundColor(danger ? Theme.cError : Theme.text)
-            .padding(.horizontal, 9).padding(.vertical, 3.5)
-            .background(RoundedRectangle(cornerRadius: 6)
+            .padding(.horizontal, 10).frame(minHeight: Theme.controlHeight)
+            .contentShape(RoundedRectangle(cornerRadius: Theme.controlRadius))
+            .background(RoundedRectangle(cornerRadius: Theme.controlRadius)
                 .fill(hovering ? Theme.raisedHover : Theme.raised))
-            .overlay(RoundedRectangle(cornerRadius: 6)
+            .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius)
                 .stroke(danger ? Theme.cError.opacity(0.30) : Theme.hairline, lineWidth: 0.5))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .help(label)
         .onHover { hovering = $0 }
         .animation(Theme.hover, value: hovering)
     }
@@ -229,19 +235,19 @@ struct ActButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                if let symbol { Image(systemName: symbol).font(.system(size: 10, weight: .semibold)) }
-                Text(label).font(.system(size: 11.5, weight: go ? .semibold : .medium))
+            HStack(spacing: 6) {
+                if let symbol { Image(systemName: symbol).font(Theme.controlIcon) }
+                Text(label).font(Theme.controlFont)
             }
             // The primary's fill is near-white, so its label is dark.
             .foregroundColor(go ? Theme.accentInk : (danger ? Theme.cError : Theme.text))
-            .padding(.horizontal, 12).padding(.vertical, 4.5)
+            .padding(.horizontal, 12).frame(minHeight: Theme.controlHeight)
             .background(
-                Capsule().fill(go ? Theme.accent.opacity(hovering ? 0.86 : 1)
+                RoundedRectangle(cornerRadius: Theme.controlRadius).fill(go ? Theme.accent.opacity(hovering ? 0.86 : 1)
                                   : (hovering ? Theme.raisedHover : Theme.raised))
             )
             .overlay(
-                Capsule().stroke(go ? Color.clear
+                RoundedRectangle(cornerRadius: Theme.controlRadius).stroke(go ? Color.clear
                                     : (danger ? Theme.cError.opacity(0.32) : Theme.hairline),
                                  lineWidth: 0.5)
             )
@@ -262,13 +268,14 @@ struct QuietButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                if let symbol { Image(systemName: symbol).font(.system(size: 10, weight: .medium)) }
-                Text(label).font(.system(size: 11.5))
+            HStack(spacing: 6) {
+                if let symbol { Image(systemName: symbol).font(Theme.controlIcon) }
+                Text(label).font(Theme.controlFont)
             }
             .foregroundColor(hovering ? Theme.text : color)
-            .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(RoundedRectangle(cornerRadius: 6)
+            .padding(.horizontal, 8).frame(minHeight: Theme.controlHeight)
+            .contentShape(RoundedRectangle(cornerRadius: Theme.controlRadius))
+            .background(RoundedRectangle(cornerRadius: Theme.controlRadius)
                 .fill(hovering ? Theme.raised : Color.clear))
         }
         .buttonStyle(.plain)
@@ -300,6 +307,7 @@ struct BackButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help("Back")
+        .accessibilityLabel("Back")
         .animation(Theme.hover, value: hovering)
     }
 }
@@ -319,6 +327,7 @@ struct CloseButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help("Close (esc, or click outside)")
+        .accessibilityLabel("Close")
         .animation(Theme.hover, value: hovering)
     }
 }
@@ -338,6 +347,7 @@ struct HelpButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help("How to use Unmute")
+        .accessibilityLabel("How to use Unmute")
         .animation(Theme.hover, value: hovering)
     }
 }

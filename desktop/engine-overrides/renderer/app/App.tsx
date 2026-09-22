@@ -30,6 +30,7 @@ import { AgentSettings } from '../remote/AgentSettings'
 import AgentHelp from './help/Agent'
 import HowToUseUnmute from './HowToUseUnmute'
 import type { GuideData } from './HowToUseUnmute'
+import { UIIcon } from './UIIcon'
 
 /**
  * Five destinations:
@@ -209,7 +210,7 @@ function AppInner() {
   }
 
   return (
-    <div className="flex h-screen bg-cream">
+    <div className="desktop-app flex h-screen bg-cream">
       {/* Titlebar drag region */}
       <div className="titlebar-drag absolute top-0 left-0 right-0 h-8 z-10" />
 
@@ -246,11 +247,11 @@ function AppInner() {
       )}
 
       {/* Sidebar */}
-      <nav className="w-[220px] min-w-[220px] border-r border-border pt-12 px-2 flex flex-col bg-cream-mid overflow-y-auto">
+      <nav aria-label="Main navigation" className="app-sidebar border-r border-border flex flex-col bg-cream-mid overflow-y-auto">
         {/* Brand — the wordmark PNG itself carries the distinguisher
             from OSS unmute (baked into the asset, not a CSS overlay), so
             this is back to a single image + tagline. */}
-        <div className="px-3 mb-5 pb-5 border-b border-border flex flex-col items-center shrink-0">
+        <div className="app-brand border-b border-border flex flex-col shrink-0">
           <div className="relative">
             <img src={unmuteLogo} alt="unmute" className="h-[54px] w-auto" />
           </div>
@@ -260,84 +261,76 @@ function AppInner() {
         </div>
 
         {/* Nav items — five destinations, one glyph each. */}
-        <div className="flex flex-col gap-0.5 px-1">
+        <div className="app-nav flex flex-col">
           <SidebarButton
-            icon={<HelpGuideIcon />}
+            icon={<UIIcon name="guide" />}
             label="How to use Unmute"
             active={activeTab === 'guide'}
             onClick={() => setActiveTab('guide')}
           />
           <SidebarButton
-            icon={<HistoryIcon />}
+            icon={<UIIcon name="history" />}
             label="Dictation"
             active={activeTab === 'history'}
             onClick={() => setActiveTab('history')}
           />
           <SidebarButton
-            icon={<NotetakerIcon />}
+            icon={<UIIcon name="notes" />}
             label="Notetaker"
             active={activeTab === 'notetaker'}
             onClick={() => setActiveTab('notetaker')}
           />
           <SidebarButton
-            icon={<AgentNavIcon />}
+            icon={<UIIcon name="agent" />}
             label="Agent"
             active={activeTab === 'agent'}
             onClick={() => setActiveTab('agent')}
           />
           <SidebarButton
-            icon={<OrchestratorIcon />}
+            icon={<UIIcon name="dashboard" />}
             label="Orchestrator"
             active={activeTab === 'orchestrator'}
             onClick={() => setActiveTab('orchestrator')}
           />
           <SidebarButton
-            icon={<AccountIcon />}
+            icon={<UIIcon name="account" />}
             label="Account"
             active={activeTab === 'account'}
             onClick={() => setActiveTab('account')}
           />
           <SidebarButton
-            icon={<SettingsIcon />}
+            icon={<UIIcon name="settings" />}
             label="Settings"
             active={activeTab === 'settings'}
             onClick={() => setActiveTab('settings')}
           />
 
-          {/* Settings sub-navigation — Triggers · Audio & behaviour ·
-              Appearance & notch · Permissions · Language · Privacy · Help &
-              about. The list itself is SETTINGS_SECTIONS in _shared.tsx, so
-              Settings.tsx can import the section type without an import cycle
-              back through this file. Settings is the only destination with
-              sub-items IN THE SIDEBAR — Orchestrator also has four sub-pages,
-              but they are a segmented control inside the content area, so the
-              rail stays four rows deep. */}
-          {activeTab === 'settings' && (
-            <div className="flex flex-col gap-0.5 mt-0.5 mb-1 pl-[26px] border-l border-border ml-[15px]">
-              {SETTINGS_SECTIONS.map((section) => (
-                <SidebarSubButton
-                  key={section.id}
-                  label={section.label}
-                  active={settingsSection === section.id}
-                  onClick={() => setSettingsSection(section.id)}
-                  trailing={section.id === 'language' ? (
-                    <span
-                      className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${settingsSection === 'language' ? 'bg-accent/10 text-accent' : 'bg-ink-07 text-ink-35'}`}
-                    >
-                      {languageBadge}
-                    </span>
-                  ) : undefined}
-                />
-              ))}
-            </div>
-          )}
         </div>
 
       </nav>
 
       {/* Content */}
-      <main className="flex-1 pt-10 px-10 overflow-y-auto">
-        <div className="max-w-2xl mx-auto pb-8">
+      <main className="app-content flex-1 overflow-y-auto">
+        <div className="app-content-column mx-auto">
+          {activeTab === 'settings' && (
+            <nav aria-label="Settings sections" className="settings-navigation">
+              <h1 className="text-ink">Settings</h1>
+              <div className="settings-navigation-grid">
+                {SETTINGS_SECTIONS.map((section) => (
+                  <SidebarSubButton
+                    key={section.id}
+                    icon={<UIIcon name={section.id} size={16} />}
+                    label={section.label}
+                    active={settingsSection === section.id}
+                    onClick={() => setSettingsSection(section.id)}
+                    trailing={section.id === 'language' ? (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-ink-07 text-ink-60">{languageBadge}</span>
+                    ) : undefined}
+                  />
+                ))}
+              </div>
+            </nav>
+          )}
           {activeTab === 'guide' && <HowToUseUnmute guide={helpGuide} loading={!helpGuide} />}
           {activeTab === 'history' && <History />}
           {activeTab === 'notetaker' && (
@@ -530,7 +523,8 @@ function SidebarButton({
   return (
     <button
       onClick={onClick}
-      className={`titlebar-no-drag w-full flex items-center gap-2.5 text-left px-3 py-2.5 rounded-[10px] text-[13px] font-medium transition-all duration-150 select-none ${
+      aria-current={active ? 'page' : undefined}
+      className={`app-nav-button titlebar-no-drag w-full flex items-center text-left text-[13px] font-medium transition-colors duration-150 select-none ${
         active
           ? 'bg-surface-2 text-ink shadow-sm'
           : 'text-ink-60 hover:bg-ink-07 hover:text-ink'
@@ -545,15 +539,15 @@ function SidebarButton({
   )
 }
 
-/** A section inside Settings. Deliberately unglyphed: seven more icons in a
- *  220px rail would collide with the one-icon-per-concept rule (D8) long before
- *  they helped anyone scan the list. */
+/** Settings sections live together above the content, outside the main rail. */
 function SidebarSubButton({
+  icon,
   label,
   active,
   onClick,
   trailing,
 }: {
+  icon: React.ReactNode
   label: string
   active: boolean
   onClick: () => void
@@ -562,88 +556,16 @@ function SidebarSubButton({
   return (
     <button
       onClick={onClick}
+      aria-current={active ? 'page' : undefined}
       className={`titlebar-no-drag w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-lg text-[12.5px] transition-all duration-150 select-none ${
         active
           ? 'bg-ink-07 text-ink font-semibold'
           : 'text-ink-60 font-medium hover:bg-ink-07 hover:text-ink'
       }`}
     >
+      {icon}
       <span className="flex-1 truncate">{label}</span>
       {trailing}
     </button>
-  )
-}
-
-function HistoryIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="8" r="6" />
-      <polyline points="8,5 8,8 10,10" />
-    </svg>
-  )
-}
-
-function HelpGuideIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="8" r="6" />
-      <path d="M6.5 6a1.7 1.7 0 1 1 2.55 1.47C8.4 7.84 8 8.2 8 9" />
-      <path d="M8 11.6h.01" />
-    </svg>
-  )
-}
-
-/** Notetaker — a document glyph (two ruled lines), distinct from History's
- *  clock. Same size/stroke conventions as every other sidebar glyph. */
-function NotetakerIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="2" width="10" height="12" rx="1.5" />
-      <line x1="5.5" y1="6" x2="10.5" y2="6" />
-      <line x1="5.5" y1="9" x2="10.5" y2="9" />
-    </svg>
-  )
-}
-
-/** Orchestrator — the cockpit: many panes, many agents, one surface. */
-/** The Agent's glyph: the same head the Settings section has always used, at
- *  sidebar weight. Deliberately not another grid — Orchestrator owns that. */
-function AgentNavIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8 1.75v1.75M3.5 6.5A2.5 2.5 0 0 1 6 4h4a2.5 2.5 0 0 1 2.5 2.5v4A2.5 2.5 0 0 1 10 13H6a2.5 2.5 0 0 1-2.5-2.5z" />
-      <path d="M6 8h.01M10 8h.01M6.5 10.5h3" />
-    </svg>
-  )
-}
-
-function OrchestratorIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="1.75" y="2.25" width="5.25" height="5" rx="1.25" />
-      <rect x="9" y="2.25" width="5.25" height="5" rx="1.25" />
-      <rect x="1.75" y="8.75" width="5.25" height="5" rx="1.25" />
-      <rect x="9" y="8.75" width="5.25" height="5" rx="1.25" />
-    </svg>
-  )
-}
-
-/** Settings — an actual gear. The old icon was a circle with eight straight
- *  spokes, which reads as a sun or a loading spinner, not a setting. */
-function SettingsIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  )
-}
-
-function AccountIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="5.5" r="2.5" />
-      <path d="M2.5 14a5.5 5.5 0 0 1 11 0" />
-    </svg>
   )
 }

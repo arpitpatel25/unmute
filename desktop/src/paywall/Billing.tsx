@@ -354,7 +354,7 @@ export function Billing() {
                   disabled={busy || upgrading}
                   className="mt-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-ink text-white hover:opacity-90 disabled:opacity-50"
                 >
-                  {upgrading ? 'Upgrading…' : 'Upgrade to Unmute →'}
+                  {upgrading ? 'Upgrading…' : 'Upgrade to Unmute'}
                 </button>
               )}
             </div>

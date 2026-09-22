@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
+import { UIIcon } from '../app/UIIcon'
 
 import { clipUrl } from './clips'
 import { advancePresenterDrag, beginPresenterDrag, canSkipAction, clipEndActionFor, didPresenterDrag, processingEscapeDelayMs, successButtonForAction, type PresenterDragState } from './presenterActions'
@@ -151,7 +152,7 @@ export function OnboardingPresenter() {
           />)}
         </div>
         <span className="ob-presenter__step">{step}/{totalSteps}</span>
-        <button className="ob-presenter__close" type="button" aria-label="Close onboarding" title="Close onboarding" onClick={() => api().onboardingPresenterAction?.({ type: 'dismiss' })}>×</button>
+        <button className="ob-presenter__close" type="button" aria-label="Close onboarding" title="Close onboarding" onClick={() => api().onboardingPresenterAction?.({ type: 'dismiss' })}><UIIcon name="close" size={13} /></button>
       </header>
       <div
         className="ob-presenter__film"
@@ -184,10 +185,10 @@ export function OnboardingPresenter() {
             </div>}
       </div>
       <footer className="ob-presenter__controls">
-        <button type="button" disabled={!state.history.length || state.historyIndex === 0} onClick={() => dispatch({ type: 'back' })}>Back</button>
-        <button type="button" onClick={togglePlayback}>{paused ? 'Play' : 'Pause'}</button>
-        <button type="button" onClick={replay}>Replay</button>
-        {state.reviewing && <button type="button" onClick={() => dispatch({ type: 'forward' })}>Forward</button>}
+        <button type="button" title="Previous step" disabled={!state.history.length || state.historyIndex === 0} onClick={() => dispatch({ type: 'back' })}><UIIcon name="back" size={12} />Back</button>
+        <button type="button" aria-label={paused ? 'Play video' : 'Pause video'} title={paused ? 'Play video' : 'Pause video'} onClick={togglePlayback}><UIIcon name={paused ? 'play' : 'pause'} size={14} /></button>
+        <button type="button" aria-label="Replay video" title="Replay video" onClick={replay}><UIIcon name="replay" size={14} /></button>
+        {state.reviewing && <button type="button" onClick={() => dispatch({ type: 'forward' })}>Next<UIIcon name="chevron" size={12} /></button>}
         {!state.reviewing && state.phase !== 'processing' && canSkipAction(state.action, state.phase) &&
           <button className="ob-presenter__skip" type="button" onClick={() => api().onboardingPresenterAction?.({ type: 'skip-section' })}>Skip section</button>}
       </footer>

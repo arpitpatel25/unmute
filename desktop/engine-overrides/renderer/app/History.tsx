@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { SegmentedControl } from './_shared'
 import type { Session } from '../shared/types'
 
 interface CaptureHistoryEntry {
@@ -196,9 +197,12 @@ export default function History() {
         </p>
       </div>
 
-      <div className="flex gap-1 mb-4 rounded-xl bg-ink-07 p-1 w-fit">
-        <button onClick={() => setTab('dictations')} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === 'dictations' ? 'bg-surface-2 text-ink shadow-sm' : 'text-ink-35'}`}>History</button>
-        <button onClick={() => setTab('scratchpads')} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === 'scratchpads' ? 'bg-surface-2 text-ink shadow-sm' : 'text-ink-35'}`}>Scratchpads</button>
+      <div className="mb-5 w-fit">
+        <SegmentedControl
+          options={[{ value: 'dictations', label: 'History' }, { value: 'scratchpads', label: 'Scratchpads' }]}
+          value={tab}
+          onChange={(value) => setTab(value as 'dictations' | 'scratchpads')}
+        />
       </div>
 
       {tab === 'dictations' && <div className="flex flex-col gap-2.5">

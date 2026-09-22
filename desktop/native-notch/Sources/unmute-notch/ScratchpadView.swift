@@ -360,14 +360,15 @@ private struct PadButton: View {
     var body: some View {
         Button(action: { if enabled { action() } }) {
             Text(label)
-                .font(.system(size: 12, weight: prominent ? .semibold : .regular))
+                .font(Theme.controlFont)
                 .foregroundColor(ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(Capsule().fill(PadPaper.buttonFace).overlay(Capsule().fill(face)))
-                .overlay(Capsule().stroke(border, lineWidth: 0.75))
-                .contentShape(Capsule())
+                .padding(.horizontal, 12).frame(minHeight: Theme.controlHeight)
+                .background(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(PadPaper.buttonFace)
+                    .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(face)))
+                .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius).stroke(border, lineWidth: 0.75))
+                .contentShape(RoundedRectangle(cornerRadius: Theme.controlRadius))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)

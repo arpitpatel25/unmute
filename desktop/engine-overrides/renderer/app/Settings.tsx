@@ -1,8 +1,8 @@
 // Settings — seven sections, one at a time.
 //
-// SHAPE. Pack A's sidebar owns which section is showing and hands it down as
-// `section`; the seven ids and their labels are `SETTINGS_SECTIONS` in
-// _shared.tsx, so the sidebar and this file cannot drift apart. Permissions,
+// The app's Settings section navigator owns the selected section and passes it
+// through `section`. IDs and labels live in SETTINGS_SECTIONS in _shared.tsx.
+// Permissions,
 // Language and Privacy used to be top-level tabs of their own — they are
 // rendered here now, as sections, and their files no longer draw a page title
 // or a width.
@@ -32,6 +32,7 @@
 // "What this does" link to its page under ./help.
 
 import React, { useEffect, useRef, useState } from 'react'
+import { UIIcon } from './UIIcon'
 import { createPortal } from 'react-dom'
 import Permissions from './Permissions'
 import Language from './Language'
@@ -626,7 +627,7 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
   const sectionLabel = SETTINGS_SECTIONS.find((s) => s.id === section)?.label ?? 'Settings'
   // Language's picker is a three-column grid of every language; it needs more
   // room than a settings column. Everything else reads better narrow.
-  const width = section === 'language' ? 'max-w-3xl' : 'max-w-lg'
+  const width = section === 'language' ? 'max-w-3xl' : 'max-w-2xl'
 
   if (helpPage) {
     return (
@@ -642,7 +643,7 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
 
   return (
     <div className={width}>
-      <h2 className="font-display text-[22px] font-bold text-ink tracking-tight mb-6">{sectionLabel}</h2>
+      <h2 className="text-[18px] font-semibold text-ink tracking-tight mb-5">{sectionLabel}</h2>
 
       {/* ══════════════ 1 · Triggers ══════════════ */}
       {section === 'triggers' && (
@@ -655,7 +656,7 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
           <div className="p-5 pt-4 flex flex-col gap-2.5">
             {/* Dictate */}
             <div className="px-4 py-3.5 bg-white/[0.055] border border-white/[0.08] rounded-[13px]">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div>
                   <h4 className="text-[13px] font-medium text-white/88 mb-0.5">Dictate</h4>
                   <p className="text-[11px] text-white/36">
@@ -1079,7 +1080,7 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
                   <span className="block text-[13px] font-medium text-ink">{page.title}</span>
                   <span className="block text-[11px] text-ink-35 mt-0.5">{page.blurb}</span>
                 </span>
-                <span className="text-[13px] text-ink-35 shrink-0">›</span>
+                <UIIcon name="chevron" size={15} />
               </button>
             ))}
           </Card>
@@ -1091,14 +1092,21 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
                 slot is the narrow right-hand column. Same padding and divider
                 classes, so it sits in the card identically. */}
             <div className="px-5 py-4 border-b border-border last:border-b-0">
-              <div className="flex items-center justify-between">
-                <div>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="min-w-0 flex-1">
                   <p className="text-[13px] font-medium text-ink">
                     {`unmute ${appVersion ? `v${appVersion}` : ''}`.trim()}
                   </p>
-                  <p className="text-[11px] text-ink-35 mt-0.5">
-                    {updateNote ?? 'unmute updates itself in the background. Check now if you would rather not wait.'}
-                  </p>
+                  {updateNote && (updateStatus?.phase === 'error' || /failed|ERR_|bridge missing/i.test(updateNote)) ? (
+                    <details className="text-[12px] text-ink-60 mt-1">
+                      <summary className="cursor-pointer">Update needs attention</summary>
+                      <p className="mt-2 break-words text-[11px]">{updateNote}</p>
+                    </details>
+                  ) : (
+                    <p className="text-[12px] text-ink-60 mt-1">
+                      {updateNote ?? 'Updates are installed automatically. You can also check now.'}
+                    </p>
+                  )}
                 </div>
                 {/* One slot, three jobs. Once bytes are on disk the only useful
                     action is the restart that applies them, so the check button
@@ -1235,7 +1243,7 @@ function LinkedRow({ label, description, onExplain, children }: {
   children: React.ReactNode
 }) {
   return (
-    <div className="flex items-center justify-between px-5 py-4 border-b border-border last:border-b-0">
+    <div className="ui-setting-row flex items-center justify-between border-b border-border last:border-b-0">
       <div className="mr-4">
         <p className="text-[13px] font-medium text-ink">{label}</p>
         <p className="text-[11px] text-ink-35 mt-0.5">
@@ -1323,7 +1331,7 @@ function Picker({ value, options, placeholder, onChange }: {
         className="flex items-center justify-between gap-2 bg-cream-mid border border-border-md rounded-full pl-3.5 pr-3 py-2 text-[12.5px] font-medium text-ink shadow-sm min-w-[180px] max-w-[220px] disabled:opacity-40"
       >
         <span className="truncate">{current?.label ?? placeholder}</span>
-        <span className="text-[13px] text-ink-35 shrink-0">⌄</span>
+        <UIIcon name="down" size={14} />
       </button>
       {/* PORTALED TO body ON PURPOSE: every Card wraps its rows in
           `overflow-hidden` to keep them inside the rounded corners, which also

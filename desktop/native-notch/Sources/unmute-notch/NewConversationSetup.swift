@@ -6,8 +6,7 @@ struct NewConversationButton: View {
     @ObservedObject var model: NotchModel
     @State private var open = false
     var body: some View {
-        Button { open = true } label: { Label("New conversation", systemImage: "plus.bubble") }
-            .buttonStyle(.borderless)
+        KeyButton(label: "New conversation", symbol: "square.and.pencil") { open = true }
             .popover(isPresented: $open) { NewConversationSetup(model: model, close: { open = false }) }
     }
 }
@@ -21,8 +20,8 @@ struct NewConversationSetup: View {
     @State private var submitted = false
     @State private var permission = "maximum"
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("New conversation").font(.headline)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("New conversation").font(Theme.fTitle)
             Picker("Provider", selection: $provider) {
                 Text("Claude").tag("claude")
                 Text("Codex").tag("codex")
@@ -34,15 +33,23 @@ struct NewConversationSetup: View {
                 else { Text("Read only").tag("read") }
             }
             TextField("Search recent projects", text: $query)
+                .textFieldStyle(.roundedBorder)
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    Button("Use isolated Unmute-managed workspace") { folder = nil }
+                    KeyButton(label: "Use a new workspace", symbol: "folder.badge.plus") { folder = nil }
+                        .help("Use isolated Unmute-managed workspace")
                     ForEach((model.cockpit?.projects ?? []).filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.path.localizedCaseInsensitiveContains(query) }, id: \.path) { project in
                         Button { folder = project.path } label: {
-                            VStack(alignment: .leading) {
-                                Text(project.name)
-                                Text(project.path).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                            }.frame(maxWidth: .infinity, alignment: .leading)
+                            HStack(spacing: 8) {
+                                Image(systemName: "folder").foregroundColor(Theme.textFaint)
+                                Text(project.name).font(Theme.fBody).lineLimit(1)
+                                Spacer()
+                                if folder == project.path { Image(systemName: "checkmark").font(Theme.controlIcon) }
+                            }
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(folder == project.path ? Theme.raised : .clear))
+                            .help(project.path)
                         }.buttonStyle(.borderless)
                     }
                 }
@@ -53,10 +60,20 @@ struct NewConversationSetup: View {
                 panel.canCreateDirectories = true; panel.allowsMultipleSelection = false
                 panel.begin { response in if response == .OK { folder = panel.url?.path } }
             }
-            Text(folder ?? model.newChatPreview?.path ?? "Resolving managed project location…")
-                .font(.caption).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup {
+                Text(folder ?? model.newChatPreview?.path ?? "Preparing workspace…")
+                    .font(Theme.fSub).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if folder == nil {
+                    Text("A colliding or expired preview will require a new preview.")
+                        .font(Theme.fCap).foregroundStyle(.secondary)
+                }
+            } label: {
+                Label(folder.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "New Unmute workspace", systemImage: "folder")
+                    .font(Theme.fSub).lineLimit(1).truncationMode(.middle)
+            }
             if folder == nil {
-                Text("Project files are retained when this conversation is removed. A colliding or expired preview will require a new preview.")
+                Text("Your project files stay when you remove the conversation.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let preview = model.newChatPreview {
@@ -81,7 +98,8 @@ struct NewConversationSetup: View {
                 }.disabled(!canCreateChat(pending: model.newChatPending, folder: folder, hasManagedPreview: model.newChatPreview != nil))
             }
         }
-        .padding(18).frame(width: 400)
+        .padding(24).frame(width: 420)
+        .font(Theme.fSub)
         .onAppear { if !model.newChatPending { refreshPreview() } }
         .onChange(of: provider) { _ in permission = "maximum"; refreshPreview() }
         .onChange(of: permission) { _ in refreshPreview() }

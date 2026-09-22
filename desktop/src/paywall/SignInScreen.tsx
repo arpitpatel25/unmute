@@ -66,9 +66,9 @@ export function SignInScreen() {
 
       <div className="flex flex-col items-center justify-center min-h-screen px-8">
         <div className="max-w-sm w-full">
-          <h1 className="font-display text-[28px] font-bold text-ink tracking-tight mb-2">Sign in</h1>
+          <h1 className="font-display text-[28px] font-semibold text-ink tracking-tight mb-3">Sign in to Unmute</h1>
           <p className="text-[13px] text-ink-60 mb-8">
-            To use unmute's managed cloud, sign in once. You can still use Local mode without an account.
+            Sign in for managed cloud. Local mode works without an account.
           </p>
 
           <button
@@ -93,6 +93,8 @@ export function SignInScreen() {
 
           <input
             type="email"
+            aria-label="Email address"
+            autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
@@ -127,12 +129,13 @@ export function SignInScreen() {
             onClick={() => setShowPaste((s) => !s)}
             className="mt-5 text-[11px] text-ink-35 hover:text-ink-60 transition-colors underline"
           >
-            {showPaste ? 'Hide' : "Magic link didn't open the app? Paste the URL"}
+            {showPaste ? 'Hide sign-in help' : 'Having trouble opening your sign-in link?'}
           </button>
           {showPaste && (
             <div className="mt-2">
               <input
                 type="text"
+                aria-label="Sign-in link"
                 value={pasteUrl}
                 onChange={(e) => setPasteUrl(e.target.value)}
                 placeholder="unmute://auth/callback?code=..."
@@ -143,7 +146,7 @@ export function SignInScreen() {
                 disabled={!pasteUrl.trim()}
                 className="mt-2 w-full px-3 py-2 rounded-lg bg-ink text-white text-[11px] font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity"
               >
-                Submit URL
+                Open sign-in link
               </button>
               <p className="mt-2 text-[10px] text-ink-35 leading-relaxed">
                 In your email, <strong>right-click</strong> the "Sign in" link → <strong>Copy link</strong> → paste here.
