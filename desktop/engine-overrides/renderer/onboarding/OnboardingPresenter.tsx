@@ -105,8 +105,8 @@ export function OnboardingPresenter() {
     data-action={state.action}
     onPointerDown={event => {
       if (event.button !== 0) return
+      suppressClickRef.current = false
       dragRef.current = { pointerId: event.pointerId, state: beginPresenterDrag(event.screenX, event.screenY) }
-      event.currentTarget.setPointerCapture(event.pointerId)
     }}
     onPointerMove={event => {
       const drag = dragRef.current
@@ -114,6 +114,11 @@ export function OnboardingPresenter() {
       const next = advancePresenterDrag(drag.state, event.screenX, event.screenY)
       drag.state = next.state
       if (!next.delta) return
+      // Capturing on mouse-down retargets even ordinary button/video clicks
+      // to <main>. Capture only once this gesture actually becomes a drag.
+      if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.setPointerCapture(event.pointerId)
+      }
       event.preventDefault()
       api().onboardingMovePresenter?.(next.delta.x, next.delta.y)
     }}
@@ -122,10 +127,14 @@ export function OnboardingPresenter() {
       if (!drag || drag.pointerId !== event.pointerId) return
       suppressClickRef.current = didPresenterDrag(drag.state)
       dragRef.current = null
-      event.currentTarget.releasePointerCapture(event.pointerId)
-      window.setTimeout(() => { suppressClickRef.current = false }, 0)
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
     }}
     onPointerCancel={() => { dragRef.current = null }}
+    onPointerLeave={() => {
+      if (!didPresenterDrag(dragRef.current?.state)) dragRef.current = null
+    }}
     onClickCapture={event => {
       if (!suppressClickRef.current) return
       suppressClickRef.current = false

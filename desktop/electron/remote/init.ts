@@ -3351,6 +3351,11 @@ let onboardingTaskWorkspace: string | null = null
 export function setOnboardingTaskWorkspace(root: string | null): void {
   onboardingTaskWorkspace = root
 }
+
+/** Reveal only the task created by the active guided exercise. */
+export function openOnboardingTask(taskId: string): void {
+  notchController?.openTask(taskId)
+}
 /** The voice lifecycle, observed (never driven) for the wall's listening surface:
  *  listening (key held) → transcribing (key up, STT running) → routing (deciding
  *  where it lands) → idle (landed; taskId says where). PURELY ADDITIVE — a

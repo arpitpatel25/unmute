@@ -18,7 +18,7 @@ import { acceptsAgentTaskLink, onOnboardingReceipt } from './paywall/onboarding/
 import type { ActionId, OnboardingEvent, PresenterCommand, ProviderId, ProviderUiStatus } from './paywall/onboarding/types'
 import { keyboardManager } from './keyboard'
 import { preflightNotetakerSystemAudio } from './notetakerInit'
-import { setOnboardingTaskWorkspace } from './paywall/remote/init'
+import { openOnboardingTask, setOnboardingTaskWorkspace } from './paywall/remote/init'
 
 declare const __PIPELINE_URL__: string
 const execFileAsync = promisify(execFile)
@@ -97,6 +97,16 @@ export async function initOnboarding(
   const receiptSource = (listener: (event: OnboardingEvent) => void) => onOnboardingReceipt(event => {
     if (event.type === 'task-created' && event.cwd !== workspace) return
     if (event.type === 'task-created' && event.source === 'agent') ownedAgentTasks.add(event.taskId)
+    if (event.type === 'task-created' && event.source === 'orchestrator'
+      && coordinator.snapshot().action === 'orchestrator-task') {
+      // The receipt precedes TaskManager's normal created listeners. Let those
+      // populate the notch before opening the exact new task.
+      setImmediate(() => {
+        if (activeRuntime === runtime && runtime.snapshot().action === 'orchestrator-task') {
+          openOnboardingTask(event.taskId)
+        }
+      })
+    }
     if (event.type === 'agent-task-linked' && !acceptsAgentTaskLink(event, workspace, ownedAgentTasks)) return
     void Promise.resolve(listener(event)).then(() => afterReceipt?.()).catch(error => console.warn('[onboarding] receipt failed:', error))
   })
