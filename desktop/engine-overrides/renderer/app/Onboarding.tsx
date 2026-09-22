@@ -164,25 +164,24 @@ const OB_CSS = `
 .ob .track{position:absolute;top:0;left:0;right:0;height:2px;background:rgba(24,22,20,.08);z-index:9}
 .ob .track span{display:block;height:100%;background:var(--act);width:8%;transition:width .72s var(--calm)}
 .ob .tbar{height:38px;flex-shrink:0;display:flex;align-items:center;justify-content:flex-end;padding:0 20px}
-.ob .stepno{font:600 10.5px var(--sans);letter-spacing:.11em;color:var(--ink-4)}
+.ob .stepno{font:500 11px var(--sans);font-variant-numeric:tabular-nums;color:var(--ink-2)}
 .ob .stage{flex:1;position:relative;overflow:hidden}
 .ob .screen{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:safe center;
-  padding:14px 40px 10px;overflow-y:auto;animation:ob-in .6s var(--expo) both}
+  padding:24px 40px 16px;overflow-y:auto;animation:ob-in .2s ease-out both}
 /* THE COLUMN IS CENTRED, ITS CONTENTS ARE NOT. The app window is wider than
    the layout needs, so left-aligning against the window gutter stranded a band
    of empty paper down the right. Every direct child is now the same centred
    700px column, which keeps one shared left edge for headings and artwork
    while the margins stay even at any window width. */
-.ob .screen > *{width:100%;max-width:820px;margin-left:auto;margin-right:auto;
-  animation:ob-in .66s var(--expo) both;animation-delay:calc(var(--i,0) * 70ms)}
-@keyframes ob-in{from{opacity:0;transform:translateY(16px) scale(.99)}to{opacity:1;transform:none}}
+.ob .screen > *{width:100%;max-width:760px;margin-left:auto;margin-right:auto}
+@keyframes ob-in{from{opacity:0}to{opacity:1}}
 .ob .foot{flex-shrink:0;padding:16px 56px 22px;display:flex;align-items:center;gap:12px}
 .ob .foot .sp{flex:1}
 .ob #ob-back{margin-left:-20px}
 
 /* controls */
 .ob .btn{font:600 13.5px var(--sans);display:inline-flex;align-items:center;justify-content:center;gap:8px;
-  height:40px;padding:0 20px;border-radius:var(--r2);border:1px solid transparent;cursor:pointer;white-space:nowrap;
+  height:36px;padding:0 16px;border-radius:var(--r1);border:1px solid transparent;cursor:pointer;white-space:nowrap;
   transition:background .2s var(--calm),color .2s,border-color .2s,opacity .2s,transform .1s}
 .ob .btn:active{transform:scale(.985)}
 .ob .btn-primary{background:var(--act);color:#fff}
@@ -193,6 +192,7 @@ const OB_CSS = `
 .ob .btn-quiet:hover{background:rgba(24,22,20,.05);color:var(--ink)}
 .ob .btn-sm{height:30px;padding:0 13px;font-size:11.5px;border-radius:var(--r1)}
 .ob .btn:disabled{opacity:.35;cursor:not-allowed}
+.ob :is(button,input,select,a):focus-visible{outline:2px solid var(--act);outline-offset:3px}
 .ob .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r3)}
 .ob .rows > .row{display:grid;grid-template-columns:var(--lead,1fr) auto;align-items:center;gap:16px;
   padding:15px 18px;border-bottom:1px solid var(--line)}

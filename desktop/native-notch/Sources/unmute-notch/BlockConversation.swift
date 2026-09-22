@@ -123,11 +123,11 @@ struct BlockConversation: View {
                                 // whole rather than to the first message, and
                                 // left-aligned it read as a stray line of text
                                 // tucked under the title.
-                                Button(earlierLabel) {
+                                KeyButton(label: earlierLabel, symbol: "clock.arrow.circlepath") {
                                     olderAnchor = turns.first
                                     loadingOlder = true
                                     loadOlder()
-                                }.buttonStyle(.plain).foregroundColor(Theme.textDim)
+                                }
                                     .frame(maxWidth: .infinity, alignment: .center)
                             }
                             ForEach(turns) { turn in
@@ -526,7 +526,9 @@ private struct UsageFooter: View {
                     .foregroundColor(Theme.cNeeds)
             }
         }
-        .font(.system(size: 10, design: .monospaced))
+        .font(Theme.fCap)
+        .monospacedDigit()
+        .help("Conversation context used by the model")
         .padding(.top, 8)
         .padding(.bottom, 2)
     }

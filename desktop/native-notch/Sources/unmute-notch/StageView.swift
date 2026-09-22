@@ -245,7 +245,7 @@ struct StageView: View {
             }
             .padding(.leading, 6)
             // THE ONE TINTED PRIMARY.
-            ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
+            KeyButton(label: "Next", symbol: "chevron.right", trailingSymbol: true) { model.emit(.next) }
                 .padding(.leading, 6)
             CloseButton {
                 model.stageFull = stageFullState(current: model.stageFull, action: .close)

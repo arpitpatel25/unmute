@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
 import { LiveTerminal } from './LiveTerminal'
 import { Markdown } from './Markdown'
+import { UIIcon } from '../app/UIIcon'
 
 type OverlayModeInfo = { mode: 'hidden' | 'docked' | 'expanded'; docked: boolean }
 type API = {
@@ -155,11 +156,12 @@ function Expanded({
           {task.result.artifacts?.map((a, i) => (
             <button
               key={i}
-              className="mt-1.5 block text-left text-[11px] text-sky-300/85 hover:text-sky-200 truncate max-w-full"
+              className="mt-2 inline-flex items-center gap-2 text-left text-[12px] text-sky-300/85 hover:text-sky-200 max-w-full"
               onClick={() => openArtifact(a.type, a.value)}
-              title={a.type === 'path' ? 'Open in Finder' : 'Open in browser'}
+              title={`${a.type === 'path' ? 'Open in Finder' : 'Open in browser'}: ${a.value}`}
             >
-              ↗ {a.value}
+              <UIIcon name={a.type === 'path' ? 'file' : 'link'} size={14} />
+              <span className="truncate">{a.type === 'path' ? a.value.split(/[\\/]/).filter(Boolean).pop() || a.value : a.value}</span>
             </button>
           ))}
         </div>
@@ -222,12 +224,12 @@ function Expanded({
       )}
 
       {/* actions */}
-      <div className="flex items-center gap-3 mt-2.5 text-[11px]">
+      <div className="ui-floating-actions flex items-center mt-3 text-[12px]">
         {active && (
-          <button className="text-white/35 hover:text-white/80" onClick={() => onKill(task.id)}>stop</button>
+          <button className="text-white/35 hover:text-white/80" onClick={() => onKill(task.id)}>Stop</button>
         )}
         {!active && (
-          <button className="text-white/35 hover:text-white/80" onClick={() => onRerun(task.intent)}>re-run</button>
+          <button className="text-white/35 hover:text-white/80" onClick={() => onRerun(task.intent)}>Run again</button>
         )}
         {/* PTY-only: a driver-backed thread has no session of ours to revive.
             Asked of the provider registry, never of an agent id — a payload
@@ -239,7 +241,7 @@ function Expanded({
             title={task.resuming ? 'Bringing the session back…' : 'Continue this exact session with full prior context'}
             disabled={task.resuming}
             onClick={() => onResume(task.id)}
-          >{task.resuming ? 'resuming…' : 'resume'}</button>
+          >{task.resuming ? 'Resuming…' : 'Resume'}</button>
         )}
         {/* The reason, when it did not work — the click discards its result. */}
         {task.resumeError && !task.resuming && (
@@ -249,7 +251,7 @@ function Expanded({
           <span className="text-white/30" title="This session's terminal is open in the Orchestrator">in Orchestrator ↗</span>
         ) : (
           <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
-            {showTerminal ? 'hide terminal' : 'terminal'}
+            {showTerminal ? 'Hide terminal' : 'Terminal'}
           </button>
         )}
         <button
@@ -257,7 +259,7 @@ function Expanded({
           title="Kill the session and erase this task"
           onClick={() => { if (window.confirm('Kill this task and erase it?')) onRemove(task.id) }}
         >
-          kill
+          Delete
         </button>
       </div>
 
@@ -319,7 +321,7 @@ function DockPill({
   const leave = () => api().remoteOverlaySetInteractive?.(false)
 
   return (
-    <div className="h-screen w-screen p-2 flex items-end justify-end" style={{ background: 'transparent' }}>
+    <div className="ui-floating h-screen w-screen p-2 flex items-end justify-end" style={{ background: 'transparent' }}>
       <style>{POP_CSS}</style>
       <button
         className="group flex items-center gap-2 rounded-full pl-3.5 pr-2 py-2 cursor-pointer transition-colors hover:bg-black/90"
@@ -439,7 +441,7 @@ export function OverlayApp() {
   }
 
   return (
-    <div className="h-screen w-screen p-2" style={{ background: 'transparent' }}>
+    <div className="ui-floating h-screen w-screen p-2" style={{ background: 'transparent' }}>
       <style>{POP_CSS}</style>
       <div
         className="h-full flex flex-col rounded-[18px] overflow-hidden"

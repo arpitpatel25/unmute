@@ -33,7 +33,7 @@ export default function Account() {
   const auth = useAuth()
 
   return (
-    <div className="max-w-lg">
+    <div className="max-w-2xl">
       <h2 className="font-display text-[22px] font-bold text-ink tracking-tight mb-6">Account</h2>
 
       {/* ═══ Profile ═══ */}

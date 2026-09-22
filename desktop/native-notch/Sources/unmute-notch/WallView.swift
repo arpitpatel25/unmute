@@ -62,7 +62,7 @@ struct WallView: View {
 
     private var main: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 24) {
                 wallTitle
 
                 if let digest = data.digest { digestBanner(digest) }
@@ -80,8 +80,8 @@ struct WallView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(.horizontal, Theme.gutter)
-            .padding(.top, 18)
+            .padding(.horizontal, 24)
+            .padding(.top, 24)
             .padding(.bottom, 60)
         }
         .scrollEdge(topInset + 18)
@@ -93,12 +93,14 @@ struct WallView: View {
     private var headerChrome: some View {
         HStack(spacing: 10) {
             UnMark(height: 13)
-            SectionLabel(text: "Orchestrator")
+            Text("Orchestrator").font(Theme.fBodyMed).foregroundColor(Theme.textDim)
             HStack(spacing: 4) {
                 ForEach(WallViewMode.allCases, id: \.rawValue) { mode in
                     wallViewButton(mode)
                 }
             }
+            .padding(3)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Theme.raised))
             Spacer(minLength: 0)
             if data.groups.flatMap(\.cards).contains(where: { $0.status == .processing }) {
                 ViewThatFits(in: .horizontal) {
@@ -353,7 +355,7 @@ struct WallView: View {
             }
 
             // One ticket fills each row at every surface size.
-            LazyVGrid(columns: cardColumns, alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: cardColumns, alignment: .leading, spacing: 12) {
                 ForEach(shownCards, id: \.id) { card($0) }
             }
         }
@@ -361,14 +363,22 @@ struct WallView: View {
 
     private var cardColumns: [GridItem] {
         let count = WallCardLayout.columnCount(surfaceFill: Double(model.selectedSurfaceFill))
-        return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: count)
+        return Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: count)
     }
 
     // MARK: card
 
+    private func workspaceName(_ path: String?) -> String {
+        guard let path, !path.isEmpty else { return "Session" }
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        return UUID(uuidString: name) == nil ? name : "Workspace"
+    }
+
     private func card(_ c: CardP) -> some View {
         Button(action: { model.emit(.focusTask(id: c.id)) }) {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(c.title)
+                    .font(Theme.fBody.weight(.semibold)).foregroundColor(Theme.text).lineLimit(2)
                 HStack(spacing: 6) {
                     Dot(status: c.status, size: 7, breathing: c.status == .processing)
                     StatusLabel(status: c.status)
@@ -381,8 +391,6 @@ struct WallView: View {
                     Spacer(minLength: 0)
                     if let q = c.qpos { Badge(text: "Q\(q)") }
                 }
-                Text(c.title)
-                    .font(Theme.fBodyMed).foregroundColor(Theme.text).lineLimit(1)
                 if let a = c.activity, !a.isEmpty {
                     Text(a).font(Theme.fSub).foregroundColor(Theme.textDim).lineLimit(2)
                 }
@@ -409,7 +417,10 @@ struct WallView: View {
                     // CLI besides, because the card arrived with no backend and
                     // the label fell through to its default.
                     ProviderMark(backend: c.backend, terminal: c.terminal ?? true)
-                    NumText(text: c.kind == "session" ? (c.dir ?? "session") : "one-off")
+                    Text(c.kind == "session" ? workspaceName(c.dir) : "One-off")
+                        .font(Theme.fCap).foregroundColor(Theme.textFaint)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(c.dir ?? (c.kind == "session" ? "Session" : "One-off"))
                     Spacer(minLength: 0)
                     if c.backend == "codex-desktop" {
                         // The grid is the one place we deliberately do NOT show
@@ -429,8 +440,8 @@ struct WallView: View {
             // often does not — so cards in a row came out different heights and
             // the wall read as ragged. Sized UP to the tallest, never shrinking
             // the ones that have something to say.
-            .padding(.horizontal, 12).padding(.vertical, 11)
-            .frame(maxWidth: .infinity, minHeight: 104, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            .frame(maxWidth: .infinity, minHeight: 112, maxHeight: .infinity, alignment: .topLeading)
             .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(cardFill(c)))
             .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
                 .stroke(cardStroke(c), lineWidth: 0.5))

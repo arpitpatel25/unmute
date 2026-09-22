@@ -16,6 +16,17 @@ struct ComposerAttachmentTile: View {
         attachmentVisualState(isImage: attachment.mimeType.hasPrefix("image/"), fileExists: preview.canUse, imageDecoded: image != nil)
     }
     private var pasteText: String? { preview.text }
+    // Generated capture names are storage identifiers, not useful titles.
+    // Keep the original name in the tooltip; imported files retain their names.
+    private var displayName: String {
+        let name = URL(fileURLWithPath: attachment.name).lastPathComponent
+        if isPaste { return "Pasted text" }
+        if attachment.mimeType.hasPrefix("image/") &&
+            (name.contains("Unmute-") || name.hasPrefix("attachment-") || UUID(uuidString: (name as NSString).deletingPathExtension) != nil) {
+            return "Image"
+        }
+        return name
+    }
     private var metadata: String {
         let bytes = knownBytes.map(Int64.init) ?? preview.bytes
         return "\(attachment.name)\n\(attachment.mimeType) · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
@@ -27,31 +38,36 @@ struct ComposerAttachmentTile: View {
                     HStack { ProgressView().controlSize(.small); Text("Loading preview…").font(.system(size: 10)) }
                         .frame(width: 150, height: 52)
                 } else if let image {
-                    Image(nsImage: image).resizable().scaledToFit().frame(width: 64, height: 52)
+                    Image(nsImage: image).resizable().scaledToFit()
+                        .frame(width: 100, height: 72)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
                 } else if visualState == .unavailableImage {
                     VStack(alignment: .leading, spacing: 3) {
-                        Label(attachment.name, systemImage: "exclamationmark.triangle")
+                        Label(displayName, systemImage: "exclamationmark.triangle")
                             .font(.system(size: 11.5)).lineLimit(1)
                         Text("Image unavailable").font(.system(size: 10)).foregroundColor(Theme.cError)
                     }.frame(width: 150, height: 52, alignment: .leading)
                 } else {
                     VStack(alignment: .leading, spacing: 3) {
-                        Label(attachment.name, systemImage: isPaste ? "text.alignleft" : "doc")
+                        Label(displayName, systemImage: isPaste ? "text.alignleft" : "doc")
                             .font(.system(size: 11.5)).lineLimit(1)
                         if isPaste { Text(pasteText?.prefix(75) ?? "Unable to read pasted text").lineLimit(2).font(.system(size: 10)) }
                     }.frame(width: 150, height: 52, alignment: .leading)
                 }
             }
-            .buttonStyle(.plain).help(metadata).accessibilityLabel("Preview \(attachment.name)")
+            .buttonStyle(.plain).help(metadata).accessibilityLabel("Preview \(displayName)")
             .disabled(!preview.canUse)
             if !readOnly {
-                Button(action: remove) { Image(systemName: "xmark").frame(width: 28, height: 28) }
-                    .buttonStyle(.plain).accessibilityLabel("Remove \(attachment.name)")
+                Button(action: remove) {
+                    Image(systemName: "xmark").font(Theme.controlIcon)
+                        .foregroundColor(Theme.textDim).frame(width: 24, height: 28)
+                }
+                    .buttonStyle(.plain).help("Remove attachment").accessibilityLabel("Remove \(displayName)")
             }
         }
-        .padding(4)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.sunken))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline, lineWidth: 0.5))
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.sunken))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hairline, lineWidth: 0.5))
         .contextMenu {
             Button("Preview") { previewing = true }.disabled(!preview.canUse)
             Button("Copy") { copy() }.disabled(!preview.canUse)
@@ -59,14 +75,18 @@ struct ComposerAttachmentTile: View {
             if !readOnly { Button("Remove", action: remove) }
         }
         .popover(isPresented: $previewing) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(attachment.name).font(.headline).lineLimit(2)
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 12) {
+                    Label(displayName, systemImage: image != nil ? "photo" : isPaste ? "text.alignleft" : "doc")
+                        .font(Theme.fBodyMed).lineLimit(1).truncationMode(.middle)
+                        .help(attachment.name)
                     Spacer()
-                    Button("Done") { previewing = false }.keyboardShortcut(.cancelAction)
+                    KeyButton(label: "Done") { previewing = false }.keyboardShortcut(.cancelAction)
                 }
                 if let image {
-                    Image(nsImage: image).resizable().scaledToFit().frame(maxWidth: 480, maxHeight: 300)
+                    Image(nsImage: image).resizable().scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: 420)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                 } else if let text = pasteText {
                     ScrollView { Text(text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                         .frame(width: 440, height: 260)
@@ -74,13 +94,17 @@ struct ComposerAttachmentTile: View {
                     Text("This image is unavailable or could not be decoded.").foregroundColor(Theme.cError)
                 } else {
                     Text(metadata).textSelection(.enabled)
-                    Button("Open file") { IPC.emit(.openArtifact(type: "path", value: attachment.path)) }
+                    KeyButton(label: "Open file", symbol: "arrow.up.forward.square") { IPC.emit(.openArtifact(type: "path", value: attachment.path)) }
                 }
-                HStack {
-                    Button("Copy") { copy() }.disabled(!preview.canUse)
-                    if isPaste && !readOnly { Button("Edit in composer") { previewing = false; restore() } }
+                HStack(spacing: 8) {
+                    KeyButton(label: image != nil ? "Copy image" : "Copy", symbol: "doc.on.doc") { copy() }.disabled(!preview.canUse)
+                    if isPaste && !readOnly { KeyButton(label: "Edit in composer", symbol: "square.and.pencil") { previewing = false; restore() } }
+                    Spacer()
+                    Text(ByteCountFormatter.string(fromByteCount: knownBytes.map(Int64.init) ?? preview.bytes, countStyle: .file))
+                        .font(Theme.fCap).foregroundColor(Theme.textFaint)
+                        .help(metadata)
                 }
-            }.padding(16).frame(maxWidth: 520)
+            }.padding(20).frame(width: 520)
         }
         .task(id: attachment.path) { preview.load(path: attachment.path, mime: attachment.mimeType) }
     }

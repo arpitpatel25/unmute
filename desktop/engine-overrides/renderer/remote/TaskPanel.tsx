@@ -22,6 +22,7 @@ import { useEffect, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
 import { Markdown } from './Markdown'
 import { ProviderMark } from './ProviderMark'
+import { UIIcon } from '../app/UIIcon'
 import {
   agentAndModel, canKill, canResume, dirLabel, isDesktopTask, openInLabel, vendorMark,
 } from './taskFacts'
@@ -92,7 +93,7 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
   const attention = task.state === 'needs-user'
 
   return (
-    <div className={`rounded-[12px] border bg-white mb-2 ${attention ? 'border-[#b45309]/45 shadow-[0_0_0_1px_rgba(180,83,9,0.10)]' : 'border-border'}`}>
+    <div className={`ui-task-ticket border bg-white ${attention ? 'border-[#b45309]/45 shadow-[0_0_0_1px_rgba(180,83,9,0.10)]' : 'border-border'}`}>
       <div className="px-4 py-3.5">
         <p className="text-[14px] font-medium text-ink leading-snug">{nameOf(task)}</p>
 
@@ -103,7 +104,7 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
 
         {/* Structured tasks show their recorded session policy. Legacy records
             without it explicitly label the global default instead. */}
-        <div className="flex items-center gap-2 mt-2 text-[11px] text-ink-35 min-w-0">
+        <div className="ui-task-facts flex flex-wrap items-center mt-3 text-[11px] text-ink-35 min-w-0">
           <ProviderMark task={task} />
           {/* Only the MODEL survives as text — the mark says the rest, and the
               full "ran on …" sentence stays in its tooltip. */}
@@ -133,22 +134,26 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
           <div className="mt-2.5 text-[12.5px] text-ink-60">
             <p>{task.result.summary}</p>
             {task.result.detail && (
-              <div className="mt-1.5 max-h-72 overflow-auto border-l border-border pl-2.5">
-                <Markdown text={task.result.detail} />
-              </div>
+              <details className="mt-3">
+                <summary className="cursor-pointer text-[12px] font-medium py-1">Result details</summary>
+                <div className="mt-2 max-h-72 overflow-auto border-l border-border pl-3">
+                  <Markdown text={task.result.detail} />
+                </div>
+              </details>
             )}
             {task.result.artifacts?.map((a, i) => (
               <button
                 key={i}
-                className="mt-1 text-[11px] underline text-ink-60 hover:text-ink block text-left"
-                title={a.type === 'path' ? 'Open in Finder' : 'Open in your browser'}
+                className="mt-2 text-[12px] text-ink-60 hover:text-ink inline-flex items-center gap-2 text-left border border-border rounded-lg px-3 py-2 max-w-full"
+                title={`${a.type === 'path' ? 'Open in Finder' : 'Open in your browser'}: ${a.value}`}
                 onClick={() => {
                   const open = api().remoteOpenArtifact
                   if (open) void open(a.type, a.value)
                   else void navigator.clipboard?.writeText(a.value)
                 }}
               >
-                {a.type === 'path' ? '📄 ' : '🔗 '}{a.value}
+                <UIIcon name={a.type === 'path' ? 'file' : 'link'} size={15} />
+                <span className="truncate">{a.type === 'path' ? a.value.split(/[\\/]/).filter(Boolean).pop() || a.value : a.value}</span>
               </button>
             ))}
           </div>

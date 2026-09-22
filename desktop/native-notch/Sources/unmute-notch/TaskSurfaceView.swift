@@ -285,15 +285,25 @@ struct TaskSurfaceView: View {
     }
 
     private func footer(_ t: TaskDetail) -> some View {
-        HStack(spacing: 10) {
-            QuietButton(label: "Open dashboard", symbol: "square.grid.2x2") {
+        ViewThatFits(in: .horizontal) {
+            footerControls(compact: false)
+            footerControls(compact: true)
+        }
+        .padding(.top, 12)
+    }
+
+    private func footerControls(compact: Bool) -> some View {
+        HStack(spacing: 8) {
+            KeyButton(label: "Dashboard", symbol: "square.grid.2x2", compact: compact) {
                 model.emit(.openDashboard)
             }
-            QuietButton(label: model.backgroundAudioMuted ? "Resume background audio" : "Pause background audio",
-                        symbol: model.backgroundAudioMuted ? "play.circle" : "pause.circle") {
+            .help("Open dashboard")
+            KeyButton(label: model.backgroundAudioMuted ? "Resume audio" : "Pause audio",
+                        symbol: model.backgroundAudioMuted ? "speaker.wave.2" : "speaker.slash", compact: compact) {
                 model.backgroundAudioMuted.toggle()
                 model.emit(.backgroundAudio(muted: model.backgroundAudioMuted))
             }
+            .help(model.backgroundAudioMuted ? "Resume background audio" : "Pause background audio")
             Spacer(minLength: 0)
             SurfaceSizeControls(model: model)
             // ON EVERY CARD, because the arrow keys are on every card.
@@ -311,15 +321,15 @@ struct TaskSurfaceView: View {
             // ← and → did the same job on the same cards all along. A control
             // the keyboard has and the surface hides is not a smaller surface;
             // it is one that behaves differently depending on how you reach it.
-            KeyButton(label: "Prev", symbol: "arrow.left") { model.emit(.prev) }
-            // THE ONE TINTED PRIMARY — the crank.
-            ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
+            HStack(spacing: 4) {
+                KeyButton(label: "Previous", symbol: "chevron.left", compact: compact) { model.emit(.prev) }
+                KeyButton(label: "Next", symbol: "chevron.right", compact: compact, trailingSymbol: true) { model.emit(.next) }
+            }
             // The overflow menu lives in the header, top right, and nowhere
             // else. A second one beside Next offered a subset of the same
             // actions from the opposite corner, so the card had two places
             // to look for one thing.
         }
-        .padding(.top, 10)
     }
 }
 

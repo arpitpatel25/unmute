@@ -228,6 +228,7 @@ private struct RoundButton: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -258,6 +259,8 @@ private struct SlotRail: View {
                 .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.07)))
         }
         .buttonStyle(.plain)
+        .help(delta < 0 ? "Previous conversation" : "Next conversation")
+        .accessibilityLabel(delta < 0 ? "Previous conversation" : "Next conversation")
     }
 }
 

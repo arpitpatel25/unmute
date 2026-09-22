@@ -14,6 +14,7 @@ import { OverlayApp } from './remote/OverlayApp'
 import { NotetakerWidgetRoute } from './notetaker/NotetakerWidget'
 import { OnboardingPresenter } from './onboarding/OnboardingPresenter'
 import './styles.css'
+import './ui-refinement.css'
 
 const hash = window.location.hash
 

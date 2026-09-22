@@ -212,21 +212,20 @@ export function MeetingsList({
           <div className="text-[11px] font-semibold text-ink-35 uppercase tracking-wide px-1">
             {formatDayHeader(day[0].started_at)}
           </div>
-          {day.map((meeting, index) => {
+          {day.map((meeting) => {
             const progress = progressLabel(meeting)
             const failed = meeting.status === 'failed' || meeting.summary_status === 'failed'
             return (
               <button
                 key={meeting.id}
                 onClick={() => setSelectedId(meeting.id)}
-                className={`group text-left relative p-4 rounded-2xl border transition-all duration-200 hover:shadow-md animate-slide-in-up ${
+                className={`group text-left relative px-5 py-4 rounded-xl border transition-colors duration-150 ${
                   failed
                     ? 'border-error/15 bg-error-soft hover:border-error/25'
                     : meeting.summary_status === 'pending'
                       ? 'border-accent/20 bg-accent/[0.025] hover:border-accent/30'
                       : 'border-border bg-surface-2 hover:border-border-md'
                 }`}
-                style={{ animationDelay: `${index * 0.05}s` }}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">

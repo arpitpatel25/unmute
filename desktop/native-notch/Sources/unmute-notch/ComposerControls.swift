@@ -29,7 +29,7 @@ struct ComposerControls: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 6) {
                         ForEach(fields, id: \.self) { field in
                             setupControl(field)
                                 .fixedSize(horizontal: true, vertical: false)
@@ -73,7 +73,7 @@ struct ComposerControls: View {
             if let error = config.error { Text(error).foregroundColor(Theme.cError) }
             if let error = config.dictationError { Text(error).foregroundColor(Theme.cError) }
         }
-        .font(.system(size: 11.5))
+        .font(Theme.fSub)
         .buttonStyle(.borderless)
     }
 
@@ -99,7 +99,7 @@ struct ComposerControls: View {
                 Text(config.cwd)
                 Button("Show in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: config.cwd) }
             } label: {
-                SetupRowLabel(label: "Working folder", value: URL(fileURLWithPath: config.cwd).lastPathComponent)
+                SetupRowLabel(label: "Working folder", value: "Folder")
             }
             .help("\(config.cwd)\nChanging working folder starts a new conversation.")
         }
@@ -130,11 +130,13 @@ private struct SetupRowLabel: View {
     var body: some View {
         HStack(spacing: 5) {
             if label == "Working folder" { Image(systemName: "folder") }
-            Text(value).lineLimit(1).truncationMode(.middle)
+            Text(value).font(Theme.fSub).lineLimit(1).truncationMode(.middle)
                 .frame(maxWidth: label == "Working folder" ? 180 : 150)
         }
         .foregroundColor(Theme.textDim)
+        .padding(.horizontal, 8)
         .frame(minHeight: 28)
+        .background(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(Theme.raised))
         .accessibilityLabel("\(label): \(value)")
         .contentShape(Rectangle())
     }

@@ -81,10 +81,11 @@ body:has(.ob-presenter),
 .ob-presenter__progress span { flex: 1; height: 3px; border-radius: 999px; background: rgba(255,255,255,.12); }
 .ob-presenter__progress span.is-past { background: rgba(255,255,255,.46); }
 .ob-presenter__progress span.is-current { background: var(--ob-accent); }
-.ob-presenter__step { color: var(--ob-faint); font-size: 9px; font-variant-numeric: tabular-nums; }
+.ob-presenter__step { color: var(--ob-muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ob-presenter__close {
   width: 22px;
   height: 22px;
+  min-height: 22px !important;
   margin: 0 0 0 2px;
   padding: 0 !important;
   display: grid;
@@ -137,16 +138,21 @@ body:has(.ob-presenter),
   color: white;
 }
 
-.ob-presenter__controls { height: 37px; display: flex; align-items: end; gap: 4px; padding: 7px 4px 0; }
+.ob-presenter__controls { height: 37px; display: flex; align-items: end; gap: 4px; padding: 7px 2px 0; }
 .ob-presenter button {
   -webkit-app-region: no-drag;
   appearance: none;
   border: 0;
-  border-radius: 10px;
-  padding: 7px 10px;
+  border-radius: 7px;
+  padding: 7px 8px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   background: transparent;
   color: var(--ob-muted);
-  font: 550 11px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+  font: 500 11px/1.2 -apple-system, BlinkMacSystemFont, sans-serif;
   cursor: pointer;
 }
 .ob-presenter button:hover { color: var(--ob-ink); background: var(--ob-raised-hover); }
@@ -162,7 +168,7 @@ body:has(.ob-presenter),
   padding: 17px 18px;
 }
 .ob-presenter__card h1 { margin: 0 0 7px; font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
-.ob-presenter__card p { margin: 0; color: var(--ob-muted); font-size: 12px; line-height: 1.4; }
+.ob-presenter__card p { margin: 0; color: var(--ob-muted); font-size: 12px; line-height: 1.5; text-wrap: pretty; }
 .ob-presenter__card blockquote { margin: 0; color: var(--ob-ink); font-size: 15px; line-height: 1.35; letter-spacing: -.01em; }
 .ob-presenter__card blockquote::before { content: "“"; color: var(--ob-accent); }
 .ob-presenter__card blockquote::after { content: "”"; color: var(--ob-accent); }

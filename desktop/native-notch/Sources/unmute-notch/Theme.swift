@@ -305,6 +305,9 @@ enum Theme {
     /// Fixed radii for elements that are not corner-adjacent.
     static let cardRadius: CGFloat = 10
     static let controlRadius: CGFloat = 7
+    static let controlHeight: CGFloat = 28
+    static let controlFont = Font.system(size: 12, weight: .medium)
+    static let controlIcon = Font.system(size: 11, weight: .medium)
     /// Plane edge → content.
     static let gutter: CGFloat = 16
 
@@ -354,7 +357,7 @@ enum Theme {
     static let fStatus  = Font.system(size: 11, weight: .semibold)
     /// Section labels: uppercase, with tracking applied at the call site.
     static let fMicro   = Font.system(size: 10, weight: .semibold)
-    static let fNum     = Font.system(size: 10.5, design: .monospaced)
+    static let fNum     = Font.system(size: 11)
     static let fTerm    = Font.system(size: 11.5, design: .monospaced)
 }
 

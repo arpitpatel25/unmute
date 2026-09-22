@@ -26,6 +26,7 @@ import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { SHOW_TRANSCRIPT_UI } from './notetakerUi'
+import { UIIcon } from '../app/UIIcon'
 
 // Field-for-field mirrors of the preload-facing types (electron/remote-
 // preload.ts) — not imported directly, same cross-tree precedent every
@@ -598,8 +599,8 @@ export function MeetingDetail({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2">
-        <button onClick={onBack} className="text-[12px] text-ink-60 hover:text-ink transition-colors">
-          &larr; Back
+        <button onClick={onBack} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-[12px] text-ink-60 hover:text-ink transition-colors">
+          <UIIcon name="back" size={14} /> All meetings
         </button>
       </div>
 
@@ -612,12 +613,12 @@ export function MeetingDetail({
             if (e.key === 'Enter') void saveTitle()
             if (e.key === 'Escape') { setDraftTitle(title); setEditingTitle(false) }
           }}
-          className="text-[18px] font-bold text-ink bg-transparent border-b border-border outline-none w-full"
+          className="text-[24px] font-semibold text-ink bg-transparent border-b border-border outline-none w-full"
           autoFocus
         />
       ) : (
         <h2
-          className="text-[18px] font-bold text-ink cursor-text"
+          className="text-[24px] font-semibold text-ink cursor-text tracking-tight leading-tight"
           onClick={() => { setDraftTitle(title); setEditingTitle(true) }}
           title="Click to rename"
         >
