@@ -33,7 +33,10 @@ body:has(.ob-presenter),
   color: var(--ob-ink);
   -webkit-font-smoothing: antialiased;
   user-select: none;
+  cursor: grab;
 }
+
+.ob-presenter:active { cursor: grabbing; }
 
 .ob-presenter *, .ob-presenter *::before, .ob-presenter *::after { box-sizing: border-box; }
 
@@ -66,8 +69,6 @@ body:has(.ob-presenter),
   align-items: center;
   gap: 8px;
   position: relative;
-  -webkit-app-region: drag;
-  cursor: grab;
 }
 
 .ob-presenter__progress {

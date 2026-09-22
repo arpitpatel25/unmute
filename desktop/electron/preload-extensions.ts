@@ -26,6 +26,9 @@ export const paywallPreloadExtensions = {
   onboardingPresenterAction: (action: unknown): void => {
     ipcRenderer.send('onboarding:presenter-action', action)
   },
+  onboardingMovePresenter: (deltaX: number, deltaY: number): void => {
+    ipcRenderer.send('onboarding:presenter-move', { deltaX, deltaY })
+  },
   onboardingGetSnapshot: (): Promise<unknown> => ipcRenderer.invoke('onboarding:snapshot'),
   onboardingReset: (): Promise<unknown> => ipcRenderer.invoke('onboarding:reset'),
   onboardingCompleteOrientation: (): Promise<unknown> => ipcRenderer.invoke('onboarding:orientation-complete'),

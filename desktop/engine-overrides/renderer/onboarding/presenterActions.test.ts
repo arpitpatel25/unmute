@@ -46,3 +46,26 @@ test('only processing task exercises offer a bounded escape', () => {
   assert.equal(processingEscapeDelayMs('orchestrator-task', 'listening'), null)
   assert.equal(processingEscapeDelayMs('microphone', 'processing'), null)
 })
+
+test('whole-surface pointer movement becomes a drag only after the click threshold', () => {
+  const actions = presenterActions as unknown as {
+    beginPresenterDrag?: (x: number, y: number) => unknown
+    advancePresenterDrag?: (state: unknown, x: number, y: number) => { state: unknown; delta: { x: number; y: number } | null }
+    didPresenterDrag?: (state: unknown) => boolean
+  }
+  assert.equal(typeof actions.beginPresenterDrag, 'function')
+  assert.equal(typeof actions.advancePresenterDrag, 'function')
+  assert.equal(typeof actions.didPresenterDrag, 'function')
+
+  let state = actions.beginPresenterDrag?.(100, 100)
+  let next = actions.advancePresenterDrag?.(state, 102, 102)
+  assert.equal(next?.delta, null)
+  assert.equal(actions.didPresenterDrag?.(next?.state), false)
+
+  next = actions.advancePresenterDrag?.(next?.state, 106, 105)
+  assert.deepEqual(next?.delta, { x: 6, y: 5 })
+  assert.equal(actions.didPresenterDrag?.(next?.state), true)
+
+  next = actions.advancePresenterDrag?.(next?.state, 109, 103)
+  assert.deepEqual(next?.delta, { x: 3, y: -2 })
+})

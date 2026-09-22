@@ -40,17 +40,24 @@ export class PresenterWindow {
   private window: PresenterBrowserWindow | undefined
   private ready = false
   private pending: PresenterCommand | undefined
+  private bounds: Rectangle | undefined
+  private userPositioned = false
 
   constructor(private readonly deps: PresenterWindowDeps) {}
 
   show(): void {
     if (this.window && !this.window.isDestroyed()) {
-      this.window.setBounds(presenterBounds(this.deps.displayWorkArea()))
+      if (!this.userPositioned) {
+        this.bounds = presenterBounds(this.deps.displayWorkArea())
+        this.window.setBounds(this.bounds)
+      }
       this.window.showInactive()
       return
     }
 
     const bounds = presenterBounds(this.deps.displayWorkArea())
+    this.bounds = bounds
+    this.userPositioned = false
     this.ready = false
     this.window = this.deps.create({
       ...bounds,
@@ -75,6 +82,19 @@ export class PresenterWindow {
     void this.window.loadURL(this.deps.routeUrl())
   }
 
+  moveBy(deltaX: number, deltaY: number): void {
+    if (!this.window || this.window.isDestroyed() || !this.bounds) return
+    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return
+    if (deltaX === 0 && deltaY === 0) return
+    this.bounds = {
+      ...this.bounds,
+      x: this.bounds.x + Math.round(deltaX),
+      y: this.bounds.y + Math.round(deltaY),
+    }
+    this.userPositioned = true
+    this.window.setBounds(this.bounds)
+  }
+
   send(command: PresenterCommand): void {
     if (!this.window || this.window.isDestroyed()) this.show()
     if (!this.ready) {
@@ -89,6 +109,8 @@ export class PresenterWindow {
     this.window = undefined
     this.ready = false
     this.pending = undefined
+    this.bounds = undefined
+    this.userPositioned = false
   }
 
   private deliver(command: PresenterCommand): void {

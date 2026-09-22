@@ -218,6 +218,12 @@ export async function initOnboarding(
     return result
   })
   ipcMain.removeAllListeners('onboarding:presenter-action')
+  ipcMain.removeAllListeners('onboarding:presenter-move')
+  ipcMain.on('onboarding:presenter-move', (_event, value: unknown) => {
+    const delta = value as { deltaX?: unknown; deltaY?: unknown }
+    if (typeof delta?.deltaX !== 'number' || typeof delta?.deltaY !== 'number') return
+    presenter.moveBy(delta.deltaX, delta.deltaY)
+  })
   ipcMain.on('onboarding:presenter-action', async (_event, value: unknown) => {
     const action = value as { type?: string; provider?: ProviderId }
     if (action.type === 'continue') {

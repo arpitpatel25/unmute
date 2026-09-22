@@ -149,6 +149,23 @@ test('hands-on presenter controls do not steal focus from the destination app', 
   assert.equal(window.focusable.at(-1), true)
 })
 
+test('whole-surface dragging moves the presenter and later shows keep that position', () => {
+  const window = fakeWindow()
+  const presenter = new PresenterWindow({
+    create: () => window,
+    routeUrl: () => 'file:///app/index.html#/onboarding-presenter',
+    displayWorkArea: () => ({ x: 0, y: 0, width: 1440, height: 900 }),
+  })
+
+  presenter.show()
+  const moveBy = (presenter as unknown as { moveBy?: (x: number, y: number) => void }).moveBy
+  assert.equal(typeof moveBy, 'function')
+  moveBy?.call(presenter, 40, 25)
+  presenter.show()
+
+  assert.deepEqual(window.bounds.at(-1), { x: 1020, y: 101, width: 432, height: 744 })
+})
+
 function fakeWindow(sent: unknown[] = []) {
   let ready: (() => void) | undefined
   const window = {
@@ -164,7 +181,8 @@ function fakeWindow(sent: unknown[] = []) {
     setVisibleOnAllWorkspaces: (...args: unknown[]) => { window.visibleOnAllWorkspaces = args },
     setAlwaysOnTop: (...args: unknown[]) => { window.alwaysOnTop = args },
     setFocusable: (value: boolean) => { window.focusable.push(value) },
-    setBounds: () => undefined,
+    bounds: [] as Array<{ x: number; y: number; width: number; height: number }>,
+    setBounds: (bounds: { x: number; y: number; width: number; height: number }) => { window.bounds.push(bounds) },
     isDestroyed: () => false,
     destroy: () => undefined,
     markReady: () => ready?.(),

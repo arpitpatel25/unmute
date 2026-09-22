@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 
 import { clipUrl } from './clips'
-import { canSkipAction, clipEndActionFor, processingEscapeDelayMs, successButtonForAction } from './presenterActions'
+import { advancePresenterDrag, beginPresenterDrag, canSkipAction, clipEndActionFor, didPresenterDrag, processingEscapeDelayMs, successButtonForAction, type PresenterDragState } from './presenterActions'
 import { emptyPresenter, reducePresenter, type PresenterCard, type PresenterMessage } from './presenterState'
 import './presenter.css'
 
@@ -12,6 +12,7 @@ type PresenterAction =
 type PresenterApi = {
   onboardingOnPresenterCommand?(callback: (message: PresenterMessage) => void): () => void
   onboardingPresenterAction?(action: PresenterAction): void
+  onboardingMovePresenter?(deltaX: number, deltaY: number): void
 }
 
 function api(): PresenterApi {
@@ -60,6 +61,8 @@ export function OnboardingPresenter() {
   const [paused, setPaused] = useState(false)
   const [escapeReady, setEscapeReady] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const dragRef = useRef<{ pointerId: number; state: PresenterDragState } | null>(null)
+  const suppressClickRef = useRef(false)
   const videoUrl = clipUrl(state.clipId)
   const hasVideo = !state.videoUnavailable && Boolean(videoUrl)
   const totalSteps = Math.max(1, state.totalSteps)
@@ -97,7 +100,39 @@ export function OnboardingPresenter() {
 
   const videoKey = `${state.clipId}:${state.reviewing ? 'review' : 'live'}`
 
-  return <main className="ob-presenter" data-action={state.action}>
+  return <main
+    className="ob-presenter"
+    data-action={state.action}
+    onPointerDown={event => {
+      if (event.button !== 0) return
+      dragRef.current = { pointerId: event.pointerId, state: beginPresenterDrag(event.screenX, event.screenY) }
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }}
+    onPointerMove={event => {
+      const drag = dragRef.current
+      if (!drag || drag.pointerId !== event.pointerId) return
+      const next = advancePresenterDrag(drag.state, event.screenX, event.screenY)
+      drag.state = next.state
+      if (!next.delta) return
+      event.preventDefault()
+      api().onboardingMovePresenter?.(next.delta.x, next.delta.y)
+    }}
+    onPointerUp={event => {
+      const drag = dragRef.current
+      if (!drag || drag.pointerId !== event.pointerId) return
+      suppressClickRef.current = didPresenterDrag(drag.state)
+      dragRef.current = null
+      event.currentTarget.releasePointerCapture(event.pointerId)
+      window.setTimeout(() => { suppressClickRef.current = false }, 0)
+    }}
+    onPointerCancel={() => { dragRef.current = null }}
+    onClickCapture={event => {
+      if (!suppressClickRef.current) return
+      suppressClickRef.current = false
+      event.preventDefault()
+      event.stopPropagation()
+    }}
+  >
     <section className="ob-presenter__glass">
       <header className="ob-presenter__identity">
         <div className="ob-presenter__progress" role="progressbar" aria-label={`Onboarding step ${step} of ${totalSteps}`} aria-valuemin={1} aria-valuemax={totalSteps} aria-valuenow={step}>
