@@ -87,8 +87,10 @@ struct RichText: View {
                 // in the dashboard instead of the conversation surface.
                 IPC.emit(.pocketFocusTask(id: taskID))
             } else if url.isFileURL {
+                AppController.CardLink.clicked()
                 IPC.emit(.openArtifact(type: "path", value: url.path))
             } else {
+                AppController.CardLink.clicked()
                 IPC.emit(.openArtifact(type: "url", value: url.absoluteString))
             }
             return .handled

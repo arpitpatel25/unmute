@@ -1955,8 +1955,7 @@ final class AppController: NSObject, NotchResizing {
                 }
                 self.model.emit(.userReturned)
             } else if self.isExpanded(self.model.state) {
-                NotchLog.log("user left for \(app?.bundleIdentifier ?? "?") — collapsing")
-                self.beginAutomaticDeparture(reason: "blur")
+                self.leaveIfShown(app, recheck: false)
             }
         }
 
@@ -1974,6 +1973,53 @@ final class AppController: NSObject, NotchResizing {
             guard let self, self.isExpanded(self.model.state) else { return }
             NotchLog.log("space changed — collapsing")
             self.beginAutomaticDeparture(reason: "space")
+        }
+    }
+
+    /// AN APP WITH NOTHING ON SCREEN IS NOT WHERE THE USER WENT.
+    ///
+    /// 2026-09-21: an orphaned headless Chrome (an agent's `--screenshot` run
+    /// that never exited) was registered as Google Chrome, so every link in a
+    /// card opened inside it — invisibly — and its activation collapsed the
+    /// card. Nothing opened and the card vanished. A real switch has a window
+    /// on screen; an app that is only launching gets one more look before we
+    /// believe it.
+    private func leaveIfShown(_ app: NSRunningApplication?, recheck: Bool) {
+        guard isExpanded(model.state) else { return }
+        let pid = app?.processIdentifier ?? 0
+        // ONLY RIGHT AFTER A LINK IN THE CARD. Every other switch behaves as
+        // it always has.
+        let fromLink = CardLink.clickedRecently()
+        let onScreen = !fromLink || Self.hasWindowOnScreen(pid: pid)
+        switch DepartureTarget.decide(hasWindowOnScreen: onScreen, rechecked: recheck) {
+        case .leave:
+            NotchLog.log("user left for \(app?.bundleIdentifier ?? "?") — collapsing")
+            beginAutomaticDeparture(reason: "blur")
+        case .lookAgain:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+                self?.leaveIfShown(app, recheck: true)
+            }
+        case .stay:
+            NotchLog.log("ignored activation of \(app?.bundleIdentifier ?? "?") pid=\(pid) — no window on screen")
+        }
+    }
+
+    /// When the card last opened a link, so only that switch gets the check.
+    enum CardLink {
+        private static var last: Date?
+        static func clicked() { last = Date() }
+        static func clickedRecently() -> Bool { last.map { Date().timeIntervalSince($0) < 3 } ?? false }
+    }
+
+    /// Owner pid and layer are readable without Screen Recording permission.
+    private static func hasWindowOnScreen(pid: pid_t) -> Bool {
+        guard pid > 0,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                    kCGNullWindowID) as? [[String: Any]]
+        else { return true }
+        return list.contains {
+            ($0[kCGWindowOwnerPID as String] as? pid_t) == pid && ($0[kCGWindowLayer as String] as? Int) == 0
         }
     }
 
