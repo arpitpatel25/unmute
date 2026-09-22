@@ -8,7 +8,7 @@ import { RoutineRunner } from './runner'
 import { RoutineStore } from './store'
 import { RoutineRunLog } from './run-log'
 import { nextFireAt } from './schedule'
-import type { RoutineFields } from './definition'
+import { parseRoutineContext, type RoutineFields } from './definition'
 import type { ExecuteInput, ExecuteOutcome, RoutineExecutor } from './executor'
 import type { RoutineRun } from './types'
 
@@ -74,6 +74,35 @@ async function setup(opts: { now?: number; agentProvider?: 'claude' | 'codex'; m
 }
 
 const runsOf = (log: RoutineRunLog, routineId: string) => log.all().filter(r => r.routineId === routineId)
+
+test('selected context reaches the manifest and empty sessions do not discard attached reference files', async () => {
+  const s = await setup()
+  const context = parseRoutineContext({ folders: ['/repo/a'], excludedSessionIds: ['excluded'], files: ['/reference.md'] })
+  await s.create({ name: 'Scoped', context })
+  await mkdir(s.indexDir, { recursive: true })
+  await writeFile(join(s.indexDir, 'sessions.jsonl'), ['selected', 'excluded', 'other'].map(id => JSON.stringify({ id, cwd: id === 'other' ? '/repo/b' : '/repo/a' })).join('\n'))
+  await writeFile(join(s.indexDir, 'turns.jsonl'), ['selected', 'excluded', 'other'].map(s => JSON.stringify({ s, t: MON_0800 - 1, o: 0, text: s })).join('\n'))
+  const run = await s.runner.runNow('scoped')
+  const manifest = JSON.parse(await readFile(join(s.runsDir, run.id, 'manifest.json'), 'utf8'))
+  assert.deepEqual(manifest.sessions.map((s: any) => s.id), ['selected'])
+  assert.match(s.starts[0]!.input.transcript, /reference.md/)
+  await s.runner.dispose()
+  s.store.close()
+  const empty = await setup()
+  await empty.create({ name: 'Reference', context })
+  await empty.runner.runNow('reference')
+  assert.equal(empty.starts.length, 1)
+  await empty.runner.dispose()
+  empty.store.close()
+})
+
+test('a meeting-specific routine ignores unrelated meeting events', async () => {
+  const s = await setup()
+  await s.create({ name: 'Meeting', schedule: 'on meeting-notes-ready', inputs: ['meetings'], context: parseRoutineContext({ meetingIds: ['m1'] }) })
+  assert.equal((await s.runner.event({ type: 'meeting-notes-ready', meetingId: 'm2' })).length, 0)
+  assert.equal((await s.runner.event({ type: 'meeting-notes-ready', meetingId: 'm1' })).length, 1)
+  await s.runner.dispose(); s.store.close()
+})
 
 test('1. a due clock routine within 6h fires a scheduled run and advances nextFireAt', async () => {
   const s = await setup()

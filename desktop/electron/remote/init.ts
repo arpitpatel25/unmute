@@ -20,6 +20,7 @@
 
 import { ipcMain, BrowserWindow, Notification, shell, app, clipboard, powerMonitor, safeStorage } from 'electron'
 import Store from 'electron-store'
+import { routineEditorFields } from './agent/routines/editor'
 import { join, dirname, basename, isAbsolute } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -6185,11 +6186,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
             case 'runNow': await client.routines.runNow(action.id); break
             case 'setEnabled': await client.routines.setEnabled(action.id, action.enabled); break
             case 'update': {
-              const { name, schedule, window, kind, prompt } = action.fields
-              if (kind !== 'read-only' && kind !== 'takes-actions') throw new Error(`"${kind}" is not a kind; use read-only or takes-actions`)
-              await client.routines.update(action.id, { name, schedule, window, kind, prompt })
+              await client.routines.update(action.id, routineEditorFields(action.fields))
               break
             }
+            case 'create': await client.routines.create(routineEditorFields(action.fields)); break
+            case 'duplicate': await client.routines.duplicate(action.id); break
+            case 'remove': await client.routines.remove(action.id); break
+            case 'refreshContext': await client.routines.refreshContext(); break
             case 'cancel': await client.routines.cancel(action.runId); break
             case 'openTranscript': {
               const path = await client.routines.transcriptPath(action.runId)

@@ -31,6 +31,7 @@ function fieldsFromDefinition(d: RoutineDefinition): RoutineFields {
   return {
     name: d.name, schedule: formatSchedule(d.schedule), prompt: d.prompt, window: formatWindow(d.window),
     kind: d.kind, provider: d.provider, inputs: d.inputs, whenEmpty: d.whenEmpty, maxMinutes: d.maxMinutes, speak: d.speak,
+    ...(d.context ? { context: d.context } : {}),
   }
 }
 
@@ -131,6 +132,15 @@ export class RoutineStore {
   }
 
   create(fields: RoutineFields): Promise<RoutineEntry> { return this.exclusive(() => this.createNow(fields)) }
+  duplicate(id: string): Promise<RoutineEntry> {
+    return this.exclusive(async () => {
+      const d = this.entries.get(id)?.definition
+      if (!d) throw new Error(`Routine "${id}" was not found`)
+      const entry = await this.createNow({ ...fieldsFromDefinition(d), name: `${d.name.slice(0, 53)} (copy)`, concise: false })
+      await this.setEnabledNow(entry.id, false)
+      return this.entries.get(entry.id)!
+    })
+  }
   private async createNow(fields: RoutineFields): Promise<RoutineEntry> {
     const id = slugify(fields.name ?? '', new Set(this.entries.keys()))
     const { concise: _concise, ...rest } = withConciseLine(fields)

@@ -177,6 +177,9 @@ struct ChatConfigP: Codable {
 /// routine-blocks.ts `RoutineItemP`. Every field but `id`/`name` is optional
 /// so a field TS adds or drops never breaks decoding here (R5).
 struct RoutineItemP: Codable {
+    var inputs: [String]? = nil
+    var context: RoutineContextP? = nil
+    var recentRuns: [RoutineRunSummaryP]? = nil
     let id: String
     let name: String
     let scheduleLabel: String?
@@ -191,6 +194,28 @@ struct RoutineItemP: Codable {
     let window: String?
     let prompt: String?
     let color: String?
+}
+
+struct RoutineContextP: Codable, Equatable {
+    var folders: [String] = []
+    var sessionIds: [String] = []
+    var files: [String] = []
+    var excludedFolders: [String] = []
+    var excludedSessionIds: [String] = []
+    var meetingIds: [String]? = nil
+}
+struct RoutineRunSummaryP: Codable {
+    let id: String
+    let status: String
+    let at: Int
+    let preview: String?
+}
+struct RoutineContextCatalogP: Codable {
+    struct Session: Codable { let id: String; let label: String; let cwd: String? }
+    let folders: [String]
+    let sessions: [Session]
+    struct Meeting: Codable { let id: String; let title: String }
+    let meetings: [Meeting]?
 }
 
 /// One activity line in an open run's transcript — see
@@ -227,6 +252,7 @@ struct RoutineRunDetailP: Codable {
 /// `available: false` shape (no engine has ever sent `items` there) and any
 /// older engine that predates this field.
 struct RoutinesPayload: Codable {
+    var contextCatalog: RoutineContextCatalogP? = nil
     let available: Bool
     let reason: String?
     let items: [RoutineItemP]
@@ -242,6 +268,7 @@ struct RoutinesPayload: Codable {
         reason = try c.decodeIfPresent(String.self, forKey: .reason)
         items = try c.decodeIfPresent([RoutineItemP].self, forKey: .items) ?? []
         run = try c.decodeIfPresent(RoutineRunDetailP.self, forKey: .run)
+        contextCatalog = try c.decodeIfPresent(RoutineContextCatalogP.self, forKey: .contextCatalog)
     }
 }
 
@@ -883,6 +910,10 @@ enum Event {
     case routineSetEnabled(id: String, enabled: Bool)
     /// `fields` is name, schedule, window, kind and prompt, all canonical text.
     case routineUpdate(id: String, fields: [String: String])
+    case routineCreate(fields: [String: String])
+    case routineDuplicate(id: String)
+    case routineRemove(id: String)
+    case routineRefreshContext
     case routineOpenRun(runId: String)
     case routineCloseRun
     case routineCancel(runId: String)
@@ -1018,6 +1049,10 @@ enum Event {
         case .routineRunNow(let id): return ["type": "routineRunNow", "id": id]
         case .routineSetEnabled(let id, let enabled): return ["type": "routineSetEnabled", "id": id, "enabled": enabled]
         case .routineUpdate(let id, let fields): return ["type": "routineUpdate", "id": id, "fields": fields]
+        case .routineCreate(let fields): return ["type": "routineCreate", "fields": fields]
+        case .routineDuplicate(let id): return ["type": "routineDuplicate", "id": id]
+        case .routineRemove(let id): return ["type": "routineRemove", "id": id]
+        case .routineRefreshContext: return ["type": "routineRefreshContext"]
         case .routineOpenRun(let runId): return ["type": "routineOpenRun", "runId": runId]
         case .routineCloseRun: return ["type": "routineCloseRun"]
         case .routineCancel(let runId): return ["type": "routineCancel", "runId": runId]

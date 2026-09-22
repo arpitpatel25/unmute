@@ -7,8 +7,27 @@ import { RoutineService } from './service'
 import { describeNext, nextFireAt, parseSchedule } from './schedule'
 import type { ExecuteOutcome, RoutineExecutor } from './executor'
 import type { RoutinesView } from './types'
+import { parseRoutineContext } from './definition'
 
 const at = (y: number, mo: number, d: number, h = 0, mi = 0) => new Date(y, mo - 1, d, h, mi).getTime()
+
+test('context survives edits and duplication; duplicates are paused and preserve advanced settings', async t => {
+  const s = await setup()
+  t.after(() => s.service.close())
+  const context = parseRoutineContext({ folders: ['/repo/a'], excludedFolders: ['/repo/a/private'], meetingIds: ['meeting-a'] })
+  await s.service.create({ name: 'Scoped', schedule: 'daily 09:00', prompt: 'p', context, inputs: ['sessions', 'meetings'], provider: 'codex', maxMinutes: 4, speak: true })
+  const updated = await s.service.update('scoped', { name: 'Renamed' })
+  assert.deepEqual(updated.context, context)
+  const copy = await s.service.duplicate('scoped')
+  assert.equal(copy.enabled, false)
+  assert.notEqual(copy.id, updated.id)
+  assert.deepEqual(copy.context, context)
+  assert.deepEqual(copy.inputs, ['sessions', 'meetings'])
+  const source = await readFile(s.service.definitionPath(copy.id), 'utf8')
+  assert.match(source, /provider: codex/)
+  assert.match(source, /max-minutes: 4/)
+  assert.match(source, /speak: true/)
+})
 
 function fakeExecutor() {
   const finishes: Array<(o: Omit<ExecuteOutcome, 'agentRunId'>) => void> = []

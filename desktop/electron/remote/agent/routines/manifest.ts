@@ -2,7 +2,8 @@ import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative, isAbsolute } from 'node:path'
+import type { RoutineContext } from './definition'
 import { writeFileAtomic } from './atomic'
 import type { RunWindow } from './window'
 
@@ -104,6 +105,7 @@ export async function buildManifest(opts: {
   window: RunWindow
   excludeCwdPart: string
   maxBytes?: number
+  context?: RoutineContext
 }): Promise<RoutineManifest> {
   const { indexDir, window, excludeCwdPart } = opts
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES
@@ -126,6 +128,7 @@ export async function buildManifest(opts: {
     if (session.provenance === 'routine') continue
     const cwd = typeof session.cwd === 'string' ? session.cwd : undefined
     if (cwd && cwd.includes(excludeCwdPart)) continue
+    if (!sessionInContext(id, cwd, opts.context)) continue
     eligible.set(id, {
       id,
       provider: typeof session.provider === 'string' ? session.provider : 'unknown',
@@ -170,6 +173,38 @@ export async function buildManifest(opts: {
       ...session,
       turns: session.turns.map(turn => ({ t: turn.t, o: turn.o })),
     })),
+  }
+}
+
+export function withinFolder(path: string, folder: string): boolean {
+  const rel = relative(folder, path)
+  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith('../'))
+}
+
+/** Positive selections form a union; exclusions always win. Folders include descendants. */
+export function sessionInContext(id: string, cwd: string | undefined, context?: RoutineContext): boolean {
+  if (!context) return true
+  if (context.excludedSessionIds.includes(id) || (cwd && context.excludedFolders.some(f => withinFolder(cwd, f)))) return false
+  if (!context.folders.length && !context.sessionIds.length) return true
+  return context.sessionIds.includes(id) || !!(cwd && context.folders.some(f => withinFolder(cwd, f)))
+}
+
+export interface RoutineContextCatalog {
+  folders: string[]; sessions: Array<{ id: string; label: string; cwd?: string }>
+  meetings?: Array<{ id: string; title: string }>
+}
+export async function contextCatalog(indexDir: string): Promise<RoutineContextCatalog> {
+  const records = new Map<string, RawIndexedSession & { title?: string }>()
+  await forEachLine(join(indexDir, 'sessions.jsonl'), line => {
+    try { const s = JSON.parse(line); if (typeof s.id === 'string') records.set(s.id, s) } catch { /* malformed line */ }
+  })
+  const sessions = [...records.values()].filter(s => s.provenance !== 'routine')
+    .sort((a, b) => Number(b.lastAt ?? 0) - Number(a.lastAt ?? 0))
+  return {
+    folders: [...new Set(sessions.flatMap(s => typeof s.cwd === 'string' && isAbsolute(s.cwd) ? [s.cwd] : []))].sort(),
+    sessions: sessions.slice(0, 100).map(s => ({ id: s.id as string,
+      label: [typeof s.title === 'string' ? s.title : undefined, s.provider, s.cwd, s.id].filter(v => typeof v === 'string').join(' · '),
+      ...(typeof s.cwd === 'string' ? { cwd: s.cwd } : {}) })),
   }
 }
 

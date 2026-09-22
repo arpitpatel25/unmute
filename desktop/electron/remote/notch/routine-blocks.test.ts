@@ -156,6 +156,19 @@ test('routinesPayload: view null is unavailable and loading', () => {
   assert.deepEqual(payload, { available: false, reason: 'Routines are loading', items: [] })
 })
 
+test('routine details retain context and per-routine results outside the global chat window', () => {
+  const context = { folders: ['/repo'], sessionIds: [], files: ['/brief.md'], excludedFolders: [], excludedSessionIds: [], meetingIds: ['meeting-1'] }
+  const recentRuns = [{ id: 'older-run', status: 'done' as const, at: 1, preview: 'The last result' }]
+  const item: RoutineItemView = { id: 'r', name: 'R', scheduleLabel: 'Daily', kind: 'read-only', enabled: true,
+    nextRunAt: 2, window: 'today', schedule: 'daily 09:00', prompt: 'Review', color: 'white', nextRunLabel: 'Tomorrow',
+    running: false, path: '/r.md', inputs: ['sessions', 'meetings'], context, recentRuns }
+  const catalog = { folders: ['/repo'], sessions: [], meetings: [{ id: 'meeting-1', title: 'Review' }] }
+  const payload = routinesPayload({ available: true, items: [item], runs: [], contextCatalog: catalog })
+  assert.deepEqual(payload.items[0]!.context, context)
+  assert.deepEqual(payload.items[0]!.recentRuns, recentRuns)
+  assert.deepEqual(payload.contextCatalog, catalog)
+})
+
 test('routinesPayload maps an item, the last-run label and a run detail', () => {
   const now = at(2026, 9, 14, 10)
   const item: RoutineItemView = {

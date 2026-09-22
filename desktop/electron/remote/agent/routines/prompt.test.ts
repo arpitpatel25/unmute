@@ -71,12 +71,20 @@ test('routineTranscript: omits the manifest line when there is no manifest path'
 
 test('routineTranscript: event trigger includes the meeting payload line', () => {
   const text = routineTranscript({
-    definition: readOnly,
+    definition: { ...readOnly, inputs: ['meetings'] },
     trigger: { type: 'event', event: 'meeting-notes-ready', meetingId: 'm-1', title: 'Standup', notesPath: '/tmp/notes.md' },
     window: null,
     resultsDir: '/tmp/results',
   })
   assert.match(text, /Meeting: Standup · id m-1 · notes at \/tmp\/notes\.md/)
+})
+
+test('an unselected meeting source does not supply its notes path', () => {
+  const text = routineTranscript({ definition: readOnly,
+    trigger: { type: 'event', event: 'meeting-notes-ready', meetingId: 'm-1', title: 'Standup', notesPath: '/private/notes.md' },
+    window: null, resultsDir: '/tmp/results' })
+  assert.doesNotMatch(text, /\/private\/notes.md/)
+  assert.match(text, /Meeting contents are not selected/)
 })
 
 test('routineTranscript: approval mode includes the action and not the routine body', () => {

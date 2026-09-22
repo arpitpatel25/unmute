@@ -7,6 +7,7 @@ import type { AgentRunMcpContext, AgentRunSupervisor } from '../supervisor'
 import type { RoutineDefinition } from './definition'
 import { routineConstitutionSection } from './prompt'
 import type { RoutineRun } from './types'
+import { referenceContext } from './context'
 
 /**
  * Read plus the two Chrome MCP surfaces a takes-actions run needs. Passed as
@@ -143,15 +144,19 @@ export class RoutineAgentExecutor implements RoutineExecutor {
         mcp: this.options.mcp(),
       }
 
+      const references = input.run.trigger.type === 'approval' ? '' : await referenceContext(input.definition)
+      const referencePath = join(input.runDir, 'references.jsonl')
+      if (references) await fs.writeFile(referencePath, references, { mode: 0o600 })
+
       const result = await pair.controller.submit(
-        { transcript: input.transcript },
+        { transcript: [input.transcript, ...(references ? [`Read the reference file snapshots and availability notes at ${referencePath}. This is the bounded reference context for this run.`] : [])].join('\n\n') },
         {
           interactionId: this.randomId(),
           runId: agentRunId,
           provider: input.provider,
           onAccepted: async () => {},
           runtime,
-          capabilities: this.options.readTools(),
+          capabilities: this.options.readTools().filter(tool => routineToolSelected(tool.name, input.definition)),
         },
       )
 
@@ -181,6 +186,17 @@ export class RoutineAgentExecutor implements RoutineExecutor {
       void pair.supervisor.closeRun(agentRunId).catch(() => {})
     }
   }
+}
+
+export function routineToolSelected(name: string, d: RoutineDefinition): boolean {
+  if (name.startsWith('memory_')) return d.inputs.includes('memory')
+  if (name.startsWith('notetaker_')) return d.inputs.includes('meetings')
+  if (name.startsWith('unmute_history_')) return d.inputs.includes('dictation')
+  // index_search cannot filter by project/session. Scoped runs already have a
+  // manifest, so do not advertise a whole-library search as an alternative.
+  if (name === 'index_search' && d.context && (d.context.folders.length || d.context.sessionIds.length || d.context.excludedFolders.length || d.context.excludedSessionIds.length)) return false
+  if (name === 'index_search' || name.startsWith('session') || name.startsWith('workspace')) return d.inputs.includes('sessions')
+  return true
 }
 
 function providerSessionId(id: string | undefined): { providerSessionId: string } | Record<string, never> {

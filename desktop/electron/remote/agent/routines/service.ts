@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 import type { RoutineFields } from './definition'
 import type { RoutineExecutor } from './executor'
-import { defaultIndexDir } from './manifest'
+import { defaultIndexDir, contextCatalog, type RoutineContextCatalog } from './manifest'
 import { RoutineRunLog } from './run-log'
 import { RoutineRunner, type MeetingNotesEvent } from './runner'
 import { describeNext, describeSchedule, formatSchedule } from './schedule'
@@ -25,6 +25,7 @@ export interface RoutineServiceOptions {
   indexDir?: string
   /** fs.watch the routines directory for hand edits (default true). */
   watch?: boolean
+  listMeetings?(): Promise<Array<{ id: string; title: string }>>
 }
 
 /** §4 facade for RPC, the Agent capability and view events. `root` is the Agent root R. */
@@ -37,6 +38,7 @@ export class RoutineService {
   private readonly runner: RoutineRunner
   private unsubscribe: (() => void) | null = null
   private started = false
+  private catalog: RoutineContextCatalog = { folders: [], sessions: [] }
 
   constructor(private readonly opts: RoutineServiceOptions) {
     this.now = opts.now ?? Date.now
@@ -55,6 +57,8 @@ export class RoutineService {
     await fs.mkdir(this.runsDir, { recursive: true })
     await this.store.load()
     await this.log.load()
+    this.catalog = await contextCatalog(this.opts.indexDir ?? defaultIndexDir())
+    this.catalog.meetings = await this.opts.listMeetings?.().catch(() => []) ?? []
     // Hand edits reload the store, which already recomputes nextFireAt for a changed schedule.
     this.unsubscribe = this.store.onChange(() => {
       this.emit()
@@ -72,7 +76,7 @@ export class RoutineService {
       .map(r => this.withColor(r))
     return {
       available: this.opts.enabled, ...(this.opts.enabled ? {} : { reason: OFF_REASON }),
-      items: this.list(), runs,
+      items: this.list(), runs, contextCatalog: this.catalog,
     }
   }
 
@@ -102,6 +106,13 @@ export class RoutineService {
     this.emit()
   }
 
+  async duplicate(id: string): Promise<RoutineItemView> {
+    this.requireEnabled()
+    const entry = await this.store.duplicate(id)
+    this.emit()
+    return this.item(entry)
+  }
+
   async setEnabled(id: string, enabled: boolean): Promise<void> {
     this.requireEnabled()
     await this.store.setEnabled(id, enabled)
@@ -110,7 +121,17 @@ export class RoutineService {
 
   async runNow(id: string): Promise<RoutineRun> { this.requireEnabled(); return this.runner.runNow(id) }
   async event(e: MeetingNotesEvent): Promise<RoutineRun[]> { this.requireEnabled(); return this.runner.event(e) }
-  async wake(): Promise<void> { this.requireEnabled(); return this.runner.wake() }
+  async wake(): Promise<void> {
+    this.requireEnabled()
+    await this.refreshContext()
+    return this.runner.wake()
+  }
+  async refreshContext(): Promise<void> {
+    this.requireEnabled()
+    this.catalog = await contextCatalog(this.opts.indexDir ?? defaultIndexDir())
+    this.catalog.meetings = await this.opts.listMeetings?.().catch(() => []) ?? []
+    this.emit()
+  }
   async cancel(runId: string): Promise<boolean> { this.requireEnabled(); return this.runner.cancel(runId) }
   async markRead(): Promise<void> { this.requireEnabled(); return this.runner.markRead() }
   async decideProposal(runId: string, proposalId: string, decision: 'approve' | 'dismiss'): Promise<RoutineRun | null> {
@@ -178,6 +199,9 @@ export class RoutineService {
       id: entry.id, name: d?.name ?? entry.id, scheduleLabel: d ? describeSchedule(d.schedule) : '',
       window: d ? formatWindow(d.window) : '',
       schedule: d ? formatSchedule(d.schedule) : '', prompt: d?.prompt ?? '', color: entry.state.color ?? 'white',
+      inputs: d?.inputs ?? [], ...(d?.context ? { context: d.context } : {}),
+      recentRuns: [...runs].sort((a, b) => b.firedAt - a.firedAt).slice(0, 8)
+        .map(r => ({ id: r.id, status: r.status, at: r.firedAt, ...(r.resultPreview ? { preview: r.resultPreview } : {}) })),
       kind: d?.kind ?? 'read-only', enabled: entry.state.enabled, nextRunAt: entry.state.nextFireAt, nextRunLabel,
       ...(last ? { lastRun: { status: last.status, at: last.endedAt ?? last.firedAt } } : {}),
       running: runs.some(r => r.status === 'queued' || r.status === 'running'),

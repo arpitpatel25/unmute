@@ -118,6 +118,23 @@ test('start writes <runDir>/constitution.md as the base constitution plus the ro
   assert.equal(stat.mode & 0o777, 0o600)
 })
 
+test('reference snapshots stay in a private run file, not an oversized controller submission', async () => {
+  const runDir = await tmpRunDir()
+  const file = join(runDir, 'reference.md')
+  await fs.writeFile(file, 'reference text '.repeat(10_000))
+  const d = definitionFromFields('reference', { name: 'Reference', schedule: 'daily 09:00', prompt: 'Review', inputs: [],
+    context: { folders: [], sessionIds: [], files: [file], excludedFolders: [], excludedSessionIds: [] } })
+  const p = fakePair()
+  const executor = new RoutineAgentExecutor(baseOptions({ reader: p.pair }))
+  const outcome = await executor.start({ run: fakeRun(d), definition: d, transcript: 'Review', runDir, provider: 'claude', onActivity() {} }).completion
+  assert.equal(outcome.outcome, 'completed')
+  assert.match(p.submitCalls[0]!.input.transcript, /references.jsonl/)
+  assert.ok(p.submitCalls[0]!.input.transcript.length < 1000)
+  const snapshot = join(runDir, 'references.jsonl')
+  assert.match(await fs.readFile(snapshot, 'utf8'), /reference text/)
+  assert.equal((await fs.stat(snapshot)).mode & 0o777, 0o600)
+})
+
 // ── the submit context ──────────────────────────────────────────────────
 
 test('the submit context carries the run dir as cwd/constitutionPath and the read-only capability list', async () => {

@@ -327,31 +327,53 @@ struct RoutinesSheet: View {
     let close: () -> Void
     var emit: (Event) -> Void = IPC.emit
     @State private var editingId: String?
+    @State private var expandedId: String?
+    @State private var creating = false
+
+    private var draft: RoutineItemP {
+        RoutineItemP(id: "", name: "", scheduleLabel: nil, kind: "read-only", enabled: true,
+                     nextRunLabel: nil, lastRunLabel: nil, running: false, error: nil,
+                     schedule: "weekdays 09:00", window: "yesterday-or-last-run", prompt: "", color: "white")
+    }
 
     var body: some View {
         RoutineSheetCard {
             HStack {
                 Text("Your routines").font(Theme.fHead).foregroundColor(Theme.text)
                 Spacer(minLength: 8)
+                if routines.available {
+                    KeyButton(label: "Create", symbol: "plus") { editingId = nil; creating = true }
+                        .disabled(creating)
+                }
                 KeyButton(label: "Done", action: close)
             }
             if !routines.available {
                 Text(routines.reason ?? "Routines are unavailable right now.")
                     .font(Theme.fSub).foregroundColor(Theme.textDim)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if routines.items.isEmpty {
-                Text("No routines yet. Say “every weekday at 9, tell me what I worked on yesterday.”")
-                    .font(Theme.fSub).foregroundColor(Theme.textDim)
-                    .fixedSize(horizontal: false, vertical: true)
             } else {
+                if let error, !error.isEmpty, editingId == nil, !creating {
+                    NoticeRow(text: error, tone: .error)
+                }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
+                        if creating {
+                            RoutineEditForm(item: draft, error: error, catalog: routines.contextCatalog,
+                                            creating: true, itemIds: routines.items.map(\.id),
+                                            close: { creating = false }, emit: emit)
+                        }
+                        if routines.items.isEmpty && !creating {
+                            Text("Create a routine, or say “every weekday at 9, tell me what I worked on yesterday.”")
+                                .font(Theme.fSub).foregroundColor(Theme.textDim)
+                        }
                         ForEach(routines.items, id: \.id) { item in
                             if editingId == item.id {
-                                RoutineEditForm(item: item, error: error,
+                                RoutineEditForm(item: item, error: error, catalog: routines.contextCatalog,
                                                 close: { editingId = nil }, emit: emit)
                             } else {
-                                RoutineItemRow(item: item, edit: { editingId = item.id }, emit: emit)
+                                RoutineItemRow(item: item, expanded: expandedId == item.id,
+                                    toggle: { withAnimation(.easeOut(duration: 0.15)) { expandedId = expandedId == item.id ? nil : item.id } },
+                                    edit: { creating = false; editingId = item.id }, emit: emit)
                             }
                         }
                     }
@@ -364,13 +386,17 @@ struct RoutinesSheet: View {
             }
             Spacer(minLength: 0)
         }
+        .onAppear { if routines.available { emit(.routineRefreshContext) } }
     }
 }
 
 private struct RoutineItemRow: View {
     let item: RoutineItemP
+    let expanded: Bool
+    let toggle: () -> Void
     let edit: () -> Void
     let emit: (Event) -> Void
+    @State private var confirmingDelete = false
 
     private var enabled: Bool { item.enabled ?? true }
     private var running: Bool { item.running ?? false }
@@ -378,6 +404,8 @@ private struct RoutineItemRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            Button(action: toggle) {
+              VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Circle().fill(tint).frame(width: 7, height: 7)
                 Text(item.name).font(Theme.fBodyMed).foregroundColor(Theme.text).lineLimit(1)
@@ -387,6 +415,8 @@ private struct RoutineItemRow: View {
                 }
                 if !enabled { Badge(text: "paused", color: Theme.textFaint) }
                 Spacer(minLength: 0)
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 11)).foregroundColor(Theme.textDim)
             }
             let schedule = [item.scheduleLabel, item.nextRunLabel.map { "next: \($0)" }]
                 .compactMap { $0 }.joined(separator: " · ")
@@ -402,6 +432,21 @@ private struct RoutineItemRow: View {
                 Text(error).font(.system(size: 11.5)).foregroundColor(Theme.cError)
                     .fixedSize(horizontal: false, vertical: true)
             }
+              }
+              .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(item.name), \(expanded ? "collapse" : "expand") routine")
+            if expanded {
+                Divider().padding(.vertical, 5)
+                Text(item.prompt ?? "No instructions available")
+                    .font(Theme.fSub).foregroundColor(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                Text("Looks at: \(item.window ?? "default time period")")
+                    .font(.system(size: 11.5)).foregroundColor(Theme.textDim)
+                RoutineContextSummary(inputs: item.inputs ?? ["sessions"], context: item.context ?? RoutineContextP())
+                Text("Runs on this Mac while Unmute is running.")
+                    .font(.system(size: 11)).foregroundColor(Theme.textFaint)
             HStack(spacing: 6) {
                 KeyButton(label: "Run now") { emit(.routineRunNow(id: item.id)) }
                     .disabled(running || item.error != nil)
@@ -412,6 +457,36 @@ private struct RoutineItemRow: View {
                 KeyButton(label: "Edit", action: edit)
             }
             .padding(.top, 2)
+                HStack(spacing: 8) {
+                    QuietButton(label: "Duplicate (paused)") { emit(.routineDuplicate(id: item.id)) }
+                        .disabled(item.error != nil)
+                    QuietButton(label: "Delete") { confirmingDelete = true }
+                        .disabled(running)
+                }
+                if confirmingDelete {
+                    Text("Delete this routine? Its definition can be recovered from the routines .trash folder; past results are kept.")
+                        .font(.system(size: 11)).foregroundColor(Theme.textDim)
+                    HStack {
+                        KeyButton(label: "Delete routine", danger: true) { emit(.routineRemove(id: item.id)); confirmingDelete = false }
+                        QuietButton(label: "Keep") { confirmingDelete = false }
+                    }
+                }
+                Text("Recent runs").font(Theme.fBodyMed).padding(.top, 6)
+                if (item.recentRuns ?? []).isEmpty {
+                    Text("No runs yet. Run it now to see the first result.").font(Theme.fSub).foregroundColor(Theme.textDim)
+                }
+                ForEach(item.recentRuns ?? [], id: \.id) { run in
+                    Button { emit(.routineOpenRun(runId: run.id)) } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("\(Date(timeIntervalSince1970: Double(run.at) / 1000).formatted(date: .abbreviated, time: .shortened)) · \(run.status)")
+                                .font(.system(size: 11.5)).foregroundColor(Theme.textDim)
+                            if let preview = run.preview, !preview.isEmpty {
+                                Text(preview).font(Theme.fSub).foregroundColor(Theme.text).lineLimit(3)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                    }.buttonStyle(.plain).padding(.vertical, 3)
+                }
+            }
         }
         .padding(.horizontal, 11).padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -426,24 +501,32 @@ private struct RoutineEditForm: View {
     let error: String?
     let close: () -> Void
     let emit: (Event) -> Void
+    let catalog: RoutineContextCatalogP?
+    let creating: Bool
+    let itemIds: [String]
 
     @State private var name: String
     @State private var schedule: RoutineScheduleDraft
     @State private var window: RoutineWindowDraft
     @State private var kind: String
     @State private var prompt: String
+    @State private var inputs: [String]
+    @State private var context: RoutineContextP
     /// Set once Save is sent; the form closes when the saved values come back.
     @State private var saving = false
     private let rawSchedule: String
 
-    init(item: RoutineItemP, error: String?, close: @escaping () -> Void, emit: @escaping (Event) -> Void) {
+    init(item: RoutineItemP, error: String?, catalog: RoutineContextCatalogP? = nil, creating: Bool = false, itemIds: [String] = [], close: @escaping () -> Void, emit: @escaping (Event) -> Void) {
         self.item = item; self.error = error; self.close = close; self.emit = emit
+        self.catalog = catalog; self.creating = creating; self.itemIds = itemIds
         rawSchedule = item.schedule ?? ""
         _name = State(initialValue: item.name)
         _schedule = State(initialValue: RoutineScheduleDraft.parse(item.schedule ?? ""))
         _window = State(initialValue: RoutineWindowDraft.parse(item.window ?? ""))
         _kind = State(initialValue: item.kind == "takes-actions" ? "takes-actions" : "read-only")
         _prompt = State(initialValue: item.prompt ?? "")
+        _inputs = State(initialValue: item.inputs ?? ["sessions"])
+        _context = State(initialValue: item.context ?? RoutineContextP())
     }
 
     private var tint: Color { Theme.routine(item.color) }
@@ -453,19 +536,21 @@ private struct RoutineEditForm: View {
          "schedule": schedule.text,
          "window": window.text,
          "kind": kind,
-         "prompt": prompt.trimmingCharacters(in: .whitespacesAndNewlines)]
+         "prompt": prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+         "inputs": routineJSON(inputs.sorted()), "context": routineJSON(context)]
     }
 
     private var current: [String: String] {
         ["name": item.name, "schedule": item.schedule ?? "", "window": item.window ?? "",
-         "kind": item.kind ?? "read-only", "prompt": item.prompt ?? ""]
+         "kind": item.kind ?? "read-only", "prompt": item.prompt ?? "",
+         "inputs": routineJSON((item.inputs ?? ["sessions"]).sorted()), "context": routineJSON(item.context ?? RoutineContextP())]
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Circle().fill(tint).frame(width: 7, height: 7)
-                Text("Edit routine").font(Theme.fBodyMed).foregroundColor(Theme.text)
+                Text(creating ? "Create routine" : "Edit routine").font(Theme.fBodyMed).foregroundColor(Theme.text)
                 Spacer(minLength: 0)
             }
 
@@ -534,6 +619,8 @@ private struct RoutineEditForm: View {
                 .labelsHidden().pickerStyle(.segmented).fixedSize()
             }
 
+            RoutineContextEditor(inputs: $inputs, context: $context, catalog: catalog)
+
             section("Prompt") {
                 TextEditor(text: $prompt)
                     .font(.system(size: 12.5))
@@ -544,13 +631,14 @@ private struct RoutineEditForm: View {
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.hairline, lineWidth: 0.5))
             }
 
-            if saving, let error, !error.isEmpty {
+            if let error, !error.isEmpty {
                 Text(error).font(.system(size: 11.5)).foregroundColor(Theme.cError)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack(spacing: 6) {
                 KeyButton(label: saving ? "Saving…" : "Save", action: save)
+                    .disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 QuietButton(label: "Cancel", action: close)
             }
         }
@@ -559,12 +647,21 @@ private struct RoutineEditForm: View {
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(tint.opacity(0.45), lineWidth: 0.75))
         // The saved values coming back is the success signal.
         .onChange(of: current) { _ in if saving { close() } }
+        .onChange(of: itemIds) { _ in if creating && saving { close() } }
+        .onChange(of: error) { value in if value != nil { saving = false } }
+        .onChange(of: schedule.frequency) { frequency in
+            if creating && frequency == .meetingNotes {
+                if !inputs.contains("meetings") { inputs.append("meetings") }
+                window = RoutineWindowDraft.parse("none")
+            }
+        }
     }
 
     private func save() {
-        if fields == current { close(); return }
+        if !creating && fields == current { close(); return }
         saving = true
-        emit(.routineUpdate(id: item.id, fields: fields))
+        if creating { emit(.routineCreate(fields: fields)) }
+        else { emit(.routineUpdate(id: item.id, fields: fields)) }
     }
 
     private var dayChips: some View {

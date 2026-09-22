@@ -539,7 +539,10 @@ export type NotchEvent =
   | { type: 'agentSetModel'; provider: 'claude' | 'codex'; model: string }
   /** End this Agent conversation and keep nothing; the next turn starts clean. */
   | { type: 'agentNewConversation' }
-  | { type: 'routineRunNow'; id: string } | { type: 'routineSetEnabled'; id: string; enabled: boolean } | { type: 'routineUpdate'; id: string; fields: { name: string; schedule: string; window: string; kind: string; prompt: string } }
+  | { type: 'routineRunNow'; id: string } | { type: 'routineSetEnabled'; id: string; enabled: boolean } | { type: 'routineUpdate'; id: string; fields: import('../agent/routines/editor').RoutineEditorFields }
+  | { type: 'routineCreate'; fields: import('../agent/routines/editor').RoutineEditorFields }
+  | { type: 'routineDuplicate' | 'routineRemove'; id: string }
+  | { type: 'routineRefreshContext' }
   | { type: 'routineOpenRun'; runId: string } | { type: 'routineCloseRun' } | { type: 'routineCancel'; runId: string }
   | { type: 'routineOpenTranscript'; runId: string } | { type: 'routineProposal'; runId: string; proposalId: string; decision: 'approve' | 'dismiss' }
   | { type: 'cancelTaskFollowup' | 'restoreTaskFollowup' | 'queueSavedTaskFollowup' | 'recoverUncertainFollowup'; id: string; queueId: string }

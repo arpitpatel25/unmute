@@ -3645,6 +3645,9 @@ test('every routine event maps to the right routineAction', async () => {
   h.client.fire({ type: 'routineCancel', runId: 'r1' })
   h.client.fire({ type: 'routineOpenTranscript', runId: 'r1' })
   h.client.fire({ type: 'routineProposal', runId: 'r1', proposalId: 'p1', decision: 'approve' })
+  h.client.fire({ type: 'routineCreate', fields: { name: 'New', schedule: 'daily 09:00', window: 'today', kind: 'read-only', prompt: 'P', inputs: '["sessions"]', context: '{"folders":["/repo"]}' } })
+  h.client.fire({ type: 'routineDuplicate', id: 'x' })
+  h.client.fire({ type: 'routineRemove', id: 'x' })
   await tick()
   assert.deepEqual(actions, [
     { type: 'runNow', id: 'x' },
@@ -3653,6 +3656,9 @@ test('every routine event maps to the right routineAction', async () => {
     { type: 'cancel', runId: 'r1' },
     { type: 'openTranscript', runId: 'r1' },
     { type: 'proposal', runId: 'r1', proposalId: 'p1', decision: 'approve' },
+    { type: 'create', fields: { name: 'New', schedule: 'daily 09:00', window: 'today', kind: 'read-only', prompt: 'P', inputs: '["sessions"]', context: '{"folders":["/repo"]}' } },
+    { type: 'duplicate', id: 'x' },
+    { type: 'remove', id: 'x' },
   ])
 })
 

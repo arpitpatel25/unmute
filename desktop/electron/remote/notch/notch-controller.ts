@@ -1,4 +1,5 @@
 import { messageWindow } from './message-window'
+import type { RoutineEditorFields } from '../agent/routines/editor'
 // NotchController — the brain between the task runtime and the native notch.
 //
 // v2: full cockpit/overlay parity. It owns the your-move QUEUE (skip=requeue),
@@ -217,7 +218,7 @@ export interface NotchControllerDeps {
   /** End the Agent conversation and keep nothing. */
   agentNewConversation?(): Promise<void>
   /** Routine controls from the Agent's routines and run sheets. */
-  routineAction?(action: { type: 'runNow'; id: string } | { type: 'setEnabled'; id: string; enabled: boolean } | { type: 'update'; id: string; fields: { name: string; schedule: string; window: string; kind: string; prompt: string } } | { type: 'cancel'; runId: string } | { type: 'openTranscript'; runId: string } | { type: 'proposal'; runId: string; proposalId: string; decision: 'approve' | 'dismiss' } | { type: 'markRead' }): Promise<void>
+  routineAction?(action: { type: 'runNow'; id: string } | { type: 'setEnabled'; id: string; enabled: boolean } | { type: 'update'; id: string; fields: RoutineEditorFields } | { type: 'create'; fields: RoutineEditorFields } | { type: 'duplicate' | 'remove'; id: string } | { type: 'cancel'; runId: string } | { type: 'openTranscript'; runId: string } | { type: 'proposal'; runId: string; proposalId: string; decision: 'approve' | 'dismiss' } | { type: 'markRead' | 'refreshContext' }): Promise<void>
   /** One run with its full result text, for the run sheet and the chat. */
   routineRunDetail?(runId: string): Promise<{ run: RoutineRun; result: string | null; hasTranscript: boolean } | null>
   /** THE VOICE IS POINTED AT THE AGENT (its card is in front, or its chat is
@@ -771,17 +772,25 @@ export class NotchController {
       void this.deps.agentSetModel?.(provider, model).catch(error => this.agentUnavailable((error as Error).message))
     })
     on('agentNewConversation', () => { void this.deps.agentNewConversation?.().catch(error => this.agentUnavailable((error as Error).message)) })
-    const routineAction = (action: Parameters<NonNullable<NotchControllerDeps['routineAction']>>[0]) =>
-      this.deps.routineAction?.(action).catch(error => this.agentUnavailable((error as Error).message))
+    const routineAction = (action: Parameters<NonNullable<NotchControllerDeps['routineAction']>>[0]) => {
+      this.agentError = undefined
+      if (this.agentOpen) this.sendAgentDetail()
+      if (!this.deps.routineAction) { this.agentUnavailable('Routines are unavailable'); return }
+      return this.deps.routineAction(action).catch(error => this.agentUnavailable((error as Error).message))
+    }
     on('routineRunNow', e => { void routineAction({ type: 'runNow', id: (e as { id: string }).id }) })
     on('routineSetEnabled', e => {
       const { id, enabled } = e as { id: string; enabled: boolean }
       void routineAction({ type: 'setEnabled', id, enabled })
     })
     on('routineUpdate', e => {
-      const { id, fields } = e as { id: string; fields: { name: string; schedule: string; window: string; kind: string; prompt: string } }
+      const { id, fields } = e as { id: string; fields: RoutineEditorFields }
       void routineAction({ type: 'update', id, fields })
     })
+    on('routineCreate', e => { void routineAction({ type: 'create', fields: (e as { fields: RoutineEditorFields }).fields }) })
+    on('routineDuplicate', e => { void routineAction({ type: 'duplicate', id: (e as { id: string }).id }) })
+    on('routineRemove', e => { void routineAction({ type: 'remove', id: (e as { id: string }).id }) })
+    on('routineRefreshContext', () => { void routineAction({ type: 'refreshContext' }) })
     on('routineCancel', e => {
       const runId = (e as { runId: string }).runId
       // Only a cancel that landed changes the run worth re-reading.

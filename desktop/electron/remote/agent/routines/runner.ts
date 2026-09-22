@@ -110,6 +110,7 @@ export class RoutineRunner {
     for (const entry of this.deps.store.list()) {
       const d = entry.definition
       if (!d || !entry.state.enabled || d.schedule.type !== 'event') continue
+      if (d.context?.meetingIds?.length && !d.context.meetingIds.includes(e.meetingId)) continue
       const key = `${d.id}@event:${e.meetingId}`
       if (this.hasKey(key)) continue
       const trigger: RunTrigger = {
@@ -271,16 +272,17 @@ export class RoutineRunner {
       }
       const runDir = join(this.deps.runsDir, run.id)
       let manifestPath: string | undefined
-      if (run.window && d.inputs.includes('sessions')) {
-        const manifest = await buildManifest({ indexDir: this.deps.indexDir, window: run.window, excludeCwdPart: this.deps.excludeCwdPart })
+      if (run.trigger.type !== 'approval' && d.inputs.includes('sessions') && (run.window || d.context)) {
+        const manifestWindow = run.window ?? { start: 0, end: run.firedAt, label: 'All indexed history' }
+        const manifest = await buildManifest({ indexDir: this.deps.indexDir, window: manifestWindow, excludeCwdPart: this.deps.excludeCwdPart, context: d.context })
         manifestPath = (await writeManifest(runDir, manifest)).mdPath
         if (this.active.get(run.id) !== active) return
         run.manifestTotals = manifest.totals
-        if (d.inputs.length === 1 && manifest.totals.turns === 0) {
+        if (d.inputs.length === 1 && !d.context?.files.length && manifest.totals.turns === 0) {
           const note = d.whenEmpty === 'note'
           await this.settle(run, {
             status: 'skipped', reason: 'nothing-in-window', posted: note, unread: note,
-            ...(note ? { resultPreview: `Nothing since ${run.window.label.split(' → ')[0]}.` } : {}),
+            ...(note ? { resultPreview: d.context ? `No matching session activity in ${manifestWindow.label}.` : `Nothing since ${manifestWindow.label.split(' → ')[0]}.` } : {}),
           })
           return
         }

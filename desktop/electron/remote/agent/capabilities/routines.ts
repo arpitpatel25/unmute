@@ -4,7 +4,7 @@ import type {
   ToolDefinition,
   ToolResult,
 } from '../types'
-import { INPUTS, KINDS, PROVIDERS, WHEN_EMPTY, type RoutineFields, type RoutineInput, type RoutineKind } from '../routines/definition'
+import { INPUTS, KINDS, PROVIDERS, WHEN_EMPTY, parseRoutineContext, type RoutineFields, type RoutineInput, type RoutineKind } from '../routines/definition'
 import type { RoutineService } from '../routines/service'
 import type { RoutineItemView } from '../routines/types'
 
@@ -25,6 +25,11 @@ const WINDOW_GRAMMAR = '`yesterday-or-last-run` · `since-last-run` · `today` �
   + ' (N ≤ 30) · `none`'
 
 const FIELD_PROPERTIES = {
+  context: {
+    type: 'object', additionalProperties: false,
+    description: 'Context scope: folders and sessionIds select a union of sessions; exclusions win. Empty selections mean all sessions. Folder paths are absolute. Files are explicit reference attachments. This is context selection, not a filesystem sandbox.',
+    properties: Object.fromEntries(['folders', 'sessionIds', 'files', 'excludedFolders', 'excludedSessionIds', 'meetingIds'].map(key => [key, { type: 'array', maxItems: 100, items: { type: 'string' } }])),
+  },
   name: { type: 'string', minLength: 1, maxLength: 60, description: 'A short label for the routine, 1-60 characters.' },
   schedule: { type: 'string', minLength: 1, description: `When it fires: ${SCHEDULE_GRAMMAR}` },
   prompt: { type: 'string', minLength: 1, maxLength: 20_000, description: 'What to ask it to do each time it runs, 1-20,000 characters.' },
@@ -45,7 +50,7 @@ const FIELD_PROPERTIES = {
   },
   inputs: {
     type: 'array', items: { type: 'string', enum: INPUTS },
-    description: 'Which inputs it is given. Defaults to [sessions].',
+    description: 'Which inputs it is given. Defaults to [meetings] for meeting events, [sessions] otherwise. Empty means prompt and attached reference files only.',
   },
   whenEmpty: {
     type: 'string', enum: WHEN_EMPTY,
@@ -195,6 +200,7 @@ function parseFields(value: Record<string, unknown>): Partial<RoutineFields> {
   if (value.kind !== undefined) fields.kind = enumString<RoutineKind>(value.kind, 'kind', KINDS)
   if (value.provider !== undefined) fields.provider = enumString(value.provider, 'provider', PROVIDERS)
   if (value.inputs !== undefined) fields.inputs = enumStringArray<RoutineInput>(value.inputs, 'inputs', INPUTS)
+  if (value.context !== undefined) fields.context = parseRoutineContext(value.context)
   if (value.whenEmpty !== undefined) fields.whenEmpty = enumString(value.whenEmpty, 'whenEmpty', WHEN_EMPTY)
   if (value.maxMinutes !== undefined) fields.maxMinutes = integer(value.maxMinutes, 'maxMinutes')
   if (value.speak !== undefined) fields.speak = boolean(value.speak, 'speak')

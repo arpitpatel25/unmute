@@ -1,4 +1,5 @@
-import type { RoutineDefinition, RoutineKind } from './definition'
+import type { RoutineDefinition, RoutineKind, RoutineInput, RoutineContext } from './definition'
+import type { RoutineContextCatalog } from './manifest'
 
 /** Each routine's colour, fixed at creation (state.json), in assignment order. */
 export const ROUTINE_COLORS = ['white', 'red', 'blue', 'yellow', 'green', 'pink'] as const
@@ -31,6 +32,8 @@ export interface RoutineItemView {
   window: string
   /** Canonical schedule text from `formatSchedule`, the prompt body, and the colour — '' for an invalid routine. */
   schedule: string; prompt: string; color: string
+  inputs?: RoutineInput[]; context?: RoutineContext
+  recentRuns?: Array<{ id: string; status: RunStatus; at: number; preview?: string }>
   nextRunLabel: string; lastRun?: { status: RunStatus; at: number }; running: boolean; error?: string; path: string
 }
-export interface RoutinesView { available: boolean; reason?: string; items: RoutineItemView[]; runs: RoutineRun[] }
+export interface RoutinesView { available: boolean; reason?: string; items: RoutineItemView[]; runs: RoutineRun[]; contextCatalog?: RoutineContextCatalog }

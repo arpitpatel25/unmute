@@ -23,6 +23,8 @@ export class AgentRuntimeClient {
     restore: (...args) => this.rpc.call('agent.memory.restore', ...args),
   }
   readonly routines: {
+    duplicate: Rpc<RoutineService['duplicate']>
+    refreshContext: Rpc<RoutineService['refreshContext']>
     view: Rpc<RoutineService['view']>; create: Rpc<RoutineService['create']>; update: Rpc<RoutineService['update']>
     remove: Rpc<RoutineService['remove']>; setEnabled: Rpc<RoutineService['setEnabled']>; runNow: Rpc<RoutineService['runNow']>
     event: Rpc<RoutineService['event']>; wake: Rpc<RoutineService['wake']>; cancel: Rpc<RoutineService['cancel']>
@@ -30,6 +32,8 @@ export class AgentRuntimeClient {
     run(runId: string): Promise<{ run: RoutineRun; result: string | null } | null>
     path(id: string): Promise<string>; transcriptPath(runId: string): Promise<string | null>
   } = {
+    duplicate: (...args) => this.rpc.call('agent.routines.duplicate', ...args),
+    refreshContext: (...args) => this.rpc.call('agent.routines.refreshContext', ...args),
     view: (...args) => this.rpc.call('agent.routines.view', ...args),
     create: (...args) => this.rpc.call('agent.routines.create', ...args),
     update: (...args) => this.rpc.call('agent.routines.update', ...args),

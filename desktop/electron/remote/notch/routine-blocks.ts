@@ -177,6 +177,8 @@ export function mergeRoutineBlocks(
 // ─── Notch payloads ────────────────────────────────────────────────────────
 
 export interface RoutineItemP {
+  inputs?: RoutineItemView['inputs']; context?: RoutineItemView['context']
+  recentRuns?: Array<{ id: string; status: string; at: number; preview?: string }>
   id: string; name: string; scheduleLabel: string; kind: 'read-only' | 'takes-actions'; enabled: boolean
   nextRunLabel: string; lastRunLabel?: string; running: boolean; error?: string
   /** Canonical text for the inline editor — '' for an invalid routine. */
@@ -191,6 +193,7 @@ export interface RoutineRunDetailP {
 }
 
 export interface RoutinesP {
+  contextCatalog?: RoutinesView['contextCatalog']
   available: boolean; reason?: string; items: RoutineItemP[]; run?: RoutineRunDetailP
 }
 
@@ -209,6 +212,7 @@ function routineItemPayload(item: RoutineItemView, now: number): RoutineItemP {
     running: item.running,
     ...(item.error ? { error: item.error } : {}),
     schedule: item.schedule, window: item.window, prompt: item.prompt, color: item.color,
+    ...(item.inputs ? { inputs: item.inputs } : {}), ...(item.context ? { context: item.context } : {}),
   }
 }
 
@@ -239,7 +243,10 @@ export function routinesPayload(
   return {
     available: view.available,
     ...(view.reason ? { reason: view.reason } : {}),
-    items: view.items.map(item => routineItemPayload(item, now)),
+    items: view.items.map(item => ({ ...routineItemPayload(item, now), recentRuns: item.recentRuns ?? view.runs
+      .filter(r => r.routineId === item.id).sort((a, b) => b.firedAt - a.firedAt).slice(0, 8)
+      .map(r => ({ id: r.id, status: r.status, at: r.firedAt, ...(r.resultPreview ? { preview: r.resultPreview } : {}) })) })),
+    ...(view.contextCatalog ? { contextCatalog: view.contextCatalog } : {}),
     ...(run ? { run: runDetailPayload(run.run, run.result, run.hasTranscript) } : {}),
   }
 }

@@ -1,5 +1,32 @@
 import { type Schedule, parseSchedule, formatSchedule } from './schedule'
 import { type WindowRule, parseWindow, formatWindow } from './window'
+import { isAbsolute, normalize } from 'node:path'
+
+export interface RoutineContext {
+  folders: string[]; sessionIds: string[]; files: string[]; excludedFolders: string[]; excludedSessionIds: string[]
+  meetingIds?: string[]
+}
+export function parseRoutineContext(value: unknown): RoutineContext {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('context must be an object')
+  const raw = value as Record<string, unknown>
+  const keys = ['folders', 'sessionIds', 'files', 'excludedFolders', 'excludedSessionIds', 'meetingIds'] as const
+  for (const key of Object.keys(raw)) if (!keys.includes(key as any)) throw new Error(`Unknown context field "${key}"`)
+  const result = {} as RoutineContext
+  for (const key of keys) {
+    const list = raw[key] ?? []
+    if (!Array.isArray(list) || list.length > 100 || list.some(v => typeof v !== 'string' || !v.trim() || v.length > 4096 || /[\r\n\0]/.test(v))) {
+      throw new Error(`context.${key} must contain at most 100 non-empty single-line strings`)
+    }
+    const paths = key === 'folders' || key === 'files' || key === 'excludedFolders'
+    result[key] = [...new Set(list.map((v: string) => {
+      const text = v.trim()
+      if (paths && !isAbsolute(text)) throw new Error(`context.${key} requires absolute paths`)
+      return paths ? normalize(text) : text
+    }))]
+  }
+  if (JSON.stringify(result).length > 12_000) throw new Error('Context selection is too large; use fewer or shorter paths and IDs')
+  return result
+}
 
 export type RoutineKind = 'read-only' | 'takes-actions'
 export type RoutineInput = 'sessions' | 'memory' | 'meetings' | 'dictation'
@@ -7,12 +34,14 @@ export interface RoutineDefinition {
   id: string; name: string; schedule: Schedule; window: WindowRule; kind: RoutineKind
   provider: 'agent' | 'claude' | 'codex'; inputs: RoutineInput[]; whenEmpty: 'note' | 'silent'
   maxMinutes: number; speak: boolean; prompt: string
+  context?: RoutineContext
 }
 export interface RoutineFields {
   name: string; schedule: string; prompt: string; window?: string; kind?: RoutineKind
   provider?: 'agent' | 'claude' | 'codex'; inputs?: RoutineInput[]; whenEmpty?: 'note' | 'silent'; maxMinutes?: number; speak?: boolean
   /** Create only, never a file key: false skips the CONCISE_LINE prepended to the prompt. */
   concise?: boolean
+  context?: RoutineContext
 }
 
 export const CONCISE_LINE = 'Keep the result short and scannable: at most 5 bullets or ~100 words. Lead with what matters.'
@@ -27,7 +56,7 @@ export function withConciseLine(fields: RoutineFields): RoutineFields {
 
 export const ROUTINE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 
-const KEYS = ['name', 'schedule', 'window', 'kind', 'provider', 'inputs', 'when-empty', 'max-minutes', 'speak'] as const
+const KEYS = ['name', 'schedule', 'window', 'kind', 'provider', 'inputs', 'when-empty', 'max-minutes', 'speak', 'context'] as const
 export const KINDS: readonly RoutineKind[] = ['read-only', 'takes-actions']
 export const PROVIDERS = ['agent', 'claude', 'codex'] as const
 export const INPUTS: readonly RoutineInput[] = ['sessions', 'memory', 'meetings', 'dictation']
@@ -71,7 +100,8 @@ export function definitionFromFields(id: string, fields: RoutineFields): Routine
     throw new Error('takes-actions routines always run Claude; set provider to claude or agent')
   }
 
-  const inputs = fields.inputs ?? ['sessions']
+  const inputs = fields.inputs ?? (schedule.type === 'event' ? ['meetings'] : ['sessions'])
+  if (!Array.isArray(inputs)) throw new Error('inputs must be an array')
   for (const input of inputs) {
     if (!INPUTS.includes(input)) throw new Error(`"${input}" is not an input; use sessions, memory, meetings or dictation`)
   }
@@ -89,7 +119,9 @@ export function definitionFromFields(id: string, fields: RoutineFields): Routine
   const windowDefault: WindowRule = schedule.type === 'event' ? { type: 'none' } : { type: 'yesterday-or-last-run' }
   const window = fields.window !== undefined ? parseWindow(fields.window) : windowDefault
 
-  return { id, name, schedule, window, kind, provider, inputs: [...inputs], whenEmpty, maxMinutes, speak, prompt }
+  const context = fields.context === undefined ? undefined : parseRoutineContext(fields.context)
+  return { id, name, schedule, window, kind, provider, inputs: [...new Set(inputs)], whenEmpty, maxMinutes, speak, prompt,
+    ...(context ? { context } : {}) }
 }
 
 export function parseDefinition(id: string, text: string): RoutineDefinition {
@@ -115,6 +147,8 @@ export function parseDefinition(id: string, text: string): RoutineDefinition {
   if (raw.kind !== undefined) fields.kind = raw.kind as RoutineKind
   if (raw.provider !== undefined) fields.provider = raw.provider as RoutineFields['provider']
   if (raw.inputs !== undefined) fields.inputs = raw.inputs.split(',').map(s => s.trim()) as RoutineInput[]
+  if (raw.inputs === '') fields.inputs = []
+  if (raw.context !== undefined) fields.context = parseRoutineContext(JSON.parse(raw.context))
   if (raw['when-empty'] !== undefined) fields.whenEmpty = raw['when-empty'] as RoutineFields['whenEmpty']
   if (raw['max-minutes'] !== undefined) fields.maxMinutes = Number(raw['max-minutes'])
   if (raw.speak !== undefined) {
@@ -136,6 +170,7 @@ export function serializeDefinition(d: RoutineDefinition): string {
     `when-empty: ${d.whenEmpty}`,
     `max-minutes: ${d.maxMinutes}`,
     `speak: ${d.speak}`,
+    ...(d.context ? [`context: ${JSON.stringify(d.context)}`] : []),
   ]
   return `---\n${lines.join('\n')}\n---\n${d.prompt}\n`
 }

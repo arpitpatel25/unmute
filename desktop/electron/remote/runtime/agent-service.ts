@@ -52,7 +52,7 @@ export type AgentRuntimeConfig = { masterKey: string; selectedProvider: AgentPro
 export type AgentRuntimeEvent = { kind: 'view'; view: AgentConversationView } | { kind: 'activity'; activity: AgentInteractionActivity }
   | { kind: 'completion'; submissionId: string; result: AgentInteractionResult } | { kind: 'routines'; view: RoutinesView }
 export type RoutineProviders = { reader: Map<AgentProviderId, AgentProvider>; actor?: Map<AgentProviderId, AgentProvider> }
-type Routines = Pick<RoutineService, 'view' | 'list' | 'create' | 'update' | 'remove' | 'setEnabled' | 'runNow' | 'event' | 'wake'
+type Routines = Pick<RoutineService, 'view' | 'list' | 'create' | 'update' | 'remove' | 'duplicate' | 'refreshContext' | 'setEnabled' | 'runNow' | 'event' | 'wake'
   | 'cancel' | 'markRead' | 'decideProposal' | 'run' | 'runs' | 'result' | 'definitionPath' | 'close'>
 /** Stands in for a routines service that could not start, so the Agent itself still runs and the UI can say why. */
 class UnavailableRoutines implements Routines {
@@ -68,6 +68,8 @@ class UnavailableRoutines implements Routines {
   create = () => this.refuse(); update = () => this.refuse(); remove = () => this.refuse(); setEnabled = () => this.refuse()
   runNow = () => this.refuse(); event = () => this.refuse(); wake = () => this.refuse(); cancel = () => this.refuse()
   markRead = () => this.refuse(); decideProposal = () => this.refuse()
+  duplicate = () => this.refuse()
+  refreshContext = () => this.refuse()
 }
 export type AgentHostCall = (method: string, args: unknown[]) => Promise<any>
 export class AgentRuntimeService {
@@ -273,6 +275,7 @@ export class AgentRuntimeService {
           mcp: () => this.mcpContext(), environment: process.env })
       }
       const routines = new RoutineService({ root: this.root, enabled, agentProvider: selectedProvider,
+        listMeetings: () => this.config?.notetaker ? this.host('notetaker.list', [100]) : Promise.resolve([]),
         executor: executor ?? { start: () => { throw new Error('Routines are turned off in Settings') }, dispose: async () => {} },
         emit: view => { if (this.routineGeneration === generation) this.emit({ kind: 'routines', view }) } })
       try { await routines.initialize() } catch (error) { await routines.close().catch(() => {}); throw error }
@@ -379,6 +382,8 @@ export class AgentRuntimeService {
       case 'routines.create': return this.routineService().create(a[0])
       case 'routines.update': return this.routineService().update(a[0], a[1])
       case 'routines.remove': return this.routineService().remove(a[0])
+      case 'routines.duplicate': return this.routineService().duplicate(a[0])
+      case 'routines.refreshContext': return this.routineService().refreshContext()
       case 'routines.setEnabled': return this.routineService().setEnabled(a[0], a[1])
       case 'routines.runNow': return this.routineService().runNow(a[0])
       case 'routines.event': return this.routineService().event(a[0])
