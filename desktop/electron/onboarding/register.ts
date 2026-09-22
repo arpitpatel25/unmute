@@ -43,6 +43,8 @@ export class OnboardingRuntime {
 
   async accept(event: OnboardingEvent): Promise<PresenterCommand> {
     const before = this.deps.coordinator.currentProgress()
+    // Permission changes must not resurrect a completed/dismissed tour.
+    if (before.action === 'complete' && event.type === 'boot-revalidated') return this.snapshot()
     if (event.type === 'task-created' && before.action === 'orchestrator-task' && !event.cwd) return this.snapshot()
     if (event.type === 'task-completed' && before.action === 'orchestrator-task') {
       if (event.taskId !== before.taskIds.orchestrator || !(await this.verifyTask(event.taskId, before.updatedAt))) return this.snapshot()

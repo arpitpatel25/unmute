@@ -36,6 +36,8 @@ test('first launch shows presenter before sign-in and completion waits for sign-
   assert.equal(h.runtime.snapshot().action, 'sign-in')
   await h.runtime.finishAfterSignIn(true)
   assert.equal(h.runtime.snapshot().action, 'complete')
+  await h.runtime.accept({ type: 'boot-revalidated', satisfied: [] })
+  assert.equal(h.runtime.snapshot().action, 'complete')
   assert.equal(h.closed, 1)
 })
 
