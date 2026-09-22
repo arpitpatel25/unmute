@@ -2160,7 +2160,7 @@ export class NotchController {
    * reading the reply, and demoting it for a glance is how you lose an answer
    * you asked for.
    */
-  private openAgent(): void {
+  openAgent(): void {
     this.cameFromPocket = this.pocketMode === 'open'
     const wasUnread = this.agentUnread
     this.agentUnread = false

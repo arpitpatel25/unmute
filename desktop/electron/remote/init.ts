@@ -3356,6 +3356,11 @@ export function setOnboardingTaskWorkspace(root: string | null): void {
 export function openOnboardingTask(taskId: string): void {
   notchController?.openTask(taskId)
 }
+
+/** Open the real Agent chat for the guided Agent lesson. */
+export function openOnboardingAgent(): void {
+  notchController?.openAgent()
+}
 /** The voice lifecycle, observed (never driven) for the wall's listening surface:
  *  listening (key held) → transcribing (key up, STT running) → routing (deciding
  *  where it lands) → idle (landed; taskId says where). PURELY ADDITIVE — a

@@ -342,6 +342,17 @@ function authStorageKey(): string {
   }
 }
 
+/** UI-only startup decision; never an entitlement or authorization grant.
+ * Main can start before the renderer hydrates its session, so consult the
+ * existing encrypted session too. Do not refresh or modify credentials here. */
+export function hasExistingPaywallSession(): boolean {
+  if (currentSession.user) return true
+  try {
+    const stored = JSON.parse(keychainGet(authStorageKey()) || 'null')
+    return Boolean(stored?.user?.id && stored?.refresh_token)
+  } catch { return false }
+}
+
 /**
  * Persist a rotation main performed itself.
  *

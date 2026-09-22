@@ -172,7 +172,9 @@ function AppInner() {
     const finish = async () => {
       try {
         const result = await api().onboardingFinishAfterSignIn?.(true)
-        if (result?.action === 'complete') return
+        // Main handles the eventual sign-in chapter on entry. Only retry
+        // until IPC is available; never poll the whole tour every 750ms.
+        if (result) return
       } catch {
         // Main may still be registering onboarding IPC during app startup.
       }

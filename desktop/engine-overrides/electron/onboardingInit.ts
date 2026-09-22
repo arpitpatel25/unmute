@@ -6,6 +6,8 @@ import { app, BrowserWindow, ipcMain, screen, shell, systemPreferences } from 'e
 
 import { AllowanceGrantStore, OnboardingAllowanceSession, InstallationIdentityStore, setOnboardingAllowanceSession } from './paywall/onboarding/allowance'
 import { OnboardingCoordinator } from './paywall/onboarding/coordinator'
+import { ActionEntry } from './paywall/onboarding/action-entry'
+import { hasExistingPaywallSession, getPaywallUser } from './paywall/paywall-glue'
 import { escapeEventFor, skipEventFor } from './paywall/onboarding/chapters'
 import { openNotesPractice, notesEventFromReceipt } from './paywall/onboarding/notes-practice'
 import { prepareOnboardingWorkspace, verifyHelloTask } from './paywall/onboarding/orchestrator-exercise'
@@ -18,7 +20,7 @@ import { acceptsAgentTaskLink, onOnboardingReceipt } from './paywall/onboarding/
 import type { ActionId, OnboardingEvent, PresenterCommand, ProviderId, ProviderUiStatus } from './paywall/onboarding/types'
 import { keyboardManager } from './keyboard'
 import { preflightNotetakerSystemAudio } from './notetakerInit'
-import { openOnboardingTask, setOnboardingTaskWorkspace } from './paywall/remote/init'
+import { openOnboardingAgent, openOnboardingTask, setOnboardingTaskWorkspace } from './paywall/remote/init'
 
 declare const __PIPELINE_URL__: string
 const execFileAsync = promisify(execFile)
@@ -42,9 +44,14 @@ async function frontmostBundleId(): Promise<string | null> {
 }
 
 async function launchFreshNotesNote(): Promise<void> {
-  await execFileAsync('/usr/bin/open', ['-b', NOTES_ID])
-  await new Promise(resolve => setTimeout(resolve, 350))
-  await execFileAsync('/usr/bin/osascript', ['-e', 'tell application "System Events" to keystroke "n" using command down']).catch(() => undefined)
+  // Address Notes itself. Never inject global Cmd+N into whatever application
+  // happens to be focused when an asynchronous onboarding callback completes.
+  await execFileAsync('/usr/bin/osascript', ['-e',
+    'tell application "Notes"\nactivate\nset practiceNote to make new note at default account with properties {name:"Unmute practice", body:""}\nshow practiceNote\nend tell',
+  ], { timeout: 10_000 }).catch(async error => {
+    console.warn('[onboarding] could not create practice note; open Notes manually:', error.message)
+    await execFileAsync('/usr/bin/open', ['-b', NOTES_ID])
+  })
 }
 
 function satisfiedPermissions(progressCompleted: readonly ActionId[]): ActionId[] {
@@ -68,9 +75,10 @@ export async function initOnboarding(
   navigate: (destination: 'orchestrator' | 'notetaker' | 'account') => void,
 ): Promise<OnboardingRuntime> {
   activeRuntime?.dispose()
-  // The first-run curriculum has one deterministic input contract.
-  keyboardManager.setDictationKey('fn')
-  keyboardManager.setActivationMode('tap-toggle')
+  const prepareInput = (): void => {
+    keyboardManager.setDictationKey('fn')
+    keyboardManager.setActivationMode('tap-toggle')
+  }
   const root = path.join(app.getPath('userData'), 'onboarding')
   const workspace = path.join(root, 'workspace')
   await prepareOnboardingWorkspace(workspace)
@@ -94,7 +102,7 @@ export async function initOnboarding(
 
   const ownedAgentTasks = new Set<string>()
   let afterReceipt: (() => Promise<void>) | null = null
-  const receiptSource = (listener: (event: OnboardingEvent) => void) => onOnboardingReceipt(event => {
+  const receiptSource = (listener: (event: OnboardingEvent) => Promise<PresenterCommand>) => onOnboardingReceipt(event => {
     if (event.type === 'task-created' && event.cwd !== workspace) return
     if (event.type === 'task-created' && event.source === 'agent') ownedAgentTasks.add(event.taskId)
     if (event.type === 'task-created' && event.source === 'orchestrator'
@@ -120,7 +128,8 @@ export async function initOnboarding(
     onNavigate: navigate,
   })
   activeRuntime = runtime
-  const initial = await runtime.boot()
+  const initial = await runtime.boot({ signedIn: hasExistingPaywallSession() })
+  if (initial.action !== 'complete') prepareInput()
   if (initial.action !== 'complete' && !allowance.snapshotGrant() && await allowance.acquire(__PIPELINE_URL__).catch(() => false)) {
     const grant = allowance.snapshotGrant()
     if (grant) await grantStore.save(grant)
@@ -159,15 +168,23 @@ export async function initOnboarding(
     })
   }
 
+  const actionEntry = new ActionEntry()
   const configureAction = async (command: PresenterCommand): Promise<void> => {
+    if (command.action !== runtime.snapshot().action) return
+    if (command.action === 'sign-in' && getPaywallUser()) {
+      command = await runtime.finishAfterSignIn(true)
+    }
     keyboardManager.setFunctionReadinessProbe(command.action === 'function-key'
       ? () => { void runtime.accept({ type: 'function-key-observed' }).then(configureAction) }
       : null)
     const usesWorkspace = command.action === 'orchestrator-task' || command.action === 'agent-task-link'
     setOnboardingTaskWorkspace(usesWorkspace ? workspace : null)
-    if (command.action === 'notes-dictation') {
-      await openNotesPractice({ launch: async () => launchFreshNotesNote(), frontmostBundleId, sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) })
-    }
+    await actionEntry.run(command.action, async () => {
+      if (command.action === 'notes-dictation') {
+        await openNotesPractice({ launch: async () => launchFreshNotesNote(), frontmostBundleId, sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) })
+      }
+      if (command.action === 'agent-task-link' || command.action === 'agent-notes') openOnboardingAgent()
+    })
     if (command.action === 'provider-choice') presentProviderChoice()
   }
   afterReceipt = () => configureAction(runtime.snapshot())
@@ -219,12 +236,13 @@ export async function initOnboarding(
   ipcMain.removeHandler('onboarding:orientation-complete')
   ipcMain.removeHandler('onboarding:finish-after-sign-in')
   ipcMain.handle('onboarding:snapshot', () => runtime.snapshot())
-  ipcMain.handle('onboarding:reset', async () => { const result = await runtime.reset(); await configureAction(result); return result })
+  ipcMain.handle('onboarding:reset', async () => { prepareInput(); const result = await runtime.reset(); await configureAction(result); return result })
   ipcMain.handle('onboarding:orientation-complete', async () => { const result = await runtime.completeOrientation(); await configureAction(result); return result })
   ipcMain.handle('onboarding:finish-after-sign-in', async (_event, signedIn: boolean) => {
+    const before = runtime.snapshot().action
     const result = await runtime.finishAfterSignIn(signedIn === true)
     if (result.action === 'complete') await grantStore.reset()
-    await configureAction(result)
+    if (result.action !== before) await configureAction(result)
     return result
   })
   ipcMain.removeAllListeners('onboarding:presenter-action')
@@ -248,7 +266,8 @@ export async function initOnboarding(
       }
     }
     if (action.type === 'dismiss') {
-      await runtime.dismiss()
+      const result = await runtime.dismiss()
+      await configureAction(result)
       await grantStore.reset()
     }
     if (action.type === 'continue-anyway') {

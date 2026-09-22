@@ -5,7 +5,7 @@ export interface OnboardingRuntimeDeps {
   coordinator: OnboardingCoordinator
   presenter: { show(): void; send(command: PresenterCommand): void; close(): void }
   allowance: { arm(action: PresenterCommand['action']): void; complete(): void }
-  onReceipt(listener: (event: OnboardingEvent) => void): () => void
+  onReceipt(listener: (event: OnboardingEvent) => Promise<PresenterCommand>): () => void
   verifyOrchestratorTask(taskId: string, notBeforeMs: number): Promise<boolean>
   onNavigate(destination: 'orchestrator' | 'notetaker' | 'account'): void
 }
@@ -18,10 +18,16 @@ export class OnboardingRuntime {
     this.verifyTask = deps.verifyOrchestratorTask
   }
 
-  async boot(): Promise<PresenterCommand> {
-    const command = await this.deps.coordinator.start()
+  async boot(options: { signedIn?: boolean } = {}): Promise<PresenterCommand> {
+    let command = await this.deps.coordinator.start()
+    // Resolve existing accounts before creating a window, even if an old tour
+    // checkpoint was left unfinished. Replay is an explicit, separate reset.
+    if (options.signedIn && command.action !== 'complete') {
+      command = await this.deps.coordinator.dispatch({ type: 'onboarding-dismissed' })
+      this.deps.allowance.complete()
+    }
     this.unsubscribe?.()
-    this.unsubscribe = this.deps.onReceipt(event => { void this.accept(event) })
+    this.unsubscribe = this.deps.onReceipt(event => this.accept(event))
     if (command.action !== 'complete') {
       this.deps.presenter.show()
       this.publish(command)

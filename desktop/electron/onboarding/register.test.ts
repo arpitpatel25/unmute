@@ -48,6 +48,18 @@ test('replay resets durable progress and opens the presenter', async () => {
   assert.equal(h.shown, 1)
 })
 
+test('signed-in startup never shows an unfinished tour, but explicit replay still works', async () => {
+  const h = harness(initialProgress({ action: 'notes-dictation' }))
+  await h.runtime.boot({ signedIn: true })
+  assert.equal(h.shown, 0)
+  assert.equal(h.runtime.snapshot().action, 'complete')
+  await h.runtime.reset()
+  assert.equal(h.shown, 1)
+  assert.equal(h.runtime.snapshot().action, 'welcome')
+  await h.runtime.finishAfterSignIn(true)
+  assert.equal(h.runtime.snapshot().action, 'welcome')
+})
+
 test('orchestrator completion advances only after output verification', async () => {
   const h = harness(initialProgress({ action: 'orchestrator-task', taskIds: { orchestrator: 't1' } }))
   await h.runtime.boot()
