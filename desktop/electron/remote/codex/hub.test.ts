@@ -6,19 +6,25 @@ import type { CodexAppServer, ServerRequest } from './app-server-client.ts'
 /** A CodexAppServer stand-in. Only the four things the hub touches. */
 function fakeServer() {
   const calls: Array<{ method: string; params: unknown }> = []
+  let starts = 0
+  let restarts = 0
+  let upgrade = false
   let notify: ((m: unknown) => void) | null = null
   let onReq: ((r: ServerRequest) => Promise<unknown>) | null = null
   let nextThread = 1
   const srv = {
     url: 'ws://127.0.0.1:9999',
     running: true,
-    async start() {},
+    async start() { starts++ },
+    async upgradeAvailable() { return upgrade },
+    async restart() { restarts++; upgrade = false },
     stop() {},
     on(_m: string, h: (p: unknown) => void) { notify = h; return () => {} },
     onRequest(h: (r: ServerRequest) => Promise<unknown>) { onReq = h },
     async request(method: string, params: unknown) {
       calls.push({ method, params })
       if (method === 'thread/start') return { threadId: `th_${nextThread++}` }
+      if (method === 'thread/resume') return { thread: { id: (params as any).threadId, turns: [] } }
       if (method === 'thread/fork') return { thread: { id: `fork_${nextThread++}`, forkedFromId: (params as any).threadId, turns: [] } }
       if (method === 'turn/start') return { turn: { id: 'turn-1' } }
       return {}
@@ -27,10 +33,47 @@ function fakeServer() {
   } as unknown as CodexAppServer
   return {
     srv, calls,
+    get starts() { return starts },
+    get restarts() { return restarts },
+    setUpgrade(value: boolean) { upgrade = value },
     emit: (method: string, params: Record<string, unknown>) => notify?.({ method, params }),
     ask: (r: ServerRequest) => onReq!(r),
   }
 }
+
+test('a Codex update drains active work, restarts only transport, and resumes durable threads', async () => {
+  const f = fakeServer()
+  const hub = new CodexHub({ resolveBin: async () => 'codex', onPatch() {}, makeServer: () => f.srv })
+  const options = { cwd: '/tmp', approvalPolicy: 'never', sandbox: 'danger-full-access' }
+  await hub.startThread('first', options)
+  await hub.send('first', 'keep working')
+  f.setUpgrade(true)
+
+  const queued = hub.startThread('second', options)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.restarts, 0, 'the active turn keeps its existing transport')
+
+  f.emit('turn/completed', { threadId: 'th_1', turn: { id: 'turn-1', status: 'completed' } })
+  await queued
+
+  assert.equal(f.restarts, 1)
+  const methods = f.calls.map(call => call.method)
+  assert.ok(methods.indexOf('thread/resume') > methods.indexOf('turn/start'))
+  assert.ok(methods.indexOf('thread/resume') < methods.lastIndexOf('thread/start'))
+  assert.equal(hub.threadIdFor('first'), 'th_1')
+  hub.stop()
+})
+
+test('a new thread reuses the current app-server when Codex has not updated', async () => {
+  const f = fakeServer()
+  const hub = new CodexHub({ resolveBin: async () => 'codex', onPatch() {}, makeServer: () => f.srv })
+  const options = { cwd: '/tmp', approvalPolicy: 'never', sandbox: 'danger-full-access' }
+
+  await hub.startThread('first', options)
+  await hub.startThread('second', options)
+
+  assert.equal(f.starts, 1)
+})
 
 test('native fork passes the exact source and registers only the returned child', async () => {
   const { hub, calls, patches } = makeHub()
@@ -441,7 +484,7 @@ test('fresh task config is injected on start and forced resume', async () => {
   const opts = { cwd: '/tmp', approvalPolicy: 'never', sandbox: 'danger-full-access' }
   await hub.startThread('task', opts)
   await hub.resumeThread('task', 'th_1', opts, true)
-  assert.deepEqual(f.calls.map(c => (c.params as any).config.token), [1, 2])
+  assert.deepEqual(f.calls.filter(c => (c.params as any)?.config).map(c => (c.params as any).config.token), [1, 2])
 })
 
 test('resume paginates inclusive turn and item anchors in chronological order without duplicates', async () => {
@@ -561,9 +604,9 @@ test('resume uses the recorded thread and policy without resubmitting a prompt',
   const { hub, calls } = makeHub()
   await hub.resumeThread('task', 'recorded-thread', { cwd: '/project', approvalPolicy: 'never', sandbox: 'danger-full-access' })
   assert.equal(hub.threadIdFor('task'), 'recorded-thread')
-  assert.deepEqual(calls.map((c) => c.method), ['thread/resume'])
+  assert.deepEqual(calls.filter(c => c.method.startsWith('thread/')).map((c) => c.method), ['thread/resume'])
   await hub.resumeThread('task', 'recorded-thread', { cwd: '/project', approvalPolicy: 'never', sandbox: 'danger-full-access' })
-  assert.equal(calls.length, 1)
+  assert.equal(calls.filter(c => c.method.startsWith('thread/')).length, 1)
 })
 
 test('a thread carries its own permissions — that is what one server buys', async () => {

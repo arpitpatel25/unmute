@@ -30,6 +30,7 @@ import {
   type CodexPatch,
 } from './app-server-events'
 import { createLogger } from '../log'
+import { sessionLifecycleDev } from '../session-lifecycle-devlog'
 import { sameQuestion, type QuestionReference } from '../question-reference'
 import type { TaskInput } from '../task-input'
 import type { FollowupGate, FollowupTurnEnded, NewTurnOutcome } from '../task-followup'
@@ -165,6 +166,8 @@ interface ThreadState {
    *  on it, but only turn/completed says the turn is over — new work on the
    *  same turn un-latches it. */
   failedMidTurn?: boolean
+  retryCount?: number
+  firstRetryAt?: number
   completedTurns?: Set<string>
   options?: StartThreadOpts
   /** What Unmute asked for before this machine's policy lowered it. */
@@ -214,7 +217,7 @@ export class CodexHub {
   private followupChanged(taskId: string, disarm = false): void { for (const cb of this.followupListeners) cb({ type: disarm ? 'disarm' : 'changed', taskId }) }
   followupGate(taskId: string): FollowupGate {
     const st = this.byTask.get(taskId)
-    if (!st || st.disconnected || !this.server?.running || st.stopping || st.submitting) return { kind: 'unavailable', reason: 'Codex is connecting or its delivery state is uncertain.' }
+    if (this.draining || !st || st.disconnected || !this.server?.running || st.stopping || st.submitting) return { kind: 'unavailable', reason: 'Codex is connecting or its delivery state is uncertain.' }
     const blocked = !!st.pending || !!st.pendingQueue?.length
     const generation = this.generation(st)
     return st.turnId ? { kind: 'active', fence: { sessionId: st.threadId, generation, turnId: st.turnId }, blocked }
@@ -231,6 +234,10 @@ export class CodexHub {
   private mcpStatuses = new Map<string, import('./app-server-events').McpStatus>()
   private planWrites = new Map<string, Promise<void>>()
   private starting: Promise<CodexAppServer> | null = null
+  private reconciling: Promise<CodexAppServer> | null = null
+  private draining = false
+  private rebinding = false
+  private drainWaiters = new Set<() => void>()
   /** What this machine's administrator allows (codex/requirements.ts): the
    *  last `configRequirements/read` answer, narrowed by anything Codex has
    *  refused on this server. Both null when unmanaged. */
@@ -258,7 +265,14 @@ export class CodexHub {
   /** Start the server if it is not up. Coalesced — several tasks dispatching at
    *  once must not each spawn a Codex. */
   private async ensure(): Promise<CodexAppServer> {
-    if (this.server?.running) return this.server
+    if (this.server?.running) {
+      if (this.rebinding) return this.server
+      if (this.reconciling) return this.reconciling
+      if (!await this.server.upgradeAvailable()) return this.server
+      const server = this.server
+      this.reconciling = this.reconcile(server).finally(() => { this.reconciling = null })
+      return this.reconciling
+    }
     if (this.starting) return this.starting
     this.starting = (async () => {
       // A new server has no loaded threads. Old mappings cannot make resume
@@ -286,6 +300,44 @@ export class CodexHub {
       return srv
     })().finally(() => { this.starting = null })
     return this.starting
+  }
+
+  private transportBusy(): boolean {
+    for (const st of this.byTask.values()) if (st.turnId || st.submitting || st.stopping || st.pending || st.pendingQueue?.length) return true
+    return false
+  }
+
+  private signalDrain(): void {
+    if (this.transportBusy()) return
+    for (const resolve of this.drainWaiters) resolve()
+    this.drainWaiters.clear()
+  }
+
+  private async waitForDrain(): Promise<void> {
+    while (this.transportBusy()) await new Promise<void>(resolve => this.drainWaiters.add(resolve))
+  }
+
+  private async reconcile(server: CodexAppServer): Promise<CodexAppServer> {
+    this.draining = true
+    log.event('codex-transport-drain-started', { tasks: this.byTask.size })
+    try {
+      await this.waitForDrain()
+      const sessions = [...this.byTask.values()].map(st => ({ taskId: st.taskId, threadId: st.threadId, options: st.options }))
+      await server.restart()
+      this.rebinding = true
+      try {
+        for (const session of sessions) {
+          if (!session.options || this.byTask.get(session.taskId)?.threadId !== session.threadId) continue
+          this.byTask.get(session.taskId)!.disconnected = true
+          await this.resumeThread(session.taskId, session.threadId, session.options, true)
+        }
+      } finally { this.rebinding = false }
+      log.event('codex-transport-drain-completed', { tasks: sessions.length, url: server.url })
+      return server
+    } finally {
+      this.draining = false
+      this.signalDrain()
+    }
   }
 
   /** Re-read on every new session, not once per server: an administrator can
@@ -530,7 +582,7 @@ export class CodexHub {
       log.warn('turn/start failed', { taskId, error: (e as Error).message })
       this.deps.onPatch({ taskId, state: 'failed', errorReason: `Could not confirm Codex submission: ${(e as Error).message}. Check the conversation before retrying.` })
       return { kind: submissionAttempted ? 'uncertain' : 'not-sent', reason: submissionAttempted ? 'Codex acceptance is uncertain. Check the conversation before sending again.' : 'Codex did not start this turn.' }
-    } finally { st.submitting = false; finishSubmission(); this.followupChanged(taskId, !!st.disconnected) }
+    } finally { st.submitting = false; finishSubmission(); this.signalDrain(); this.followupChanged(taskId, !!st.disconnected) }
   }
 
   /** One `turn/start`, carrying the thread's CURRENT posture. */
@@ -897,13 +949,23 @@ export class CodexHub {
     if (st && m.method === 'turn/started') {
       const turn = m.params?.turn as { id?: string } | undefined
       if (turn?.id) st.turnId = turn.id
+      st.retryCount = 0
+      st.firstRetryAt = undefined
     }
     if (st && m.method === 'turn/completed') {
       const id = (m.params?.turn as { id?: string } | undefined)?.id
+      if (st.retryCount) sessionLifecycleDev('codex-retry-outcome', {
+        taskId: st.taskId, threadId: st.threadId, turnId: id ?? st.turnId,
+        attempts: st.retryCount, status: (m.params?.turn as { status?: string } | undefined)?.status ?? 'unknown',
+        elapsedMs: st.firstRetryAt ? Date.now() - st.firstRetryAt : 0,
+      })
+      st.retryCount = 0
+      st.firstRetryAt = undefined
       if (id) (st.completedTurns ??= new Set()).add(id)
       this.retireCompletedRequests(st)
       if (!id || st.turnId === id) st.turnId = undefined
       else if (st.turnId) return
+      this.signalDrain()
     }
 
     // THE CHAT VIEW IS FED FIRST, AND FROM EVERY NOTIFICATION.
@@ -919,6 +981,20 @@ export class CodexHub {
 
     let patch = reduceAppServerEvent({ method: m.method, params: m.params })
     if (st) {
+      if (m.method === 'error') {
+        const error = m.params?.error && typeof m.params.error === 'object' ? m.params.error as Record<string, unknown> : {}
+        const willRetry = m.params?.willRetry === true
+        if (willRetry) {
+          st.retryCount = (st.retryCount ?? 0) + 1
+          st.firstRetryAt ??= Date.now()
+        }
+        sessionLifecycleDev('codex-provider-error', {
+          taskId: st.taskId, threadId: st.threadId, turnId: st.turnId,
+          willRetry, attempt: st.retryCount ?? 0,
+          code: typeof error.codexErrorInfo === 'string' ? error.codexErrorInfo : undefined,
+          reason: typeof error.message === 'string' ? error.message : undefined,
+        })
+      }
       if (m.method === 'turn/started' || m.method === 'turn/completed') st.failedMidTurn = false
       else if (m.method === 'error' && patch?.state === 'failed' && st.turnId) st.failedMidTurn = true
       else if (st.failedMidTurn && st.turnId && (m.method === 'item/started' || m.method.endsWith('/delta'))) {

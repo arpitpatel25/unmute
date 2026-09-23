@@ -59,7 +59,9 @@ function claudeModelLabel(displayName: string, description: unknown): string {
   if (displayName.startsWith('Default')) return displayName
   if (typeof description !== 'string') return displayName
   const versionedName = description.split('·', 1)[0].trim()
-  if (!versionedName) return displayName
+  const family = displayName.replace(/\s*\([^)]*\)\s*$/, '').trim()
+  const escapedFamily = family.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  if (!versionedName || !new RegExp(`^${escapedFamily}\\s+\\d`, 'i').test(versionedName)) return displayName
   return versionedName.replace(/ with (\d+[KMG] context)$/i, ' ($1)')
 }
 

@@ -43,6 +43,35 @@ test('a busy daemon from an older build is left alone this launch', async () => 
   assert.ok(!r.log.includes('runtime.shutdown'))
 })
 
+test('a deferred stale daemon is replaced after it becomes idle without another app launch', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'runtime-stale-retry-'))
+  const d = await daemons(root)
+  let busy = true
+  const client = new PersistentRuntimeClient(root, '/unused', '/usr/bin/true')
+    .replaceStaleBuild({ build: 'new', idle: async () => !busy, retryAfterMs: 5 })
+  try {
+    assert.equal(await client.call('ping'), 'old')
+    assert.ok(!d.log.includes('runtime.shutdown'))
+    busy = false
+    const deadline = Date.now() + 1_000
+    while (!d.log.includes('runtime.shutdown') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+    assert.ok(d.log.includes('runtime.shutdown'))
+    const freshDeadline = Date.now() + 1_000
+    let answer = ''
+    while (Date.now() < freshDeadline) {
+      try { answer = await client.call<string>('ping'); if (answer === 'fresh') break } catch { /* reconnecting */ }
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal(answer, 'fresh')
+  } finally {
+    client.disconnect()
+    await d.old.close().catch(() => {})
+    await d.fresh.close().catch(() => {})
+    await rm(root, { recursive: true, force: true })
+    await rm(dirname(runtimeSocket(root)), { recursive: true, force: true })
+  }
+})
+
 test('a daemon already on this build is kept and not even asked about idleness', async () => {
   const r = await scenario(true, 'old')
   assert.equal(r.answer, 'old')

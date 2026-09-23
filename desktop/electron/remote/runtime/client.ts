@@ -32,6 +32,8 @@ export interface RuntimeUpgrade {
   build?: string
   /** True when the daemon holds nothing a restart would interrupt. */
   idle: (rpc: RuntimeRpcClient) => Promise<boolean>
+  /** Injected by tests; production retries conservatively. */
+  retryAfterMs?: number
 }
 
 /** A per-user-data daemon; dev worktrees do not attach to production runtimes. */
@@ -42,6 +44,8 @@ export class PersistentRuntimeClient extends RuntimeRpcClient {
   private upgrade?: RuntimeUpgrade
   private buildChecked = false
   private replacing = false
+  private upgradeRetry?: ReturnType<typeof setTimeout>
+  private upgradeAttempts = 0
   constructor(private root: string, private entry: string, private executable = runtimeExecutable(process.execPath)) {
     super(runtimeSocket(root))
     this.on('disconnected', () => this.scheduleReconnect())
@@ -66,11 +70,20 @@ export class PersistentRuntimeClient extends RuntimeRpcClient {
   private async replacedStale(): Promise<boolean> {
     const upgrade = this.upgrade
     if (!upgrade?.build || this.buildChecked) return false
-    this.buildChecked = true
+    const attempt = ++this.upgradeAttempts
     const hello = await this.call<{ build?: string; pid?: number }>('hello').catch(() => ({} as { build?: string; pid?: number }))
-    if (hello.build === upgrade.build) return false
-    const fields = { root: this.root, running: hello.build ?? 'unreported', expected: upgrade.build }
-    if (!(await upgrade.idle(this).catch(() => false))) { diagnostic('runtime-stale-build-deferred', fields); return false }
+    const fields = { root: this.root, running: hello.build ?? 'unreported', expected: upgrade.build, attempt }
+    if (hello.build === upgrade.build) {
+      this.buildChecked = true
+      diagnostic('runtime-build-current', fields)
+      return false
+    }
+    if (!(await upgrade.idle(this).catch(() => false))) {
+      diagnostic('runtime-stale-build-deferred', fields)
+      this.scheduleUpgradeRetry()
+      return false
+    }
+    this.buildChecked = true
     diagnostic('runtime-stale-build-replaced', fields)
     this.replacing = true
     try {
@@ -88,6 +101,24 @@ export class PersistentRuntimeClient extends RuntimeRpcClient {
     return true
   }
 
+  private scheduleUpgradeRetry(): void {
+    if (this.disposed || this.buildChecked || this.replacing || this.upgradeRetry) return
+    const delayMs = this.upgrade?.retryAfterMs ?? 30_000
+    diagnostic('runtime-stale-build-retry-scheduled', { root: this.root, delayMs, attempt: this.upgradeAttempts + 1 })
+    this.upgradeRetry = setTimeout(() => {
+      this.upgradeRetry = undefined
+      void this.replacedStale().then(async replaced => {
+        if (!replaced) return
+        await this.connect()
+        if (!this.disposed) this.emit('reconnected')
+      }).catch(error => {
+        diagnostic('runtime-stale-build-retry-failed', { root: this.root, error: (error as Error).message, attempt: this.upgradeAttempts })
+        this.scheduleUpgradeRetry()
+      })
+    }, delayMs)
+    this.upgradeRetry.unref()
+  }
+
   private scheduleReconnect(): void {
     if (this.disposed || this.retry || this.replacing) return
     this.retry = setTimeout(() => {
@@ -100,7 +131,9 @@ export class PersistentRuntimeClient extends RuntimeRpcClient {
   override disconnect(): void {
     this.disposed = true
     if (this.retry) clearTimeout(this.retry)
+    if (this.upgradeRetry) clearTimeout(this.upgradeRetry)
     this.retry = undefined
+    this.upgradeRetry = undefined
     super.disconnect()
   }
   override connect(): Promise<void> {

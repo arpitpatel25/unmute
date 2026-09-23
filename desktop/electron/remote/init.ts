@@ -33,6 +33,7 @@ import { draftInput } from './task-input'
 import { safeArtifactURL, artifactPathAction } from './artifact-url'
 import { ClaudeTaskSession, type ClaudeTaskModel } from './claude/task-session'
 import { agentModelName, claudeAgentModels, defaultAgentModel, setAgentModelChoices, type AgentModelChoices } from './agent/modelPolicy'
+import { claudeModelChoices } from './claude/model-choices'
 import { writeFileAtomic } from './atomic-file'
 import { TaskDraftStore } from './task-draft'
 import { stageTaskDraftAttachment, persistTaskDraftFile } from './task-draft-attachment'
@@ -1097,11 +1098,8 @@ function refreshAgentModelCatalog(): Promise<void> {
     }
     if (agentProviderInstalled('claude')) {
       reads.push((async () => {
-        if (!chatClaudeModels.length) {
-          const probe = new ClaudeTaskSession({ binary: 'claude', cwd: tmpdir(), controlTimeoutMs: 15_000, onEvent: () => {} })
-          try { await probe.start(); chatClaudeModels = probe.models } finally { probe.close() }
-        }
-        const models = claudeAgentModels(chatClaudeModels.map(m => ({ id: m.id, label: m.label })))
+        await refreshClaudeModelCatalog()
+        const models = claudeAgentModels(claudeModelChoices(chatClaudeModels, settings.get('unmuteAgentModels')?.claude).map(m => ({ id: m.id, label: m.label })))
         if (models.selectable.length) agentModelCatalog.claude = models.selectable
       })().catch(error => log.warn('agent-model-catalog', { provider: 'claude', error: (error as Error).message })))
     }
@@ -3019,7 +3017,26 @@ let chatCatalogAttemptAt = 0
 let chatClaudeModels: ClaudeTaskModel[] = []
 let chatClaudeCatalogLoading = false
 let chatClaudeCatalogAttemptAt = 0
+let chatClaudeCatalogRequest: Promise<void> | null = null
 const composerDictation = new ComposerDictationCoordinator()
+
+function refreshClaudeModelCatalog(): Promise<void> {
+  if (chatClaudeCatalogRequest) return chatClaudeCatalogRequest
+  if (!shouldRefreshModelCatalog({ count: chatClaudeModels.length, loading: false, attemptedAt: chatClaudeCatalogAttemptAt, now: Date.now() })) return Promise.resolve()
+  chatClaudeCatalogLoading = true
+  chatClaudeCatalogAttemptAt = Date.now()
+  const probe = new ClaudeTaskSession({ binary: 'claude', cwd: tmpdir(), controlTimeoutMs: 15_000, onEvent: () => {} })
+  chatClaudeCatalogRequest = probe.start().then(() => { if (probe.models.length) chatClaudeModels = probe.models })
+    .catch(error => log.warn('claude-chat-model-catalog', { error: (error as Error).message }))
+    .finally(() => {
+      probe.close()
+      chatClaudeCatalogLoading = false
+      chatClaudeCatalogRequest = null
+      notchController?.refresh()
+      if (pillController?.phase !== 'hidden') void pushPillChips(pillController?.taskId ?? null)
+    })
+  return chatClaudeCatalogRequest
+}
 
 /**
  * What `/` offers in a chat, per provider and per project folder.
@@ -3063,19 +3080,7 @@ function chatConfig(id: string): ChatConfigP | undefined {
   if (!task) return undefined
   const provider = task.agent ?? 'claude'
   const owned = task.claudeSessionSettings ?? task.codexSessionSettings
-  if (provider === 'claude' && shouldRefreshModelCatalog({ count: chatClaudeModels.length, loading: chatClaudeCatalogLoading, attemptedAt: chatClaudeCatalogAttemptAt, now: Date.now() })) {
-    chatClaudeCatalogLoading = true
-    chatClaudeCatalogAttemptAt = Date.now()
-    const probe = new ClaudeTaskSession({ binary: 'claude', cwd: tmpdir(), controlTimeoutMs: 15_000, onEvent: () => {} })
-    void probe.start().then(() => { if (probe.models.length) chatClaudeModels = probe.models })
-      .catch(error => log.warn('claude-chat-model-catalog', { error: (error as Error).message }))
-      .finally(() => {
-        probe.close()
-        chatClaudeCatalogLoading = false
-        notchController?.refresh()
-        if (pillController?.taskId === id && pillController.phase !== 'hidden') void pushPillChips(id)
-      })
-  }
+  if (provider === 'claude') void refreshClaudeModelCatalog()
   if (provider === 'codex' && shouldRefreshModelCatalog({ count: chatCodexModels.length, loading: chatCatalogLoading, attemptedAt: chatCatalogAttemptAt, now: Date.now() })) {
     chatCatalogLoading = true
     chatCatalogAttemptAt = Date.now()
@@ -3087,7 +3092,8 @@ function chatConfig(id: string): ChatConfigP | undefined {
       })
   }
   const codexModel = chatCodexModels.find(m => m.id === owned?.model)
-  const claudeModel = chatClaudeModels.find(m => m.id === (owned?.model || 'default'))
+  const visibleClaudeModels = claudeModelChoices(chatClaudeModels, owned?.model)
+  const claudeModel = visibleClaudeModels.find(m => m.id === (owned?.model || 'default'))
   const permission = task.claudeSessionSettings
     ? task.claudeSessionSettings.permissionMode === 'bypassPermissions' ? 'full' : task.claudeSessionSettings.permissionMode === 'plan' ? 'plan' : 'ask'
     : task.codexSessionSettings?.sandbox === 'danger-full-access' ? 'full' : task.codexSessionSettings?.sandbox === 'read-only' ? 'read' : task.codexSessionSettings?.approvalPolicy === 'never' ? 'workspace' : 'ask'
@@ -3097,12 +3103,12 @@ function chatConfig(id: string): ChatConfigP | undefined {
     modelLabel: existingTaskModelLabel(
       provider === 'codex'
         ? chatCodexModels.map(model => ({ id: model.id, label: model.uiLabel }))
-        : chatClaudeModels.map(({ id: modelId, label }) => ({ id: modelId, label })),
+        : visibleClaudeModels.map(({ id: modelId, label }) => ({ id: modelId, label })),
       owned?.model || (provider === 'claude' ? 'default' : undefined),
       task.model ?? owned?.model,
     ),
     models: provider === 'codex' ? chatCodexModels.map(m => ({ id: m.id, label: m.uiLabel, description: m.description }))
-      : provider === 'claude' ? chatClaudeModels.map(({ id, label, description }) => ({ id, label, description })) : [],
+      : provider === 'claude' ? visibleClaudeModels.map(({ id, label, description }) => ({ id, label, description })) : [],
     effort: owned?.effort,
     efforts: codexModel ? codexModel.efforts.map((id, i) => ({ id, label: codexModel.effortLabels[i] }))
       : claudeModel ? claudeModel.efforts.map(id => ({ id, label: ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum' } as Record<string, string>)[id] ?? id })) : [],
@@ -3184,7 +3190,10 @@ function setModelFor(agent: AgentKind, m: string): string | null {
     log.warn('model-pick-refused', { agent, reason: `models come from ${p.modelSource}`, model: m })
     return null
   }
-  if (!isSelectableModel(m, agent)) { log.warn('pick-model-rejected', { agent, model: m }); return null }
+  const selectable = agent === 'claude'
+    ? claudeModelChoices(chatClaudeModels, currentModelFor('claude')).some(model => model.id === m)
+    : isSelectableModel(m, agent)
+  if (!selectable) { log.warn('pick-model-rejected', { agent, model: m }); return null }
   if (key === 'model') {
     settings.set('model', m)
     settings.set('modelUserSet', true) // explicit choice — never auto-migrate it
@@ -3666,7 +3675,8 @@ async function pushPillChips(
       chips.modelEmpty = 'Unmute couldn’t reach the codex command'
       chips.raw = injectionDisabled()
     } else {
-      const catalog = getModelCatalog()
+      await refreshClaudeModelCatalog()
+      const catalog = claudeModelChoices(chatClaudeModels, currentModelFor('claude'))
       const current = addressed?.model || currentModelFor('claude')
       chips.model = catalog.find((c) => c.id === current)?.label ?? current
       chips.modelOptions = catalog.map((c) => ({
@@ -7722,7 +7732,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:get-model', async () => settings.get('model') || getModels().doerDefault)
   // The effective, config-driven selectable catalog (renderer renders THIS,
   // not a hardcoded list) — so new models arrive via config without a rebuild.
-  ipcMain.handle('remote:get-model-catalog', async () => getModelCatalog())
+  ipcMain.handle('remote:get-model-catalog', async () => {
+    await refreshClaudeModelCatalog()
+    return claudeModelChoices(chatClaudeModels, currentModelFor('claude'))
+  })
   ipcMain.handle('remote:set-model', async (_e, m: string) => {
     // ROUTED BY THE SELECTED BACKEND, through the same function the pill uses.
     // This handler used to write `model` unconditionally, so the Remote screen's
@@ -8175,7 +8188,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // Codex — and the exact lie the comment above warns about: `-c model="opus"`
     // is valid TOML for a model Codex does not have, so it fails at the API
     // rather than the picker, long after the user chose.
-    const catalog = getModelCatalog(id)
+    if (id === 'claude') await refreshClaudeModelCatalog()
+    const catalog = id === 'claude' ? claudeModelChoices(chatClaudeModels, currentModelFor('claude')) : getModelCatalog(id)
     log.event('model-options', { agent: id, models: catalog.length })
     return { agent: id, models: catalog.map((m) => ({ id: m.id, label: m.label, description: m.description })) }
   })

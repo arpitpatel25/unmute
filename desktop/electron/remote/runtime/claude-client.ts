@@ -17,11 +17,12 @@ export class PersistentClaudeTaskSession extends ClaudeTaskSession {
     this.apply(event)
   }
   private disconnected = () => {
+    const interrupted = this.runtimeState.busy || !!this.runtimeState.activeSubmissionId || this.runtimeState.followupBlocked
     this.attached = undefined
     this.replaying = true
     this.buffered = []
     this.runtimeState = { ...this.runtimeState, alive: false, followupUnavailable: true }
-    this.remoteOptions.onEvent({ type: 'error', message: 'Background runtime connection lost; reconnect before sending again.' })
+    if (interrupted) this.remoteOptions.onEvent({ type: 'error', message: 'Background runtime connection lost; reconnect before sending again.' })
   }
   constructor(private rpc: RuntimeRpcClient, private remoteOptions: ClaudeTaskOptions) {
     super(remoteOptions)

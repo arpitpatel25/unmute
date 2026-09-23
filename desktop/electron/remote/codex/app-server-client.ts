@@ -95,6 +95,7 @@ export interface AppServerDeps {
   port?: number
   ownerFile?: string
   inspectProcess?: (pid: number) => Promise<string | null>
+  binaryVersion?: () => Promise<string | null>
   killImpl?: (pid: number) => void
   killProcessGroupImpl?: (pid: number) => void
   readyTimeoutMs?: number
@@ -111,6 +112,11 @@ export interface AppServerReaperDeps {
 }
 
 type AppServerOwner = { pid: number; port: number; generation: string }
+
+function semanticVersion(value: unknown): string | null {
+  const match = typeof value === 'string' ? value.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/) : null
+  return match?.[0] ?? null
+}
 
 /** Ask the OS for a free loopback port. Racy in principle, immediately reused
  *  in practice, and far better than a hardcoded port that collides with a
@@ -138,6 +144,7 @@ export class CodexAppServer {
   private port = 0
   private stopped = false
   private owner: AppServerOwner | null = null
+  private serverVersion: string | null = null
 
   constructor(private deps: AppServerDeps) {}
 
@@ -164,6 +171,35 @@ export class CodexAppServer {
     return this.starting
   }
 
+  async upgradeAvailable(): Promise<boolean> {
+    const installedVersion = semanticVersion(await this.readBinaryVersion())
+    const replace = !!installedVersion && !!this.serverVersion && installedVersion !== this.serverVersion
+    log.event('app-server-version-check', { installedVersion, serverVersion: this.serverVersion, ownerPid: this.owner?.pid ?? null,
+      decision: !installedVersion || !this.serverVersion ? 'unverifiable' : replace ? 'replace' : 'keep' })
+    if (replace) log.warn('app-server-version-mismatch', { installedVersion, serverVersion: this.serverVersion,
+      ownerPid: this.owner?.pid ?? null, port: this.owner?.port ?? this.port })
+    return replace
+  }
+
+  async restart(): Promise<void> {
+    const owner = this.owner
+    const previousVersion = this.serverVersion
+    this.stopped = true
+    this.ws?.close()
+    this.ws = null
+    if (owner) {
+      await this.terminateOwner(owner)
+      await this.clearOwner(owner)
+    }
+    this.proc = null
+    this.owner = null
+    this.port = 0
+    this.serverVersion = null
+    this.stopped = false
+    log.event('app-server-version-restart-ready', { previousVersion, previousOwnerPid: owner?.pid ?? null })
+    await this.start()
+  }
+
   private async doStart(): Promise<void> {
     this.stopped = false
     const adopted = await this.adoptOwner()
@@ -173,7 +209,8 @@ export class CodexAppServer {
       try {
         await this.waitReady(false)
         await this.connect()
-        await this.request('initialize', { clientInfo: { name: 'unmute', version: '1' } })
+        const initialized = await this.request<{ userAgent?: string }>('initialize', { clientInfo: { name: 'unmute', version: '1' } })
+        await this.requireCurrentVersion(initialized.userAgent)
         this.notify('initialized', {})
         log.event('app-server-adopted', { port: adopted.port, pid: adopted.pid, generation: adopted.generation })
         sessionLifecycleDev('writer-owner-adopted', { pid: adopted.pid, port: adopted.port, generation: adopted.generation })
@@ -222,20 +259,22 @@ export class CodexAppServer {
     // here, and saying nothing is how the model-list bug stayed invisible.
     this.proc.stdout?.on('data', (d: Buffer) => log.event('app-server-out', { text: String(d).trim().slice(0, 300) }))
     this.proc.stderr?.on('data', (d: Buffer) => log.warn('app-server-err', { text: String(d).trim().slice(0, 300) }))
+    const spawnedProcess = this.proc
+    const spawnedOwner = this.owner
     this.proc.on('exit', (code, signal) => {
       log.warn('app-server-exited', { code, signal, deliberate: this.stopped })
       this.failAllPending(new Error('app-server exited'))
       if (!this.stopped) this.dispatchNotification('transport/disconnected', { reason: 'app-server exited' })
-      this.ws = null
-      this.proc = null
-      void this.clearOwner(this.owner)
-      this.owner = null
+      if (this.proc === spawnedProcess) this.proc = null
+      void this.clearOwner(spawnedOwner)
+      if (this.owner?.generation === spawnedOwner?.generation) this.owner = null
     })
 
     await this.waitReady()
     await this.connect()
     // The protocol requires a handshake before anything else is accepted.
-    await this.request('initialize', { clientInfo: { name: 'unmute', version: '1' } })
+    const initialized = await this.request<{ userAgent?: string }>('initialize', { clientInfo: { name: 'unmute', version: '1' } })
+    await this.requireCurrentVersion(initialized.userAgent)
     this.notify('initialized', {})
     log.event('app-server-ready', { url: this.url })
   }
@@ -243,6 +282,26 @@ export class CodexAppServer {
   private async inspectProcess(pid: number): Promise<string | null> {
     if (this.deps.inspectProcess) return this.deps.inspectProcess(pid)
     return new Promise(resolve => execFile('/bin/ps', ['-p', String(pid), '-wwEo', 'command='], (error, stdout) => {
+      resolve(error ? null : String(stdout).trim() || null)
+    }))
+  }
+
+  private async requireCurrentVersion(userAgent: string | undefined): Promise<void> {
+    const serverVersion = semanticVersion(userAgent)
+    const installedVersion = semanticVersion(await this.readBinaryVersion())
+    this.serverVersion = serverVersion
+    log.event('app-server-version-handshake', { installedVersion, serverVersion, userAgent: userAgent?.slice(0, 120) ?? null,
+      ownerPid: this.owner?.pid ?? null, port: this.port })
+    if (serverVersion && installedVersion && serverVersion !== installedVersion) {
+      log.warn('app-server-version-handshake-rejected', { installedVersion, serverVersion, ownerPid: this.owner?.pid ?? null, port: this.port })
+      throw new Error(`app-server version ${serverVersion} does not match installed Codex ${installedVersion}`)
+    }
+  }
+
+  private async readBinaryVersion(): Promise<string | null> {
+    if (this.deps.binaryVersion) return this.deps.binaryVersion()
+    return new Promise(resolve => execFile(this.deps.bin, ['--version'], (error, stdout) => {
+      if (error) log.warn('codex-binary-version-read-failed', { bin: this.deps.bin, error: error.message })
       resolve(error ? null : String(stdout).trim() || null)
     }))
   }

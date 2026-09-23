@@ -8,14 +8,14 @@ import { CodexAppServer } from './app-server-client.ts'
 
 class FakeSocket extends EventTarget {
   readyState = 0
-  constructor() {
+  constructor(private initializeResult: Record<string, unknown> = {}) {
     super()
     queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event('open')) })
   }
   send(raw: string): void {
     const frame = JSON.parse(raw)
     if (typeof frame.id === 'number') queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', {
-      data: JSON.stringify({ jsonrpc: '2.0', id: frame.id, result: {} }),
+      data: JSON.stringify({ jsonrpc: '2.0', id: frame.id, result: frame.method === 'initialize' ? this.initializeResult : {} }),
     })))
   }
   close(): void { this.readyState = 3; this.dispatchEvent(new Event('close')) }
@@ -41,6 +41,69 @@ test('a restarted runtime adopts its verified app-server owner without spawning 
   assert.equal(spawned, 0)
   server.stop()
   assert.deepEqual(killed, [4242])
+})
+
+test('a live owner from an older Codex installation is replaced before it can receive new models', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'codex-owner-version-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const ownerFile = join(dir, 'owner.json')
+  await writeFile(ownerFile, JSON.stringify({ pid: 4343, port: 54326, generation: 'old-version' }))
+  let spawned = 0, oldAlive = true, socket = 0
+  const killed: number[] = []
+  const child = Object.assign(new EventEmitter(), {
+    pid: 4444, stdout: new EventEmitter(), stderr: new EventEmitter(), kill() { return true },
+  })
+  const server = new CodexAppServer({
+    bin: '/codex', ownerFile, port: 54327,
+    binaryVersion: async () => '0.156.1',
+    spawnImpl: (() => { spawned++; return child }) as never,
+    inspectProcess: async pid => pid === 4343 && oldAlive
+      ? 'UNMUTE_APP_SERVER=1 /codex app-server --listen ws://127.0.0.1:54326'
+      : pid === 4444 ? 'UNMUTE_APP_SERVER=1 /codex app-server --listen ws://127.0.0.1:54327' : null,
+    killImpl: pid => { killed.push(pid); if (pid === 4343) oldAlive = false },
+    fetchImpl: async () => ({ ok: true }) as Response,
+    wsFactory: () => new FakeSocket({ userAgent: socket++ === 0 ? 'unmute/0.153.2 (Mac OS; arm64)' : 'unmute/0.156.1 (Mac OS; arm64)' }) as never,
+  } as any)
+
+  await server.start()
+
+  assert.deepEqual(killed, [4343])
+  assert.equal(spawned, 1)
+  assert.equal(JSON.parse(await readFile(ownerFile, 'utf8')).pid, 4444)
+  server.stop()
+})
+
+test('a running app-server is replaced after Codex updates in place', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'codex-owner-live-update-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const ownerFile = join(dir, 'owner.json')
+  let installedVersion = '0.153.2', nextPid = 4545
+  const alive = new Set<number>()
+  const killed: number[] = []
+  const server = new CodexAppServer({
+    bin: '/codex', ownerFile, port: 54328,
+    binaryVersion: async () => installedVersion,
+    spawnImpl: (() => {
+      const pid = nextPid++
+      alive.add(pid)
+      return Object.assign(new EventEmitter(), {
+        pid, stdout: new EventEmitter(), stderr: new EventEmitter(), kill() { alive.delete(pid); return true },
+      })
+    }) as never,
+    inspectProcess: async pid => alive.has(pid) ? `UNMUTE_APP_SERVER=1 /codex app-server --listen ws://127.0.0.1:54328` : null,
+    killImpl: pid => { killed.push(pid); alive.delete(pid) },
+    fetchImpl: async () => ({ ok: true }) as Response,
+    wsFactory: () => new FakeSocket({ userAgent: `unmute/${installedVersion} (Mac OS; arm64)` }) as never,
+  } as any)
+
+  await server.start()
+  installedVersion = '0.156.1'
+  assert.equal(await server.upgradeAvailable(), true)
+  await server.restart()
+
+  assert.deepEqual(killed, [4545])
+  assert.equal(JSON.parse(await readFile(ownerFile, 'utf8')).pid, 4546)
+  server.stop()
 })
 
 test('a verified live but unreachable owner is reaped before one replacement is spawned', async t => {

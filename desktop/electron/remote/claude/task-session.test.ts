@@ -124,6 +124,20 @@ test('model labels retain the exact versions Claude reports', async () => {
   f.driver.close()
 })
 
+test('marketing descriptions never become Claude model labels', async () => {
+  const f = fixture(false, {}, { models: [
+    { value: 'default', displayName: 'Default (recommended)', description: 'Most capable for ambitious work' },
+    { value: 'opus', displayName: 'Opus', description: 'Best for everyday, complex tasks' },
+    { value: 'sonnet', displayName: 'Sonnet', description: 'Most efficient for everyday tasks' },
+  ] })
+
+  await f.driver.start()
+  assert.deepEqual(f.driver.models.map(model => model.label), [
+    'Default (recommended)', 'Opus', 'Sonnet',
+  ])
+  f.driver.close()
+})
+
 test('split UTF-8 JSON lines preserve raw messages and stream deltas; result ends only the turn', async () => {
   const f = fixture(); await f.driver.start(); await f.driver.send('hello')
   const bytes = Buffer.from(JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '☃' } } }) + '\n')
