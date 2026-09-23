@@ -110,6 +110,23 @@ export interface SetupInputs {
   /** The agents that can run work, probed. Optional so existing callers and
    *  tests keep their old checklist unchanged. */
   backends?: BackendProbe[]
+  /** CLIs that are behind and that Unmute could not update itself (see
+   *  cli-updates.ts). Optional, like backends. */
+  cliUpdates?: CliUpdateNotice[]
+}
+
+/** An agent CLI older than the published release, which Unmute tried and
+ *  failed to update, or is not allowed to (a desktop app's bundled copy). */
+export interface CliUpdateNotice {
+  /** Provider id: 'claude' | 'codex'. */
+  id: string
+  label: string
+  version: string
+  latest: string
+  /** What the user can run themselves, when there is such a thing. */
+  command?: string
+  /** Why the automatic update did not happen, when it was attempted. */
+  detail?: string
 }
 
 /** How a backend that isn't ready gets fixed. Keyed by provider id, because the
@@ -196,6 +213,23 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
       status: b.ready ? 'done' : 'todo',
       auto: true,
       group: 'backend',
+    })
+  }
+
+  // OUTDATED CLIs. Optional: an old CLI still runs tasks, it just cannot offer
+  // models released after it. Only listed when Unmute could not update it
+  // itself — a CLI it keeps current never needs the user.
+  for (const u of inputs.cliUpdates ?? []) {
+    steps.push({
+      key: `cli-update-${u.id}`,
+      title: `Update ${u.label} (${u.version} → ${u.latest})`,
+      detail: u.command
+        ? `Unmute could not update ${u.label} automatically${u.detail ? ` (${u.detail.split('\n')[0]})` : ''}. Newer models only appear once it is updated — run the command in your terminal.`
+        : `${u.label} is updated by the app it ships with. Update that app to get the newest models.`,
+      ...(u.command ? { command: u.command } : {}),
+      status: 'todo',
+      auto: true,
+      optional: true,
     })
   }
 

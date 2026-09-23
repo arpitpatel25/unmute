@@ -200,3 +200,25 @@ test('tmux is an optional step — todo when missing, never blocks completeness'
   // every non-optional step done + tmux todo(optional) ⇒ essentials complete
   assert.equal(setupComplete(steps), true)
 })
+
+test('an outdated CLI Unmute could not update is an OPTIONAL step with the user\'s command', () => {
+  const steps = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: false, tmuxAvailable: true, confirmations: {},
+    backends: [{ id: 'claude', label: 'Claude Code', installed: true, ready: true }],
+    cliUpdates: [
+      { id: 'codex', label: 'Codex CLI', version: '0.150.0', latest: '0.156.1', command: 'npm install -g @openai/codex@latest', detail: 'EACCES: permission denied\nmore' },
+      { id: 'claude', label: 'Claude Code', version: '2.1.0', latest: '2.1.281' },
+    ],
+  })
+  const codex = steps.find((s) => s.key === 'cli-update-codex')!
+  assert.equal(codex.title, 'Update Codex CLI (0.150.0 → 0.156.1)')
+  assert.equal(codex.command, 'npm install -g @openai/codex@latest')
+  assert.match(codex.detail, /EACCES: permission denied\)/)
+  assert.equal(codex.optional, true)
+  const claude = steps.find((s) => s.key === 'cli-update-claude')!
+  assert.equal(claude.command, undefined)
+  assert.match(claude.detail, /Update that app/)
+  // Never blocks setup: an old CLI still runs tasks.
+  assert.equal(setupComplete(steps), true)
+  assert.equal(blockerOf(steps), null)
+})

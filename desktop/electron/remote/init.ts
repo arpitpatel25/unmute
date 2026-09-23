@@ -63,7 +63,8 @@ import {
 } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
-import { buildSetupChecklist, setupComplete, blockerOf, confirmationKey, type BackendProbe } from './setup-status'
+import { buildSetupChecklist, setupComplete, blockerOf, confirmationKey, type BackendProbe, type CliUpdateNotice } from './setup-status'
+import { CliUpdater, defaultCliUpdateDeps, type CliUpdateResult } from './cli-updates'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape, setOverlaySuppressed } from './overlay'
 import { Router, type RoutableTask, type AgentAvailability } from './router'
 import { CodexRouterEngine } from './codex-router-engine'
@@ -429,6 +430,10 @@ interface RemoteSettings {
   // Onboarding: user-confirmed manual steps we can't auto-detect (extension
   // installed, signed in, window parked on its own Space). Keyed by step key.
   setupConfirmations: Record<string, boolean>
+  /** Keep the user's Claude Code and Codex CLIs on the latest release, in
+   *  place (see cli-updates.ts). On by default: every model Unmute offers is
+   *  read from those CLIs, so an old one silently hides new models. */
+  agentCliAutoUpdate: boolean
   // DECIDED: the overlay surfaces task state, not macOS notifications (which get
   // dropped/missed). OFF by default; toggle on to also fire OS notifications.
   osNotifications: boolean
@@ -534,6 +539,7 @@ const settings = new Store<RemoteSettings>({
     codexFullAccessConsent: false,
     browserEnabled: true,
     setupConfirmations: {},
+    agentCliAutoUpdate: true,
     osNotifications: false,
     overlayAutoPresent: true,
     notchAutoExpand: true,
@@ -731,13 +737,53 @@ async function getSetupStatus() {
   const mcpListOutput = await claudeMcpList()
   const confirmations = settings.get('setupConfirmations') ?? {}
   const backends = await probeBackends()
-  const steps = buildSetupChecklist({ mcpListOutput, browserEnabled, tmuxAvailable: tmuxBin !== null, confirmations, backends })
+  const steps = buildSetupChecklist({ mcpListOutput, browserEnabled, tmuxAvailable: tmuxBin !== null, confirmations, backends, cliUpdates: cliUpdateNotices() })
   const complete = setupComplete(steps)
   // The blocker travels WITH the status so no surface has to guess which step
   // matters most — the old nudge named the Chrome extension unconditionally.
   const blocker = blockerOf(steps)
   log.event('setup-status', { complete, blocker, todo: steps.filter((s) => s.status === 'todo').map((s) => s.key) })
   return { steps, complete, blocker }
+}
+
+/** The last update check per CLI — in memory, redone every launch. */
+const cliUpdateResults = new Map<CliUpdateResult['cli'], CliUpdateResult>()
+
+function cliUpdateNotices(): CliUpdateNotice[] {
+  const labels = { claude: 'Claude Code', codex: 'Codex CLI' } as const
+  const out: CliUpdateNotice[] = []
+  for (const r of cliUpdateResults.values()) {
+    if (r.state !== 'outdated' && r.state !== 'failed') continue
+    out.push({
+      id: r.cli, label: labels[r.cli], version: r.version, latest: r.latest,
+      ...(r.command ? { command: r.command } : {}),
+      ...(r.state === 'failed' ? { detail: r.detail } : {}),
+    })
+  }
+  return out
+}
+
+/**
+ * A CLI just changed version. Everything read FROM it is now stale — most of
+ * all its model list, which is the reason updates exist — so drop the caches
+ * and re-read. Live sessions keep the version they started with; the next one
+ * picks up the new binary.
+ */
+function onCliUpdateResult(result: CliUpdateResult): void {
+  cliUpdateResults.set(result.cli, result)
+  log.event('cli-update', { ...result })
+  if (result.state !== 'updated') return
+  cliCache.delete(result.cli)
+  if (result.cli === 'claude') {
+    chatClaudeCatalogAttemptAt = 0
+    void refreshClaudeModelCatalog()
+  } else {
+    chatCatalogAttemptAt = 0
+    void listCodexCliModels({ force: true }).then(models => { if (models.length) chatCodexModels = models })
+      .catch(error => log.warn('chat-model-catalog', { error: (error as Error).message }))
+  }
+  agentCatalogAttemptAt = 0
+  void refreshAgentModelCatalog()
 }
 
 let manager: TaskManager | null = null
@@ -5576,6 +5622,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
   refreshPolicy()
   setInterval(refreshPolicy, 10 * 60_000).unref()
+
+  // Keep the agent CLIs current (after fixPath, so the same binaries the
+  // executors spawn are the ones checked and updated).
+  new CliUpdater({
+    deps: defaultCliUpdateDeps({ enabled: () => settings.get('agentCliAutoUpdate') !== false }),
+    busy: () => manager?.list().some((t) => t.state === 'processing') ?? false,
+    onResult: onCliUpdateResult,
+  }).start()
   if (fixedSurfacePreferenceChanges.surfaceTone || fixedSurfacePreferenceChanges.surfaceAppearance) {
     log.event('surface-preferences-normalized', fixedSurfacePreferenceChanges)
   }
