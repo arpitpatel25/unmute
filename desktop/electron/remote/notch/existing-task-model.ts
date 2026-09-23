@@ -26,7 +26,10 @@ export function existingTaskModelLabel(
   currentId: string | undefined,
   fallback: string | undefined,
 ): string {
-  return models.find(choice => choice.id === currentId)?.label ?? fallback ?? currentId ?? 'Provider default'
+  const exact = models.find(choice => choice.id === currentId)
+  const baseId = currentId?.replace(/\[[^\]]+\]$/, '')
+  const qualifiedAlias = exact ?? (baseId ? models.find(choice => choice.id.replace(/\[[^\]]+\]$/, '') === baseId) : undefined)
+  return qualifiedAlias?.label ?? fallback ?? currentId ?? 'Provider default'
 }
 
 /** Translate the pill's display labels back into the conversation's provider

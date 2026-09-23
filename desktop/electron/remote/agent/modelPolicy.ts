@@ -42,6 +42,20 @@ export interface AgentModelChoice {
 }
 export type AgentModelChoices = Partial<Record<AgentProviderId, AgentModelChoice>>
 
+export interface AgentCatalogModel { id: string; label: string }
+
+/** Claude's `default` alias is a real picker choice, but not a concrete model
+ *  that can be supplied to `--fallback-model`. Keep those two concerns apart. */
+export function claudeAgentModels(models: readonly AgentCatalogModel[]): {
+  selectable: AgentCatalogModel[]
+  fallbacks: string[]
+} {
+  return {
+    selectable: [...models],
+    fallbacks: models.filter(model => model.id !== 'default').map(model => model.id),
+  }
+}
+
 let choices: AgentModelChoices = {}
 export function setAgentModelChoices(next: AgentModelChoices | undefined): void {
   choices = structuredClone(next ?? {})
@@ -101,7 +115,7 @@ export function agentFallbackModels(provider: AgentProviderId, now = Date.now())
 export function agentModelName(provider: AgentProviderId, model: string): string {
   const known = choices[provider]?.labels?.[model]
   if (known) return known
-  if (model === 'opus') return 'Opus 5'
+  if (model === 'opus') return 'Opus'
   if (model === 'sonnet') return 'Sonnet'
   if (model === 'haiku') return 'Haiku'
   // gpt-5.6-sol → GPT-5.6 Sol

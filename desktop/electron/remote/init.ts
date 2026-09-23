@@ -32,7 +32,7 @@ import { claudeUnattendedArgs, refreshManagedPolicy } from './permission-ceiling
 import { draftInput } from './task-input'
 import { safeArtifactURL, artifactPathAction } from './artifact-url'
 import { ClaudeTaskSession, type ClaudeTaskModel } from './claude/task-session'
-import { agentModelName, defaultAgentModel, setAgentModelChoices, type AgentModelChoices } from './agent/modelPolicy'
+import { agentModelName, claudeAgentModels, defaultAgentModel, setAgentModelChoices, type AgentModelChoices } from './agent/modelPolicy'
 import { writeFileAtomic } from './atomic-file'
 import { TaskDraftStore } from './task-draft'
 import { stageTaskDraftAttachment, persistTaskDraftFile } from './task-draft-attachment'
@@ -142,6 +142,7 @@ import { NotchClient } from './notch/notch-client'
 import { NotchController } from './notch/notch-controller'
 import { PillController, type PillStateP } from './notch/pill-controller'
 import { applyExistingTaskModelPick, existingTaskModelLabel, type ExistingTaskModelPick } from './notch/existing-task-model'
+import { shouldRefreshModelCatalog } from './model-catalog-refresh'
 import { listCodexModels, matchCurrent, type CodexModel } from './codex/appserver'
 import { listCodexCliModels, resolveCodexCliChoice, codexCliChoiceLabel } from './codex/cli-models'
 import { listCodexCliSkills } from './codex/cli-models'
@@ -1083,9 +1084,11 @@ function agentProviderInstalled(id: AgentProviderId): boolean {
  */
 const agentModelCatalog: Partial<Record<AgentProviderId, Array<{ id: string; label: string }>>> = {}
 let agentCatalogLoading: Promise<void> | null = null
+let agentCatalogAttemptAt = 0
 
 function refreshAgentModelCatalog(): Promise<void> {
   return agentCatalogLoading ??= (async () => {
+    agentCatalogAttemptAt = Date.now()
     const reads: Array<Promise<void>> = []
     if (agentProviderInstalled('codex')) {
       reads.push(listCodexCliModels().then(models => {
@@ -1098,10 +1101,8 @@ function refreshAgentModelCatalog(): Promise<void> {
           const probe = new ClaudeTaskSession({ binary: 'claude', cwd: tmpdir(), controlTimeoutMs: 15_000, onEvent: () => {} })
           try { await probe.start(); chatClaudeModels = probe.models } finally { probe.close() }
         }
-        // `default` is the CLI's own alias for whatever it picks, not a model
-        // anyone chooses, and it cannot be a --fallback-model.
-        const models = chatClaudeModels.filter(m => m.id !== 'default')
-        if (models.length) agentModelCatalog.claude = models.map(m => ({ id: m.id, label: m.label }))
+        const models = claudeAgentModels(chatClaudeModels.map(m => ({ id: m.id, label: m.label })))
+        if (models.selectable.length) agentModelCatalog.claude = models.selectable
       })().catch(error => log.warn('agent-model-catalog', { provider: 'claude', error: (error as Error).message })))
     }
     await Promise.all(reads)
@@ -1118,10 +1119,13 @@ function agentModelSettings(): { models: AgentModelChoices; switchWhenUnavailabl
     const catalog = agentModelCatalog[provider] ?? []
     const model = chosen[provider]
     const primary = (model || defaultAgentModel(provider)).replace(/\[.*\]$/, '')
+    const fallbackIds = provider === 'claude'
+      ? claudeAgentModels(catalog).fallbacks
+      : catalog.map(m => m.id)
     models[provider] = {
       ...(model ? { model } : {}),
       ...(catalog.length ? {
-        fallbacks: catalog.map(m => m.id).filter(id => id.replace(/\[.*\]$/, '') !== primary),
+        fallbacks: fallbackIds.filter(id => id.replace(/\[.*\]$/, '') !== primary),
         labels: Object.fromEntries(catalog.map(m => [m.id, m.label])),
       } : {}),
     }
@@ -3059,11 +3063,11 @@ function chatConfig(id: string): ChatConfigP | undefined {
   if (!task) return undefined
   const provider = task.agent ?? 'claude'
   const owned = task.claudeSessionSettings ?? task.codexSessionSettings
-  if (provider === 'claude' && !chatClaudeModels.length && !chatClaudeCatalogLoading && Date.now() - chatClaudeCatalogAttemptAt > 30_000) {
+  if (provider === 'claude' && shouldRefreshModelCatalog({ count: chatClaudeModels.length, loading: chatClaudeCatalogLoading, attemptedAt: chatClaudeCatalogAttemptAt, now: Date.now() })) {
     chatClaudeCatalogLoading = true
     chatClaudeCatalogAttemptAt = Date.now()
     const probe = new ClaudeTaskSession({ binary: 'claude', cwd: tmpdir(), controlTimeoutMs: 15_000, onEvent: () => {} })
-    void probe.start().then(() => { chatClaudeModels = probe.models })
+    void probe.start().then(() => { if (probe.models.length) chatClaudeModels = probe.models })
       .catch(error => log.warn('claude-chat-model-catalog', { error: (error as Error).message }))
       .finally(() => {
         probe.close()
@@ -3072,10 +3076,10 @@ function chatConfig(id: string): ChatConfigP | undefined {
         if (pillController?.taskId === id && pillController.phase !== 'hidden') void pushPillChips(id)
       })
   }
-  if (provider === 'codex' && !chatCodexModels.length && !chatCatalogLoading && Date.now() - chatCatalogAttemptAt > 30_000) {
+  if (provider === 'codex' && shouldRefreshModelCatalog({ count: chatCodexModels.length, loading: chatCatalogLoading, attemptedAt: chatCatalogAttemptAt, now: Date.now() })) {
     chatCatalogLoading = true
     chatCatalogAttemptAt = Date.now()
-    void listCodexCliModels().then(models => { chatCodexModels = models }).catch(error => log.warn('chat-model-catalog', { error: (error as Error).message }))
+    void listCodexCliModels().then(models => { if (models.length) chatCodexModels = models }).catch(error => log.warn('chat-model-catalog', { error: (error as Error).message }))
       .finally(() => {
         chatCatalogLoading = false
         notchController?.refresh()
@@ -6173,7 +6177,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           log.event('agent-turn-stopped', { interrupted: outcome?.interrupted ?? false, ...(outcome?.reason ? { reason: outcome.reason } : {}) })
         },
         agentModelsFor: (provider) => {
-          if (!agentModelCatalog[provider]) void refreshAgentModelCatalog()
+          if (shouldRefreshModelCatalog({
+            count: agentModelCatalog[provider]?.length ?? 0,
+            loading: agentCatalogLoading !== null,
+            attemptedAt: agentCatalogAttemptAt,
+            now: Date.now(),
+          })) void refreshAgentModelCatalog()
           return {
             models: agentModelCatalog[provider] ?? [{ id: defaultAgentModel(provider), label: agentModelName(provider, defaultAgentModel(provider)) }],
             selected: settings.get('unmuteAgentModels')?.[provider] || defaultAgentModel(provider),

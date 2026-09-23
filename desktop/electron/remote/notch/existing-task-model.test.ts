@@ -44,6 +44,13 @@ test('the accepted model id is presented with its provider label immediately', (
   assert.equal(existingTaskModelLabel([], 'custom-model', 'Custom model'), 'Custom model')
 })
 
+test('a stored Claude alias uses the live context-qualified model label', () => {
+  assert.equal(existingTaskModelLabel([
+    { id: 'default', label: 'Default (recommended)' },
+    { id: 'opus[1m]', label: 'Opus (1M context)' },
+  ], 'opus', 'opus'), 'Opus (1M context)')
+})
+
 test('an addressed pill applies its selection through conversation configuration', async () => {
   const applied: unknown[] = []
   const result = await applyExistingTaskModelPick(config, { axis: 'Model', value: '5.6 Sol' }, async change => {

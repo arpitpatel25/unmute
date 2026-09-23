@@ -97,6 +97,33 @@ test('model and effort choices come from initialization capabilities, not screen
   f.driver.close()
 })
 
+test('model labels retain the exact versions Claude reports', async () => {
+  const f = fixture(false, {}, { models: [
+    {
+      value: 'opus[1m]', resolvedModel: 'claude-opus-5-5[1m]', displayName: 'Opus (1M context)',
+      description: 'Opus 5.5 with 1M context · Best for everyday, complex tasks',
+    },
+    {
+      value: 'claude-fable-5-1[1m]', resolvedModel: 'claude-fable-5-1', displayName: 'Fable',
+      description: 'Fable 5.1 · Most capable for your hardest and longest-running tasks',
+    },
+    {
+      value: 'sonnet', resolvedModel: 'claude-sonnet-5', displayName: 'Sonnet',
+      description: 'Sonnet 5 · Efficient for routine tasks',
+    },
+    {
+      value: 'haiku', resolvedModel: 'claude-haiku-4-5-20251001', displayName: 'Haiku',
+      description: 'Haiku 4.5 · Fastest for quick answers',
+    },
+  ] })
+
+  await f.driver.start()
+  assert.deepEqual(f.driver.models.map(model => model.label), [
+    'Opus 5.5 (1M context)', 'Fable 5.1', 'Sonnet 5', 'Haiku 4.5',
+  ])
+  f.driver.close()
+})
+
 test('split UTF-8 JSON lines preserve raw messages and stream deltas; result ends only the turn', async () => {
   const f = fixture(); await f.driver.start(); await f.driver.send('hello')
   const bytes = Buffer.from(JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '☃' } } }) + '\n')
@@ -295,4 +322,3 @@ test('editing forks from an exact message checkpoint', async () => {
  assert.equal(f.args()[f.args().indexOf('--resume-session-at') + 1], 'prior-assistant')
  f.driver.close()
 })
-

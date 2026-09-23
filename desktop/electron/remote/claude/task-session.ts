@@ -55,6 +55,14 @@ export interface ClaudeTaskAnswer {
   message?: string
 }
 
+function claudeModelLabel(displayName: string, description: unknown): string {
+  if (displayName.startsWith('Default')) return displayName
+  if (typeof description !== 'string') return displayName
+  const versionedName = description.split('·', 1)[0].trim()
+  if (!versionedName) return displayName
+  return versionedName.replace(/ with (\d+[KMG] context)$/i, ' ($1)')
+}
+
 /** Persistent ordinary-task CLI session. The wire contract follows the official
  * claude-agent-sdk-python Query control protocol. No PTY or global settings.
  * `send` acknowledges a successful stdin write, not model completion. */
@@ -153,7 +161,7 @@ export class ClaudeTaskSession {
       const initialized = await this.control({ subtype: 'initialize', hooks: null })
       this.models = Array.isArray(initialized.models) ? initialized.models.flatMap((m: Json) =>
         m && typeof m.value === 'string' && typeof m.displayName === 'string' ? [{
-          id: m.value, label: m.displayName,
+          id: m.value, label: claudeModelLabel(m.displayName, m.description),
           ...(typeof m.description === 'string' ? { description: m.description } : {}),
           efforts: m.supportsEffort === true && Array.isArray(m.supportedEffortLevels) ? m.supportedEffortLevels.filter((v: unknown): v is string => typeof v === 'string') : [],
         }] : []) : []
