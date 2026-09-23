@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseMcpList, buildSetupChecklist, setupComplete, blockerOf } from './setup-status.ts'
+import { parseMcpList, buildSetupChecklist, setupComplete, blockerOf, detectedBackends, displayedAgent } from './setup-status.ts'
 
 // BACKENDS COME FIRST.
 //
@@ -221,4 +221,69 @@ test('an outdated CLI Unmute could not update is an OPTIONAL step with the user\
   // Never blocks setup: an old CLI still runs tasks.
   assert.equal(setupComplete(steps), true)
   assert.equal(blockerOf(steps), null)
+})
+
+// NOTHING ABOUT AN AGENT THAT IS NOT ON THIS MAC.
+// A Mac with only Codex must not be told how to install Claude Code, nor shown
+// the Claude-for-Chrome and `claude mcp add` steps that only Claude Code runs.
+test('an undetected backend gets no row once another one is detected', () => {
+  const steps = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: true, tmuxAvailable: true, confirmations: {},
+    backends: [
+      { id: 'claude', label: 'Claude Code CLI', installed: false, ready: false, reason: 'not-installed' },
+      { id: 'codex', label: 'Codex CLI', installed: true, ready: true },
+      { id: 'codex-desktop', label: 'Codex desktop', installed: false, ready: false, reason: 'not-installed' },
+    ],
+  })
+  assert.deepEqual(steps.filter((s) => s.group === 'backend').map((s) => s.key), ['backend-codex'])
+  assert.ok(!steps.some((s) => s.key === 'chrome-extension'), 'the browser lane is Claude Code only')
+  assert.ok(!steps.some((s) => s.key.startsWith('mcp-')), '`claude mcp add` is Claude Code only')
+  assert.ok(!JSON.stringify(steps).includes('Claude'), 'no Claude text anywhere on a Codex-only Mac')
+})
+
+test('no Codex rows on a Claude-only Mac', () => {
+  const steps = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: true, tmuxAvailable: true, confirmations: {},
+    backends: [
+      { id: 'claude', label: 'Claude Code CLI', installed: true, ready: true },
+      { id: 'codex', label: 'Codex CLI', installed: false, ready: false, reason: 'not-installed' },
+      { id: 'codex-desktop', label: 'Codex desktop', installed: false, ready: false, reason: 'not-installed' },
+    ],
+  })
+  assert.ok(!JSON.stringify(steps).includes('Codex'))
+  assert.ok(steps.some((s) => s.key === 'chrome-extension'))
+})
+
+test('with NO agent detected, every install row stays — it is the only way forward', () => {
+  const steps = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: true, tmuxAvailable: true, confirmations: {},
+    backends: [
+      { id: 'claude', label: 'Claude Code CLI', installed: false, ready: false },
+      { id: 'codex-desktop', label: 'Codex desktop', installed: false, ready: false, reason: 'not-installed' },
+    ],
+  })
+  assert.deepEqual(steps.filter((s) => s.group === 'backend').map((s) => s.key), ['backend-claude', 'backend-codex-desktop'])
+  assert.match(blockerOf(steps) ?? '', /Claude Code CLI or Codex desktop/)
+})
+
+test('the no-agent blocker names only the agents that are on this Mac', () => {
+  const steps = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: false, tmuxAvailable: true, confirmations: {},
+    backends: [
+      { id: 'claude', label: 'Claude Code CLI', installed: false, ready: false },
+      { id: 'codex-desktop', label: 'Codex desktop', installed: true, ready: false, reason: 'not-armed' },
+    ],
+  })
+  assert.equal(blockerOf(steps), 'No agent is set up yet — Remote needs Codex desktop to run anything.')
+})
+
+test('pickers list only detected backends, and never name an undetected default', () => {
+  const probes = [
+    { id: 'claude', label: 'Claude Code CLI', installed: false, ready: false },
+    { id: 'codex', label: 'Codex CLI', installed: true, ready: true },
+  ]
+  assert.deepEqual(detectedBackends(probes).map((b) => b.id), ['codex'])
+  assert.equal(displayedAgent('claude', detectedBackends(probes)), 'codex', 'the stored default is not on this Mac')
+  assert.equal(displayedAgent('codex', detectedBackends(probes)), 'codex')
+  assert.equal(displayedAgent('claude', []), 'claude', 'nothing detected ⇒ nothing better to name')
 })

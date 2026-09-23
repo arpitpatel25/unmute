@@ -3,7 +3,7 @@ import { UIIcon } from '../app/UIIcon'
 
 import { clipUrl } from './clips'
 import { advancePresenterDrag, beginPresenterDrag, canSkipAction, clipEndActionFor, didPresenterDrag, processingEscapeDelayMs, successButtonForAction, type PresenterDragState } from './presenterActions'
-import { emptyPresenter, reducePresenter, type PresenterCard, type PresenterMessage } from './presenterState'
+import { emptyPresenter, reducePresenter, shownProviders, type PresenterCard, type PresenterMessage } from './presenterState'
 import './presenter.css'
 
 type PresenterAction =
@@ -40,8 +40,7 @@ function CompanionCard({ action, card, reviewing, phase, escapeReady }: { action
     {card.phrase && <blockquote>{card.phrase}</blockquote>}
     {card.detail && <p>{card.detail}</p>}
     {!reviewing && card.kind === 'provider' && <div className="ob-presenter__choices">
-      <ProviderButton provider="claude" card={card} />
-      <ProviderButton provider="codex" card={card} />
+      {shownProviders(card.providers).map((provider) => <ProviderButton key={provider} provider={provider} card={card} />)}
     </div>}
     {!reviewing && (card.kind === 'permission' || card.kind === 'repair') &&
       <button className="ob-presenter__primary" type="button" onClick={() => send({ type: card.kind === 'repair' ? 'open-settings' : 'continue' })}>

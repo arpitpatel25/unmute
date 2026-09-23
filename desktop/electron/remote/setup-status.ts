@@ -196,10 +196,23 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
   const servers = parseMcpList(inputs.mcpListOutput)
   const confirmed = (k: string) => isConfirmed(inputs.confirmations, k)
 
+  // ONLY WHAT IS ON THIS MACHINE. A backend that was not detected gets no row:
+  // a Mac with just Codex should never be told how to install Claude Code, and
+  // vice versa. The one exception is a Mac with NO agent at all — then every
+  // row stays, because install guidance is the only way forward.
+  const probes = inputs.backends ?? []
+  const detected = probes.filter((b) => b.installed)
+  const shownBackends = detected.length > 0 ? detected : probes
+  // The browser lane (`claude --chrome`) and the recommended MCPs (`claude mcp
+  // add …`) both run through the Claude Code CLI, so they are Claude Code
+  // information and follow its detection. No backends passed ⇒ an older caller,
+  // which keeps the old checklist.
+  const claudeDetected = inputs.backends === undefined || detected.some((b) => b.id === 'claude')
+
   // BACKENDS FIRST — nothing else in this list matters if no agent can run the
   // work. These are never `optional`: a user with no working backend has no
   // product, and they are never self-confirmed, because we can see the truth.
-  for (const b of inputs.backends ?? []) {
+  for (const b of shownBackends) {
     const remedy = BACKEND_REMEDIES[b.id]
     const unready = !b.installed ? undefined : remedy?.unready
     steps.push({
@@ -233,7 +246,7 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
     })
   }
 
-  if (inputs.browserEnabled) {
+  if (inputs.browserEnabled && claudeDetected) {
     for (const s of MANUAL_BROWSER_STEPS) {
       steps.push({ ...s, status: confirmed(s.key) ? 'done' : 'todo', auto: false })
     }
@@ -254,7 +267,7 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
   // Recommended integrations are OPTIONAL — Remote works with just the Chrome
   // extension. These add capability (email, Sheets, etc.) and the user grants
   // them as-needed, so they must NOT gate "setup complete" (DECIDED).
-  for (const rec of RECOMMENDED_MCPS) {
+  for (const rec of claudeDetected ? RECOMMENDED_MCPS : []) {
     const hit = servers.find((s) => rec.match.test(s.name) && s.connected)
     steps.push({
       key: `mcp-${rec.label.toLowerCase().replace(/\s+/g, '-')}`,
@@ -296,8 +309,32 @@ export function blockerOf(steps: SetupStep[]): string | null {
   const required = steps.filter((s) => !s.optional)
   const backends = required.filter((s) => s.group === 'backend')
   if (backends.length > 0 && !backends.some((s) => s.status === 'done')) {
-    return 'No agent is set up yet — Remote needs Claude Code or Codex desktop to run anything.'
+    // Named from the rows actually shown, so an agent that is not on this Mac
+    // is never mentioned here either.
+    const names = backends.map((s) => s.title.replace(/^Set up /, '').replace(/ — ready$/, ''))
+    return `No agent is set up yet — Remote needs ${names.join(' or ')} to run anything.`
   }
   const other = required.find((s) => s.group !== 'backend' && s.status === 'todo')
   return other ? `${other.title} — ${other.detail}` : null
+}
+
+/**
+ * The backends a picker may show: only those detected on this Mac. An agent
+ * that is not installed is not an option with a "not installed" badge — it is
+ * simply absent, so a Codex-only Mac never sees Claude Code and vice versa.
+ */
+export function detectedBackends<T extends Pick<BackendProbe, 'installed'>>(probes: readonly T[]): T[] {
+  return probes.filter((b) => b.installed)
+}
+
+/**
+ * Which backend a surface should NAME as the default for new work. The stored
+ * choice defaults to 'claude', so without this a Codex-only Mac would be shown
+ * "Claude Code CLI" in the pill for an agent it does not have. Mirrors
+ * dispatch's own fallback (resolveAgent): the first detected backend. With
+ * nothing detected, the stored value is left alone — there is nothing better.
+ */
+export function displayedAgent(stored: string, detected: ReadonlyArray<Pick<BackendProbe, 'id'>>): string {
+  if (detected.length === 0 || detected.some((b) => b.id === stored)) return stored
+  return detected[0].id
 }

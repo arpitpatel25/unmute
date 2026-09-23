@@ -63,7 +63,7 @@ import {
 } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
-import { buildSetupChecklist, setupComplete, blockerOf, confirmationKey, type BackendProbe, type CliUpdateNotice } from './setup-status'
+import { buildSetupChecklist, setupComplete, blockerOf, confirmationKey, detectedBackends, displayedAgent, type BackendProbe, type CliUpdateNotice } from './setup-status'
 import { CliUpdater, defaultCliUpdateDeps, type CliUpdateResult } from './cli-updates'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape, setOverlaySuppressed } from './overlay'
 import { Router, type RoutableTask, type AgentAvailability } from './router'
@@ -3522,7 +3522,12 @@ async function pushPillChips(
     const addressed = taskId ? manager?.get(taskId) : undefined
     // An addressed capture is a reply to an existing thread. Its provider is
     // immutable here; only an unaddressed capture reads the new-task default.
-    const agent = addressed?.agent ?? (settings.get('agent') as AgentKind) ?? 'claude'
+    // EVERY DETECTED backend, from the same probe the picker and setup card
+    // use. An agent that is not on this Mac is not offered at all, and an
+    // unaddressed capture never names one as the default.
+    const probes = detectedBackends(await probeBackends())
+    const agent = (addressed?.agent
+      ?? displayedAgent((settings.get('agent') as AgentKind) ?? 'claude', probes)) as AgentKind
     const isCodex = agent === 'codex-desktop'
     const codexOk = codexDriver
       ? await codexDriver.availability().then((a) => a.ok).catch(() => false)
@@ -3536,10 +3541,6 @@ async function pushPillChips(
     // offering Claude models while Codex was selected. The renderer already
     // solved this with an `isCodex` gate; this is the same gate, on the side
     // that now owns the data.
-    // EVERY reachable backend, from the same probe the picker and setup card
-    // use. This was a two-entry literal, so the pill could not show a third
-    // backend even while agent-options was already offering it.
-    const probes = await probeBackends()
     const agentOptions = probes.map((p) => ({
       id: p.id, label: p.label, available: p.ready,
       terminal: providerOf(p.id as ProviderId).hasTerminal,
@@ -8175,9 +8176,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // to be a hand-written two-entry array, so a third backend was invisible
     // here even once it was registered, installed and ready. One probe, one
     // answer, and a new provider appears in both places or neither.
-    const probes = await probeBackends()
+    // DETECTED ONLY. An agent that is not installed is not an option at all —
+    // no greyed-out row, no install hint — and is never named as the current
+    // choice, even though the stored setting defaults to 'claude'.
+    const probes = detectedBackends(await probeBackends())
     const result = {
-      current: (settings.get('agent') as AgentKind) ?? 'claude',
+      current: displayedAgent((settings.get('agent') as AgentKind) ?? 'claude', probes),
       options: probes.map((p) => ({
         id: p.id,
         label: p.label,

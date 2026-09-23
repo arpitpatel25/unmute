@@ -23,8 +23,13 @@
 // curator and the librarian are off, so it does not).
 
 import { Shell, Sec, P, Note, type HelpProps } from './index'
+import { showsVendor } from '../../remote/detectedAgents'
+import { useDetectedVendors } from '../../remote/useDetectedVendors'
 
 export default function Orchestrator({ onBack }: HelpProps) {
+  const vendors = useDetectedVendors()
+  const claude = showsVendor(vendors, 'claude')
+  const codex = showsVendor(vendors, 'codex')
   return (
     <Shell
       title="Orchestrator"
@@ -34,8 +39,10 @@ export default function Orchestrator({ onBack }: HelpProps) {
       <Sec title="Who is actually driving">
         <P>
           Unmute has no intelligence of its own here. The thinking and the doing
-          are <b>Claude Code</b> or the <b>Codex desktop app</b> — whichever you
-          pick — running on this machine, under your account, with your logins.
+          are {claude && codex
+            ? <><b>Claude Code</b> or the <b>Codex desktop app</b> — whichever you pick —</>
+            : <b>{claude ? 'Claude Code' : 'Codex'}</b>}{' '}
+          running on this machine, under your account, with your logins.
         </P>
         <P>
           Unmute is the interface: it hears you, starts the task, watches it, and

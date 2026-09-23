@@ -14,6 +14,8 @@
 // conditional; the door never is.
 
 import { useEffect, useState } from 'react'
+import { showsVendor } from './detectedAgents'
+import { useDetectedVendors } from './useDetectedVendors'
 
 interface SetupStatus {
   complete: boolean
@@ -36,6 +38,12 @@ export function RemoteSetupEntry({ onOpen }: { onOpen: () => void }) {
   }, [])
 
   const blocker = status?.blocker ?? null
+  const vendors = useDetectedVendors()
+  // Only the agents on this Mac are named. Browser and integrations run
+  // through Claude Code, so they go with it.
+  const subtitle = showsVendor(vendors, 'claude') && showsVendor(vendors, 'codex')
+    ? 'Claude Code, Codex desktop, browser and integrations'
+    : showsVendor(vendors, 'claude') ? 'Claude Code, browser and integrations' : 'Codex and optional extras'
 
   return (
     <div className="mb-3">
@@ -52,7 +60,7 @@ export function RemoteSetupEntry({ onOpen }: { onOpen: () => void }) {
           <span className="block text-[11px] text-ink/50">
             {/* Never "you are done" — a working setup can stop working without
                 anyone touching it, so this reads as a place to go, not a receipt. */}
-            {blocker ?? 'Claude Code, Codex desktop, browser and integrations'}
+            {blocker ?? subtitle}
           </span>
         </span>
         <span className="text-[11px] text-ink/30">→</span>

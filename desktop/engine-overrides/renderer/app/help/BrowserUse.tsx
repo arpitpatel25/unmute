@@ -36,8 +36,13 @@
 // copy from it.
 
 import { Shell, Sec, P, Note, type HelpProps } from './index'
+import { showsVendor } from '../../remote/detectedAgents'
+import { useDetectedVendors } from '../../remote/useDetectedVendors'
 
 export default function BrowserUse({ onBack }: HelpProps) {
+  const vendors = useDetectedVendors()
+  const claude = showsVendor(vendors, 'claude')
+  const codex = showsVendor(vendors, 'codex')
   return (
     <Shell
       title="Browser use"
@@ -66,20 +71,26 @@ export default function BrowserUse({ onBack }: HelpProps) {
       </Sec>
 
       <Sec title="Setting it up">
-        <P>
-          <b>Claude Code</b> reaches Chrome through the Claude for Chrome
-          extension, so it needs that installed and enabled in your normal
-          Chrome. Most people already have it; if you do, tick the step off and
-          you are done. It is the only manual step the orchestrator has.
-        </P>
-        <P>
-          <b>Codex desktop</b> brings browser control of its own, so it does not
-          need the extension to open a page.
-        </P>
-        <Note>
-          The setup step is listed whichever agent you have selected, and
-          Orchestrator → Agents remembers your answer.
-        </Note>
+        {claude && (
+          <P>
+            <b>Claude Code</b> reaches Chrome through the Claude for Chrome
+            extension, so it needs that installed and enabled in your normal
+            Chrome. Most people already have it; if you do, tick the step off and
+            you are done. It is the only manual step the orchestrator has.
+          </P>
+        )}
+        {codex && (
+          <P>
+            <b>Codex desktop</b> brings browser control of its own, so it does not
+            need the extension to open a page.
+          </P>
+        )}
+        {claude && (
+          <Note>
+            The setup step is listed whichever agent you have selected, and
+            Orchestrator → Agents remembers your answer.
+          </Note>
+        )}
       </Sec>
 
       <Sec title="Turning it off">

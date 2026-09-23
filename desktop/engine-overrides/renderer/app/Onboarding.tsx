@@ -40,6 +40,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import unmuteLogo from '../assets/unmute-logo.png'
 import { useAuth } from '../paywall/AuthContext'
+import { vendorsOf, showsVendor, type Vendor } from '../remote/detectedAgents'
+import { useDetectedVendors } from '../remote/useDetectedVendors'
 
 interface OnboardingProps {
   onComplete: () => void
@@ -73,6 +75,8 @@ type OnboardingAPI = {
   ) => Promise<{ ok: boolean; checkoutUrl?: string; alreadySubscribed?: boolean; message?: string }>
   paywallOpenExternal?: (url: string) => Promise<boolean>
   remoteGetSetupStatus?: () => Promise<{ complete: boolean }>
+  /** Only the agents detected on this Mac (remote:agent-options). */
+  remoteAgentOptions?: () => Promise<{ options: Array<{ id: string }> }>
 }
 function api(): OnboardingAPI {
   return (window as unknown as { electronAPI?: OnboardingAPI }).electronAPI ?? {}
@@ -115,6 +119,12 @@ const PLANS: { plan: Plan; name: string; price: string; tagline: string; recomme
  * They are hand-drawn stand-ins; dropping the official artwork in later
  * means replacing these two components and nothing else.
  */
+
+/** The maker a demo card is drawn as. A maker with no agent on this Mac is
+ *  never shown: its card borrows a detected maker's mark instead. */
+function shownVendor(vendor: Vendor, detected: readonly Vendor[]): Vendor {
+  return detected.length === 0 || detected.includes(vendor) ? vendor : detected[0]
+}
 
 function ClaudeMark({ size = 13 }: { size?: number }) {
   return (
@@ -450,7 +460,7 @@ function Shell({ step, total, onBack, onNext, nextLabel, nextDisabled, children 
  * is what shows the card is what decides.
  */
 
-type Slot = { name: string; ask: string; vendor: 'claude' | 'codex'; demanding: boolean; reply: string; out: string[] }
+type Slot = { name: string; ask: string; vendor: Vendor; demanding: boolean; reply: string; out: string[] }
 const SLOTS: Slot[] = [
   { name: 'api-gateway', ask: 'Apply this patch to src/fetch.ts?', vendor: 'claude', demanding: true,
     reply: 'yes, and run the tests', out: ['✓ patch applied', 'running 42 tests…'] },
@@ -465,7 +475,7 @@ const BASE_LINES: Record<string, { text: string; cls?: string }[]> = {
   'docs-site': [{ text: '› rewrite the install page' }, { text: '✓ done in 2m 14s', cls: 'go' }],
 }
 
-function PocketDemo({ orchestrateLabel }: { orchestrateLabel: string }) {
+function PocketDemo({ orchestrateLabel, vendors }: { orchestrateLabel: string; vendors: readonly Vendor[] }) {
   const [open, setOpen] = useState(false)
   const [at, setAt] = useState(0)
   const [hot, setHot] = useState(false)
@@ -558,7 +568,7 @@ function PocketDemo({ orchestrateLabel }: { orchestrateLabel: string }) {
               <div className="face" key={at}>
                 <div className="ph">
                   <span className={`pdot${slot.demanding ? '' : ' quiet'}`} />
-                  {slot.vendor === 'claude' ? <ClaudeMark size={11} /> : <CodexMark size={11} />}
+                  {shownVendor(slot.vendor, vendors) === 'claude' ? <ClaudeMark size={11} /> : <CodexMark size={11} />}
                   <span className="ptitle">{slot.name}</span>
                   <button className="popen">Open</button>
                 </div>
@@ -889,12 +899,20 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
 
   // ─── Agent setup status ───
   const [agentReady, setAgentReady] = useState<boolean | null>(null)
+  // The makers with an agent on this Mac. Nothing about a maker that is not
+  // installed is shown; empty (unknown, or none installed) keeps both, since
+  // then the screens are telling the user what they could install.
+  const [agentVendors, setAgentVendors] = useState<Vendor[]>([])
 
   const refreshAgentStatus = useCallback(async () => {
     try {
       const status = await api().remoteGetSetupStatus?.()
       if (status) setAgentReady(status.complete)
     } catch { /* ignore — the step still offers "later" */ }
+    try {
+      const picker = await api().remoteAgentOptions?.()
+      if (picker) setAgentVendors(vendorsOf(picker.options.map((o) => o.id)))
+    } catch { /* ignore — unknown keeps both makers */ }
   }, [])
 
   useEffect(() => {
@@ -1008,7 +1026,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
               is showing, then hold {orchestrateLabel} and talk to it.
             </p>
           </div>
-          <div style={{ marginTop: 14, ['--i' as string]: 1 }}><PocketDemo orchestrateLabel={orchestrateLabel} /></div>
+          <div style={{ marginTop: 14, ['--i' as string]: 1 }}><PocketDemo orchestrateLabel={orchestrateLabel} vendors={agentVendors} /></div>
         </>
       ),
     },
@@ -1267,22 +1285,28 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
             <span className="eyebrow">Setup</span>
             <h2 className="d2" style={{ marginTop: 8 }}>Connect an agent</h2>
             <p className="lead" style={{ marginTop: 12, maxWidth: 600 }}>
-              Orchestrate needs a coding agent already installed on your Mac — Claude Code
-              or Codex. It runs under your own account with your own credentials; unmute is
+              {agentVendors.length === 0
+                ? 'Orchestrate needs a coding agent already installed on your Mac — Claude Code or Codex.'
+                : 'Orchestrate runs on the coding agent already installed on your Mac.'}
+              {' '}It runs under your own account with your own credentials; unmute is
               never in the credential path.
             </p>
           </div>
           <div className="card rows lead-tile" style={{ marginTop: 20, ['--i' as string]: 1 }}>
-            <div className="row">
-              <div className="tile tile-mute"><ClaudeMark size={14} /></div>
-              <div><p className="rtitle">Claude Code</p><p className="rsub">The CLI, running in your own terminal</p></div>
-              <span />
-            </div>
-            <div className="row">
-              <div className="tile tile-mute"><CodexMark size={14} /></div>
-              <div><p className="rtitle">Codex</p><p className="rsub">Same deal — your account, your credentials</p></div>
-              <span />
-            </div>
+            {showsVendor(agentVendors, 'claude') && (
+              <div className="row">
+                <div className="tile tile-mute"><ClaudeMark size={14} /></div>
+                <div><p className="rtitle">Claude Code</p><p className="rsub">The CLI, running in your own terminal</p></div>
+                <span />
+              </div>
+            )}
+            {showsVendor(agentVendors, 'codex') && (
+              <div className="row">
+                <div className="tile tile-mute"><CodexMark size={14} /></div>
+                <div><p className="rtitle">Codex</p><p className="rsub">Your account, your credentials</p></div>
+                <span />
+              </div>
+            )}
           </div>
           {agentReady ? (
             <div className="rowf" style={{ gap: 10, marginTop: 16, ['--i' as string]: 2 }}>
@@ -1359,6 +1383,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
  */
 
 export function WhatsNew({ onComplete, onOpenAgentSetup }: OnboardingProps) {
+  const agentVendors = useDetectedVendors()
   const [step, setStep] = useState(0)
   const [dictationKey, setDictationKey] = useState<DictationKey>('fn')
   const orchestrateLabel = KEY_LABELS[otherKey(dictationKey)]
@@ -1404,7 +1429,7 @@ export function WhatsNew({ onComplete, onOpenAgentSetup }: OnboardingProps) {
               and your words land in that terminal.
             </p>
           </div>
-          <div style={{ marginTop: 14, ['--i' as string]: 1 }}><PocketDemo orchestrateLabel={orchestrateLabel} /></div>
+          <div style={{ marginTop: 14, ['--i' as string]: 1 }}><PocketDemo orchestrateLabel={orchestrateLabel} vendors={agentVendors} /></div>
         </>
       ),
     },

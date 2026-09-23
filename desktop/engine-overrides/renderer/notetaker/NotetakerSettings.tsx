@@ -85,34 +85,32 @@ export function NotetakerSettings() {
 
         {noProviderAvailable && (
           <p className="text-[11px] text-ink/50 mt-2">
-            Connect Claude Code, Codex, or Unmute Cloud to generate meeting notes.
+            Install a coding agent on this Mac, or connect Unmute Cloud, to generate meeting notes.
           </p>
         )}
 
         {settings && (
           <div className="mt-3 flex flex-col gap-4">
-            <div>
+            {!noProviderAvailable && <div>
               <div className="text-[12px] font-medium text-ink mb-1.5">Provider</div>
-              {(['claude', 'codex'] as const).map((id) => {
-                const available = settings.availability[id]
+              {/* Only the CLIs detected on this Mac — an agent that is not
+                  installed is not listed at all. */}
+              {(['claude', 'codex'] as const).filter((id) => settings.availability[id]).map((id) => {
                 const selected = settings.provider === id
                 return (
                   <button
                     key={id}
                     type="button"
-                    disabled={!available}
                     onClick={() => save({ provider: id })}
-                    className="w-full flex items-center gap-2 py-1.5 text-left disabled:cursor-not-allowed"
+                    className="w-full flex items-center gap-2 py-1.5 text-left"
                   >
-                    <span className={available ? 'text-green-700' : 'text-ink/30'}>{available ? '✓' : '○'}</span>
-                    <span className={`text-[12.5px] ${available ? 'text-ink' : 'text-ink/40'}`}>
-                      {PROVIDER_LABEL[id]}
-                    </span>
-                    {selected && available && <span className="text-[11px] text-ink/50 ml-auto">Selected</span>}
+                    <span className="text-green-700">✓</span>
+                    <span className="text-[12.5px] text-ink">{PROVIDER_LABEL[id]}</span>
+                    {selected && <span className="text-[11px] text-ink/50 ml-auto">Selected</span>}
                   </button>
                 )
               })}
-            </div>
+            </div>}
 
             <p className="text-[11px] text-ink/50 leading-relaxed">
               Meeting transcription supports mixed English and Hindi/Hinglish; the generated notes

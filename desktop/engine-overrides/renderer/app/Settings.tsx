@@ -55,7 +55,6 @@ import {
   BehaviorIcon,
   AppearanceIcon,
   HelpIcon,
-  EngineIcon,
   type SettingsSection,
 } from './_shared'
 
@@ -100,8 +99,7 @@ interface SettingsApi {
   paywallGetRemoteTrigger?: () => Promise<TriggerState>
   paywallOnRemoteTriggerChanged?: (cb: (s: TriggerState) => void) => () => void
   paywallSetRemoteTriggerEnabled?: (v: boolean) => Promise<TriggerState>
-  /** The orchestrator's settings snapshot (remote/init.ts:3485-3498). Two of its
-   *  fields are read here: `overlayAutoPresent` and `librarianWriteEnabled`. */
+  /** The orchestrator's settings snapshot (remote/init.ts:3485-3498). */
   remoteGetSettings?: () => Promise<{
     overlayAutoPresent?: boolean
     notchAutoExpand?: boolean
@@ -109,8 +107,6 @@ interface SettingsApi {
     voiceFeedback?: boolean
     surfaceFill?: number
     showInScreenCapture?: boolean
-    librarianWriteEnabled?: boolean
-    curatorEnabled?: boolean
   }>
   remoteSetOverlayAutoPresent?: (on: boolean) => Promise<boolean>
   remoteSetNotchAutoExpand?: (on: boolean) => Promise<boolean>
@@ -118,13 +114,6 @@ interface SettingsApi {
   remoteSetVoiceFeedback?: (on: boolean) => Promise<boolean>
   remoteSetSurfaceFill?: (fill: number) => Promise<number>
   remoteSetShowInScreenCapture?: (on: boolean) => Promise<boolean>
-  /** Handled in main (remote/init.ts:3444) but NOT exposed by the preload —
-   *  an orphaned handler. Optional-chained, so calling it is a no-op until
-   *  `electron/remote-preload.ts` carries it. See KILL_SWITCHES_WIRED. */
-  remoteSetLibrarianWriteEnabled?: (on: boolean) => Promise<boolean>
-  /** No setting, no handler, no gate — the curator has no off switch at all.
-   *  Named here so the row is one line from working. See KILL_SWITCHES_WIRED. */
-  remoteSetCuratorEnabled?: (on: boolean) => Promise<boolean>
   paywallOpenExternal?: (url: string) => Promise<boolean>
   paywallCheckForUpdates?: () => Promise<
     | { status: 'available'; version: string }
@@ -156,41 +145,6 @@ function mb(bytes: number): string {
 const api = (): SettingsApi =>
   (window as unknown as { electronAPI?: SettingsApi }).electronAPI ?? {}
 
-/* ─── The two kill-switches, and why they are inert ───
- *
- * SPEC §2.7 asks for a curator switch and a librarian switch, both default off.
- * Both rows exist below. Neither can move its setting from the renderer, and
- * the reason is not cosmetic:
- *
- *   librarian — main HANDLES `remote:set-librarian-write-enabled`
- *     (electron/remote/init.ts:3444) but `electron/remote-preload.ts` never
- *     exposes it: the handler is orphaned and nothing in the app can call it.
- *     The READ is real — `remote:get-settings` returns `librarianWriteEnabled`
- *     (init.ts:3495) — so the row shows the true state, which is off
- *     (init.ts:200) and doubly so: LIBRARIAN_PARKED (init.ts:2143) means no
- *     librarian session spawns at all.
- *
- *   curator — there is no `curatorEnabled` setting, no handler and no gate.
- *     `curator.start()` (init.ts:2742) is unconditional, so THE CURATOR IS
- *     RUNNING in a release build. Decision D7 assumed it was already off for
- *     launch; it is not, and no pack disables it. That is escalated in this
- *     pack's decisions file as the one place the SPEC's premise is wrong.
- *
- * So the rows render DIMMED AND INERT rather than live. An enabled toggle here
- * would flip, write nothing, and snap back to off on the next mount — visibly
- * broken, and for the curator it would also assert a state that is false.
- * `Toggle`'s `disabled` prop is documented in _shared.tsx for exactly this: the
- * capability stays discoverable without the control lying about it.
- *
- * TO MAKE THEM LIVE, three lines outside this pack — after which flip this
- * constant and nothing else in this file changes:
- *   1. `electron/remote-preload.ts`: expose remoteSetLibrarianWriteEnabled →
- *      invoke('remote:set-librarian-write-enabled').
- *   2. same file: expose remoteSetCuratorEnabled → invoke('remote:set-curator-enabled').
- *   3. `electron/remote/init.ts`: a `curatorEnabled` setting (default false),
- *      that handler, `curatorEnabled` on the remote:get-settings snapshot, and
- *      gate `curator.start()` on it.
- */
 // THE SURFACE GROUND, and the one list that decides what a valid one is.
 //
 // Kept next to each other on purpose: the union, the runtime guard and the
@@ -228,7 +182,6 @@ const TONE_SWATCHES: readonly {
   },
 ]
 
-const KILL_SWITCHES_WIRED = false
 // Keep the customization implementation available for a later release, but do
 // not present choices while the product has one supported surface: Glass + Fixed.
 const SURFACE_STYLE_CONTROLS_VISIBLE = false
@@ -361,12 +314,6 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
   // DEFAULT ON: captures should show what the user can see unless they
   // explicitly choose privacy. Main and Swift share the same default.
   const [showInScreenCapture, setShowInScreenCapture] = useState<boolean>(true)
-  // The two kill-switches. DEFAULT OFF, both — D7 retires the curator and the
-  // librarian for launch, and `librarianWriteEnabled` defaults to false in main
-  // too (remote/init.ts:200). Neither can be WRITTEN from here; see
-  // KILL_SWITCHES_WIRED above for why, and for what makes them live.
-  const [curatorEnabled, setCuratorEnabled] = useState<boolean>(false)
-  const [librarianEnabled, setLibrarianEnabled] = useState<boolean>(false)
 
   // Which explainer page is open, if any. One piece of state for both entry
   // points: the "What this does" links on Capture and Scratchpad, and the list
@@ -449,8 +396,6 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
       setVoiceFeedback(s.voiceFeedback === true)
       setSurfaceFill(typeof s.surfaceFill === 'number' ? s.surfaceFill : 0.8)
       setShowInScreenCapture(s.showInScreenCapture !== false)
-      setLibrarianEnabled(s.librarianWriteEnabled === true)
-      setCuratorEnabled(s.curatorEnabled === true)
     }).catch(() => {})
   }, [])
 
@@ -1165,53 +1110,6 @@ export default function Settings({ onDictationKeyChange, onActivationModeChange,
             </SettingRow>
           </Card>
 
-          {/* ─── Advanced ───
-              Two features being retired for launch (D7). They are shown rather
-              than deleted because the skills they produced are still on disk
-              and still work, and a user who wonders why nothing is being added
-              deserves an answer in the app rather than none.
-
-              Both are inert in this build — see KILL_SWITCHES_WIRED at the top
-              of this file for exactly which three lines, in two files this pack
-              does not own, make them live. The descriptions below say what each
-              one DOES, never what state it is in, because for the curator the
-              app cannot currently know. */}
-          <SectionHeader icon={<EngineIcon />} title="Advanced" />
-          <Card>
-            <SettingRow
-              label="Skill curator"
-              description="Reviews finished tasks and proposes skills worth keeping"
-            >
-              <Toggle
-                checked={curatorEnabled}
-                disabled={!KILL_SWITCHES_WIRED}
-                title="Not adjustable in this release"
-                onChange={(on) => {
-                  setCuratorEnabled(on)
-                  void api().remoteSetCuratorEnabled?.(on)
-                }}
-              />
-            </SettingRow>
-            <SettingRow
-              label="Librarian"
-              description="Writes accepted proposals into your skill library"
-            >
-              <Toggle
-                checked={librarianEnabled}
-                disabled={!KILL_SWITCHES_WIRED}
-                title="Not adjustable in this release"
-                onChange={(on) => {
-                  setLibrarianEnabled(on)
-                  void api().remoteSetLibrarianWriteEnabled?.(on)
-                }}
-              />
-            </SettingRow>
-          </Card>
-          <p className="text-[11px] text-ink-35 leading-relaxed px-1 mb-3">
-            Both are being switched off for this release and are not adjustable
-            here yet. Anything they already learned stays on disk and keeps
-            working.
-          </p>
         </>
       )}
     </div>

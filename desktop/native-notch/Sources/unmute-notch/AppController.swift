@@ -680,6 +680,7 @@ final class AppController: NSObject, NotchResizing {
             if state.phase != pillModel.state.phase {
                 NotchLog.log("CMD pill phase=\(state.phase.rawValue) kind=\(state.kind.rawValue)")
             }
+            if let options = state.agentOptions { model.detectedAgentIds = options.map(\.id) }
             let priorFlashToken = pillModel.state.captureFlashToken
             pillModel.state = state
             if let token = state.captureFlashToken, token != priorFlashToken {

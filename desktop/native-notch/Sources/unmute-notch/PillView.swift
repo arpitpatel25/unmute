@@ -886,7 +886,7 @@ private struct AgentModelControl: View {
                     ProviderMark(backend: picked.id, terminal: picked.terminal ?? true)
                         .opacity(state.agentConnected ? 1 : 0.45)
                 }
-                Text((state.agent ?? "Claude Code") + (state.agentConnected ? "" : " · connect"))
+                Text((state.agent ?? "Agent") + (state.agentConnected ? "" : " · connect"))
                     .font(.system(size: 12.5, weight: .semibold))
                     // THE LANE IS ON THE EDGE NOW, NOT IN THE WORDS.
                     //

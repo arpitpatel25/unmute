@@ -19,13 +19,22 @@ struct NewConversationSetup: View {
     @State private var query = ""
     @State private var submitted = false
     @State private var permission = "maximum"
+    /// Only the providers on this Mac. Nothing detected yet (or nothing at all)
+    /// keeps both, so the popover is never empty.
+    private var providers: [String] {
+        let shown = ["claude", "codex"].filter { model.detectedAgentIds?.contains($0) ?? false }
+        return shown.isEmpty ? ["claude", "codex"] : shown
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("New conversation").font(Theme.fTitle)
-            Picker("Provider", selection: $provider) {
-                Text("Claude").tag("claude")
-                Text("Codex").tag("codex")
-            }.pickerStyle(.segmented)
+            if providers.count > 1 {
+                Picker("Provider", selection: $provider) {
+                    ForEach(providers, id: \.self) { id in
+                        Text(id == "claude" ? "Claude" : "Codex").tag(id)
+                    }
+                }.pickerStyle(.segmented)
+            }
             Picker("Permissions for this conversation", selection: $permission) {
                 Text("Maximum authorized access").tag("maximum")
                 Text("Ask for approval").tag("ask")
@@ -100,7 +109,10 @@ struct NewConversationSetup: View {
         }
         .padding(24).frame(width: 420)
         .font(Theme.fSub)
-        .onAppear { if !model.newChatPending { refreshPreview() } }
+        .onAppear {
+            if !providers.contains(provider), let first = providers.first { provider = first }
+            if !model.newChatPending { refreshPreview() }
+        }
         .onChange(of: provider) { _ in permission = "maximum"; refreshPreview() }
         .onChange(of: permission) { _ in refreshPreview() }
         .onChange(of: model.newChatPending) { pending in

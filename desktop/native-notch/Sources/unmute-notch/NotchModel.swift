@@ -245,6 +245,9 @@ final class NotchModel: ObservableObject {
     @Published var newChatPending = false
     @Published var newChatError: String? = nil
     @Published var newChatPreview: ChatPreviewP? = nil
+    /// Backend ids detected on this Mac, from the pill's agent options (main
+    /// sends only installed ones). Nil until the first pill push.
+    @Published var detectedAgentIds: [String]? = nil
     @Published var newChatPreviewToken: String = ""
     @Published var questionSubmissions: [String: QuestionAcknowledgmentP] = [:]
 

@@ -121,8 +121,8 @@ export default function Privacy({ onOpenMemory }: { onOpenMemory?: () => void })
           body={
             <>
               <p>
-                The agent is Claude Code or the Codex desktop app, running on
-                this Mac under your own account and your own logins. What you ask
+                The agent is the coding agent already on this Mac, running
+                under your own account and your own logins. What you ask
                 for, what it reads and what it produces stay between you, your
                 machine and whichever agent you signed in to.
               </p>

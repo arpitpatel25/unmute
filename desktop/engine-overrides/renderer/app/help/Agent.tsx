@@ -53,8 +53,8 @@ export default function Agent({ onBack }: HelpProps) {
 
       <Sec title="It knows what you have been working on">
         <P>
-          Every coding session on this Mac is on disk — Claude Code and Codex
-          alike, the ones Unmute started and the ones you ran yourself in a
+          Every coding session on this Mac is on disk — whichever agent ran it,
+          the ones Unmute started and the ones you ran yourself in a
           terminal. The Agent reads those transcripts directly when you refer
           to work you have already done.
         </P>

@@ -104,3 +104,20 @@ export function reducePresenter(state: PresenterState, message: PresenterMessage
       : [...state.history, state.checkpoint]
   return display({ ...state, checkpoint: next, history }, next, null)
 }
+
+/**
+ * Which provider buttons the choice card shows. A provider that is not on this
+ * Mac gets no button once the other one is — a Codex-only Mac is never offered
+ * "Set up Claude Code", and vice versa. With neither installed, both stay:
+ * setting one up is the only way forward.
+ */
+export function shownProviders(
+  providers: NonNullable<PresenterCard>['providers'],
+): Array<'claude' | 'codex'> {
+  const all = ['claude', 'codex'] as const
+  const present = all.filter((id) => {
+    const state = providers?.[id]?.state
+    return state !== undefined && state !== 'missing' && state !== 'checking'
+  })
+  return present.length > 0 ? present : [...all]
+}

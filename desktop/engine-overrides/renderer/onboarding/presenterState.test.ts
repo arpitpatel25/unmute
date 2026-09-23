@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { emptyPresenter, reducePresenter } from './presenterState'
+import { emptyPresenter, reducePresenter, shownProviders } from './presenterState'
 
 test('action change swaps caption and one companion card', () => {
   const next = reducePresenter(emptyPresenter(), {
@@ -72,4 +72,12 @@ test('Forward returns from chapter history to the live checkpoint', () => {
 
   assert.equal(state.action, 'privacy')
   assert.equal((state as unknown as { reviewing: boolean }).reviewing, false)
+})
+
+test('the provider card hides an agent that is not on this Mac', () => {
+  assert.deepEqual(shownProviders({ claude: { state: 'missing' }, codex: { state: 'ready' } }), ['codex'])
+  assert.deepEqual(shownProviders({ claude: { state: 'auth-required' }, codex: { state: 'missing' } }), ['claude'])
+  assert.deepEqual(shownProviders({ claude: { state: 'missing' }, codex: { state: 'missing' } }), ['claude', 'codex'])
+  assert.deepEqual(shownProviders({ claude: { state: 'checking' }, codex: { state: 'checking' } }), ['claude', 'codex'])
+  assert.deepEqual(shownProviders(undefined), ['claude', 'codex'])
 })

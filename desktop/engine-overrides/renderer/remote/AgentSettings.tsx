@@ -97,12 +97,10 @@ export function AgentSettings() {
 
   if (!settings) return null
 
-  const providers = availability?.providers.length
-    ? availability.providers
-    : [
-        { id: 'claude' as const, label: 'Claude Code CLI', available: false, reason: 'not-installed' as const },
-        { id: 'codex' as const, label: 'Codex CLI', available: false, reason: 'not-installed' as const },
-      ]
+  // ONLY THE CLIS ON THIS MAC. A provider that was not detected is not listed
+  // at all — not greyed out as "not installed" — and nothing is guessed before
+  // the probe answers.
+  const providers = (availability?.providers ?? []).filter((provider) => provider.available)
 
   const select = async (provider: AgentProvider) => {
     const accepted = await api().remoteSetUnmuteAgentProvider?.(provider)
@@ -176,6 +174,11 @@ export function AgentSettings() {
             you pick that per task.
           </p>
 
+          {availability && providers.length === 0 && (
+            <p className="text-[11px] text-ink-35 leading-relaxed">
+              No coding agent was detected on this Mac. Install one and it will appear here.
+            </p>
+          )}
           <div className="space-y-1.5">
             {providers.map((provider) => {
               const selected = provider.id === settings.agentProvider
@@ -189,12 +192,9 @@ export function AgentSettings() {
                   }`}
                 >
                   <span className="flex items-center gap-2">
-                    <ProviderGlyph backend={provider.id} terminal title={provider.label} style={{ opacity: provider.available ? 1 : 0.4 }} />
-                    <span className={`w-[7px] h-[7px] rounded-full shrink-0 ${provider.available ? 'bg-success' : 'bg-ink-35'}`} />
+                    <ProviderGlyph backend={provider.id} terminal title={provider.label} />
+                    <span className="w-[7px] h-[7px] rounded-full shrink-0 bg-success" />
                     <span className="text-[13px] font-medium text-ink">{provider.label}</span>
-                    {!provider.available && (
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-ink-35">not installed</span>
-                    )}
                   </span>
                   <span className="block text-[11px] text-ink-35 mt-1 leading-relaxed">
                     {provider.id === 'claude'

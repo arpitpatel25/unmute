@@ -31,8 +31,13 @@
 // what the last card says.
 
 import { Shell, Sec, P, Lit, Note, type HelpProps } from './index'
+import { showsVendor } from '../../remote/detectedAgents'
+import { useDetectedVendors } from '../../remote/useDetectedVendors'
 
 export default function ComputerUse({ onBack }: HelpProps) {
+  // The tools are registered with Claude Code only, so this section is
+  // Claude Code information and is dropped on a Mac without it.
+  const claude = showsVendor(useDetectedVendors(), 'claude')
   return (
     <Shell
       title="Computer use"
@@ -87,7 +92,7 @@ export default function ComputerUse({ onBack }: HelpProps) {
         <Note>Orchestrator → Settings, under Computer use.</Note>
       </Sec>
 
-      <Sec title="Which agent gets it">
+      {claude && <Sec title="Which agent gets it">
         <P>
           Unmute registers these tools with <b>Claude Code</b>, as an MCP server
           called <Lit>unmute-computer</Lit>, for every project. Claude Code
@@ -99,7 +104,7 @@ export default function ComputerUse({ onBack }: HelpProps) {
           a fallback for the rare thing the accessibility layer genuinely cannot
           do.
         </P>
-      </Sec>
+      </Sec>}
     </Shell>
   )
 }

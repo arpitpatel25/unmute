@@ -100,7 +100,7 @@ function api(): API {
  *  sentence rather than a guessed one. */
 const AGENT_PITCH: Record<string, string> = {
   claude: 'Runs on your machine in a real terminal. Live output, and you can resume a session later.',
-  codex: 'Runs on your machine in a real terminal, same as Claude Code — its own models, its own sessions.',
+  codex: 'Runs on your machine in a real terminal — its own models, its own sessions.',
   'codex-desktop': 'Runs in the Codex app you already have open. No terminal here — the thread lives in Codex.',
   'claude-code-desktop': 'Runs in the Claude desktop app. The conversation lives there; Unmute conducts it.',
 }

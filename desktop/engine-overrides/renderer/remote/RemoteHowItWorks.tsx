@@ -15,6 +15,9 @@
 // gone stale and are corrected here: the product is no longer Claude-Code-only
 // — Codex desktop has shipped since v1.4.8 — and the surface is the Orchestrator.
 
+import { showsVendor } from './detectedAgents'
+import { useDetectedVendors } from './useDetectedVendors'
+
 interface Props {
   onBack: () => void
   /** Optional route into the setup checklist. Omitted when the caller has no
@@ -33,6 +36,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export function RemoteHowItWorks({ onBack, onOpenSetup }: Props) {
+  const vendors = useDetectedVendors()
+  const claude = showsVendor(vendors, 'claude')
+  const codex = showsVendor(vendors, 'codex')
   return (
     <div className="max-w-[640px]">
       <button
@@ -55,9 +61,11 @@ export function RemoteHowItWorks({ onBack, onOpenSetup }: Props) {
           doing it — belongs to a <b>coding agent already on your machine</b>.
         </p>
         <p>
-          Today that means <b>Claude Code</b> or the <b>Codex desktop app</b>, and you
-          choose which in the panel behind this page. Each task card says which one ran
-          it and on which model, so you are never guessing.
+          {claude && codex
+            ? <>Today that means <b>Claude Code</b> or the <b>Codex desktop app</b>, and you
+                choose which in the panel behind this page.</>
+            : <>On this Mac that means <b>{claude ? 'Claude Code' : 'Codex'}</b>.</>}{' '}
+          Each task card says which agent ran it and on which model, so you are never guessing.
         </p>
         <p>
           That&rsquo;s a deliberate choice. Those agents are already excellent, so we
@@ -129,8 +137,9 @@ export function RemoteHowItWorks({ onBack, onOpenSetup }: Props) {
       {onOpenSetup && (
         <div className="mt-6 pt-4 border-t border-border">
           <div className="text-[12.5px] text-ink-60 mb-2">
-            Set up an agent, and add the Claude for Chrome extension if you want
-            browser tasks.
+            {claude
+              ? 'Set up an agent, and add the Claude for Chrome extension if you want browser tasks.'
+              : 'Set up an agent.'}
           </div>
           <button
             className="text-[12.5px] px-3 py-1.5 rounded-full bg-ink text-white hover:opacity-90"
