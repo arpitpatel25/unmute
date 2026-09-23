@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { copyFile, mkdir, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { AGENT_TURN_CEILING } from './continuity'
+import { AGENT_CONTEXT_ROTATION_TOKENS, AGENT_TURN_CEILING } from './continuity'
 import { AgentProviderError, type AgentProviderId } from './provider'
 import type { AgentConversationHandoff, AgentInteractionInput, AgentInteractionResult, AgentSubmissionContext } from './controller'
 import type { AgentConversationRecord, AgentJournal, JournalAgentRun } from './journal'
@@ -16,6 +16,7 @@ interface Options {
   controller: { submit(input: AgentInteractionInput, context: AgentSubmissionContext): Promise<AgentInteractionResult> }
   selectedProvider(): AgentProviderId
   ceiling?(): number
+  contextCeilingTokens?: number
   idleMs?: number
   now?(): number
   prepareFresh(): Promise<void>
@@ -134,32 +135,24 @@ export class AgentConversationLifecycle {
         completion = Promise.resolve(failure('Retry or discard the retained Agent message before sending another.', 'interaction-failed')); return
       }
       const snapshot = structuredClone(this.snapshot)
-      // Prepare lazily on the next interaction: no provider is started solely
-      // because a timer fired. Work and queued input can never be split by idle.
-      // WHY THIS IS OR IS NOT THE SAME CONVERSATION, written down.
-      //
-      // The log said `session: "resume"` and never why, so answering "why did
-      // it still have yesterday's context" meant reading two constants and
-      // doing the arithmetic by hand. Both gates have to pass to rotate, and
-      // being one gate short is the interesting case — it is what makes a
-      // conversation feel like it should have ended and did not.
+      // Prepare lazily on the next interaction, never from a timer. A turn or
+      // measured context ceiling is a boundary even during continuous use.
       const idleMs = this.options.idleMs ?? 20 * 60_000
       const idleFor = this.now() - (snapshot.lastActivityAt ?? this.now())
       const blocked = this.draining || this.pendingSettlement || !!snapshot.queued.length
         || !!snapshot.draft.text.trim() || !!this.record.prepared || this.record.phase === 'recovery-required'
       const atCeiling = this.record.accepted.length >= this.record.ceiling
       const idleEnough = idleFor >= idleMs
-      if (!blocked && atCeiling && idleEnough) this.rotationDue = true
+      const contextCeilingTokens = this.options.contextCeilingTokens ?? AGENT_CONTEXT_ROTATION_TOKENS
+      const contextHigh = (this.record.lastContextTokens ?? 0) >= contextCeilingTokens
+      if (atCeiling || contextHigh) this.rotationDue = true
       diagnostic('agent-continuity-decision', {
         rotate: this.rotationDue,
         turns: this.record.accepted.length, ceiling: this.record.ceiling, atCeiling,
-        idleForMs: idleFor, idleMs, idleEnough,
-        ...(blocked ? { blocked: true } : {}),
-        reason: this.rotationDue ? 'ceiling-and-idle'
-          : blocked ? 'work-in-flight'
-          : !atCeiling && !idleEnough ? 'under-ceiling-and-recently-active'
-          : !atCeiling ? 'under-ceiling'
-          : 'recently-active',
+        idleForMs: idleFor, idleMs, idleEnough, blocked,
+        lastContextTokens: this.record.lastContextTokens ?? null, contextCeilingTokens, contextHigh,
+        reason: atCeiling ? 'turn-ceiling' : contextHigh ? 'context-ceiling'
+          : blocked ? 'work-in-flight' : 'resume',
       })
       snapshot.lastActivityAt = this.now()
       if (!snapshot.queued.some(q => q.submissionId === submissionId)) snapshot.queued.push({ submissionId, input: structuredClone({ ...input, submissionId }) })
@@ -414,12 +407,24 @@ export class AgentConversationLifecycle {
     let input!: AgentInteractionInput
     let provider!: AgentProviderId
     let fresh = false
+    let rotationReason = 'resume'
     await this.lock(async () => {
       this.assertLive()
       const first = this.snapshot.queued[0]
       input = structuredClone(first.input)
       fresh = !this.record.runId || this.rotationDue || !!this.record.pendingProvider
+        || this.record.accepted.length >= this.record.ceiling
+        || (this.record.lastContextTokens ?? 0) >= (this.options.contextCeilingTokens ?? AGENT_CONTEXT_ROTATION_TOKENS)
       provider = this.record.pendingProvider ?? this.record.provider ?? this.options.selectedProvider()
+      rotationReason = !this.record.runId ? 'initial'
+        : this.record.pendingProvider ? 'provider-change'
+        : this.record.accepted.length >= this.record.ceiling ? 'turn-ceiling'
+        : (this.record.lastContextTokens ?? 0) >= (this.options.contextCeilingTokens ?? AGENT_CONTEXT_ROTATION_TOKENS) ? 'context-ceiling'
+        : 'resume'
+      diagnostic('agent-conversation-boundary', { reason: rotationReason, fresh,
+        generation: this.record.generation, provider, turns: this.record.accepted.length,
+        lastContextTokens: this.record.lastContextTokens ?? null,
+        contextCeilingTokens: this.options.contextCeilingTokens ?? AGENT_CONTEXT_ROTATION_TOKENS })
       prepared = { submissionId: first.submissionId, interactionId: randomUUID(), candidateRunId: fresh ? randomUUID() : this.record.runId!, generation: fresh && this.record.runId ? this.record.generation + 1 : this.record.generation }
       await this.publish({ ...this.record, prepared }, this.snapshot)
     })
@@ -447,12 +452,13 @@ export class AgentConversationLifecycle {
               record.accepted = []
               record.generation = prepared.generation
               record.ceiling = this.ceiling()
+              delete record.lastContextTokens
               snapshot.generation = prepared.generation
               snapshot.chat.runId = run.id
               snapshot.results = {}
               if (oldRun) snapshot.notice = record.pendingProvider
                 ? `Switched to ${provider === 'claude' ? 'Claude' : 'Codex'} — new conversation`
-                : `Started a fresh conversation after idle; earlier messages retained`
+                : `Started a fresh conversation; earlier messages retained`
               if (record.pendingProvider === provider) delete record.pendingProvider
             }
             record.runId = run.id; record.provider = run.provider; record.model = run.model
@@ -473,6 +479,9 @@ export class AgentConversationLifecycle {
             }
             accepted = true
             if (fresh) this.rotationDue = false
+            if (fresh) diagnostic('agent-conversation-rotated', { reason: rotationReason,
+              fromRunId: oldRun ?? null, toRunId: run.id, generation: record.generation,
+              provider, handoff: !!oldRun, saved: true })
             if (oldRun && oldRun !== run.id) void this.options.close(oldRun).catch(() => {})
             // The Stop that arrived while this was starting, delivered now that
             // there is something to deliver it to.
@@ -500,6 +509,10 @@ export class AgentConversationLifecycle {
         const submission = record.accepted.find(a => a.submissionId === prepared.submissionId)
         if (!submission || submission.outcome) return
         result = { ...result, provider: record.provider!, model: record.model }
+        diagnostic('agent-context-measured', { runId: record.runId, provider: record.provider,
+          contextTokens: result.contextTokens ?? null,
+          contextCeilingTokens: this.options.contextCeilingTokens ?? AGENT_CONTEXT_ROTATION_TOKENS,
+          nextTurnRotatesForContext: (result.contextTokens ?? 0) >= (this.options.contextCeilingTokens ?? AGENT_CONTEXT_ROTATION_TOKENS) })
         const why = this.switched.get(prepared.submissionId)
         if (why && result.outcome === 'completed') result = { ...result, notice: [why, result.notice].filter(Boolean).join(' ') }
         this.pendingSettlement = { generation: record.generation, runId: record.runId!, submissionId: prepared.submissionId, at: this.now(), result }
@@ -556,6 +569,11 @@ export class AgentConversationLifecycle {
     try { await this.publish(next.record, next.snapshot) } finally { this.settling = false }
     await this.options.store.clearSettlement()
     this.pendingSettlement = null
+    diagnostic('agent-turn-settled', { runId: next.record.runId, generation: next.record.generation,
+      turns: next.record.accepted.length, contextTokens: next.record.lastContextTokens ?? null,
+      rotationDueNextTurn: next.record.accepted.length >= next.record.ceiling
+        || (next.record.lastContextTokens ?? 0) >= (this.options.contextCeilingTokens ?? AGENT_CONTEXT_ROTATION_TOKENS),
+      saved: true })
     this.options.onView?.(this.view())
   }
 
@@ -591,6 +609,7 @@ export class AgentConversationLifecycle {
 function applySettlement(view: AgentConversationView, pending: AgentPendingSettlement): void {
   const accepted = view.record.accepted.find(a => a.submissionId === pending.submissionId)
   if (!accepted || view.record.generation !== pending.generation || view.record.runId !== pending.runId) throw new Error('Pending Agent settlement identity is invalid.')
+  if (pending.result.contextTokens !== undefined) view.record.lastContextTokens = pending.result.contextTokens
   if (!view.snapshot.results?.[pending.submissionId]) {
     // A TURN THE USER STOPPED IS NOT A TURN THAT FAILED.
     //

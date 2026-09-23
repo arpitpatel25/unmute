@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import { isTurnImage } from '../turnImages'
 import { settledByInterrupt, type AgentProcessDriver, type AgentProcessEvent, type AgentProcessLaunch } from '../provider'
+import { diagnostic } from '../../diagnostics'
 
 const EXIT_DRAIN_CAP_MS = 2_000
 const liveTurns = new Set<{ kill(signal: NodeJS.Signals): void }>()
@@ -102,6 +103,13 @@ export class CodexHeadlessEventParser {
       return [{ type: 'activity', kind: 'message', summary: item.text }]
     }
     if (record.type === 'turn.completed') {
+      const usage = asRecord(record.usage)
+      diagnostic('agent-codex-turn-usage', {
+        inputTokens: usage?.input_tokens ?? null,
+        cachedInputTokens: usage?.cached_input_tokens ?? null,
+        outputTokens: usage?.output_tokens ?? null,
+        contextTokens: null, // Codex reports turn totals, not the final call's context size.
+      })
       return [{
         type: 'completion',
         outcome: 'completed',

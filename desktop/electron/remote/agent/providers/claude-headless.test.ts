@@ -80,6 +80,16 @@ test('the result event completes the turn and carries the answer', () => {
   )
 })
 
+test('completion carries the final Claude call context rather than cumulative cache usage', () => {
+  const state = {}
+  headlessEvents({ type: 'assistant', message: { content: [], usage: { input_tokens: 2, cache_creation_input_tokens: 50_000, cache_read_input_tokens: 100_000 } } }, state)
+  headlessEvents({ type: 'assistant', message: { content: [], usage: { input_tokens: 2, cache_creation_input_tokens: 5_000, cache_read_input_tokens: 155_000 } } }, state)
+  assert.deepEqual(headlessEvents({ type: 'result', subtype: 'success', result: 'done' }, state),
+    [{ type: 'completion', outcome: 'completed', finalText: 'done', contextTokens: 160_002 }])
+  assert.deepEqual(headlessEvents({ type: 'result', subtype: 'success', result: 'next' }, state),
+    [{ type: 'completion', outcome: 'completed', finalText: 'next' }])
+})
+
 test('an errored result fails the turn rather than completing it emptily', () => {
   // The CLI says WHY, and the parser now carries it (see the failure field) —
   // this expectation was left behind when it started to.

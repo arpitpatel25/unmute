@@ -10,6 +10,7 @@ import { traceStreamLine, type AgentTrace } from '../trace'
 import { claudeFallbackReason, claudeModelUnavailable } from '../modelAvailability'
 import { agentModelName } from '../modelPolicy'
 import { claudeImageBlocks } from '../turnImages'
+import { diagnostic } from '../../diagnostics'
 
 /**
  * Headless Claude driver — the Agent as one thing, not as a session.
@@ -243,7 +244,16 @@ interface ContentBlock {
  */
 /** What a driver remembers between stream lines: a model switch announced
  *  mid-turn, to be said with that turn's answer. */
-export interface HeadlessTurnState { notice?: string }
+export interface HeadlessTurnState { notice?: string; contextTokens?: number; modelCalls?: number }
+
+function claudeContextTokens(value: unknown): number | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const usage = value as Record<string, unknown>
+  const fields = ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens']
+  const parts = fields.map(field => usage[field])
+  if (!parts.some(part => Number.isSafeInteger(part) && Number(part) >= 0)) return undefined
+  return parts.reduce<number>((sum, part) => sum + (Number.isSafeInteger(part) && Number(part) >= 0 ? Number(part) : 0), 0)
+}
 
 export function headlessEvents(value: unknown, state: HeadlessTurnState = {}): AgentProcessEvent[] {
   if (!value || typeof value !== 'object') return []
@@ -265,7 +275,20 @@ export function headlessEvents(value: unknown, state: HeadlessTurnState = {}): A
   }
 
   if (record.type === 'assistant') {
-    const message = record.message as { content?: unknown } | undefined
+    const message = record.message as { content?: unknown; usage?: unknown } | undefined
+    const contextTokens = claudeContextTokens(message?.usage)
+    if (contextTokens !== undefined) {
+      state.contextTokens = contextTokens
+      state.modelCalls = (state.modelCalls ?? 0) + 1
+      const usage = message?.usage as Record<string, unknown>
+      diagnostic('agent-claude-model-call', {
+        call: state.modelCalls, contextTokens,
+        inputTokens: usage.input_tokens ?? null,
+        cacheCreationInputTokens: usage.cache_creation_input_tokens ?? null,
+        cacheReadInputTokens: usage.cache_read_input_tokens ?? null,
+        outputTokens: usage.output_tokens ?? null,
+      })
+    }
     const blocks = Array.isArray(message?.content) ? message.content as ContentBlock[] : []
     const events: AgentProcessEvent[] = []
     for (const block of blocks) {
@@ -280,6 +303,10 @@ export function headlessEvents(value: unknown, state: HeadlessTurnState = {}): A
   }
 
   if (record.type === 'result') {
+    const contextTokens = state.contextTokens
+    state.contextTokens = undefined
+    diagnostic('agent-claude-turn-usage', { modelCalls: state.modelCalls ?? 0, finalContextTokens: contextTokens ?? null })
+    state.modelCalls = undefined
     // Trust the negative signals over the positive one: a result that is not
     // explicitly a success is a failure, so a shape we have not seen before
     // can never be reported to the user as a good answer.
@@ -299,6 +326,7 @@ export function headlessEvents(value: unknown, state: HeadlessTurnState = {}): A
       return [{
         type: 'completion',
         outcome: 'failed',
+        ...(contextTokens !== undefined ? { contextTokens } : {}),
         ...(record.subtype || message
           ? { failure: {
               ...(typeof record.subtype === 'string' ? { subtype: record.subtype } : {}),
@@ -313,6 +341,7 @@ export function headlessEvents(value: unknown, state: HeadlessTurnState = {}): A
     return [{
       type: 'completion',
       outcome: 'completed',
+      ...(contextTokens !== undefined ? { contextTokens } : {}),
       ...(typeof record.result === 'string' && record.result ? { finalText: record.result } : {}),
       ...(notice ? { notice } : {}),
     }]

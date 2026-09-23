@@ -16,13 +16,14 @@ async function harness(ceiling = 20) {
   const calls: Array<{ text: string; prior?: string; context: AgentSubmissionContext; settle(outcome?: AgentInteractionResult['outcome']): void }> = []
   const interrupts: string[] = []
   let reject = false, uncertain = false, refreshes = 0
+  let contextTokens: number | undefined
   let interruptFails: string | null = null
   let now = 1_000
   const options = { journal, store, now: () => now, ceiling: () => ceiling, selectedProvider: () => 'claude' as const,
     prepareFresh: async () => { refreshes++ }, pin: (_ids: string[]) => {}, close: async (_id: string) => {},
     interrupt: async (id: string) => { if (interruptFails) throw new Error(interruptFails); interrupts.push(id) },
     controller: { async submit(input: { transcript: string; priorRunId?: string }, context: AgentSubmissionContext) {
-      const result = (outcome: AgentInteractionResult['outcome']): AgentInteractionResult => ({ interactionId: context.interactionId, agentRunId: context.runId, provider: context.provider, source: 'provider', presentation: 'transient', outcome, text: `answer ${input.transcript}` })
+      const result = (outcome: AgentInteractionResult['outcome']): AgentInteractionResult => ({ interactionId: context.interactionId, agentRunId: context.runId, provider: context.provider, source: 'provider', presentation: 'transient', outcome, text: `answer ${input.transcript}`, ...(contextTokens === undefined ? {} : { contextTokens }) })
       if (reject || uncertain) return { ...result('failed'), error: { code: uncertain ? 'acceptance-uncertain' as const : 'provider-unavailable' as const, message: 'retained error' } }
       return new Promise<AgentInteractionResult>(resolve => calls.push({ text: input.transcript, prior: input.priorRunId, context, settle: (outcome = 'completed') => resolve(result(outcome)) }))
     } } }
@@ -35,13 +36,14 @@ async function harness(ceiling = 20) {
   }
   return { root, journal, store, calls, interrupts, get lifecycle() { return lifecycle }, waitCalls, accept,
     advance: (ms: number) => { now += ms },
+    setContextTokens: (value: number | undefined) => { contextTokens = value },
     failInterrupt: (why: string | null) => { interruptFails = why },
     setReject: (value: boolean) => { reject = value }, setUncertain: (value: boolean) => { uncertain = value }, get refreshes() { return refreshes },
     restart: async () => { lifecycle.dispose(); lifecycle = new AgentConversationLifecycle(options); await lifecycle.initialize(); return lifecycle },
     cleanup: async () => { lifecycle.dispose(); await rm(root, { recursive: true, force: true }) } }
 }
 
-test('continuous work past twenty stays in the same conversation, preserving draft and replay', async () => {
+test('continuous work rotates at twenty while preserving draft and replay', async () => {
   const h = await harness()
   try {
     for (let i = 1; i <= 19; i++) {
@@ -57,16 +59,50 @@ test('continuous work past twenty stays in the same conversation, preserving dra
     assert.equal(h.calls.length, 20)
     h.calls[19].settle('interrupted'); await p20
     await h.waitCalls(21)
-    assert.equal(h.calls[20].prior, h.calls[19].context.runId)
+    assert.equal(h.calls[20].prior, undefined)
+    assert.equal(h.calls[20].context.carryoverRunId, h.calls[19].context.runId)
     assert.equal(h.lifecycle.view().record.accepted.length, 20)
     await h.accept(20)
-    assert.equal(h.lifecycle.view().record.accepted.length, 21)
+    assert.equal(h.lifecycle.view().record.accepted.length, 1)
     assert.equal(h.lifecycle.view().snapshot.chat.turns.at(-1)!.text.length, 40000)
     assert.equal(h.lifecycle.view().snapshot.draft.text, 'typed during send')
     h.calls[20].settle(); await queued.completion
     await h.lifecycle.submit({ transcript: 'm1 replay', submissionId: 's1' })
     assert.equal(h.calls.length, 21)
-    assert.equal(h.refreshes, 1)
+    assert.equal(h.refreshes, 2)
+  } finally { await h.cleanup() }
+})
+
+test('turn ceiling rotates before the next queued message without waiting for idle', async () => {
+  const h = await harness(2)
+  try {
+    const one = h.lifecycle.submit({ transcript: 'one', submissionId: 'one' })
+    await h.waitCalls(1); await h.accept(0); h.calls[0].settle(); await one
+    const two = h.lifecycle.submit({ transcript: 'two', submissionId: 'two' })
+    await h.waitCalls(2); await h.accept(1)
+    const queued = await h.lifecycle.enqueue({ transcript: 'what about that?', submissionId: 'three' })
+    h.calls[1].settle(); await two
+    await h.waitCalls(3)
+    assert.equal(h.calls[2].prior, undefined)
+    assert.equal(h.calls[2].context.handoff?.recentTurns.at(-1)?.text, 'answer two')
+    await h.accept(2); h.calls[2].settle(); await queued.completion
+    assert.equal(h.lifecycle.view().snapshot.chat.turns.length, 6)
+  } finally { await h.cleanup() }
+})
+
+test('measured context rotates before the turn ceiling', async () => {
+  const h = await harness(20)
+  try {
+    h.setContextTokens(170_000)
+    const first = h.lifecycle.submit({ transcript: 'one' })
+    await h.waitCalls(1); await h.accept(0); h.calls[0].settle(); await first
+    assert.equal(h.lifecycle.view().record.lastContextTokens, 170_000)
+    await h.restart()
+    const second = h.lifecycle.submit({ transcript: 'follow up' })
+    await h.waitCalls(2)
+    assert.equal(h.calls[1].prior, undefined)
+    assert.equal(h.calls[1].context.handoff?.recentTurns.at(-1)?.text, 'answer one')
+    await h.accept(1); h.calls[1].settle(); await second
   } finally { await h.cleanup() }
 })
 
@@ -215,7 +251,7 @@ test('a provider handoff summarizes the most recent older work, not the oldest',
   } finally { await h.cleanup() }
 })
 
-test('idle requires the threshold and an empty draft; successful rotation retains visible history', async () => {
+test('turn ceiling rotates despite draft or recent activity; idle alone does not rotate', async () => {
   const h = await harness(2)
   try {
     async function turn(text: string, n: number) {
@@ -229,15 +265,16 @@ test('idle requires the threshold and an empty draft; successful rotation retain
     await h.lifecycle.setDraft('composing', 1)
     h.advance(20 * 60_000)
     await turn('three', 3)
-    assert.equal(h.calls[2].prior, h.calls[0].context.runId)
+    assert.equal(h.calls[2].prior, undefined)
+    assert.equal(h.lifecycle.view().snapshot.draft.text, 'composing')
     await h.lifecycle.setDraft('', 2)
     h.advance(20 * 60_000 - 1)
     await turn('four', 4)
-    assert.equal(h.calls[3].prior, h.calls[0].context.runId)
+    assert.equal(h.calls[3].prior, h.calls[2].context.runId)
     h.advance(20 * 60_000)
     await turn('five', 5)
     assert.equal(h.calls[4].prior, undefined)
-    assert.equal(h.calls[4].context.carryoverRunId, h.calls[0].context.runId)
+    assert.equal(h.calls[4].context.carryoverRunId, h.calls[2].context.runId)
     assert.equal(h.lifecycle.view().snapshot.chat.turns.length, 10)
     assert.equal(h.lifecycle.view().record.accepted.length, 1)
   } finally { await h.cleanup() }
@@ -258,7 +295,7 @@ test('prepared crash and unobserved write ambiguity fail closed without replay o
   } finally { await h.cleanup() }
 })
 
-test('restart at threshold waits for idle before rotating and carries prior run context', async () => {
+test('restart at threshold rotates on the next message and carries prior run context', async () => {
   const h = await harness(1)
   try {
     const pending = h.lifecycle.submit({ transcript: 'boundary', submissionId: 'boundary' })
@@ -266,7 +303,6 @@ test('restart at threshold waits for idle before rotating and carries prior run 
     await h.restart()
     assert.equal(h.lifecycle.view().record.phase, 'reset-due')
     assert.equal(h.lifecycle.view().record.accepted[0].outcome, 'interrupted')
-    h.advance(20 * 60_000)
     const next = h.lifecycle.submit({ transcript: 'fresh' })
     await h.waitCalls(2); assert.equal(h.calls[1].prior, undefined)
     assert.equal(h.calls[1].context.carryoverRunId, h.calls[0].context.runId)

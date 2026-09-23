@@ -107,6 +107,8 @@ import { reapCodexHeadlessTurns } from './agent/providers/codex-headless'
 import { agentConstitution } from './agent/constitution'
 import { describeRules, loadPersona } from './agent/persona'
 import { AgentConversationLifecycle } from './agent/lifecycle'
+import { prefetchSessionHistory } from './agent/history-prefetch'
+import { planHistoryTerms } from './agent/history-query-helper'
 import { AgentConversationStore } from './agent/conversation-store'
 import { buildHandoffPrompt, HandoffCapability } from './agent/capabilities/handoff'
 import { ProviderHealth } from './agent/providerHealth'
@@ -1641,8 +1643,10 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
     log.event('agent-rules-loaded', describeRules(persona))
     const constitutionPath = join(root, 'runtime', 'constitution.md')
     mkdirSync(dirname(constitutionPath), { recursive: true, mode: 0o700 })
-    writeFileSync(constitutionPath, agentConstitution(SESSION_PREAMBLE, persona.text),
+    const constitution = agentConstitution(SESSION_PREAMBLE, persona.text)
+    writeFileSync(constitutionPath, constitution,
       { encoding: 'utf8', mode: 0o600 })
+    log.event('agent-system-context-loaded', { chars: constitution.length })
     // hookEvents/executor are consumed only by the REPL driver; they stay wired
     // so UNMUTE_AGENT_RUNTIME=repl is a pure environment change. Which driver
     // is live is logged because the two fail in completely different ways.
@@ -1841,6 +1845,8 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
       attachmentHandles: handles,
       journal,
       capabilities: registry,
+      prefetchHistory: (request, provider) => prefetchSessionHistory(request, undefined,
+        query => planHistoryTerms(query, provider, (agentModelCatalog[provider] ?? []).map(model => model.id))),
       selectedProvider: () => resolveAgentProvider(),
       runtime: () => {
         const endpoint = `http://127.0.0.1:${getKnobs().mcpPort}${MCP_PATH}`

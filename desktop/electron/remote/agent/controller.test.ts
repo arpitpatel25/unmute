@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { UnmuteAgentController } from './controller'
+import { UnmuteAgentController, providerTranscript } from './controller'
 import { InteractionAttachmentHandles } from './memory/attachments'
 import { CapabilityRegistry } from './capabilities/registry'
 import type { AgentResumeInput, AgentRunInput, SupervisedAgentSession } from './supervisor'
@@ -48,9 +48,10 @@ test('controller uses actual resumed provider and never injects another run tran
 test('a context runtime/capabilities override wins outright; the live-Agent options are never called', async () => {
   let runtimeCalls = 0
   let capabilitiesCalls = 0
-  const seen: { cwd?: string } = {}
+  const seen: { cwd?: string; transcript?: string } = {}
   const session = (input: AgentRunInput | AgentResumeInput): SupervisedAgentSession => {
     seen.cwd = input.cwd
+    seen.transcript = input.transcript
     return {
       runId: 'r', provider: 'claude',
       run: { id: 'r', provider: 'claude', state: 'complete', createdAt: 1, lastUserAt: 1, lastActivityAt: 1, providerWorkEnded: true },
@@ -78,6 +79,37 @@ test('a context runtime/capabilities override wins outright; the live-Agent opti
   assert.equal(runtimeCalls, 0, 'options.runtime() must not run when a context override is supplied')
   assert.equal(capabilitiesCalls, 0, 'options.capabilities.tools() must not run when a context override is supplied')
   assert.equal(seen.cwd, '/routines/run-1')
+  assert.match(seen.transcript ?? '', /routine_runs: read-only/)
   controller.dispose()
 })
 async function* empty() {}
+
+test('per-turn Agent prompt does not copy MCP tool descriptions into conversation history', () => {
+  const prompt = providerTranscript(
+    { transcript: 'Find the earlier task', attachments: [] }, [], [],
+    [{ name: 'index_search', description: 'LONG_TOOL_DESCRIPTION_SHOULD_LIVE_IN_MCP' }],
+  )
+  assert.match(prompt, /Find the earlier task/)
+  assert.doesNotMatch(prompt, /LONG_TOOL_DESCRIPTION_SHOULD_LIVE_IN_MCP/)
+})
+
+test('controller supplies bounded local history candidates before the Agent runs', async () => {
+  let transcript = ''
+  const controller = new UnmuteAgentController({
+    supervisor: {
+      start: async input => {
+        transcript = input.transcript
+        return { runId: 'r', provider: 'claude', run: { id: 'r', provider: 'claude', state: 'complete', createdAt: 1, lastUserAt: 1, lastActivityAt: 1, providerWorkEnded: true }, handle: { provider: 'claude', opaqueId: 'h' }, activity: empty(), completion: Promise.resolve({ outcome: 'completed', finalText: 'Found it.' }) }
+      },
+      resume: async () => { throw new Error('not used') }, recentExchanges: async () => [],
+    },
+    tokens: { closeRun() {} }, attachmentHandles: new InteractionAttachmentHandles(),
+    capabilities: new CapabilityRegistry([]), journal: { appendExchange: async () => {} },
+    selectedProvider: () => 'claude',
+    runtime: () => ({ cwd: '/runtime', constitutionPath: '/constitution.md', environment: {}, mcp: { endpoint: 'http://127.0.0.1/mcp', config: 'strict' } }),
+    prefetchHistory: async () => ({ status: 'matched', text: 'BOUNDED_LOCAL_MATCH', terms: 2, matchedSessions: 1 }),
+  })
+  await controller.submit({ transcript: 'Find the earlier session' })
+  assert.match(transcript, /BOUNDED_LOCAL_MATCH/)
+  controller.dispose()
+})

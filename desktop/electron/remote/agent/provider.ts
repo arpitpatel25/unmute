@@ -57,6 +57,8 @@ export interface AgentActivityDetail { tool: string; input: string }
 
 export interface AgentCompletion {
   outcome: 'completed' | 'interrupted' | 'failed'
+  /** Last model request's context size, when the provider reports it. */
+  contextTokens?: number
   finalText?: string
   /**
    * WHY A FAILED TURN FAILED, in the provider's own words.
@@ -144,7 +146,7 @@ function publicErrorMessage(code: AgentProviderErrorCode): string {
 export type AgentProcessEvent =
   | { type: 'handle'; sessionId: string; observed?: boolean; model?: string }
   | { type: 'activity'; kind: AgentActivityKind; summary: string; detail?: AgentActivityDetail }
-  | { type: 'completion'; outcome: AgentCompletion['outcome']; finalText?: string; failure?: AgentCompletion['failure']; notice?: string }
+  | { type: 'completion'; outcome: AgentCompletion['outcome']; finalText?: string; failure?: AgentCompletion['failure']; notice?: string; contextTokens?: number }
   | { type: 'observer-failure' }
   | { type: 'terminal-output'; chunk: string }
   /** `stderrTail` is the process's last words. Optional because only the
@@ -548,6 +550,7 @@ export class CliProviderRuntime implements AgentProvider {
               // it was dropped here, one hop from the supervisor that needed it.
               ...(event.failure ? { failure: event.failure } : {}),
               ...(event.notice ? { notice: event.notice } : {}),
+              ...(event.contextTokens !== undefined ? { contextTokens: event.contextTokens } : {}),
             })
           }
           continue
