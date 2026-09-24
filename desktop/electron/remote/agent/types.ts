@@ -46,6 +46,8 @@ export interface ExplicitInteraction {
    * truncate it, and one that cannot reach the field cannot get it wrong.
    */
   transcript?: string
+  /** Host-minted capture handles from this turn; never supplied by the model. */
+  attachmentHandles?: readonly string[]
 }
 
 export interface CapabilityCallContext {

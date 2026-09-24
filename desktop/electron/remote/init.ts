@@ -133,6 +133,9 @@ import { SafeStorageKeyProvider } from './agent/memory/key-provider'
 import { MemoryCrypto } from './agent/memory/crypto'
 import { EncryptedRecordStore, presentMemoryRecord } from './agent/memory/record-store'
 import { InteractionAttachmentHandles, EncryptedAttachmentStore } from './agent/memory/attachments'
+import { BugReportCapability } from './agent/capabilities/bug-report'
+import { submitBugReport, uploadBugReport, type PreparedBugReport } from './agent/bug-report-client'
+import { ensureFreshToken, getPaywallAccessToken } from '../paywall-glue'
 import { JsonlMemoryAudit } from './agent/memory/audit'
 import { DurableMemoryMutationJournal } from './agent/memory/journal'
 import { openSqlCipherMemoryIndex } from './agent/memory/sqlcipher-index'
@@ -1675,6 +1678,10 @@ async function initializeUnmuteAgentLegacy(): Promise<void> {
     const registry = new CapabilityRegistry([
       new MemoryCapability(memory),
       new HelpCapability(helpSettings),
+      new BugReportCapability(async report => {
+        await ensureFreshToken()
+        return submitBugReport(report, handles, getPaywallAccessToken())
+      }),
       // WHAT THE USER ACTUALLY SAID, LATELY. The one thing a coding session
       // cannot reach: it lives in Unmute's own archive, not on the filesystem.
       // Read-only, and pasting reuses copyHistoryToClipboard — the same call
@@ -4677,6 +4684,10 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
   if (method === 'pocket.removeFromPocket') return pocketActions.removeFromPocket(args[0])
   if (method === 'pocket.delete') return pocketActions.delete(args[0])
   if (method === 'help.settings') return helpSettings()
+  if (method === 'bugReport.submit') {
+    await ensureFreshToken()
+    return uploadBugReport(args[0] as PreparedBugReport, getPaywallAccessToken())
+  }
   if (method === 'handoff.cardForSession') return agentCardForSession(String(args[0]))
   if (method === 'handoff.createTask') {
     if (!manager) throw new Error('Unmute Remote is not initialized')

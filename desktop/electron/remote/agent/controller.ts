@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { isExplicitBugReportRequest } from './bug-report'
 
 import type { CapabilityRegistry } from './capabilities/registry'
 import { devInteractionEnded, devInteractionStarted, devProviderTool, devTrace } from './devlog'
@@ -242,6 +243,7 @@ export class UnmuteAgentController {
       const handles = validated.attachments.map((attachment) => (
         this.options.attachmentHandles.mintCapture(principal, attachment, principal.expiresAt)
       ))
+      interaction.attachmentHandles = handles
       // THE PICTURES THEMSELVES. A handle lets the Agent file a capture into
       // memory; it does not let it look. Images go to the provider as images,
       // exactly as a task receives them, and the handles stay for storing.
@@ -545,8 +547,9 @@ function validateRuntime(runtime: AgentControllerRuntime): AgentControllerRuntim
 }
 
 /**
- * NO INTENT IS DERIVED FROM WHAT THE USER SAID. There is no keyword list here
- * any more, for any operation.
+ * Ordinary Agent actions do not derive intent from keywords. Bug reporting is
+ * the narrow exception: it sends dictated text and screenshots to Unmute, and
+ * the product requires a direct request in the current turn before that upload.
  *
  * There used to be one per operation. Saving required /\bremember\b/, so
  * "note that I prefer oat milk" was refused. Deleting required a phrasing that
@@ -567,7 +570,10 @@ function validateRuntime(runtime: AgentControllerRuntime): AgentControllerRuntim
  * still pass intents explicitly, and those are honoured.
  */
 function explicitIntents(input: AgentInteractionInput): string[] {
-  return [...new Set(input.intents ?? [])]
+  return [...new Set([
+    ...(input.intents ?? []),
+    ...(isExplicitBugReportRequest(input.transcript) ? ['report-bug'] : []),
+  ])]
 }
 
 export function providerTranscript(

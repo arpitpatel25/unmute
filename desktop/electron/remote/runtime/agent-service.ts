@@ -20,6 +20,8 @@ import { HistoryCapability } from '../agent/capabilities/history'
 import { SessionsCapability } from '../agent/capabilities/sessions'
 import { PocketCapability } from '../agent/capabilities/pocket'
 import { HelpCapability } from '../agent/capabilities/help'
+import { BugReportCapability } from '../agent/capabilities/bug-report'
+import { prepareBugReport } from '../agent/bug-report-client'
 import { IndexSearchCapability } from '../agent/capabilities/index-search'
 import { warmTurnSearch } from '../agent/sessions/turn-search'
 import { HandoffCapability } from '../agent/capabilities/handoff'
@@ -195,6 +197,7 @@ export class AgentRuntimeService {
         // The constitution sends every how-do-I question here; it was only
         // ever registered on the retired in-process path.
         new HelpCapability(() => this.host('help.settings', [])),
+        new BugReportCapability(async report => this.host('bugReport.submit', [await prepareBugReport(report, handles)])),
         // Reads the index file directly: it is on this machine, and a host
         // round-trip would only copy 28 MB across a socket.
         new IndexSearchCapability(),

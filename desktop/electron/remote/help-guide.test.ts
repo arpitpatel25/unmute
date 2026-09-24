@@ -47,4 +47,5 @@ test('search finds concise answers for common how-to questions', () => {
   assert.equal(searchHelpGuide(guide, 'screenshot while dictating')[0]?.id, 'dictation-context')
   assert.equal(searchHelpGuide(guide, 'scratchpad')[0]?.id, 'dictation-scratchpad')
   assert.equal(searchHelpGuide(guide, 'right command')[0]?.id, 'agent-manager')
+  assert.equal(searchHelpGuide(guide, 'report a bug')[0]?.id, 'agent-bug-report')
 })

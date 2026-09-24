@@ -4,6 +4,7 @@
 //   POST /v1/stt   — Speech-to-text via Groq Whisper Turbo
 //   POST /v1/llm   — Chat completion via Groq Llama-4-Scout
 //   GET  /v1/me    — Lightweight balance + plan info (for desktop polling)
+//   POST /v1/bug-reports — Authenticated, explicit Agent bug reports
 //   GET  /v1/remote-config — PUBLIC (no auth): desktop Remote runtime config
 //
 // Hot-path design (optimized vs BoloAI's pipeline):
@@ -50,6 +51,7 @@ import type {
 } from '../../shared/types'
 import { transcribeNotetakerWithFallback } from './notetakerSttCascade'
 import { authorizeOnboardingGrant, issueOnboardingGrant, OnboardingAllowance } from './onboardingAllowance'
+import { receiveBugReport } from './bugReports'
 export { OnboardingAllowance }
 
 // ─── Durable usage recording (the BILL we must never lose) ──────────────────
@@ -161,6 +163,10 @@ export default {
       if (req.method === 'GET' && url.pathname === '/v1/me') {
         if (!userId) return err('UNAUTHORIZED', 'Sign-in required', 401)
         return await handleMe(env, userId)
+      }
+      if (req.method === 'POST' && url.pathname === '/v1/bug-reports') {
+        if (!userId) return err('UNAUTHORIZED', 'Sign-in required', 401)
+        return await receiveBugReport(req, env, userId)
       }
       if (req.method === 'POST' && url.pathname === '/v1/stt') {
         return await handleSTT(req, env, ctx, userId)

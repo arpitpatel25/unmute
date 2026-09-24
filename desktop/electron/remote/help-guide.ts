@@ -121,6 +121,14 @@ export function resolveHelpGuide(input: {
             source: 'desktop/engine-overrides/electron/keyboard.ts',
           },
           {
+            id: 'agent-bug-report',
+            title: 'Report a bug to Unmute',
+            summary: 'Ask the Unmute Agent to report a bug to the Unmute team. It sends your exact dictated request, a short summary, and screenshots from that turn, including the current screen. Sign in to send the report.',
+            example: '“Please report this bug to the Unmute team: my mic stops after sleep.”',
+            keywords: ['bug', 'report', 'issue', 'feedback', 'unmute team', 'screenshot'],
+            source: 'desktop/electron/remote/agent/capabilities/bug-report.ts',
+          },
+          {
             id: 'session-pocket',
             title: 'Open your session pocket',
             summary: 'The pocket is the quick way to glance at your active sessions and open one.',

@@ -39,6 +39,12 @@ test('Agent work and encrypted conversation survive UI disconnection', async () 
     const input = await started
     assert.ok(input.mcp.endpoint.includes('127.0.0.1:'))
     assert.ok(!input.mcp.endpoint.includes(':0/'))
+    const listed = await (await fetch(input.mcp.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${input.mcp.token}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+    })).json() as { result?: { tools?: Array<{ name: string }> } }
+    assert.ok(listed.result?.tools?.some(tool => tool.name === 'unmute_report_bug'), 'live Agent exposes bug reporting')
     assert.match(await readFile(input.constitutionPath, 'utf8'), /Unmute/)
     client.dispose(); rpc.disconnect()
     assert.equal(closes, 0)

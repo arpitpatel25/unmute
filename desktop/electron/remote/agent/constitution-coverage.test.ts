@@ -9,6 +9,7 @@ import { HandoffCapability } from './capabilities/handoff.ts'
 import { NotetakerCapability } from './capabilities/notetaker.ts'
 import { HelpCapability } from './capabilities/help.ts'
 import { DeliveryCapability } from './capabilities/delivery.ts'
+import { BugReportCapability } from './capabilities/bug-report.ts'
 
 /**
  * A CAPABILITY THE PROSE NEVER NAMES IS A DEAD ROUTE.
@@ -36,6 +37,7 @@ const tools = [
   ...new NotetakerCapability({} as never).tools,
   ...new HelpCapability(() => ({ dictationKey: 'fn', activationMode: 'tap-toggle' })).tools,
   ...new DeliveryCapability({} as never).tools,
+  ...new BugReportCapability({} as never).tools,
 ].map(tool => tool.name)
 
 test('every registered Agent tool is named in the constitution', () => {

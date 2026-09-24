@@ -84,6 +84,34 @@ test('a context runtime/capabilities override wins outright; the live-Agent opti
 })
 async function* empty() {}
 
+test('only a direct bug-report turn carries upload intent and host capture handles', async () => {
+  const observed: Array<{ intents?: readonly string[]; handles?: readonly string[]; transcript?: string }> = []
+  let controller!: UnmuteAgentController
+  controller = new UnmuteAgentController({
+    supervisor: {
+      start: async () => {
+        const interaction = controller.interactionContext({ kind: 'unmute-agent', runId: 'run', interactionId: 'turn', expiresAt: Date.now() + 60_000 }).interaction
+        observed.push({ intents: interaction?.intents, handles: interaction?.attachmentHandles, transcript: interaction?.transcript })
+        return { runId: 'run', provider: 'claude', run: { id: 'run', provider: 'claude', state: 'complete', createdAt: 1, lastUserAt: 1, lastActivityAt: 1, providerWorkEnded: true }, handle: { provider: 'claude', opaqueId: 'h' }, activity: empty(), completion: Promise.resolve({ outcome: 'completed', finalText: 'ok' }) }
+      },
+      resume: async () => { throw new Error('not used') }, recentExchanges: async () => [],
+    },
+    tokens: { closeRun() {} }, attachmentHandles: new InteractionAttachmentHandles(),
+    capabilities: new CapabilityRegistry([]), journal: { appendExchange: async () => {} },
+    selectedProvider: () => 'claude',
+    runtime: () => ({ cwd: '/runtime', constitutionPath: '/constitution.md', environment: {}, mcp: { endpoint: 'http://127.0.0.1/mcp', config: 'strict' } }),
+    createInteractionId: () => 'turn', createRunId: () => 'run',
+  })
+  try {
+    await controller.submit({ transcript: 'Please report this bug to Unmute.', attachments: [{ path: '/tmp/screenshot.png', mimeType: 'image/png' }] })
+    await controller.submit({ transcript: 'I found a bug in Unmute.' })
+    assert.deepEqual(observed[0]?.intents, ['report-bug'])
+    assert.equal(observed[0]?.handles?.length, 1)
+    assert.equal(observed[0]?.transcript, 'Please report this bug to Unmute.')
+    assert.deepEqual(observed[1]?.intents, [])
+  } finally { controller.dispose() }
+})
+
 test('per-turn Agent prompt does not copy MCP tool descriptions into conversation history', () => {
   const prompt = providerTranscript(
     { transcript: 'Find the earlier task', attachments: [] }, [], [],
