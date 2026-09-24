@@ -1,7 +1,7 @@
 {
   "sourceRevision": "20dfd8fe5135371b7c4b5178a4124225a2e15662",
-  "productHead": "20dfd8fe5135371b7c4b5178a4124225a2e15662",
-  "sourceDrift": false,
+  "productHead": "12588986f6f149d79a82ad0a3d2185e75fb9661e",
+  "sourceDrift": true,
   "files": [
     "desktop/electron/remote/notch/pill-controller.ts",
     "desktop/electron/remote/notetakerWidget.ts",
@@ -29681,74 +29681,172 @@
     {
       "type": "pocketMove",
       "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
-      "line": 253
+      "line": 253,
+      "arguments": {
+        "delta": "delta"
+      },
+      "reachable": true
     },
     {
       "type": "pocketExpand",
       "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
-      "line": 310
+      "line": 310,
+      "arguments": {
+        "id": "slot?.id"
+      },
+      "reachable": false
     },
     {
       "type": "openDashboard",
       "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
-      "line": 339
+      "line": 339,
+      "arguments": {},
+      "reachable": false
     },
     {
       "type": "pocketRelease",
       "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
-      "line": 343
+      "line": 343,
+      "arguments": {},
+      "reachable": false
     },
     {
       "type": "openDashboard",
       "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
-      "line": 406
+      "line": 406,
+      "arguments": {},
+      "reachable": true
     },
     {
       "type": "pocketRelease",
       "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
-      "line": 410
+      "line": 410,
+      "arguments": {},
+      "reachable": true
     },
     {
       "type": "pocketExpand",
       "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
-      "line": 465
+      "line": 465,
+      "arguments": {
+        "id": "slot?.id"
+      },
+      "reachable": true
     },
     {
       "type": "openDashboard",
       "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
-      "line": 470
+      "line": 470,
+      "arguments": {},
+      "reachable": true
     },
     {
       "type": "pocketRelease",
       "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
-      "line": 474
+      "line": 474,
+      "arguments": {},
+      "reachable": true
     },
     {
       "type": "pocketMove",
       "source": "desktop/native-notch/Sources/unmute-notch/NotchView.swift",
-      "line": 324
+      "line": 324,
+      "arguments": {
+        "delta": "delta"
+      },
+      "reachable": true
     },
     {
       "type": "pocketMove",
       "source": "desktop/native-notch/Sources/unmute-notch/AppController.swift",
-      "line": 1619
+      "line": 1619,
+      "arguments": {
+        "delta": "-1"
+      },
+      "reachable": true
     },
     {
       "type": "pocketMove",
       "source": "desktop/native-notch/Sources/unmute-notch/AppController.swift",
-      "line": 1623
+      "line": 1623,
+      "arguments": {
+        "delta": "1"
+      },
+      "reachable": true
     },
     {
       "type": "pocketExpand",
       "source": "desktop/native-notch/Sources/unmute-notch/AppController.swift",
-      "line": 1628
+      "line": 1628,
+      "arguments": {
+        "id": "self.model.pocket.current?.id"
+      },
+      "reachable": true
     },
     {
       "type": "pocketRelease",
       "source": "desktop/native-notch/Sources/unmute-notch/AppController.swift",
-      "line": 1777
+      "line": 1777,
+      "arguments": {},
+      "reachable": true
     }
   ],
+  "pocketEventContracts": {
+    "arrows": [
+      {
+        "symbol": "chevron.left",
+        "delta": -1,
+        "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+        "line": 244
+      },
+      {
+        "symbol": "chevron.right",
+        "delta": 1,
+        "source": "desktop/native-notch/Sources/unmute-notch/PocketView.swift",
+        "line": 248
+      }
+    ],
+    "ipc": {
+      "openDashboard": {
+        "source": "desktop/native-notch/Sources/unmute-notch/IPC.swift",
+        "line": 719,
+        "fields": {
+          "type": "\"openDashboard\""
+        },
+        "optionalId": false,
+        "expression": "case .openDashboard: return [\"type\": \"openDashboard\"]"
+      },
+      "pocketMove": {
+        "source": "desktop/native-notch/Sources/unmute-notch/IPC.swift",
+        "line": 735,
+        "fields": {
+          "type": "\"pocketMove\"",
+          "delta": "delta"
+        },
+        "optionalId": false,
+        "expression": "case let .pocketMove(delta): return [\"type\": \"pocketMove\", \"delta\": delta]"
+      },
+      "pocketRelease": {
+        "source": "desktop/native-notch/Sources/unmute-notch/IPC.swift",
+        "line": 737,
+        "fields": {
+          "type": "\"pocketRelease\""
+        },
+        "optionalId": false,
+        "expression": "case .pocketRelease: return [\"type\": \"pocketRelease\"]"
+      },
+      "pocketExpand": {
+        "source": "desktop/native-notch/Sources/unmute-notch/IPC.swift",
+        "line": 738,
+        "fields": {
+          "type": "\"pocketExpand\"",
+          "id": "id"
+        },
+        "optionalId": true,
+        "expression": "case .pocketExpand(let id):\n            var payload: [String: Any] = [\"type\": \"pocketExpand\"]\n            if let id { payload[\"id\"] = id }\n            return payload"
+      }
+    }
+  },
   "classifications": [
     {
       "occurrenceId": "enum:desktop/native-notch/Sources/ComposerSupport/ComposerAvailability.swift:36:1",
@@ -34713,15 +34811,19 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:566:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'p.isOpen, !wasOpen || p.at != wasAt' in handle at desktop/native-notch/Sources/unmute-notch/AppController.swift:566 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-payload-focus-refits"
+      ],
+      "reason": "pocket-payload-focus-refits: The source render condition 'p.isOpen, !wasOpen || p.at != wasAt' contributes the visible configuration captured by pocket-payload-focus-refits."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:574:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'pocketIsVisible' in handle at desktop/native-notch/Sources/unmute-notch/AppController.swift:574 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-payload-focus-refits"
+      ],
+      "reason": "pocket-payload-focus-refits: The source render condition 'pocketIsVisible' contributes the visible configuration captured by pocket-payload-focus-refits."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:576:1",
@@ -34827,9 +34929,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:657:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'model.captureAimed != wasAimed, model.pocket.isOpen, !isExpanded(model.state)' in handle at desktop/native-notch/Sources/unmute-notch/AppController.swift:657 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-capture-refits"
+      ],
+      "reason": "pocket-capture-refits: The source render condition 'model.captureAimed != wasAimed, model.pocket.isOpen, !isExpanded(model.state)' contributes the visible configuration captured by pocket-capture-refits."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:662:1",
@@ -34863,9 +34967,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:712:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if '!preserveContentHandoff' in applyState at desktop/native-notch/Sources/unmute-notch/AppController.swift:712 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-handoff-motion-unprepared"
+      ],
+      "reason": "pocket-handoff-motion-unprepared: The source render condition '!preserveContentHandoff' contributes the visible configuration captured by pocket-handoff-motion-unprepared."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:714:1",
@@ -34881,9 +34987,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:717:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'SurfaceContentHandoff.shouldDelayExpandedContent( expandingFromPocket: expandingFromPocket, contentPrepared: contentPrepared ) && !Motion.reduceMotion' in applyState at desktop/native-notch/Sources/unmute-notch/AppController.swift:717 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-handoff-motion-unprepared"
+      ],
+      "reason": "pocket-handoff-motion-unprepared: The source render condition 'SurfaceContentHandoff.shouldDelayExpandedContent( expandingFromPocket: expandingFromPocket, contentPrepared: contentPrepared ) && !Motion.reduceMotion' contributes the visible configuration captured by pocket-handoff-motion-unprepared."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:723:1",
@@ -34935,15 +35043,19 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:813:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'wasExpanded, !engaged, model.pocket.isOpen' in applyState at desktop/native-notch/Sources/unmute-notch/AppController.swift:813 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-handoff-motion-unprepared"
+      ],
+      "reason": "pocket-handoff-motion-unprepared: The source render condition 'wasExpanded, !engaged, model.pocket.isOpen' contributes the visible configuration captured by pocket-handoff-motion-unprepared."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:822:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'let self, self.expandedContentGeneration == contentGeneration, isExpanded(self.model.state)' in self at desktop/native-notch/Sources/unmute-notch/AppController.swift:822 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-handoff-motion-unprepared"
+      ],
+      "reason": "pocket-handoff-motion-unprepared: The source render condition 'let self, self.expandedContentGeneration == contentGeneration, isExpanded(self.model.state)' contributes the visible configuration captured by pocket-handoff-motion-unprepared."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:831:1",
@@ -35025,9 +35137,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:975:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'model.pocket.isOpen, !isExpanded(model.state)' in pocketClaimsKey at desktop/native-notch/Sources/unmute-notch/AppController.swift:975 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-outside-click-retains-open"
+      ],
+      "reason": "pocket-outside-click-retains-open: The source render condition 'model.pocket.isOpen, !isExpanded(model.state)' contributes the visible configuration captured by pocket-outside-click-retains-open."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:976:1",
@@ -35425,15 +35539,19 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1536:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional guard 'self.isExpanded(self.model.state)' in installOutsideClickMonitor at desktop/native-notch/Sources/unmute-notch/AppController.swift:1536 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-outside-click-retains-open"
+      ],
+      "reason": "pocket-outside-click-retains-open: The source render condition 'self.isExpanded(self.model.state)' contributes the visible configuration captured by pocket-outside-click-retains-open."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1537:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'self.model.pocket.isOpen, self.pocketHoldsKey' in installOutsideClickMonitor at desktop/native-notch/Sources/unmute-notch/AppController.swift:1537 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-outside-click-retains-open"
+      ],
+      "reason": "pocket-outside-click-retains-open: The source render condition 'self.model.pocket.isOpen, self.pocketHoldsKey' contributes the visible configuration captured by pocket-outside-click-retains-open."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1553:1",
@@ -35455,21 +35573,27 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1583:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'let eventWindow = e.window, eventWindow !== self.window' in eventWindow at desktop/native-notch/Sources/unmute-notch/AppController.swift:1583 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-keyboard-actions"
+      ],
+      "reason": "pocket-keyboard-actions: The source render condition 'let eventWindow = e.window, eventWindow !== self.window' contributes the visible configuration captured by pocket-keyboard-actions."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1587:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'e.keyCode == 53' in installKeyMonitors at desktop/native-notch/Sources/unmute-notch/AppController.swift:1587 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-keyboard-actions"
+      ],
+      "reason": "pocket-keyboard-actions: The source render condition 'e.keyCode == 53' contributes the visible configuration captured by pocket-keyboard-actions."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1615:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if '!typing, bareKey, self.model.pocket.isOpen, !isExpanded(self.model.state)' in installKeyMonitors at desktop/native-notch/Sources/unmute-notch/AppController.swift:1615 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-keyboard-actions"
+      ],
+      "reason": "pocket-keyboard-actions: The source render condition '!typing, bareKey, self.model.pocket.isOpen, !isExpanded(self.model.state)' contributes the visible configuration captured by pocket-keyboard-actions."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1617:1",
@@ -35479,9 +35603,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1618:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'self.model.pocket.slots.count > 1' in installKeyMonitors at desktop/native-notch/Sources/unmute-notch/AppController.swift:1618 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-keyboard-actions"
+      ],
+      "reason": "pocket-keyboard-actions: The source render condition 'self.model.pocket.slots.count > 1' contributes the visible configuration captured by pocket-keyboard-actions."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1621:1",
@@ -35491,9 +35617,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1622:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'self.model.pocket.slots.count > 1' in installKeyMonitors at desktop/native-notch/Sources/unmute-notch/AppController.swift:1622 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-keyboard-actions"
+      ],
+      "reason": "pocket-keyboard-actions: The source render condition 'self.model.pocket.slots.count > 1' contributes the visible configuration captured by pocket-keyboard-actions."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1625:1",
@@ -35503,9 +35631,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1626:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'self.model.pocket.current != nil' in installKeyMonitors at desktop/native-notch/Sources/unmute-notch/AppController.swift:1626 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-keyboard-actions"
+      ],
+      "reason": "pocket-keyboard-actions: The source render condition 'self.model.pocket.current != nil' contributes the visible configuration captured by pocket-keyboard-actions."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1630:1",
@@ -35653,9 +35783,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1766:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'isExpanded(model.state), model.proposal != nil || model.proposalLoadingId != nil' in stepDown at desktop/native-notch/Sources/unmute-notch/AppController.swift:1766 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-keyboard-actions"
+      ],
+      "reason": "pocket-keyboard-actions: The source render condition 'isExpanded(model.state), model.proposal != nil || model.proposalLoadingId != nil' contributes the visible configuration captured by pocket-keyboard-actions."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1767:1",
@@ -35665,9 +35797,11 @@
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1776:1",
-      "kind": "render-input",
-      "stateIds": [],
-      "reason": "Conditional if 'model.pocket.isOpen' in stepDown at desktop/native-notch/Sources/unmute-notch/AppController.swift:1776 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "kind": "render-affecting",
+      "stateIds": [
+        "pocket-keyboard-actions"
+      ],
+      "reason": "pocket-keyboard-actions: The source render condition 'model.pocket.isOpen' contributes the visible configuration captured by pocket-keyboard-actions."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/AppController.swift:1781:1",
@@ -39547,9 +39681,13 @@
       "stateIds": [
         "pocket-expanded-hidden",
         "pocket-transition-snapshot",
-        "pocket-transition-reduce-motion"
+        "pocket-transition-snapshot-notched",
+        "pocket-transition-reduce-motion",
+        "pocket-popup-escape",
+        "pocket-cockpit-payload-hidden",
+        "pocket-cockpit-open-suppressed"
       ],
-      "reason": "pocket-expanded-hidden: Expanded task content wins before the open-Pocket branch. pocket-transition-snapshot: Expanded handoff renders a non-hit-testable PocketCard snapshot before expanded content is ready. pocket-transition-reduce-motion: Reduced Motion skips the delayed snapshot and presents expanded content immediately."
+      "reason": "pocket-expanded-hidden: Expanded task content wins before the open-Pocket branch. pocket-transition-snapshot: Expanded handoff renders a non-hit-testable card from snapshot identity/ask; rail count and transient values remain live. pocket-transition-snapshot-notched: Expanded handoff renders a non-hit-testable card from snapshot identity/ask; rail count and transient values remain live. pocket-transition-reduce-motion: Reduced Motion skips the delayed snapshot and presents expanded content immediately. pocket-popup-escape: Defines pocket popup escape Pocket behavior. pocket-cockpit-payload-hidden: Defines pocket cockpit payload hidden Pocket behavior. pocket-cockpit-open-suppressed: Defines pocket cockpit open suppressed Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:278:1",
@@ -39561,10 +39699,14 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:288:1",
       "kind": "render-affecting",
       "stateIds": [
+        "pocket-closed-empty",
+        "pocket-open-zero-slots",
+        "pocket-closed-slots-quiet",
         "pocket-notched-question",
-        "pocket-outside-click-retains-open"
+        "pocket-outside-click-retains-open",
+        "pocket-closed-hover-first-not-current"
       ],
-      "reason": "pocket-notched-question: Defines pocket notched question Pocket behavior. pocket-outside-click-retains-open: Outside click releases keyboard ownership without changing the open Pocket payload."
+      "reason": "pocket-closed-empty: A zero-slot payload cannot satisfy PocketP.isOpen and falls through to the bar. pocket-open-zero-slots: Even mode=open cannot satisfy PocketP.isOpen without slots and therefore falls through to the bar. pocket-closed-slots-quiet: Defines pocket closed slots quiet Pocket behavior. pocket-notched-question: Defines pocket notched question Pocket behavior. pocket-outside-click-retains-open: Outside click releases keyboard ownership without changing the open Pocket payload; deliberate inside click reclaims focus. pocket-closed-hover-first-not-current: Defines pocket closed hover first not current Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/NotchView.swift:301:1",
@@ -40591,41 +40733,37 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:38:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pocket-swipe-precise-next"
+        "pocket-scroll-containment"
       ],
-      "reason": "pocket-swipe-precise-next: The source render condition 'view.enabled != enabled' contributes the visible configuration captured by pocket-swipe-precise-next."
+      "reason": "pocket-scroll-containment: The source render condition 'view.enabled != enabled' contributes the visible configuration captured by pocket-scroll-containment."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:53:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pocket-swipe-precise-next"
-      ],
-      "reason": "pocket-swipe-precise-next: The source render condition 'nil' contributes the visible configuration captured by pocket-swipe-precise-next."
+      "kind": "non-rendering",
+      "stateIds": [],
+      "reason": "Scanner artifact: Any? is an optional type declaration, not a conditional execution path."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:65:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pocket-swipe-precise-next"
+        "pocket-scroll-containment"
       ],
-      "reason": "pocket-swipe-precise-next: The source render condition 'monitor == nil' contributes the visible configuration captured by pocket-swipe-precise-next."
+      "reason": "pocket-scroll-containment: The source render condition 'monitor == nil' contributes the visible configuration captured by pocket-scroll-containment."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:67:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pocket-swipe-precise-next"
-      ],
-      "reason": "pocket-swipe-precise-next: The source render condition 'let self' contributes the visible configuration captured by pocket-swipe-precise-next."
+      "kind": "render-input",
+      "stateIds": [],
+      "reason": "Conditional guard 'let self' in self at desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:67 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:73:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pocket-swipe-precise-next"
+        "pocket-scroll-containment"
       ],
-      "reason": "pocket-swipe-precise-next: The source render condition 'let monitor' contributes the visible configuration captured by pocket-swipe-precise-next."
+      "reason": "pocket-scroll-containment: The source render condition 'let monitor' contributes the visible configuration captured by pocket-scroll-containment."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketSwipeArea.swift:82:1",
@@ -40655,43 +40793,37 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:100:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'PocketFace.isAgent(slot)' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:100 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'PocketFace.isAgent(slot)' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:100 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:102:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'else' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:102 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'else' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:102 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:108:1",
-      "kind": "render-input",
+      "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Conditional ternary 'listening' in card at desktop/native-notch/Sources/unmute-notch/PocketView.swift:108 is retained as a source-model input or composition predicate; no standalone state or backlink is claimed without hand-curated evidence."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'listening' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:108 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:109:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'pocket.slots.count > 1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:109 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'pocket.slots.count > 1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:109 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:138:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pocket-closed-empty",
-        "pocket-open-zero-slots",
-        "pocket-open-invalid-negative"
-      ],
-      "reason": "pocket-closed-empty: A zero-slot payload cannot satisfy PocketP.isOpen and falls through to the bar. pocket-open-zero-slots: Even mode=open cannot satisfy PocketP.isOpen without slots and therefore falls through to the bar. pocket-open-invalid-negative: Invalid negative current index renders fallback identity and disables card expansion."
+      "kind": "non-rendering",
+      "stateIds": [],
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'let slot' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:138 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:139:1",
-      "kind": "render-affecting",
-      "stateIds": [
-        "pocket-task-question"
-      ],
-      "reason": "pocket-task-question: The source render condition 'let ask = slot.ask, !ask.isEmpty' contributes the visible configuration captured by pocket-task-question."
+      "kind": "non-rendering",
+      "stateIds": [],
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'let ask = slot.ask, !ask.isEmpty' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:139 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:153:1",
@@ -40705,7 +40837,7 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:175:1",
       "kind": "render-affecting",
       "stateIds": [
-        "pocket-closed-slots-quiet",
+        "pocket-open-invalid-negative",
         "pocket-open-invalid-high",
         "pocket-status-processing",
         "pocket-status-needs-user",
@@ -40716,7 +40848,7 @@
         "pocket-status-unknown-demanding",
         "pocket-demanding-nil"
       ],
-      "reason": "pocket-closed-slots-quiet: Defines pocket closed slots quiet Pocket behavior. pocket-open-invalid-high: Past-end current index renders fallback Ready and the clamped N/N count. pocket-status-processing: Defines pocket status processing Pocket behavior. pocket-status-needs-user: Defines pocket status needs user Pocket behavior. pocket-status-ready: Defines pocket status ready Pocket behavior. pocket-status-stuck: Defines pocket status stuck Pocket behavior. pocket-status-done: Defines pocket status done Pocket behavior. pocket-status-failed: Defines pocket status failed Pocket behavior. pocket-status-unknown-demanding: Defines pocket status unknown demanding Pocket behavior. pocket-demanding-nil: Defines pocket demanding nil Pocket behavior."
+      "reason": "pocket-open-invalid-negative: Invalid negative current index renders fallback identity and disables card expansion. pocket-open-invalid-high: Past-end current index renders fallback Ready and the clamped N/N count. pocket-status-processing: Defines pocket status processing Pocket behavior. pocket-status-needs-user: Defines pocket status needs user Pocket behavior. pocket-status-ready: Defines pocket status ready Pocket behavior. pocket-status-stuck: Defines pocket status stuck Pocket behavior. pocket-status-done: Defines pocket status done Pocket behavior. pocket-status-failed: Defines pocket status failed Pocket behavior. pocket-status-unknown-demanding: Defines pocket status unknown demanding Pocket behavior. pocket-demanding-nil: Defines pocket demanding nil Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:176:1",
@@ -40731,43 +40863,43 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:294:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'quiet' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:294 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'quiet' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:294 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:297:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'PocketFace.isAgent(slot)' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:297 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'PocketFace.isAgent(slot)' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:297 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:299:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'else' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:299 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'else' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:299 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:305:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'quiet' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:305 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'quiet' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:305 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:321:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'listening' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:321 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'listening' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:321 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:323:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'else' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:323 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'else' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:323 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:327:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'model.pocket.slots.count > 1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:327 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'model.pocket.slots.count > 1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:327 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:388:1",
@@ -40789,9 +40921,14 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:391:1",
       "kind": "render-affecting",
       "stateIds": [
+        "pocket-provider-claude-notched",
+        "pocket-provider-codex-notched",
+        "pocket-provider-claude-code-desktop-notched",
+        "pocket-provider-nil-notched",
+        "pocket-provider-unknown-notched",
         "pocket-notched-question"
       ],
-      "reason": "pocket-notched-question: The source render condition 'else' contributes the visible configuration captured by pocket-notched-question."
+      "reason": "pocket-provider-claude-notched: Defines pocket provider claude notched Pocket behavior. pocket-provider-codex-notched: Defines pocket provider codex notched Pocket behavior. pocket-provider-claude-code-desktop-notched: Defines pocket provider claude code desktop notched Pocket behavior. pocket-provider-nil-notched: Defines pocket provider nil notched Pocket behavior. pocket-provider-unknown-notched: Defines pocket provider unknown notched Pocket behavior. pocket-notched-question: The source render condition 'else' contributes the visible configuration captured by pocket-notched-question."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:449:1",
@@ -40848,17 +40985,23 @@
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:489:1",
       "kind": "render-affecting",
       "stateIds": [
+        "pocket-provider-claude-notchless",
+        "pocket-provider-codex-notchless",
+        "pocket-provider-claude-code-desktop-notchless",
+        "pocket-provider-nil-notchless",
+        "pocket-provider-unknown-notchless",
         "pocket-task-question"
       ],
-      "reason": "pocket-task-question: The source render condition 'else' contributes the visible configuration captured by pocket-task-question."
+      "reason": "pocket-provider-claude-notchless: Defines pocket provider claude notchless Pocket behavior. pocket-provider-codex-notchless: Defines pocket provider codex notchless Pocket behavior. pocket-provider-claude-code-desktop-notchless: Defines pocket provider claude code desktop notchless Pocket behavior. pocket-provider-nil-notchless: Defines pocket provider nil notchless Pocket behavior. pocket-provider-unknown-notchless: Defines pocket provider unknown notchless Pocket behavior. pocket-task-question: The source render condition 'else' contributes the visible configuration captured by pocket-task-question."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:494:1",
       "kind": "render-affecting",
       "stateIds": [
+        "pocket-narrow-shoulders-long-title",
         "pocket-agent-notched"
       ],
-      "reason": "pocket-agent-notched: The source render condition '!PocketFace.isAgent(slot) || headerInShoulders' contributes the visible configuration captured by pocket-agent-notched."
+      "reason": "pocket-narrow-shoulders-long-title: Defines pocket narrow shoulders long title Pocket behavior. pocket-agent-notched: The source render condition '!PocketFace.isAgent(slot) || headerInShoulders' contributes the visible configuration captured by pocket-agent-notched."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:497:1",
@@ -40883,18 +41026,37 @@
         "pocket-page-first",
         "pocket-page-middle",
         "pocket-page-last",
-        "pocket-keyboard-actions"
+        "pocket-keyboard-actions",
+        "pocket-keyboard-guards",
+        "pocket-keyboard-one-slot",
+        "pocket-keyboard-invalid-current",
+        "pocket-keyboard-invalid-high",
+        "pocket-pointer-precedence-notchless",
+        "pocket-pointer-precedence-notched",
+        "pocket-stale-popup-escape",
+        "pocket-scroll-containment",
+        "pocket-payload-focus-refits",
+        "pocket-capture-refits",
+        "pocket-handoff-motion-unprepared",
+        "pocket-handoff-motion-prepared",
+        "pocket-handoff-reduced-unprepared",
+        "pocket-handoff-reduced-prepared",
+        "pocket-handoff-stale-completion"
       ],
-      "reason": "pocket-page-first: Defines pocket page first Pocket behavior. pocket-page-middle: Defines pocket page middle Pocket behavior. pocket-page-last: Defines pocket page last Pocket behavior. pocket-keyboard-actions: Defines pocket keyboard actions Pocket behavior."
+      "reason": "pocket-page-first: Defines pocket page first Pocket behavior. pocket-page-middle: Defines pocket page middle Pocket behavior. pocket-page-last: Defines pocket page last Pocket behavior. pocket-keyboard-actions: Defines pocket keyboard actions Pocket behavior. pocket-keyboard-guards: Defines pocket keyboard guards Pocket behavior. pocket-keyboard-one-slot: Defines pocket keyboard one slot Pocket behavior. pocket-keyboard-invalid-current: Defines pocket keyboard invalid current Pocket behavior. pocket-keyboard-invalid-high: Defines pocket keyboard invalid high Pocket behavior. pocket-pointer-precedence-notchless: Defines pocket pointer precedence notchless Pocket behavior. pocket-pointer-precedence-notched: Defines pocket pointer precedence notched Pocket behavior. pocket-stale-popup-escape: Defines pocket stale popup escape Pocket behavior. pocket-scroll-containment: Defines pocket scroll containment Pocket behavior. pocket-payload-focus-refits: Defines pocket payload focus refits Pocket behavior. pocket-capture-refits: Defines pocket capture refits Pocket behavior. pocket-handoff-motion-unprepared: Defines pocket handoff motion unprepared Pocket behavior. pocket-handoff-motion-prepared: Defines pocket handoff motion prepared Pocket behavior. pocket-handoff-reduced-unprepared: Defines pocket handoff reduced unprepared Pocket behavior. pocket-handoff-reduced-prepared: Defines pocket handoff reduced prepared Pocket behavior. pocket-handoff-stale-completion: Defines pocket handoff stale completion Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:511:1",
       "kind": "render-affecting",
       "stateIds": [
         "pocket-task-listening-question",
-        "pocket-agent-listening"
+        "pocket-agent-listening",
+        "pocket-listening-toast-many-notchless-task",
+        "pocket-listening-toast-many-notchless-agent",
+        "pocket-listening-toast-many-notched-task",
+        "pocket-listening-toast-many-notched-agent"
       ],
-      "reason": "pocket-task-listening-question: Defines pocket task listening question Pocket behavior. pocket-agent-listening: Defines pocket agent listening Pocket behavior."
+      "reason": "pocket-task-listening-question: Defines pocket task listening question Pocket behavior. pocket-agent-listening: Defines pocket agent listening Pocket behavior. pocket-listening-toast-many-notchless-task: Defines pocket listening toast many notchless task Pocket behavior. pocket-listening-toast-many-notchless-agent: Defines pocket listening toast many notchless agent Pocket behavior. pocket-listening-toast-many-notched-task: Defines pocket listening toast many notched task Pocket behavior. pocket-listening-toast-many-notched-agent: Defines pocket listening toast many notched agent Pocket behavior."
     },
     {
       "occurrenceId": "branch:desktop/native-notch/Sources/unmute-notch/PocketView.swift:513:1",
@@ -50180,19 +50342,19 @@
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:120:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '20' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '20' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:120:2",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '30' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '30' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:120:3",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '10' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '10' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:120 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:150:1",
@@ -50246,67 +50408,67 @@
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:277:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '0' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:277 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '0' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:277 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:292:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '0' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:292 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '0' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:292 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:304:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '12.5' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:304 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '12.5' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:304 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:306:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:306 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:306 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:324:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '12' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:324 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '12' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:324 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:324:2",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '0.68' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:324 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '0.68' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:324 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:325:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:325 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:325 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:330:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:330 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '1' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:330 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:330:2",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '0.5' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:330 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '0.5' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:330 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:338:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '8.5' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:338 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '8.5' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:338 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:341:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence '8' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:341 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. '8' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:341 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "metric:desktop/native-notch/Sources/unmute-notch/PocketView.swift:384:1",
@@ -53680,7 +53842,7 @@
       "occurrenceId": "token:desktop/native-notch/Sources/unmute-notch/PocketView.swift:281:1",
       "kind": "non-rendering",
       "stateIds": [],
-      "reason": "Pinned-revision call-site search finds PocketRow declaration only; legacy occurrence 'Color.clear' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:281 cannot affect the current Pocket arrangement."
+      "reason": "Pinned-revision call-site search finds PocketRow and PocketRowMetrics.make declaration only; PocketFace.saying is called only by those dead paths. 'Color.clear' at desktop/native-notch/Sources/unmute-notch/PocketView.swift:281 cannot affect the current arrangement."
     },
     {
       "occurrenceId": "token:desktop/native-notch/Sources/unmute-notch/PocketView.swift:401:1",

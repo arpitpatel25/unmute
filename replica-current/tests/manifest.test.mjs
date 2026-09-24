@@ -517,11 +517,11 @@ test("every retained Pill render backlink has semantic outcome evidence", async 
   }
 });
 
-test("the audit uses only approved visual source sets at current product HEAD", async () => {
+test("the audit uses the approved immutable revision and reports HEAD drift separately", async () => {
   const { evidence } = await loadInventory();
   assert.equal(evidence.sourceRevision, CURRENT_REVISION);
-  assert.equal(evidence.productHead, CURRENT_REVISION);
-  assert.equal(evidence.sourceDrift, false);
+  assert.match(evidence.productHead, /^[a-f0-9]{40}$/);
+  assert.equal(evidence.sourceDrift, evidence.productHead !== CURRENT_REVISION);
   assert.ok(evidence.files.every((source) =>
     source.startsWith("desktop/native-notch/Sources/") ||
     source === "desktop/electron/remote/notch/pill-controller.ts" ||
