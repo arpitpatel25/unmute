@@ -277,6 +277,11 @@ export class ClaudeTaskSession {
     // Only a result frame ends the turn. An acknowledgement is not completion.
   }
 
+  /** Read the provider's turn state before Stop decides whether to escalate. */
+  async stopState(): Promise<{ alive: boolean; busy: boolean }> {
+    return { alive: this.alive, busy: this.busy }
+  }
+
   close(): void {
     if (this.closed) return
     this.closed = true

@@ -4356,23 +4356,52 @@ export class TaskManager extends EventEmitter {
           try { await this.claudeStarting.get(id) } catch { /* still stop by durable session id */ }
           const runtime = this.claudeTasks.get(id)
           if (runtime) {
-            stopLog.event('task-stop.claude-runtime', { method: 'interrupt-then-terminate' })
+            stopLog.event('task-stop.claude-runtime', { method: 'interrupt-verify-escalate' })
             runtime.channel.requestStop()
-            const interrupt = runtime.driver.interrupt().catch(error => {
-              if ((error as Error).message !== CLAUDE_RUNTIME_RELEASED) log.child({ taskId: id }).warn('claude interrupt failed; terminating session', { error: (error as Error).message })
-            })
-            await Promise.race([interrupt, new Promise<void>(resolve => setTimeout(resolve, 200))])
-            await runtime.driver.terminate()
-            if (this.claudeTasks.get(id) === runtime) this.claudeTasks.delete(id)
+            let stopped = false
+            try {
+              const initial = await runtime.driver.stopState()
+              if (initial.busy) {
+                let timer: NodeJS.Timeout | undefined
+                const acknowledged = await Promise.race([
+                  runtime.driver.interrupt().then(() => true, error => {
+                    stopLog.warn('task-stop.claude-interrupt-failed', { error: (error as Error).message })
+                    return false
+                  }),
+                  new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 1_500) }),
+                ])
+                if (timer) clearTimeout(timer)
+                stopLog.event('task-stop.claude-interrupt', { acknowledged })
+                for (let attempt = 0; attempt < 20; attempt++) {
+                  const state = await runtime.driver.stopState()
+                  if (!state.busy) { stopped = true; break }
+                  await new Promise(resolve => setTimeout(resolve, 150))
+                }
+              } else stopped = true
+            } catch (error) {
+              if ((error as Error).message === CLAUDE_RUNTIME_RELEASED) stopped = true
+              else stopLog.warn('task-stop.claude-state-failed', { error: (error as Error).message })
+            }
+            if (!stopped) {
+              stopLog.warn('task-stop.claude-escalating', { reason: 'turn-still-active-or-state-unavailable' })
+              await runtime.driver.terminate()
+              if (this.claudeTasks.get(id) === runtime) this.claudeTasks.delete(id)
+            } else stopLog.event('task-stop.claude-turn-ended', { sessionKept: true })
           } else if (!task.chatUnstarted && this.opts.stopClaudeSession) {
-            stopLog.event('task-stop.claude-runtime', { method: 'close-persisted-session' })
+            stopLog.event('task-stop.claude-runtime', { method: 'interrupt-persisted-session' })
             if (!(await this.opts.stopClaudeSession(task))) throw new Error('Claude session is still running')
           } else if (!task.chatUnstarted) {
             // Non-persistent test and legacy managers have no direct daemon
             // address; reattach the recorded identity before stopping it.
             if (!(await this.resume(id, { touchActivity: false, hydrateHistory: false, forStop: true }))) throw new Error('Could not reconnect to Claude')
             const attached = this.claudeTasks.get(id)
-            if (attached) { await attached.driver.terminate(); this.claudeTasks.delete(id) }
+            if (attached) {
+              await attached.driver.interrupt()
+              if ((await attached.driver.stopState()).busy) {
+                await attached.driver.terminate()
+                this.claudeTasks.delete(id)
+              }
+            }
           }
         } else if (task.codexSessionSettings) {
           const hub = this.opts.codexHub

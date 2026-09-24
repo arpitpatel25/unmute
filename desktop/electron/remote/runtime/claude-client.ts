@@ -106,6 +106,10 @@ export class PersistentClaudeTaskSession extends ClaudeTaskSession {
     this.runtimeState = await this.rpc.call('claude.answer', this.sessionId, id, decision)
   }
   override async interrupt(): Promise<void> { this.runtimeState = await this.rpc.call('claude.interrupt', this.sessionId) }
+  override async stopState(): Promise<{ alive: boolean; busy: boolean }> {
+    this.runtimeState = await this.rpc.call<ClaudeRuntimeState>('claude.state', this.sessionId)
+    return { alive: this.runtimeState.alive, busy: this.runtimeState.busy }
+  }
   override async terminate(): Promise<void> {
     try {
       this.runtimeState = await this.rpc.call('claude.close', this.sessionId)

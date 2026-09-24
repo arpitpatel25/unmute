@@ -5878,7 +5878,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       const runtime = task.claudeResumeSessionAt ? claudeEditRuntime : persistentRuntime
       if (!runtime) throw new Error('Claude background runtime is unavailable')
       try {
-        const state = await runtime.call<{ alive: boolean }>('claude.close', task.sessionId)
+        let state = await runtime.call<{ alive: boolean; busy: boolean }>('claude.state', task.sessionId)
+        if (!state.busy) return true
+        try { await runtime.call('claude.interrupt', task.sessionId) }
+        catch (error) { log.warn('claude stop interrupt failed; checking turn state', { taskId: task.id, error: (error as Error).message }) }
+        for (let attempt = 0; attempt < 20; attempt++) {
+          state = await runtime.call('claude.state', task.sessionId)
+          if (!state.busy) return true
+          await new Promise(resolve => setTimeout(resolve, 150))
+        }
+        log.warn('claude stop escalating to process termination', { taskId: task.id })
+        state = await runtime.call('claude.close', task.sessionId)
         return !state.alive
       } catch (error) {
         if ((error as Error).message === CLAUDE_RUNTIME_RELEASED) return true
