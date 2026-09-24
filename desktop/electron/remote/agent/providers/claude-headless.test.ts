@@ -99,12 +99,15 @@ test('repeated Claude stream records for one message count as one model call', (
     usage: { ...base, output_tokens: 8 } } }, state, log)
   headlessEvents({ type: 'assistant', message: { id: 'msg-1', content: [{ type: 'tool_use', name: 'Grep' }],
     usage: { ...base, output_tokens: 159 } } }, state, log)
-  assert.deepEqual(headlessEvents({ type: 'result', subtype: 'success', result: 'done' }, state, log),
+  assert.deepEqual(headlessEvents({ type: 'result', subtype: 'success', result: 'done',
+    usage: { ...base, output_tokens: 234 } }, state, log),
     [{ type: 'completion', outcome: 'completed', finalText: 'done', contextTokens: 101_002 }])
   const calls = logged.filter(row => row.event === 'agent-claude-model-call')
   assert.equal(calls.length, 1)
-  assert.equal(calls[0]?.fields.outputTokens, 159)
-  assert.equal(logged.find(row => row.event === 'agent-claude-turn-usage')?.fields.modelCalls, 1)
+  assert.equal(calls[0]?.fields.streamOutputTokens, 159)
+  const turn = logged.find(row => row.event === 'agent-claude-turn-usage')?.fields
+  assert.equal(turn?.modelCalls, 1)
+  assert.equal(turn?.turnOutputTokens, 234)
 })
 
 test('an errored result fails the turn rather than completing it emptily', () => {

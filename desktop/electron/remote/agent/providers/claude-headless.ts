@@ -249,7 +249,7 @@ interface ClaudeCallUsage {
   inputTokens: unknown
   cacheCreationInputTokens: unknown
   cacheReadInputTokens: unknown
-  outputTokens: unknown
+  streamOutputTokens: unknown
 }
 export interface HeadlessTurnState {
   notice?: string
@@ -307,7 +307,7 @@ export function headlessEvents(
         inputTokens: usage.input_tokens ?? null,
         cacheCreationInputTokens: usage.cache_creation_input_tokens ?? null,
         cacheReadInputTokens: usage.cache_read_input_tokens ?? null,
-        outputTokens: usage.output_tokens ?? null,
+        streamOutputTokens: usage.output_tokens ?? null,
       })
       state.modelCalls = state.callUsage.size
     }
@@ -327,10 +327,18 @@ export function headlessEvents(
   if (record.type === 'result') {
     const contextTokens = state.contextTokens
     state.contextTokens = undefined
+    const turnUsage = record.usage && typeof record.usage === 'object'
+      ? record.usage as Record<string, unknown> : {}
     for (const [index, usage] of [...(state.callUsage?.values() ?? [])].entries()) {
       log('agent-claude-model-call', { call: index + 1, ...usage })
     }
-    log('agent-claude-turn-usage', { modelCalls: state.modelCalls ?? 0, finalContextTokens: contextTokens ?? null })
+    log('agent-claude-turn-usage', { modelCalls: state.modelCalls ?? 0,
+      finalContextTokens: contextTokens ?? null,
+      turnInputTokens: turnUsage.input_tokens ?? null,
+      turnCacheCreationInputTokens: turnUsage.cache_creation_input_tokens ?? null,
+      turnCacheReadInputTokens: turnUsage.cache_read_input_tokens ?? null,
+      turnOutputTokens: turnUsage.output_tokens ?? null,
+      reportedTurns: record.num_turns ?? null })
     state.modelCalls = undefined
     state.callUsage = undefined
     state.anonymousCalls = undefined
