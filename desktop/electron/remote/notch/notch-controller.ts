@@ -1454,6 +1454,10 @@ export class NotchController {
     // the Agent reopened and delivered into — is handled where it belongs, by
     // the resume promoting that task to a session (sessions/service.ts).
     if ((t.kind ?? 'oneoff') === 'session') return true
+    // Structured chats can reopen from their recorded provider identity after
+    // Stop closes the process. Keep a fresh one-off in the pocket so its next
+    // message can resume the same conversation.
+    if (providerOf(t.agent).transport === 'structured' && t.chatResumable !== false) return true
     // CODEX IS NEVER "GENUINELY OVER" EITHER, one-off or not: every thread
     // mints a rollout on disk, so a dead process still has resume() to bring
     // it straight back (findRollout(codexRolloutId)) — the same "asleep, not

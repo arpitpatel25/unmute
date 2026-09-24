@@ -754,6 +754,12 @@ export class TaskManager extends EventEmitter {
     if (!scope || !task || this.shuttingDown) return { kind: 'unavailable', reason: 'This task is not an owned chat.' }
     if (task.chatUnstarted) return { kind: 'idle', sessionId: scope.sessionId, generation: 0, blocked: false }
     if ((task.claudeSessionSettings?.permissionMode === 'bypassPermissions' || task.codexSessionSettings?.sandbox === 'danger-full-access') && !this.chatFullAccessAllowed(id)) return { kind: 'unavailable', reason: 'Session permissions exceed the current policy.' }
+    // Stop closes Claude's process. A confirmed stop is an idle conversation:
+    // the next explicit message reconnects it through deliverDraft(). Without
+    // this, the follow-up coordinator locks the composer over a dead runtime.
+    if (task.stopRequestedAt) return task.stopConfirmedAt
+      ? { kind: 'idle', sessionId: scope.sessionId, generation: 0, blocked: false }
+      : { kind: 'unavailable', reason: 'Stop is still in progress.' }
     if (scope.provider === 'codex') return this.opts.codexHub?.followupGate(id) ?? { kind: 'unavailable', reason: 'Codex is unavailable.' }
     const r = this.claudeTasks.get(id)
     if (!r || r.driver.followupUnavailable) return { kind: 'unavailable', reason: 'Claude is connecting or its acceptance is uncertain. Reconnect before sending.' }
