@@ -832,8 +832,7 @@ export class NotchController {
     })
     on('pocketFocusTask', (e) => {
       const id = (e as { id: string }).id
-      emitOnboardingReceipt({ type: 'task-link-opened', taskId: id })
-      this.onPocketFocusTask(id)
+      this.openSessionLink(id)
     })
     on('tap', () => this.onTap())
     on('collapsed', () => {
@@ -3570,6 +3569,17 @@ export class NotchController {
   /** Say something transient on the surface (delivery failures, guards). */
   toast(text: string): void {
     this.client.send({ type: 'toast', text })
+  }
+
+  /** Shared by native and dashboard chat links. Never report a missing card as opened. */
+  openSessionLink(id: string): boolean {
+    if (!this.deps.getTask(id)) {
+      this.toast('Could not open session: it is no longer available.')
+      return false
+    }
+    emitOnboardingReceipt({ type: 'task-link-opened', taskId: id })
+    this.onPocketFocusTask(id)
+    return true
   }
 
   /**

@@ -20,7 +20,7 @@
 // over IPC for an icon is not worth a round-trip. The POLICY is shared; the
 // precision differs by what each runtime can actually know.
 
-export type LinkKind = 'web' | 'file' | 'folder' | 'image' | 'mail' | 'phone'
+export type LinkKind = 'web' | 'file' | 'folder' | 'image' | 'mail' | 'phone' | 'session'
 
 // Bounded and boring on purpose — unlike a brand list, the set of raster formats
 // a markdown link points at does not change month to month.
@@ -46,6 +46,7 @@ export function linkKind(destination: string): LinkKind {
   if (!raw) return 'web'
 
   const lower = raw.toLowerCase()
+  if (lower.startsWith('unmute://task/')) return 'session'
   if (lower.startsWith('mailto:')) return 'mail'
   if (lower.startsWith('tel:') || lower.startsWith('sms:')) return 'phone'
 

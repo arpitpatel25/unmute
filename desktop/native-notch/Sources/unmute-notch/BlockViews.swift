@@ -729,7 +729,7 @@ private struct SourcesSection: View {
     private func open(_ url: String) {
         guard let u = URL(string: url), u.scheme == "https" || u.scheme == "http" else { return }
         AppController.CardLink.clicked()
-        NSWorkspace.shared.open(u)
+        IPC.emit(.openArtifact(type: "url", value: u.absoluteString))
     }
 }
 

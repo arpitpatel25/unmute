@@ -86,6 +86,7 @@ function Expanded({
 }) {
   const [draft, setDraft] = useState('')
   const [showTerminal, setShowTerminal] = useState(false)
+  const [artifactError, setArtifactError] = useState(false)
   const active = task.state === 'processing' || task.state === 'needs-user' || task.state === 'stuck'
 
   // Single-owner terminal: when the wall is focused on THIS session it owns the PTY
@@ -100,10 +101,12 @@ function Expanded({
   }, [task.id])
   useEffect(() => { if (wallOwned) setShowTerminal(false) }, [wallOwned])
 
-  const openArtifact = (type: 'url' | 'path', value: string) => {
+  const openArtifact = async (type: 'url' | 'path', value: string) => {
+    setArtifactError(false)
     const fn = api().remoteOpenArtifact
-    if (fn) void fn(type, value)
-    else void navigator.clipboard?.writeText(value)
+    try {
+      if (!fn || !await fn(type, value)) setArtifactError(true)
+    } catch { setArtifactError(true) }
   }
 
   // Multimodal: drop a screenshot on the expanded card (or ⌘V while it's open) —
@@ -141,6 +144,7 @@ function Expanded({
     >
       <div className="text-[10px] text-white/30 mb-1.5">{duration(task)}</div>
       {attachNote && <div className="text-[11px] text-white/60 mb-1.5">🖼 {attachNote}</div>}
+      {artifactError && <div role="alert" className="text-[11px] text-rose-300 mb-1.5">Could not open link.</div>}
 
       {/* done → summary + artifacts */}
       {task.state === 'done' && task.result && (
@@ -158,7 +162,7 @@ function Expanded({
               key={i}
               className="mt-2 inline-flex items-center gap-2 text-left text-[12px] text-sky-300/85 hover:text-sky-200 max-w-full"
               onClick={() => openArtifact(a.type, a.value)}
-              title={`${a.type === 'path' ? 'Open in Finder' : 'Open in browser'}: ${a.value}`}
+              title={`${a.type === 'path' ? 'Open local item' : 'Open link'}: ${a.value}`}
             >
               <UIIcon name={a.type === 'path' ? 'file' : 'link'} size={14} />
               <span className="truncate">{a.type === 'path' ? a.value.split(/[\\/]/).filter(Boolean).pop() || a.value : a.value}</span>

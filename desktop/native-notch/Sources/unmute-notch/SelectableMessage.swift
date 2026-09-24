@@ -81,7 +81,10 @@ private enum MessageAttributedText {
                 next[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
                 children(node, next, depth)
             case let value as Markdown.Link:
-                if let destination = value.destination, let url = URL(string: destination) { next[.link] = url }
+                if let destination = value.destination {
+                    if let path = localPath(from: destination) { next[.link] = URL(fileURLWithPath: path) }
+                    else if let url = URL(string: destination) { next[.link] = url }
+                }
                 children(node, next, depth)
             case let value as Markdown.Image:
                 append(value.plainText, attrs)

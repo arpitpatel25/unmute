@@ -194,7 +194,12 @@ struct TerminalHost: NSViewRepresentable {
             }
         }
         func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-            if let url = URL(string: link) { NSWorkspace.shared.open(url) }
+            if link.hasPrefix("/") || link.hasPrefix("~/") {
+                IPC.emit(.openArtifact(type: "path", value: link))
+            } else if let url = URL(string: link) {
+                IPC.emit(.openArtifact(type: url.isFileURL ? "path" : "url",
+                                       value: url.isFileURL ? url.path : url.absoluteString))
+            }
         }
         func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
         func bell(source: TerminalView) {}
