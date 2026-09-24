@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { CodexPersistentProcess, agentCodexHome, agentRequestResponse, userMcpServers } from './codex-persistent'
+import { CodexPersistentProcess, CodexRequestRejected, agentCodexHome, agentRequestResponse, userMcpServers } from './codex-persistent'
 import { AgentProviderError, AgentSetupError, type AgentProcessEvent, type AgentProcessLaunch } from '../provider'
 
 const id = '22222222-2222-4222-8222-222222222222'
@@ -15,7 +15,7 @@ const launch: AgentProcessLaunch = {
 
 /** A Codex that enforces a policy: `refuse` rejects thread/start the first time
  *  with the given message; `applied` is what it reports applying. */
-function codex(opts: { requirements?: unknown; refuse?: string; applied?: { approvalPolicy: string; sandbox: string }; account?: unknown }) {
+function codex(opts: { requirements?: unknown; refuse?: string; turnRefuse?: string; applied?: { approvalPolicy: string; sandbox: string }; account?: unknown }) {
   const requests: Array<{ method: string; params: any }> = []
   let refused = false
   let notify!: (m: string, p: any) => void
@@ -30,7 +30,10 @@ function codex(opts: { requirements?: unknown; refuse?: string; applied?: { appr
         const a = opts.applied ?? { approvalPolicy: params.approvalPolicy, sandbox: params.sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite' }
         return { thread: { id }, model: 'm', approvalPolicy: a.approvalPolicy, sandbox: { type: a.sandbox } } as any
       }
-      if (method === 'turn/start') { queueMicrotask(() => { notify('item/completed', { threadId: id, turnId: 't1', item: { type: 'agentMessage', text: 'ok' } }); notify('turn/completed', { threadId: id, turn: { id: 't1', status: 'completed' } }) }); return { turn: { id: 't1' } } as any }
+      if (method === 'turn/start') {
+        if (opts.turnRefuse) throw new CodexRequestRejected(-32600, opts.turnRefuse)
+        queueMicrotask(() => { notify('item/completed', { threadId: id, turnId: 't1', item: { type: 'agentMessage', text: 'ok' } }); notify('turn/completed', { threadId: id, turn: { id: 't1', status: 'completed' } }) }); return { turn: { id: 't1' } } as any
+      }
       return {} as any
     }, notify() {}, close: async () => {} }
   } })
@@ -76,6 +79,13 @@ test('no login is said as such, not as "provider unavailable"', async () => {
   await c.driver.start(launch)
   await assert.rejects(c.driver.submitUserTurn('hi'), (e: unknown) => e instanceof AgentSetupError && /not signed in/.test(e.userMessage))
   assert.match(new AgentProviderError('provider-unavailable', 'd', 'Codex is not signed in on this Mac.').message, /unavailable\. Codex is not signed in/)
+})
+
+test('a managed turn refusal gives a policy reason without claiming acceptance', async () => {
+  const c = codex({ turnRefuse: 'blocked by organization policy' })
+  await c.driver.start(launch)
+  await assert.rejects(c.driver.submitUserTurn('hi'), (e: unknown) => e instanceof AgentSetupError && /Codex policy/.test(e.userMessage))
+  assert.equal(c.driver.hasDispatched, false)
 })
 
 test('approvals: only the Agent\'s own Unmute tool calls are accepted; everything else is declined in Codex\'s shape', () => {

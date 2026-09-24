@@ -305,6 +305,7 @@ struct TaskDetail: Codable {
     /// What this thread runs on, as Codex labels it ("5.6 Terra High").
     let modelLabel: String?
     let agentCanRetry: Bool?
+    let agentRecoveryRequired: Bool?
     /// Which backend runs this task. Absent ⇒ Claude (PTY-backed).
     let backend: String?       // "codex-desktop"
     /// Last few turns — the GUI-agent equivalent of the live terminal. A Codex

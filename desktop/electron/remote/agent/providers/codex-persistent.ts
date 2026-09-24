@@ -110,6 +110,15 @@ export interface CodexAgentConnection {
   notify(method: string, params: unknown): void
   close(): Promise<void>
 }
+
+/** A JSON-RPC error response proves Codex refused this request. A closed or
+ * timed-out transport does not prove whether Codex accepted it. */
+export class CodexRequestRejected extends Error {
+  constructor(readonly code: number, message: string) {
+    super(`${code}: ${message}`)
+    this.name = 'CodexRequestRejected'
+  }
+}
 interface Options {
   audit?: DiagnosticSink
   resolveResumePath?(id: string, home: string): Promise<string | undefined>
@@ -178,7 +187,14 @@ export class CodexPersistentProcess implements AgentProcessDriver {
     this.turnNotice = this.pendingNotice
     this.pendingNotice = undefined
     this.hasDispatched = true
-    await this.startTurn(text)
+    try { await this.startTurn(text) }
+    catch (error) {
+      if (error instanceof CodexRequestRejected) {
+        this.hasDispatched = false
+        if (codexPolicyRefusal(error.message)) throw new AgentSetupError("This Mac's Codex policy refused the Agent's turn. Check your organization's Codex policy.", error.message)
+      }
+      throw error
+    }
     this.queue.emit({ type: 'handle', sessionId: this.threadId!, observed: true, model: this.model })
     for (const { method, params } of this.buffered.splice(0)) this.notification(method, params)
   }
@@ -290,6 +306,9 @@ export class CodexPersistentProcess implements AgentProcessDriver {
         if (learnFromRejection(message, null)) {
           throw new AgentSetupError(`This Mac's Codex policy refused the Agent's session (${message.replace(/^-?\d+:\s*/, '').slice(0, 200)}).`, message)
         }
+        if (error instanceof CodexRequestRejected && codexPolicyRefusal(message)) {
+          throw new AgentSetupError("This Mac's Codex policy refused the Agent's session. Check your organization's Codex policy.", message)
+        }
         throw error
       }
     }
@@ -366,6 +385,10 @@ export class CodexPersistentProcess implements AgentProcessDriver {
   }
 }
 
+function codexPolicyRefusal(message: string): boolean {
+  return /\b(policy|requirements|managed|organization|MDM|allowed set)\b/i.test(message)
+}
+
 /** Private stdio prevents another local client attaching to the Agent server. */
 async function connectStdio(launch: AgentProcessLaunch, notify: (method: string, params: any) => void, exited: () => void): Promise<CodexAgentConnection> {
   if (!launch.environment.HOME) throw new AgentSetupError('Unmute could not find your home folder to start Codex.', 'no HOME')
@@ -412,7 +435,7 @@ async function connectStdio(launch: AgentProcessLaunch, notify: (method: string,
       clearTimeout(waiting.timer); pending.delete(message.id)
       // Keep Codex's own words: a policy refusal names what is allowed, which
       // is exactly what the retry above learns from.
-      if (message.error) waiting.reject(new Error(`${message.error.code ?? ''}: ${message.error.message ?? 'Codex request failed'}`.replace(/^: /, '')))
+      if (message.error) waiting.reject(new CodexRequestRejected(Number(message.error.code) || -32603, String(message.error.message ?? 'Codex request failed')))
       else waiting.resolve(message.result)
     }
   })

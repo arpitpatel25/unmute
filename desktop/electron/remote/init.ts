@@ -1397,9 +1397,12 @@ function providerAvailability(probes: readonly ProviderProbe[]): UnmuteAgentProv
 }
 
 async function probeUnmuteAgentProviders(): Promise<UnmuteAgentProviderAvailability[]> {
+  const codexBinary = await resolveCodexCli(bin => new Promise<string | null>(resolve => {
+    execFile('/usr/bin/which', [bin], { env: process.env }, (error, stdout) => resolve(error ? null : String(stdout).trim() || null))
+  }))
   const probes = await Promise.all((['claude', 'codex'] as const).map(async (provider) => ({
     provider,
-    available: await probeCli(provider).catch(() => false),
+    available: await probeCli(provider === 'codex' ? codexBinary ?? provider : provider).catch(() => false),
     reason: 'not-installed' as const,
   })))
   return providerAvailability(probes)
@@ -6267,8 +6270,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           log.event('unmute-agent-provider-set', { provider, via: 'notch' })
         },
         agentInstalledProviders: async () => {
-          const [claude, codex] = await Promise.all([claudeCliAvailable(), codexCliAvailable()])
-          return [...(claude ? ['claude' as const] : []), ...(codex ? ['codex' as const] : [])]
+          return (await probeUnmuteAgentProviders()).filter(provider => provider.available).map(provider => provider.id)
         },
         // ONE CONVERSATION AT A TIME: starting a new one ends the old one, it
         // does not sit beside it. Refused rather than forced while a turn is

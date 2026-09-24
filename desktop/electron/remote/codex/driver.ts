@@ -1036,10 +1036,10 @@ export class CodexDesktopDriver {
 }
 
 /** Resolve the Codex CLI binary: PATH first, else the desktop bundle's copy. */
-export async function resolveCodexCli(which: (bin: string) => Promise<string | null>): Promise<string | null> {
+export async function resolveCodexCli(which: (bin: string) => Promise<string | null>, bundledPath = CODEX_BUNDLED_CLI): Promise<string | null> {
   const onPath = await which('codex').catch(() => null)
   if (onPath) return onPath
-  try { await fs.stat(CODEX_BUNDLED_CLI); return CODEX_BUNDLED_CLI } catch { return null }
+  try { await fs.stat(bundledPath); return bundledPath } catch { return null }
 }
 
 export const codexHome = () => join(homedir(), '.codex')

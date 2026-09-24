@@ -309,9 +309,9 @@ export class AgentConversationLifecycle {
    * record it would have resumed from is gone: `runId: null` is what makes
    * controller.submit() take supervisor.start() instead of resume().
    *
-   * Work in flight is refused rather than abandoned — discarding a
-   * conversation whose turn is still running would leave a provider process
-   * writing into a record nothing points at any more.
+   * Work in flight is refused. Recovery-required input has no live waiter and
+   * cannot safely be replayed; an explicit fresh start discards that retained
+   * input and closes any old provider run after the new record is durable.
    */
   async discard(): Promise<{ discarded: boolean; reason?: string }> {
     // NOT `draining`: that flag is the drain loop's own, and it is still true
@@ -319,16 +319,18 @@ export class AgentConversationLifecycle {
     // refuse a discard requested the instant a turn finished. What matters is
     // unsettled WORK: somebody still waiting on a result, input not yet sent,
     // or an acceptance whose outcome we do not know.
-    if (this.waiting.size || this.snapshot.queued.length || this.pendingSettlement) {
+    if (this.waiting.size || (this.snapshot.queued.length && this.record.phase !== 'recovery-required') || this.pendingSettlement) {
       return { discarded: false, reason: 'a turn is still running' }
     }
     const previous = this.record.snapshotId
+    const previousRuns = new Set([this.record.runId, this.record.prepared?.candidateRunId].filter((id): id is string => !!id))
     this.rotationDue = false
     this.record = { generation: this.record.generation + 1, phase: 'ready', runId: null, provider: null,
       ceiling: this.ceiling(), effort: this.record.effort, accepted: [], snapshotId: 'initial' }
     this.snapshot = { generation: this.record.generation, chat: { runId: null, turns: [], startedAt: this.now() },
       draft: { text: '', revision: 0 }, queued: [], results: {} }
     await this.publish(this.record, this.snapshot)
+    await Promise.all([...previousRuns].map(id => this.options.close(id).catch(() => {})))
     // Only after the new record is durable: a crash between these two leaves a
     // pointer to a snapshot that still exists, which recovers; the reverse does not.
     if (previous && previous !== 'initial') await this.options.store.remove(previous).catch(() => {})

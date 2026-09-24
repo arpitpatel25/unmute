@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { CodexPersistentProcess, isolatedCodexHome } from './codex-persistent'
+import { CodexPersistentProcess, CodexRequestRejected, isolatedCodexHome } from './codex-persistent'
 import type { AgentProcessEvent, AgentProcessLaunch } from '../provider'
 
 const id = '11111111-1111-4111-8111-111111111111'
@@ -12,6 +12,22 @@ const launch: AgentProcessLaunch = {
   environment: { UNMUTE_MCP_ENDPOINT: 'http://127.0.0.1/mcp', UNMUTE_MCP_TOKEN: 'session-token' },
   systemContext: { type: 'file', path: '/private/unmute/runtime/constitution.md' }, session: { kind: 'fresh' },
 }
+
+test('an explicit turn/start refusal is known unaccepted, while a transport failure remains uncertain', async () => {
+  for (const [error, uncertain] of [[new CodexRequestRejected(-32600, 'request refused'), false], [new Error('Codex transport closed'), true]] as const) {
+    const driver = new CodexPersistentProcess({ readSystemPrompt: async () => 'C', connect: async () => ({
+      request: async (method: string) => {
+        if (method === 'thread/start') return { thread: { id }, approvalPolicy: 'never', sandbox: { type: 'readOnly' } } as never
+        if (method === 'turn/start') throw error
+        return {} as never
+      }, notify() {}, close: async () => {},
+    }) })
+    await driver.start(launch)
+    await assert.rejects(driver.submitUserTurn('hello'), error)
+    assert.equal(driver.hasDispatched, uncertain)
+    await driver.close()
+  }
+})
 
 test('Codex holds one structured connection across turns and filters completion by exact turn', async () => {
   const requests: Array<{ method: string; params: any }> = []

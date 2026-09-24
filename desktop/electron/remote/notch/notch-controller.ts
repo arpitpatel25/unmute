@@ -665,6 +665,7 @@ export class NotchController {
   private agentModel?: string
   private agentError?: string
   private agentCanRetry = false
+  private agentRecoveryRequired = false
   private agentEnqueue: { revision: number; submissionId: string } | null = null
   /** The pocket's order, nailed down for the duration of a visit. Null when
    *  the pocket is closed, so the next open re-sorts to what you last worked in. */
@@ -2288,6 +2289,7 @@ export class NotchController {
       modelLabel: this.agentModel ? `${this.agentModel} · medium` : 'Model not reported · medium',
       deliveryError: this.agentError,
       agentCanRetry: this.agentCanRetry,
+      agentRecoveryRequired: this.agentRecoveryRequired,
       canCompose: true,
       // STOPPABLE WHILE IT IS WORKING, though it is not owned: there is no
       // process of ours to kill, but the provider takes an interrupt and the
@@ -2784,6 +2786,7 @@ export class NotchController {
     this.agentBusy = !snapshot.settlementPending && (record.phase === 'sending' || !!record.prepared && record.phase !== 'recovery-required')
     this.agentError = snapshot.error
     this.agentCanRetry = !!snapshot.settlementPending || (!!snapshot.error || snapshot.retryRequired === true) && record.phase !== 'recovery-required' && snapshot.queued.length > 0
+    this.agentRecoveryRequired = record.phase === 'recovery-required'
     if (snapshot.draft.revision >= this.agentDraftRevision) {
       this.agentDraft = snapshot.draft.text; this.agentDraftRevision = snapshot.draft.revision
     }

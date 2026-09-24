@@ -39,6 +39,10 @@ struct TaskSurfaceView: View {
                     Button("Retry retained message") { model.emit(.agentRetry) }
                         .buttonStyle(.plain).foregroundColor(Theme.textDim)
                 }
+                if t.id == "unmute-agent", t.agentRecoveryRequired == true {
+                    Button("Start new conversation (discard retained message)") { model.emit(.agentNewConversation) }
+                        .buttonStyle(.plain).foregroundColor(Theme.textDim)
+                }
                 ChatStatusView(model: model, task: t)
 
                 // THE ASK MOVED BELOW THE REASONING (see the strip further

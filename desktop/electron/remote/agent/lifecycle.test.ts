@@ -15,12 +15,13 @@ async function harness(ceiling = 20) {
   const store = new AgentConversationStore({ root: join(root, 'conversations'), crypto: new MemoryCrypto({ keyProvider: { getMasterKey: async () => Buffer.alloc(32, 4) } }) })
   const calls: Array<{ text: string; prior?: string; context: AgentSubmissionContext; settle(outcome?: AgentInteractionResult['outcome']): void }> = []
   const interrupts: string[] = []
+  const closed: string[] = []
   let reject = false, uncertain = false, refreshes = 0
   let contextTokens: number | undefined
   let interruptFails: string | null = null
   let now = 1_000
   const options = { journal, store, now: () => now, ceiling: () => ceiling, selectedProvider: () => 'claude' as const,
-    prepareFresh: async () => { refreshes++ }, pin: (_ids: string[]) => {}, close: async (_id: string) => {},
+    prepareFresh: async () => { refreshes++ }, pin: (_ids: string[]) => {}, close: async (id: string) => { closed.push(id) },
     interrupt: async (id: string) => { if (interruptFails) throw new Error(interruptFails); interrupts.push(id) },
     controller: { async submit(input: { transcript: string; priorRunId?: string }, context: AgentSubmissionContext) {
       const result = (outcome: AgentInteractionResult['outcome']): AgentInteractionResult => ({ interactionId: context.interactionId, agentRunId: context.runId, provider: context.provider, source: 'provider', presentation: 'transient', outcome, text: `answer ${input.transcript}`, ...(contextTokens === undefined ? {} : { contextTokens }) })
@@ -34,7 +35,7 @@ async function harness(ceiling = 20) {
     const c = calls[index]
     await c.context.onAccepted({ id: c.context.runId, provider: c.context.provider, providerHandle: `handle-${c.context.runId}`, model: 'reported-model', state: 'running', createdAt: 1, lastUserAt: 1, lastActivityAt: 1, providerWorkEnded: false })
   }
-  return { root, journal, store, calls, interrupts, get lifecycle() { return lifecycle }, waitCalls, accept,
+  return { root, journal, store, calls, interrupts, closed, get lifecycle() { return lifecycle }, waitCalls, accept,
     advance: (ms: number) => { now += ms },
     setContextTokens: (value: number | undefined) => { contextTokens = value },
     failInterrupt: (why: string | null) => { interruptFails = why },
@@ -292,6 +293,25 @@ test('prepared crash and unobserved write ambiguity fail closed without replay o
     assert.equal(h.calls.length, 1)
     await assert.rejects(h.accept(0), /stale|stopped/i)
     h.calls[0].settle(); await pending
+  } finally { await h.cleanup() }
+})
+
+test('a recovery-required conversation can be explicitly replaced without replaying retained input', async () => {
+  const h = await harness()
+  try {
+    h.setUncertain(true)
+    await h.lifecycle.submit({ transcript: 'possibly sent', submissionId: 'uncertain' })
+    assert.equal(h.lifecycle.view().record.phase, 'recovery-required')
+    assert.equal(h.lifecycle.view().snapshot.queued.length, 1)
+    assert.deepEqual(await h.lifecycle.discard(), { discarded: true })
+    assert.equal(h.closed.length, 1, 'the uncertain provider run is closed')
+    assert.equal(h.lifecycle.view().record.phase, 'ready')
+    assert.equal(h.lifecycle.view().snapshot.queued.length, 0)
+    h.setUncertain(false)
+    const next = h.lifecycle.submit({ transcript: 'new request', submissionId: 'new' })
+    await h.waitCalls(1)
+    await h.accept(0); h.calls[0].settle(); await next
+    assert.equal(h.calls[0].text, 'new request')
   } finally { await h.cleanup() }
 })
 

@@ -2184,6 +2184,22 @@ test('the chat stays open while you read it', () => {
   assert.equal(h.client.last('setState')!.state, 'task', 'still expanded')
 })
 
+test('a recovery-required Agent card offers a fresh-start escape instead of replay', () => {
+  const h = setup()
+  h.controller.restoreAgentConversation({ selectedProvider: 'codex', record: {
+    generation: 1, phase: 'recovery-required', provider: 'codex', runId: null,
+    effort: 'medium', ceiling: 20, accepted: [], snapshotId: 'saved',
+  }, snapshot: {
+    generation: 1, chat: { runId: null, turns: [] }, draft: { text: '', revision: 0 },
+    queued: [{ submissionId: 'uncertain', input: { transcript: 'possibly sent' } }],
+    error: 'A previous submission may have reached the provider.',
+  } })
+  h.client.fire({ type: 'pocketOpen' }); h.client.fire({ type: 'pocketExpand' }); h.flush()
+  const task = h.client.last('showTask')!.task
+  assert.equal(task.agentRecoveryRequired, true)
+  assert.equal(task.agentCanRetry, false)
+})
+
 test('durable Agent restore shows actual provider/full chat and preserves newer draft while enqueue awaits', async () => {
   let acknowledge!: () => void
   const switched: string[] = []

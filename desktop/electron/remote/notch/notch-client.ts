@@ -207,6 +207,7 @@ export interface TaskDetailP {
   /** Last message that did not reach the agent (NOT a task failure). */
   deliveryError?: string
   agentCanRetry?: boolean
+  agentRecoveryRequired?: boolean
   /** A message is in flight to the agent. */
   sending?: boolean
   /** Codex's label for the model/effort this thread runs on. */

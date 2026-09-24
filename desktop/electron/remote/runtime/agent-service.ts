@@ -1,4 +1,5 @@
 import { setAgentModelChoices, type AgentModelChoices } from '../agent/modelPolicy'
+import { execFile } from 'node:child_process'
 import { mkdir, stat, access, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join, dirname, basename, isAbsolute } from 'node:path'
@@ -11,6 +12,7 @@ import { AgentConversationLifecycle, type AgentConversationView } from '../agent
 import { AgentConversationStore } from '../agent/conversation-store'
 import { ClaudeCodeProvider } from '../agent/providers/claude'
 import { CodexCliProvider } from '../agent/providers/codex'
+import { resolveCodexCli } from '../codex/driver'
 import type { AgentProvider, AgentProviderId, ProviderProbe } from '../agent/provider'
 import { CapabilityRegistry } from '../agent/capabilities/registry'
 import { MemoryCapability } from '../agent/capabilities/memory'
@@ -94,8 +96,12 @@ export class AgentRuntimeService {
   private routineControllers: UnmuteAgentController[] = []
   private routineDeps?: { registry: CapabilityRegistry; tokens: AgentTokenStore; handles: InteractionAttachmentHandles }
   private routineProviders: RoutineProviders
+  private readonly defaultProviders: boolean
+  private readonly defaultRoutineProviders: boolean
   constructor(private root: string, private emit: (event: AgentRuntimeEvent) => void, private host: AgentHostCall,
     providers?: Map<AgentProviderId, AgentProvider>, private openIndex = openSqlCipherMemoryIndex, routineProviders?: RoutineProviders) {
+    this.defaultProviders = !providers
+    this.defaultRoutineProviders = !routineProviders
     this.providers = providers ?? new Map<AgentProviderId, AgentProvider>([
       ['claude', new ClaudeCodeProvider({ runtime: 'persistent' })], ['codex', new CodexCliProvider({ runtime: 'persistent' })],
     ])
@@ -121,6 +127,15 @@ export class AgentRuntimeService {
     return this.configuring
   }
   private async initialize(input: AgentRuntimeConfig): Promise<unknown> {
+    if (this.defaultProviders) {
+      const binary = await resolveCodexCli(bin => new Promise<string | null>(resolve => {
+        execFile('/usr/bin/which', [bin], { env: process.env }, (error, stdout) => resolve(error ? null : String(stdout).trim() || null))
+      }))
+      if (binary) {
+        this.providers.set('codex', new CodexCliProvider({ binary, runtime: 'persistent' }))
+        if (this.defaultRoutineProviders) this.routineProviders.reader.set('codex', new CodexCliProvider({ binary, runtime: 'headless' }))
+      }
+    }
     const key = Buffer.from(input.masterKey, 'base64')
     if (key.length !== 32) { key.fill(0); throw new Error('Agent memory requires a 32-byte master key') }
     this.key = key
