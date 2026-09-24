@@ -21,6 +21,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import { belowMinimum, compareVersions, MIN_CLI_VERSIONS, parseVersion } from '../onboarding/cli-versions'
 import { resolveKnownProviderBinary } from '../onboarding/provider-probe'
 import { installProvider } from '../onboarding/provider-setup'
 import type { ProviderId } from '../onboarding/types'
@@ -66,21 +67,7 @@ export function detectChannel(cli: CliId, realPath: string, env: { home: string;
   return { kind: 'unknown' }
 }
 
-/** The first `x.y.z` in a `--version` line ("2.1.280 (Claude Code)",
- *  "codex-cli 0.156.1"). Prerelease suffixes are ignored. */
-export function parseVersion(text: string): string | null {
-  return text.match(/(\d+)\.(\d+)\.(\d+)/)?.[0] ?? null
-}
-
-export function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(Number)
-  const pb = b.split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
-    if (d !== 0) return Math.sign(d)
-  }
-  return 0
-}
+export { belowMinimum, compareVersions, MIN_CLI_VERSIONS, parseVersion } from '../onboarding/cli-versions'
 
 type Command = { command: string; args: string[] }
 
@@ -118,6 +105,9 @@ export function manualCommandFor(cli: CliId, channel: InstallChannel): string | 
 
 export type CliUpdateResult =
   | { cli: CliId; state: 'not-installed' }
+  /** Was missing, and Unmute installed it with the official installer. */
+  | { cli: CliId; state: 'installed'; version: string }
+  | { cli: CliId; state: 'install-failed'; detail: string }
   | { cli: CliId; state: 'disabled' }
   /** Could not learn the installed or the published version; nothing done. */
   | { cli: CliId; state: 'unknown'; detail: string }
@@ -125,8 +115,8 @@ export type CliUpdateResult =
   | { cli: CliId; state: 'updated'; from: string; to: string }
   /** Behind, and not ours to update (a desktop app's copy, or an install we
    *  don't recognise). Reported so the user can be told. */
-  | { cli: CliId; state: 'outdated'; version: string; latest: string; channel: InstallChannel['kind']; command?: string }
-  | { cli: CliId; state: 'failed'; version: string; latest: string; detail: string; command?: string }
+  | { cli: CliId; state: 'outdated'; version: string; latest: string; channel: InstallChannel['kind']; command?: string; belowMinimum?: true }
+  | { cli: CliId; state: 'failed'; version: string; latest: string; detail: string; command?: string; belowMinimum?: true }
 
 type RunResult = { code: number | null; stdout: string; stderr: string }
 
@@ -151,41 +141,61 @@ async function installedVersion(deps: CliUpdateDeps, binary: string): Promise<st
   return r.code === 0 ? parseVersion(r.stdout) ?? parseVersion(r.stderr) : null
 }
 
-/** Check one CLI and, when it is behind and ours to update, update it. */
-export async function updateCli(cli: CliId, deps: CliUpdateDeps): Promise<CliUpdateResult> {
+/** Install a missing CLI with its official installer (a fresh install has no
+ *  channel to respect yet, and the installer is what the onboarding button
+ *  runs too). */
+async function installMissing(cli: CliId, deps: CliUpdateDeps): Promise<CliUpdateResult> {
+  const r = await deps.runInstaller(cli)
+  if (!r.ok) return { cli, state: 'install-failed', detail: r.detail || 'The installer did not finish.' }
+  const binary = await deps.resolveBinary(cli)
+  const version = binary ? await installedVersion(deps, binary) : null
+  if (!version) return { cli, state: 'install-failed', detail: 'The installer finished, but the CLI is still not where Unmute looks for it.' }
+  return { cli, state: 'installed', version }
+}
+
+/** Check one CLI and, when it is behind and ours to update, update it.
+ *  `installIfMissing` also installs it when it is absent — the caller decides,
+ *  because a Mac that runs only the other agent must not be given this one. */
+export async function updateCli(cli: CliId, deps: CliUpdateDeps, opts: { installIfMissing?: boolean } = {}): Promise<CliUpdateResult> {
   if (deps.disabled(cli)) return { cli, state: 'disabled' }
   const binary = await deps.resolveBinary(cli)
-  if (!binary) return { cli, state: 'not-installed' }
+  if (!binary) return opts.installIfMissing ? installMissing(cli, deps) : { cli, state: 'not-installed' }
 
   const version = await installedVersion(deps, binary)
   if (!version) return { cli, state: 'unknown', detail: `Could not read ${binary} --version.` }
-  const latest = await deps.latestVersion(CLI_PACKAGES[cli]).catch(() => null)
-  if (!latest) return { cli, state: 'unknown', detail: 'Could not read the latest published version.' }
-  if (compareVersions(version, latest) >= 0) return { cli, state: 'current', version }
+  // Below the minimum the update is not optional, so it goes ahead even when
+  // the registry cannot be reached: every channel installs @latest anyway.
+  const tooOld = belowMinimum(cli, version)
+  const published = await deps.latestVersion(CLI_PACKAGES[cli]).catch(() => null)
+  if (!published && !tooOld) return { cli, state: 'unknown', detail: 'Could not read the latest published version.' }
+  if (published && compareVersions(version, published) >= 0) return { cli, state: 'current', version }
+  const latest = published ?? MIN_CLI_VERSIONS[cli]
+  const flag = tooOld ? { belowMinimum: true as const } : {}
 
   let real = binary
   try { real = deps.realpath(binary) } catch { /* keep the unresolved path */ }
   const channel = detectChannel(cli, real, { home: deps.home, codexHome: deps.codexHome })
   const command = manualCommandFor(cli, channel)
   const update = updateCommandFor(cli, binary, channel, deps.exists)
-  if (!update) return { cli, state: 'outdated', version, latest, channel: channel.kind, ...(command ? { command } : {}) }
+  if (!update) return { cli, state: 'outdated', version, latest, channel: channel.kind, ...(command ? { command } : {}), ...flag }
 
   if (update === 'installer') {
     const r = await deps.runInstaller(cli)
-    if (!r.ok) return { cli, state: 'failed', version, latest, detail: r.detail || 'The installer did not finish.', ...(command ? { command } : {}) }
+    if (!r.ok) return { cli, state: 'failed', version, latest, detail: r.detail || 'The installer did not finish.', ...(command ? { command } : {}), ...flag }
   } else {
     const r = await deps.run(update.command, update.args, UPDATE_TIMEOUT_MS)
     if (r.code !== 0) {
       const detail = (r.stderr.trim() || r.stdout.trim() || `${update.command} exited ${r.code}`).slice(-500)
-      return { cli, state: 'failed', version, latest, detail, ...(command ? { command } : {}) }
+      return { cli, state: 'failed', version, latest, detail, ...(command ? { command } : {}), ...flag }
     }
   }
 
   // Re-read rather than trust the exit code: Homebrew can lag npm by a release,
   // in which case `brew upgrade` succeeds and changes nothing.
   const after = await installedVersion(deps, binary) ?? version
-  if (compareVersions(after, version) > 0) return { cli, state: 'updated', from: version, to: after }
-  return { cli, state: 'outdated', version, latest, channel: channel.kind, ...(command ? { command } : {}) }
+  if (compareVersions(after, version) > 0 && !belowMinimum(cli, after)) return { cli, state: 'updated', from: version, to: after }
+  if (compareVersions(after, version) > 0) return { cli, state: 'outdated', version: after, latest, channel: channel.kind, ...(command ? { command } : {}), ...flag }
+  return { cli, state: 'outdated', version, latest, channel: channel.kind, ...(command ? { command } : {}), ...flag }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,17 +277,43 @@ export class CliUpdater {
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms))
   }
 
-  start(): void {
+  /** The routine pass waits two minutes so it never competes with launch. That
+   *  wait is skipped when no agent can run at all — nothing is installed, or
+   *  what is installed is too old — because then every task would fail until
+   *  it happens. Resolves once the urgent pass (if any) has finished. */
+  async start(): Promise<void> {
+    if (await this.urgent().catch(() => false)) {
+      await this.runOnce()
+      this.schedule(this.opts.intervalMs ?? 6 * 60 * 60_000)
+      return
+    }
     this.schedule(this.opts.firstDelayMs ?? 2 * 60_000)
   }
 
+  private async urgent(): Promise<boolean> {
+    const { deps } = this.opts
+    let usable = false
+    for (const cli of ['claude', 'codex'] as const) {
+      const binary = await deps.resolveBinary(cli)
+      if (!binary) continue
+      const version = await installedVersion(deps, binary)
+      // An unreadable version is not evidence of an old CLI; leave it be.
+      if (!version || !belowMinimum(cli, version)) usable = true
+    }
+    return !usable
+  }
+
   /** One pass over both CLIs, one at a time (both may share a Homebrew lock).
-   *  Concurrent calls share the pass in flight. */
+   *  Concurrent calls share the pass in flight. A missing CLI is installed only
+   *  when NEITHER is on this Mac: someone who runs just Codex never had Claude
+   *  Code put on their machine, and vice versa. */
   runOnce(): Promise<CliUpdateResult[]> {
     return this.running ??= (async () => {
       const results: CliUpdateResult[] = []
+      const present = await Promise.all((['claude', 'codex'] as const).map((cli) => this.opts.deps.resolveBinary(cli).catch(() => null)))
+      const installIfMissing = present.every((binary) => !binary)
       for (const cli of ['claude', 'codex'] as const) {
-        const result = await updateCli(cli, this.opts.deps).catch((error): CliUpdateResult =>
+        const result = await updateCli(cli, this.opts.deps, { installIfMissing }).catch((error): CliUpdateResult =>
           ({ cli, state: 'unknown', detail: error instanceof Error ? error.message : String(error) }))
         results.push(result)
         this.opts.onResult(result)

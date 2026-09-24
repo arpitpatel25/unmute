@@ -1,4 +1,4 @@
-export type ProviderUiState = 'checking' | 'ready' | 'missing' | 'auth-required' | 'installing' | 'timed-out' | 'failed'
+export type ProviderUiState = 'checking' | 'ready' | 'missing' | 'outdated' | 'auth-required' | 'installing' | 'timed-out' | 'failed'
 
 export type PresenterCard = null | {
   kind: 'permission' | 'speak' | 'provider' | 'repair' | 'success'

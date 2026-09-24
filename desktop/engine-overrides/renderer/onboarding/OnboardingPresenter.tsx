@@ -28,6 +28,7 @@ function ProviderButton({ provider, card }: { provider: 'claude' | 'codex'; card
   if (status.state === 'installing') return <button type="button" disabled>Setting up {label}…</button>
   if (status.state === 'ready') return <button type="button" onClick={() => send({ type: 'choose-provider', provider })}>Use {label}</button>
   if (status.state === 'missing') return <button type="button" onClick={() => send({ type: 'install-provider', provider })}>Set up {label}</button>
+  if (status.state === 'outdated') return <button type="button" title={status.detail} onClick={() => send({ type: 'install-provider', provider })}>Update {label}</button>
   if (status.state === 'auth-required') return <button type="button" onClick={() => send({ type: 'authenticate-provider', provider })}>Sign in to {label}</button>
   return <button type="button" onClick={() => send({ type: 'retry-provider', provider })}>Check {label} again</button>
 }

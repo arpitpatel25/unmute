@@ -25,7 +25,12 @@ const INSTALLER_URLS: Record<ProviderId, string> = {
 
 function exec(command: string, args: string[]): Promise<RunResult> {
   return new Promise(resolve => {
-    execFile(command, args, { env: process.env, timeout: 180_000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
+    // Codex's installer ends by asking "Start Codex now?" — on /dev/tty when
+    // there is one, otherwise on stdin, which execFile leaves open. Either way
+    // nobody answers, so the install sat out the whole timeout and was then
+    // reported as failed. CODEX_NON_INTERACTIVE skips every prompt.
+    const env = { ...process.env, CODEX_NON_INTERACTIVE: '1' }
+    execFile(command, args, { env, timeout: 180_000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
       const code = typeof (error as NodeJS.ErrnoException & { code?: unknown } | null)?.code === 'number'
         ? (error as unknown as { code: number }).code
         : error ? 1 : 0

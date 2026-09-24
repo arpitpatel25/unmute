@@ -106,3 +106,18 @@ function probeHarness(options: {
     get spawned() { return spawned },
   }
 }
+
+test('a CLI below the minimum is outdated, and is never asked to run a turn', async () => {
+  const harness = probeHarness({ stdout: 'READY' })
+  const result = await probeProvider('claude', { ...harness.deps, readVersion: async () => '2.0.67' }, 1_000)
+  assert.deepEqual(result, { provider: 'claude', state: 'outdated', detail: 'Claude Code 2.0.67 is too old — Unmute needs 2.1.38 or newer. Update it to use it with Unmute.' })
+  assert.equal(harness.spawned, false)
+})
+
+test('a new-enough or unreadable version goes on to the readiness turn', async () => {
+  for (const version of ['0.156.1', null]) {
+    const harness = probeHarness({ stdout: 'READY' })
+    const result = await probeProvider('codex', { ...harness.deps, readVersion: async () => version }, 1_000)
+    assert.equal(result.state, 'ready')
+  }
+})

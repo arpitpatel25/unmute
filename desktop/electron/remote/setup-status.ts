@@ -94,8 +94,11 @@ export interface BackendProbe {
   installed: boolean
   /** Able to take a task RIGHT NOW (installed, and reachable if it needs to be). */
   ready: boolean
-  /** Why not, when we know: 'not-installed' | 'not-armed' | 'not-running'. */
+  /** Why not, when we know: 'not-installed' | 'outdated' | 'not-armed' | 'not-running'. */
   reason?: string
+  /** For 'outdated': the installed version and the oldest Unmute can drive. */
+  version?: string
+  minimum?: string
 }
 
 export interface SetupInputs {
@@ -113,6 +116,9 @@ export interface SetupInputs {
   /** CLIs that are behind and that Unmute could not update itself (see
    *  cli-updates.ts). Optional, like backends. */
   cliUpdates?: CliUpdateNotice[]
+  /** Missing CLIs Unmute tried to install and could not, with the reason,
+   *  keyed by provider id. */
+  cliInstallFailures?: Record<string, string>
 }
 
 /** An agent CLI older than the published release, which Unmute tried and
@@ -127,6 +133,8 @@ export interface CliUpdateNotice {
   command?: string
   /** Why the automatic update did not happen, when it was attempted. */
   detail?: string
+  /** Older than Unmute can drive at all — not just missing new models. */
+  belowMinimum?: boolean
 }
 
 /** How a backend that isn't ready gets fixed. Keyed by provider id, because the
@@ -136,7 +144,11 @@ export interface CliUpdateNotice {
 const BACKEND_REMEDIES: Record<string, { install: string; command?: string; unready?: { detail: string; action?: SetupStep['action'] } }> = {
   claude: {
     install: 'Install the Claude Code CLI and sign in, then re-check. If it is already installed but not found, it is probably not on the PATH a launched app sees — reopen Unmute from your terminal once, or install it under /usr/local/bin.',
-    command: 'npm install -g @anthropic-ai/claude-code',
+    command: 'curl -fsSL https://claude.ai/install.sh | bash',
+  },
+  codex: {
+    install: 'Install the Codex CLI and sign in with `codex login`, then re-check. If it is already installed but not found, it is probably not on the PATH a launched app sees — reopen Unmute from your terminal once.',
+    command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
   },
   'codex-desktop': {
     install: 'Install the Codex desktop app (ChatGPT.app) in /Applications and sign in to it. Unmute drives the real app, so it must be installed at that exact path.',
@@ -214,13 +226,19 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
   // product, and they are never self-confirmed, because we can see the truth.
   for (const b of shownBackends) {
     const remedy = BACKEND_REMEDIES[b.id]
+    if (!b.ready && b.reason === 'outdated') {
+      steps.push(outdatedBackendStep(b, (inputs.cliUpdates ?? []).find((u) => u.id === b.id)))
+      continue
+    }
     const unready = !b.installed ? undefined : remedy?.unready
+    const installFailure = !b.installed ? inputs.cliInstallFailures?.[b.id] : undefined
+    const install = remedy?.install ?? `${b.label} is not available on this machine.`
     steps.push({
       key: `backend-${b.id}`,
       title: b.ready ? `${b.label} — ready` : `Set up ${b.label}`,
       detail: b.ready
         ? `${b.label} can take tasks.`
-        : unready?.detail ?? remedy?.install ?? `${b.label} is not available on this machine.`,
+        : unready?.detail ?? (installFailure ? `Unmute tried to install ${b.label} and could not (${installFailure.split('\n')[0]}). ${install}` : install),
       ...(b.ready || b.installed ? {} : remedy?.command ? { command: remedy.command } : {}),
       ...(b.ready ? {} : unready?.action ? { action: unready.action } : {}),
       status: b.ready ? 'done' : 'todo',
@@ -233,6 +251,8 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
   // models released after it. Only listed when Unmute could not update it
   // itself — a CLI it keeps current never needs the user.
   for (const u of inputs.cliUpdates ?? []) {
+    // A too-old CLI is already its backend's own (required) row.
+    if (u.belowMinimum && shownBackends.some((b) => b.id === u.id && b.reason === 'outdated')) continue
     steps.push({
       key: `cli-update-${u.id}`,
       title: `Update ${u.label} (${u.version} → ${u.latest})`,
@@ -283,6 +303,28 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
   return steps
 }
 
+/** A backend whose CLI is installed but older than Unmute can drive. Required,
+ *  like any backend row: it cannot run a task until it is updated. Unmute
+ *  updates it by itself when it may, so the command is only shown once that
+ *  has been tried and did not work (or is not Unmute's to do). */
+function outdatedBackendStep(b: BackendProbe, notice: CliUpdateNotice | undefined): SetupStep {
+  const tooOld = `${b.label}${b.version ? ` ${b.version}` : ''} is too old for Unmute, which needs ${b.minimum ?? 'a newer version'} or newer.`
+  const why = notice
+    ? notice.command
+      ? ` Unmute could not update it automatically${notice.detail ? ` (${notice.detail.split('\n')[0]})` : ''} — run the command in your terminal, then re-check.`
+      : ` It is updated by the app it ships with — update that app, then re-check.`
+    : ' Unmute updates it automatically unless automatic CLI updates are turned off; re-check in a minute.'
+  return {
+    key: `backend-${b.id}`,
+    title: `Update ${b.label}`,
+    detail: tooOld + why,
+    ...(notice?.command ? { command: notice.command } : {}),
+    status: 'todo',
+    auto: true,
+    group: 'backend',
+  }
+}
+
 /** Headline: are the ESSENTIAL steps done? (drives the "setup needed" nudge.)
  *  Optional enhancements (e.g. tmux) don't count against completeness. */
 export function setupComplete(steps: SetupStep[]): boolean {
@@ -311,7 +353,7 @@ export function blockerOf(steps: SetupStep[]): string | null {
   if (backends.length > 0 && !backends.some((s) => s.status === 'done')) {
     // Named from the rows actually shown, so an agent that is not on this Mac
     // is never mentioned here either.
-    const names = backends.map((s) => s.title.replace(/^Set up /, '').replace(/ — ready$/, ''))
+    const names = backends.map((s) => s.title.replace(/^(Set up|Update) /, '').replace(/ — ready$/, ''))
     return `No agent is set up yet — Remote needs ${names.join(' or ')} to run anything.`
   }
   const other = required.find((s) => s.group !== 'backend' && s.status === 'todo')

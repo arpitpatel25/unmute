@@ -4,11 +4,12 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 
+import { belowMinimum, MIN_CLI_VERSIONS, parseVersion } from './cli-versions'
 import type { ProviderId } from './types'
 
 export type ProviderProbeResult =
   | { provider: ProviderId; state: 'ready' }
-  | { provider: ProviderId; state: 'missing' | 'auth-required' | 'timed-out' | 'failed'; detail: string }
+  | { provider: ProviderId; state: 'missing' | 'outdated' | 'auth-required' | 'timed-out' | 'failed'; detail: string }
 
 export interface ProbeChild {
   stdout?: { on(event: 'data', listener: (value: Buffer) => void): unknown }
@@ -24,6 +25,9 @@ export interface ProviderProbeDeps {
   makeWorkspace(provider: ProviderId): Promise<string>
   removeWorkspace(path: string): Promise<void>
   spawn(command: string, args: string[], options: { cwd: string }): ProbeChild
+  /** `<binary> --version`, parsed; null when it cannot be read. Optional so a
+   *  caller without it skips the minimum-version check. */
+  readVersion?(binary: string): Promise<string | null>
 }
 
 const PROBE_PROMPT = 'This is a readiness check. Do not use tools or modify files. Reply with exactly READY.'
@@ -67,7 +71,14 @@ export const defaultProviderProbeDeps: ProviderProbeDeps = {
   makeWorkspace: (provider) => mkdtemp(join(tmpdir(), `unmute-${provider}-readiness-`)),
   removeWorkspace: (path) => rm(path, { recursive: true, force: true }),
   spawn: (command, args, options) => nodeSpawn(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] }),
+  readVersion: binary => new Promise(resolve => {
+    execFile(binary, ['--version'], { env: process.env, timeout: 10_000 }, (error, stdout, stderr) => {
+      resolve(error ? null : parseVersion(String(stdout)) ?? parseVersion(String(stderr)))
+    })
+  }),
 }
+
+const LABELS: Record<ProviderId, string> = { claude: 'Claude Code', codex: 'Codex' }
 
 function classifyFailure(provider: ProviderId, detail: string): ProviderProbeResult {
   if (/log[ -]?in|sign[ -]?in|authentication|unauthori[sz]ed|credential|api key/i.test(detail)) {
@@ -86,6 +97,12 @@ export async function probeProvider(
   try {
     const binary = await deps.resolveBinary(provider)
     if (!binary) return { provider, state: 'missing', detail: `${provider} CLI is not installed.` }
+    // An old CLI can still answer this prompt and then fail on the flags a
+    // real task passes, so readiness is checked against the minimum first.
+    const version = await deps.readVersion?.(binary).catch(() => null)
+    if (version && belowMinimum(provider, version)) {
+      return { provider, state: 'outdated', detail: `${LABELS[provider]} ${version} is too old — Unmute needs ${MIN_CLI_VERSIONS[provider]} or newer. Update it to use it with Unmute.` }
+    }
 
     const outcome = await new Promise<{ kind: 'close'; code: number | null; stdout: string; stderr: string } | { kind: 'error'; detail: string } | { kind: 'timeout' }>((resolve) => {
       let settled = false

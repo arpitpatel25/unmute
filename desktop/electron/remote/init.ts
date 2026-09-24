@@ -25,7 +25,7 @@ import { join, dirname, basename, isAbsolute } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { homedir, tmpdir } from 'node:os'
-import { existsSync, writeFileSync, mkdirSync, statSync, watch, constants as fsConstants, promises as fs } from 'node:fs'
+import { existsSync, writeFileSync, mkdirSync, statSync, realpathSync, watch, constants as fsConstants, promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
 import { claudeUnattendedArgs, refreshManagedPolicy } from './permission-ceiling'
@@ -64,7 +64,7 @@ import {
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete, blockerOf, confirmationKey, detectedBackends, displayedAgent, type BackendProbe, type CliUpdateNotice } from './setup-status'
-import { CliUpdater, defaultCliUpdateDeps, type CliUpdateResult } from './cli-updates'
+import { CliUpdater, belowMinimum, defaultCliUpdateDeps, MIN_CLI_VERSIONS, parseVersion, type CliId, type CliUpdateResult } from './cli-updates'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape, setOverlaySuppressed } from './overlay'
 import { Router, type RoutableTask, type AgentAvailability } from './router'
 import { CodexRouterEngine } from './codex-router-engine'
@@ -689,8 +689,15 @@ async function probeBackends(): Promise<BackendProbe[]> {
       //
       // Asking each backend about its own binary is the whole point of walking
       // the registry — otherwise the loop is a two-entry literal wearing a for.
-      const ok = p.id === 'codex' ? await codexCliAvailable() : await claudeCliAvailable()
-      out.push({ id: p.id, label: p.label, installed: ok, ready: ok, ...(ok ? {} : { reason: 'not-installed' }) })
+      const cli: CliId = p.id === 'codex' ? 'codex' : 'claude'
+      const state = await cliState(cli, `${cli}-cli-availability`)
+      const ready = state.installed && !state.tooOld
+      out.push({
+        id: p.id, label: p.label, installed: state.installed, ready,
+        ...(ready ? {} : state.installed
+          ? { reason: 'outdated', ...(state.version ? { version: state.version } : {}), minimum: MIN_CLI_VERSIONS[cli] }
+          : { reason: 'not-installed' }),
+      })
       continue
     }
     // A driven app: installed is not enough — it has to be reachable as well,
@@ -743,7 +750,7 @@ async function getSetupStatus() {
   const mcpListOutput = await claudeMcpList()
   const confirmations = settings.get('setupConfirmations') ?? {}
   const backends = await probeBackends()
-  const steps = buildSetupChecklist({ mcpListOutput, browserEnabled, tmuxAvailable: tmuxBin !== null, confirmations, backends, cliUpdates: cliUpdateNotices() })
+  const steps = buildSetupChecklist({ mcpListOutput, browserEnabled, tmuxAvailable: tmuxBin !== null, confirmations, backends, cliUpdates: cliUpdateNotices(), cliInstallFailures: cliInstallFailures() })
   const complete = setupComplete(steps)
   // The blocker travels WITH the status so no surface has to guess which step
   // matters most — the old nudge named the Chrome extension unconditionally.
@@ -764,8 +771,16 @@ function cliUpdateNotices(): CliUpdateNotice[] {
       id: r.cli, label: labels[r.cli], version: r.version, latest: r.latest,
       ...(r.command ? { command: r.command } : {}),
       ...(r.state === 'failed' ? { detail: r.detail } : {}),
+      ...(r.belowMinimum ? { belowMinimum: true } : {}),
     })
   }
+  return out
+}
+
+/** Why an automatic install of a missing CLI did not work, per CLI. */
+function cliInstallFailures(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const r of cliUpdateResults.values()) if (r.state === 'install-failed') out[r.cli] = r.detail
   return out
 }
 
@@ -778,7 +793,7 @@ function cliUpdateNotices(): CliUpdateNotice[] {
 function onCliUpdateResult(result: CliUpdateResult): void {
   cliUpdateResults.set(result.cli, result)
   log.event('cli-update', { ...result })
-  if (result.state !== 'updated') return
+  if (result.state !== 'updated' && result.state !== 'installed') return
   cliCache.delete(result.cli)
   if (result.cli === 'claude') {
     chatClaudeCatalogAttemptAt = 0
@@ -2350,19 +2365,51 @@ export async function codexCliAvailable(): Promise<boolean> {
   return cliOnPath('codex', 'codex-cli-availability')
 }
 
-const cliCache = new Map<string, { at: number; ok: boolean }>()
+/** A CLI as the executors will meet it: on the PATH at all, and if so,
+ *  whether it is new enough to run (see MIN_CLI_VERSIONS). */
+interface CliState { installed: boolean; version?: string; tooOld: boolean }
 
-async function cliOnPath(bin: string, event: string): Promise<boolean> {
-  const hit = cliCache.get(bin)
-  if (hit && Date.now() - hit.at < 60_000) return hit.ok
-  const ok = await new Promise<boolean>((resolve) => {
-    execFile('/usr/bin/which', [bin], { env: process.env }, (err, stdout) => {
-      resolve(!err && !!String(stdout).trim())
+const cliCache = new Map<string, { at: number; state: CliState }>()
+/** `--version` per binary, kept until the file changes: availability is asked
+ *  per dispatch, and spawning a CLI each time would add up. */
+const cliVersionCache = new Map<string, { mtimeMs: number; version: string | null }>()
+
+async function cliVersionOf(path: string): Promise<string | null> {
+  let mtimeMs = 0
+  try { mtimeMs = statSync(realpathSync(path)).mtimeMs } catch { /* read it uncached */ }
+  const hit = cliVersionCache.get(path)
+  if (hit && mtimeMs && hit.mtimeMs === mtimeMs) return hit.version
+  const version = await new Promise<string | null>((resolve) => {
+    execFile(path, ['--version'], { env: process.env, timeout: 10_000 }, (err, stdout, stderr) => {
+      resolve(err ? null : parseVersion(String(stdout)) ?? parseVersion(String(stderr)))
     })
   })
-  if (hit?.ok !== ok) log.event(event, { ok })
-  cliCache.set(bin, { at: Date.now(), ok })
-  return ok
+  if (mtimeMs) cliVersionCache.set(path, { mtimeMs, version })
+  return version
+}
+
+async function cliState(bin: CliId, event: string): Promise<CliState> {
+  const hit = cliCache.get(bin)
+  if (hit && Date.now() - hit.at < 60_000) return hit.state
+  const path = await new Promise<string | null>((resolve) => {
+    execFile('/usr/bin/which', [bin], { env: process.env }, (err, stdout) => {
+      resolve(err ? null : String(stdout).trim() || null)
+    })
+  })
+  // A version we cannot read is not proof of an old CLI — it stays usable.
+  const version = path ? await cliVersionOf(path) : null
+  const state: CliState = { installed: !!path, ...(version ? { version } : {}), tooOld: !!version && belowMinimum(bin, version) }
+  const ok = state.installed && !state.tooOld
+  if (!hit || (hit.state.installed && !hit.state.tooOld) !== ok) log.event(event, { ok, ...(version ? { version } : {}), ...(state.tooOld ? { minimum: MIN_CLI_VERSIONS[bin] } : {}) })
+  cliCache.set(bin, { at: Date.now(), state })
+  return state
+}
+
+/** Installed AND new enough: a below-minimum CLI fails at spawn, so it must
+ *  never be offered to the router or the picker as if it could run a task. */
+async function cliOnPath(bin: CliId, event: string): Promise<boolean> {
+  const state = await cliState(bin, event)
+  return state.installed && !state.tooOld
 }
 
 /**
@@ -5678,7 +5725,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     deps: defaultCliUpdateDeps({ enabled: () => settings.get('agentCliAutoUpdate') !== false }),
     busy: () => manager?.list().some((t) => t.state === 'processing') ?? false,
     onResult: onCliUpdateResult,
-  }).start()
+  }).start().catch(error => log.warn('cli-update start failed', { error: (error as Error).message }))
   if (fixedSurfacePreferenceChanges.surfaceTone || fixedSurfacePreferenceChanges.surfaceAppearance) {
     log.event('surface-preferences-normalized', fixedSurfacePreferenceChanges)
   }

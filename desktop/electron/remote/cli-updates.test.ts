@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   CliUpdater,
+  MIN_CLI_VERSIONS,
   claudeAutoUpdateDisabled,
   compareVersions,
   detectChannel,
@@ -74,8 +75,8 @@ function fakeDeps(opts: {
   existing?: string[]
 }) {
   const calls: string[] = []
-  let version = opts.version ?? '1.0.0'
-  const latest = opts.latest === undefined ? '1.0.1' : opts.latest
+  let version = opts.version ?? '9.0.0'
+  const latest = opts.latest === undefined ? '9.0.1' : opts.latest
   const deps: CliUpdateDeps = {
     resolveBinary: async () => (opts.binary === undefined ? '/bin/cli' : opts.binary),
     realpath: () => opts.real ?? '/bin/cli',
@@ -127,15 +128,15 @@ test('a standalone Codex install is upgraded by re-running the official installe
 })
 
 test('a current CLI is left alone', async () => {
-  const { deps, calls } = fakeDeps({ version: '1.0.1', latest: '1.0.1' })
-  assert.deepEqual(await updateCli('codex', deps), { cli: 'codex', state: 'current', version: '1.0.1' })
+  const { deps, calls } = fakeDeps({ version: '9.0.1', latest: '9.0.1' })
+  assert.deepEqual(await updateCli('codex', deps), { cli: 'codex', state: 'current', version: '9.0.1' })
   assert.equal(calls.length, 2)
 })
 
 test('the copy inside ChatGPT.app is reported, never touched', async () => {
   const { deps, calls } = fakeDeps({ real: '/Applications/ChatGPT.app/Contents/Resources/codex' })
   const result = await updateCli('codex', deps)
-  assert.deepEqual(result, { cli: 'codex', state: 'outdated', version: '1.0.0', latest: '1.0.1', channel: 'app-bundled' })
+  assert.deepEqual(result, { cli: 'codex', state: 'outdated', version: '9.0.0', latest: '9.0.1', channel: 'app-bundled' })
   assert.equal(calls.filter((c) => !c.includes('--version') && !c.startsWith('latest')).length, 0)
 })
 
@@ -166,13 +167,13 @@ test('CliUpdater waits while a task is running, then checks both CLIs and resche
   let busy = true
   const results: string[] = []
   const updater = new CliUpdater({
-    deps: fakeDeps({ version: '1.0.1', latest: '1.0.1' }).deps,
+    deps: fakeDeps({ version: '9.0.1', latest: '9.0.1' }).deps,
     busy: () => busy,
     onResult: (r) => results.push(`${r.cli}:${r.state}`),
     firstDelayMs: 1, busyRetryMs: 2, intervalMs: 3,
     setTimer: (fn, ms) => { timers.push({ fn, ms }); return {} },
   })
-  updater.start()
+  await updater.start()
   assert.deepEqual(timers.map((t) => t.ms), [1])
   timers.shift()!.fn()
   await new Promise((r) => setImmediate(r))
@@ -184,4 +185,105 @@ test('CliUpdater waits while a task is running, then checks both CLIs and resche
   await new Promise((r) => setTimeout(r, 10))
   assert.deepEqual(results, ['claude:current', 'codex:current'])
   assert.deepEqual(timers.map((t) => t.ms), [3])
+})
+
+test('a CLI below the minimum is updated even when the registry cannot be reached', async () => {
+  const { deps, calls } = fakeDeps({ binary: `${HOME}/.local/bin/claude`, real: `${HOME}/.local/share/claude/versions/2.0.67`, version: '2.0.67', latest: null })
+  const result = await updateCli('claude', deps)
+  assert.equal(result.state, 'outdated')
+  assert.ok(result.state === 'outdated' && result.belowMinimum === true)
+  assert.ok(calls.includes(`${HOME}/.local/bin/claude update`), calls.join('\n'))
+})
+
+test('a below-minimum copy Unmute may not touch is flagged as below the minimum', async () => {
+  const { deps } = fakeDeps({ real: '/Applications/ChatGPT.app/Contents/Resources/codex', version: '0.120.0', latest: '0.156.1' })
+  const result = await updateCli('codex', deps)
+  assert.deepEqual(result, { cli: 'codex', state: 'outdated', version: '0.120.0', latest: '0.156.1', channel: 'app-bundled', belowMinimum: true })
+})
+
+test('the minimums are the measured ones', () => {
+  assert.deepEqual(MIN_CLI_VERSIONS, { claude: '2.1.38', codex: '0.136.0' })
+})
+
+/** A Mac where each CLI is either installed at a version or absent, and the
+ *  installer puts the missing one in place. */
+function machine(installed: Partial<Record<CliId, string>>, opts: { installerOk?: boolean } = {}) {
+  const versions = { ...installed }
+  const calls: string[] = []
+  const deps: CliUpdateDeps = {
+    resolveBinary: async (cli) => (versions[cli] ? `/bin/${cli}` : null),
+    realpath: (p) => p,
+    exists: () => false,
+    async run(command, args) {
+      calls.push(`${command} ${args.join(' ')}`)
+      const cli = command.split('/').pop() as CliId
+      return { code: 0, stdout: `${versions[cli]}\n`, stderr: '' }
+    },
+    latestVersion: async () => '9.9.9',
+    async runInstaller(cli) {
+      calls.push(`installer ${cli}`)
+      if (opts.installerOk === false) return { ok: false, detail: 'curl: (6) Could not resolve host' }
+      versions[cli] = '9.9.9'
+      return { ok: true }
+    },
+    disabled: () => false,
+    home: HOME,
+  }
+  return { deps, calls }
+}
+
+test('a missing CLI is installed only when asked to', async () => {
+  const { deps, calls } = machine({})
+  assert.deepEqual(await updateCli('codex', deps), { cli: 'codex', state: 'not-installed' })
+  assert.deepEqual(await updateCli('codex', deps, { installIfMissing: true }), { cli: 'codex', state: 'installed', version: '9.9.9' })
+  assert.deepEqual(calls.filter((c) => c.startsWith('installer')), ['installer codex'])
+})
+
+test('a failed install is reported with the installer\'s reason', async () => {
+  const { deps } = machine({}, { installerOk: false })
+  assert.deepEqual(await updateCli('claude', deps, { installIfMissing: true }), { cli: 'claude', state: 'install-failed', detail: 'curl: (6) Could not resolve host' })
+})
+
+test('a disabled CLI is never installed', async () => {
+  const { deps, calls } = machine({})
+  assert.deepEqual(await updateCli('claude', { ...deps, disabled: () => true }, { installIfMissing: true }), { cli: 'claude', state: 'disabled' })
+  assert.equal(calls.length, 0)
+})
+
+function updaterOn(deps: CliUpdateDeps) {
+  const timers: number[] = []
+  const results: string[] = []
+  const updater = new CliUpdater({
+    deps, busy: () => false, onResult: (r) => results.push(`${r.cli}:${r.state}`),
+    firstDelayMs: 1, intervalMs: 3,
+    setTimer: (_fn, ms) => { timers.push(ms); return {} },
+  })
+  return { updater, timers, results }
+}
+
+test('with no agent on the Mac, start installs both at once instead of waiting', async () => {
+  const { updater, timers, results } = updaterOn(machine({}).deps)
+  await updater.start()
+  assert.deepEqual(results, ['claude:installed', 'codex:installed'])
+  assert.deepEqual(timers, [3])
+})
+
+test('a Mac with one agent never has the other installed', async () => {
+  const { deps, calls } = machine({ codex: '9.9.9' })
+  const { updater, results } = updaterOn(deps)
+  await updater.runOnce()
+  assert.deepEqual(results, ['claude:not-installed', 'codex:current'])
+  assert.ok(!calls.some((c) => c.startsWith('installer')))
+})
+
+test('start skips the delay when every installed CLI is below the minimum', async () => {
+  const old = updaterOn(machine({ claude: '2.0.67' }).deps)
+  await old.updater.start()
+  assert.equal(old.results.length, 2)
+  assert.deepEqual(old.timers, [3])
+
+  const fine = updaterOn(machine({ claude: '2.0.67', codex: '0.156.1' }).deps)
+  await fine.updater.start()
+  assert.deepEqual(fine.results, [])
+  assert.deepEqual(fine.timers, [1])
 })

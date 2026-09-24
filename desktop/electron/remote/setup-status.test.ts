@@ -287,3 +287,38 @@ test('pickers list only detected backends, and never name an undetected default'
   assert.equal(displayedAgent('codex', detectedBackends(probes)), 'codex')
   assert.equal(displayedAgent('claude', []), 'claude', 'nothing detected ⇒ nothing better to name')
 })
+
+test('a CLI below the minimum is a required "Update" row, not ready', () => {
+  const backends = [
+    { id: 'claude', label: 'Claude Code CLI', installed: true, ready: false, reason: 'outdated', version: '2.0.67', minimum: '2.1.38' },
+  ]
+  const steps = buildSetupChecklist({ ...noBackends, backends })
+  const row = steps.find((s) => s.key === 'backend-claude')!
+  assert.equal(row.title, 'Update Claude Code CLI')
+  assert.match(row.detail, /2\.0\.67 is too old for Unmute, which needs 2\.1\.38 or newer/)
+  assert.match(row.detail, /updates it automatically/)
+  assert.equal(row.command, undefined)
+  assert.equal(row.optional, undefined)
+  assert.equal(setupComplete(steps), false)
+  assert.equal(blockerOf(steps), 'No agent is set up yet — Remote needs Claude Code CLI to run anything.')
+})
+
+test('a too-old CLI Unmute failed to update carries the command, and is not listed twice', () => {
+  const backends = [
+    { id: 'codex', label: 'Codex CLI', installed: true, ready: false, reason: 'outdated', version: '0.120.0', minimum: '0.136.0' },
+  ]
+  const cliUpdates = [{ id: 'codex', label: 'Codex CLI', version: '0.120.0', latest: '0.156.1', command: 'npm install -g @openai/codex@latest', detail: 'EACCES: permission denied', belowMinimum: true }]
+  const steps = buildSetupChecklist({ ...noBackends, backends, cliUpdates })
+  const row = steps.find((s) => s.key === 'backend-codex')!
+  assert.match(row.detail, /could not update it automatically \(EACCES: permission denied\)/)
+  assert.equal(row.command, 'npm install -g @openai/codex@latest')
+  assert.equal(steps.some((s) => s.key === 'cli-update-codex'), false)
+})
+
+test('a failed automatic install says so on the install row', () => {
+  const backends = [{ id: 'codex', label: 'Codex CLI', installed: false, ready: false, reason: 'not-installed' }]
+  const steps = buildSetupChecklist({ ...noBackends, backends, cliInstallFailures: { codex: 'curl: (6) Could not resolve host\nmore' } })
+  const row = steps.find((s) => s.key === 'backend-codex')!
+  assert.match(row.detail, /^Unmute tried to install Codex CLI and could not \(curl: \(6\) Could not resolve host\)\. Install the Codex CLI/)
+  assert.equal(row.command, 'curl -fsSL https://chatgpt.com/codex/install.sh | sh')
+})

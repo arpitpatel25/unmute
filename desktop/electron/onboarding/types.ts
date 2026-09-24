@@ -1,5 +1,5 @@
 export type ProviderId = 'claude' | 'codex'
-export type ProviderUiState = 'checking' | 'ready' | 'missing' | 'auth-required' | 'installing' | 'timed-out' | 'failed'
+export type ProviderUiState = 'checking' | 'ready' | 'missing' | 'outdated' | 'auth-required' | 'installing' | 'timed-out' | 'failed'
 export type ProviderUiStatus = { state: ProviderUiState; detail?: string }
 
 export type ActionId =

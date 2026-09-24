@@ -14,6 +14,7 @@ import { prepareOnboardingWorkspace, verifyHelloTask } from './paywall/onboardin
 import { PresenterWindow } from './paywall/onboarding/presenter-window'
 import { defaultProviderProbeDeps, probeProvider, probeProviders, type ProviderProbeResult } from './paywall/onboarding/provider-probe'
 import { installProvider, launchProviderLogin } from './paywall/onboarding/provider-setup'
+import { defaultCliUpdateDeps, updateCli, type CliUpdateResult } from './paywall/remote/cli-updates'
 import { ProgressStore } from './paywall/onboarding/progress-store'
 import { OnboardingRuntime } from './paywall/onboarding/register'
 import { acceptsAgentTaskLink, onOnboardingReceipt } from './paywall/onboarding/receipts'
@@ -154,7 +155,7 @@ export async function initOnboarding(
     const bothMissing = providers?.claude.state === 'missing' && providers.codex.state === 'missing'
     const actionableDetail = (['claude', 'codex'] as const)
       .map(provider => providers?.[provider])
-      .find(result => result?.state === 'failed' || result?.state === 'timed-out' || result?.state === 'auth-required')
+      .find(result => result?.state === 'outdated' || result?.state === 'failed' || result?.state === 'timed-out' || result?.state === 'auth-required')
     presenter.send({
       ...command,
       card: {
@@ -300,7 +301,18 @@ export async function initOnboarding(
       if (installingProviders.has(action.provider)) return
       installingProviders.add(action.provider)
       presentProviderChoice()
-      const installed = await installProvider(action.provider)
+      // A too-old CLI is updated through the channel it was installed with —
+      // running the official installer over an npm or Homebrew copy would
+      // leave two. The user asked for it, so the auto-update opt-out does not
+      // apply here.
+      const outdated = (await ensureProviders())[action.provider].state === 'outdated'
+      const installed = outdated
+        ? await updateCli(action.provider, { ...defaultCliUpdateDeps({ enabled: () => true }), disabled: () => false })
+          .then((r: CliUpdateResult) => r.state === 'failed' ? { state: 'failed' as const, detail: r.detail }
+            : r.state === 'outdated' ? { state: 'failed' as const, detail: r.command ? `Unmute could not update it. Run \`${r.command}\` in your terminal, then check again.` : 'It is updated by the app it ships with — update that app, then check again.' }
+            : { state: 'installed' as const })
+          .catch((error: unknown) => ({ state: 'failed' as const, detail: error instanceof Error ? error.message : String(error) }))
+        : await installProvider(action.provider)
       installingProviders.delete(action.provider)
       const currentProviders = await ensureProviders()
       currentProviders[action.provider] = installed.state === 'installed'
