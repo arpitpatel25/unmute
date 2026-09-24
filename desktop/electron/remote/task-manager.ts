@@ -4321,6 +4321,25 @@ export class TaskManager extends EventEmitter {
   /** One task-level Stop path for the button and Agent. Idempotent at any state. */
   kill(id: string): void { void this.stopTask(id) }
 
+  isStopped(id: string): boolean { return !!this.tasks.get(id)?.stopRequestedAt }
+
+  /** An explicit new message may follow Stop; a delayed older message may not. */
+  async prepareExplicitMessage(id: string): Promise<number | null> {
+    const task = this.tasks.get(id)
+    if (!task) return null
+    const version = this.chatStopVersion.get(id) ?? 0
+    const stopping = this.stopInFlight.get(id)
+    if (stopping && !(await stopping)) return null
+    if ((this.chatStopVersion.get(id) ?? 0) !== version) return null
+    if (task.stopRequestedAt && !task.stopConfirmedAt) return null
+    if (task.stopRequestedAt) {
+      task.stopRequestedAt = undefined
+      task.stopConfirmedAt = undefined
+      await this.persistStopFields(task)
+    }
+    return version
+  }
+
   private stopAfterConnecting(task: Task, forStop?: boolean): void {
     if (forStop || !task.stopRequestedAt || task.stopConfirmedAt) return
     const pending = this.stopInFlight.get(task.id)
@@ -6105,17 +6124,19 @@ export class TaskManager extends EventEmitter {
     }
   }
 
-  async deliverDraft(id: string, text: string, attachments: readonly string[], inputTrace?: TaskReplyTrace, ordered?: TaskInput[], context: AnswerContext = null): Promise<boolean> {
+  async deliverDraft(id: string, text: string, attachments: readonly string[], inputTrace?: TaskReplyTrace, ordered?: TaskInput[], context: AnswerContext = null, expectedStopVersion?: number): Promise<boolean> {
     const task = this.tasks.get(id)
     if (!task) {
       if (inputTrace) emitTaskReplyStep(log, inputTrace, 'delivery-preflight', 'failed', { reason: 'task-no-longer-exists' })
       return false
     }
     const stopVersion = this.chatStopVersion.get(id) ?? 0
+    if (expectedStopVersion !== undefined && stopVersion !== expectedStopVersion) return false
     const stopping = this.stopInFlight.get(id)
     if (stopping && !(await stopping)) return false
     // This call may have entered before Stop and waited for a connection.
     if ((this.chatStopVersion.get(id) ?? 0) !== stopVersion) return false
+    if (expectedStopVersion !== undefined && task.stopRequestedAt) return false
     if (task.stopRequestedAt && !task.stopConfirmedAt) return false
     if (task.stopRequestedAt) {
       task.stopRequestedAt = undefined

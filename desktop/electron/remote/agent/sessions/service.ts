@@ -13,7 +13,9 @@ interface ContinuationManager {
   setGroup?(id: string, group: string): void
   list(): Array<{ id: string; sessionId: string; codexRolloutId?: string } & MetadataSource>
   resume(taskId: string): Promise<boolean>
-  deliverDraft(taskId: string, text: string, attachments: readonly string[]): Promise<boolean>
+  isStopped?(taskId: string): boolean
+  prepareExplicitMessage?(taskId: string): Promise<number | null>
+  deliverDraft(taskId: string, text: string, attachments: readonly string[], inputTrace?: unknown, ordered?: unknown, context?: null, expectedStopVersion?: number): Promise<boolean>
   /** Park text in a card's composer when it could not be sent into the session. */
   saveDraft?(taskId: string, text: string): void
   /** Respawn a cold card's session. `resume()` marks it resumable; THIS wakes it. */
@@ -123,7 +125,18 @@ export class AgentContinuationService {
     if (plan.action === 'wake') {
       if (existing?.name !== metadata.title) manager.setName?.(plan.taskId, metadata.title)
       if (existing?.groupId !== metadata.groupId || existing?.group !== metadata.group) manager.setGroup?.(plan.taskId, metadata.group)
-      if (!(await manager.resume(plan.taskId))) throw new Error('That session could not be resumed')
+      const stopVersion = plan.followUp ? await manager.prepareExplicitMessage?.(plan.taskId) : undefined
+      if (plan.followUp && stopVersion === null) {
+        manager.saveDraft?.(plan.taskId, plan.followUp)
+        manager.returnToPocket?.(plan.taskId)
+        manager.opened?.(plan.taskId)
+        manager.landInPocket?.(plan.taskId)
+        return { taskId: plan.taskId, operation: 'resume', sourceSessionId: input.sessionId, sessionId: input.sessionId, delivered: false }
+      }
+      if (!manager.isStopped?.(plan.taskId) && !(await manager.resume(plan.taskId))) {
+        if (plan.followUp) manager.saveDraft?.(plan.taskId, plan.followUp)
+        throw new Error('That session could not be resumed')
+      }
       // WAKING IS NOT THE SAME AS BEING READY TO LISTEN.
       //
       // `resume()` returns once the respawn is INITIATED, not once the session
@@ -155,7 +168,7 @@ export class AgentContinuationService {
       // taking an undelivered message with it (2026-09-08).
       if (plan.followUp) manager.setKind?.(plan.taskId, 'session')
       if (plan.followUp) await this.waitUntilLive(plan.taskId)
-      const delivered = plan.followUp ? await this.deliverWhenReady(plan.taskId, plan.followUp) : true
+      const delivered = plan.followUp ? await this.deliverWhenReady(plan.taskId, plan.followUp, stopVersion ?? undefined) : true
       manager.landInPocket?.(plan.taskId)
       return {
         taskId: plan.taskId, operation: 'resume',
@@ -202,6 +215,11 @@ export class AgentContinuationService {
   }
   private async sendOnce(taskId: string, message: string): Promise<SessionRelayResult> {
     const manager = this.manager()
+    const park = () => {
+      manager.saveDraft?.(taskId, message)
+      manager.returnToPocket?.(taskId)
+      manager.landInPocket?.(taskId)
+    }
     // Field-legible from the first try: which card, how much was carried, and
     // — when it goes wrong — WHICH card the Agent thought it was speaking to
     // against the ones that existed. A relay that lands in the wrong place, or
@@ -214,9 +232,16 @@ export class AgentContinuationService {
       diagnostic('relay-unknown-card', { taskId, held: manager.list().map(task => task.id).slice(0, 24) })
       throw new Error('Unmute is not holding that card, so there is nothing to speak into')
     }
+    const stopVersion = await manager.prepareExplicitMessage?.(taskId)
+    if (stopVersion === null) {
+      park()
+      diagnostic('relay-stop-in-progress', { taskId })
+      return { taskId, operation: 'send', delivered: false }
+    }
     if (!(await manager.resume(taskId))) {
+      park()
       diagnostic('relay-resume-refused', { taskId })
-      throw new Error('That session could not be resumed')
+      return { taskId, operation: 'send', delivered: false }
     }
     // The same wake-then-wait the resume path learned the hard way: resume()
     // only marks it resumable, opened() is what respawns a cold card, and
@@ -225,7 +250,7 @@ export class AgentContinuationService {
     manager.opened?.(taskId)
     manager.setKind?.(taskId, 'session')
     const live = await this.waitUntilLiveResult(taskId)
-    const delivered = await this.deliverWhenReady(taskId, message)
+    const delivered = await this.deliverWhenReady(taskId, message, stopVersion)
     diagnostic('relay-delivered', { taskId, chars: message.length, delivered, live })
     return { taskId, operation: 'send', delivered }
   }
@@ -270,7 +295,7 @@ export class AgentContinuationService {
    * nothing to show for it. The delays are short and few because the common
    * case is a PTY appearing, not a stuck runtime.
    */
-  private async deliverWhenReady(taskId: string, text: string): Promise<boolean> {
+  private async deliverWhenReady(taskId: string, text: string, stopVersion?: number): Promise<boolean> {
     // Long enough to WAKE something, not just to catch it already awake. The
     // old ladder totalled five seconds, which was fine when this only ever ran
     // after a PTY had come up and hopeless for a chat session being connected
@@ -285,7 +310,7 @@ export class AgentContinuationService {
       // a row produced one line saying a delivery was deferred and nothing at
       // all about why — the card had been flipping in and out of `busy` and
       // there was no way to learn that from here.
-      const outcome = await this.manager().deliverDraft(taskId, text, [])
+      const outcome = await this.manager().deliverDraft(taskId, text, [], undefined, undefined, null, stopVersion)
         .then(ok => ({ ok }), (error: unknown) => ({ ok: false, why: (error as Error)?.message }))
       if (outcome.ok) {
         diagnostic('continuation-delivered', { taskId, afterMs: wait })

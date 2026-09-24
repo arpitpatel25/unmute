@@ -62,6 +62,18 @@ test('Claude Stop with no daemon session falls back to marking the task stopped'
   manager.shutdown()
 })
 
+test('a new explicit message can reopen a confirmed Stop, but an older message cannot cross another Stop', async () => {
+  const { manager, id } = await claudeManager({ busy: false, async interrupt() {} })
+  assert.equal(await manager.stopTask(id), true)
+  const version = await manager.prepareExplicitMessage(id)
+  assert.equal(typeof version, 'number')
+  assert.equal(manager.get(id)?.stopRequestedAt, undefined)
+  await manager.stopTask(id)
+  assert.equal(await manager.deliverDraft(id, 'old message', [], undefined, undefined, null, version!), false)
+  assert.equal(manager.get(id)?.stopRequestedAt !== undefined, true)
+  manager.shutdown()
+})
+
 test('Claude Stop terminates after an interrupt failure', async () => {
   const { manager, id } = await claudeManager({ busy: true, async interrupt() { throw new Error('socket closed') } })
   assert.equal(await manager.stopTask(id), true)
