@@ -2887,6 +2887,13 @@ test('a session link expands that card from the pocket, not the cockpit', () => 
   assert.equal(h.client.last('pocket')?.data.mode, 'open', 'coming back lands in the pocket')
 })
 
+test('a link to a missing session reports failure without moving focus', () => {
+  const h = setup()
+  assert.equal(h.controller.openSessionLink('gone'), false)
+  assert.match(h.client.last('toast')?.text ?? '', /no longer available/)
+  assert.equal(h.calls.focus, undefined)
+})
+
 test('a link to a card that cannot be pocketed still lands somewhere correct', () => {
   const h = setup()
   put(h, makeTask({ id: 'a', state: 'done', kind: 'oneoff', alive: false }))

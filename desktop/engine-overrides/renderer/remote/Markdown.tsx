@@ -16,17 +16,18 @@
 
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { useState } from 'react'
 import { linkKind, localPath, type LinkKind } from './linkGlyph'
 
 type API = { remoteOpenArtifact?: (type: 'url' | 'path', value: string) => Promise<boolean> }
 
 /// A link opens where the user works, never inside the panel — this surface has
 /// nowhere to navigate back from.
-function openHref(href: string) {
+async function openHref(href: string): Promise<boolean> {
   const fn = (window as unknown as { electronAPI?: API }).electronAPI?.remoteOpenArtifact
-  if (!fn) return
+  if (!fn || !href) return false
   const path = localPath(href)
-  void fn(path === null ? 'url' : 'path', path ?? href)
+  try { return await fn(path === null ? 'url' : 'path', path ?? href) } catch { return false }
 }
 
 // House style: 16px box, currentColor stroke, 1.75 round caps — matching the
@@ -39,6 +40,7 @@ function Glyph({ kind }: { kind: LinkKind }) {
     image: 'M3 3h10v10H3V3Zm0 7.5 3-3 2.5 2.5L11 7.5l2 2M6 6.5a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z',
     mail: 'M2 4.5h12v7H2v-7Zm0 .5 6 4 6-4',
     phone: 'M5.5 2.5 7 5.5 5.5 7a7 7 0 0 0 3.5 3.5L10.5 9l3 1.5v2.5a1 1 0 0 1-1 1A10.5 10.5 0 0 1 2 3.5a1 1 0 0 1 1-1h2.5Z',
+    session: 'M2 3h12v8H6l-3 2v-2H2V3Zm3 3h6M5 8h4',
   }
   return (
     <svg
@@ -60,8 +62,14 @@ function urlTransform(url: string): string {
 }
 
 export function Markdown({ text }: { text: string }) {
+  const [openError, setOpenError] = useState(false)
+  const open = (dest: string) => {
+    setOpenError(false)
+    void openHref(dest).then(ok => { if (!ok) setOpenError(true) })
+  }
   return (
     <div className="[&>*:last-child]:mb-0">
+      {openError && <p role="alert" className="mb-1.5 text-red-500">Could not open link.</p>}
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         urlTransform={urlTransform}
@@ -111,7 +119,7 @@ export function Markdown({ text }: { text: string }) {
               <a
                 href={dest}
                 className="underline text-sky-500 hover:text-sky-400"
-                onClick={(e) => { e.preventDefault(); openHref(dest) }}
+                onClick={(e) => { e.preventDefault(); open(dest) }}
               >
                 <Glyph kind={linkKind(dest)} />
                 {children}
@@ -128,7 +136,7 @@ export function Markdown({ text }: { text: string }) {
               <a
                 href={dest}
                 className="underline text-sky-500 hover:text-sky-400"
-                onClick={(e) => { e.preventDefault(); openHref(dest) }}
+                onClick={(e) => { e.preventDefault(); open(dest) }}
               >
                 <Glyph kind="image" />
                 {alt || dest || 'image'}

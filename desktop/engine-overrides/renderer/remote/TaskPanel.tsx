@@ -89,6 +89,7 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
   onResume: (id: string) => void
 }) {
   const [draft, setDraft] = useState('')
+  const [artifactError, setArtifactError] = useState(false)
   const active = task.state === 'processing' || task.state === 'needs-user' || task.state === 'stuck'
   const attention = task.state === 'needs-user'
 
@@ -145,17 +146,20 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
               <button
                 key={i}
                 className="mt-2 text-[12px] text-ink-60 hover:text-ink inline-flex items-center gap-2 text-left border border-border rounded-lg px-3 py-2 max-w-full"
-                title={`${a.type === 'path' ? 'Open in Finder' : 'Open in your browser'}: ${a.value}`}
-                onClick={() => {
+                title={`${a.type === 'path' ? 'Open local item' : 'Open link'}: ${a.value}`}
+                onClick={async () => {
+                  setArtifactError(false)
                   const open = api().remoteOpenArtifact
-                  if (open) void open(a.type, a.value)
-                  else void navigator.clipboard?.writeText(a.value)
+                  try {
+                    if (!open || !await open(a.type, a.value)) setArtifactError(true)
+                  } catch { setArtifactError(true) }
                 }}
               >
                 <UIIcon name={a.type === 'path' ? 'file' : 'link'} size={15} />
                 <span className="truncate">{a.type === 'path' ? a.value.split(/[\\/]/).filter(Boolean).pop() || a.value : a.value}</span>
               </button>
             ))}
+            {artifactError && <p role="alert" className="mt-1 text-red-700">Could not open link.</p>}
           </div>
         )}
 

@@ -166,7 +166,8 @@ struct CanvasWeb: NSViewRepresentable {
             }
             if action.navigationType == .linkActivated, let url = action.request.url,
                url.scheme == "https" || url.scheme == "http" {
-                NSWorkspace.shared.open(url)
+                AppController.CardLink.clicked()
+                IPC.emit(.openArtifact(type: "url", value: url.absoluteString))
             }
             decisionHandler(.cancel)
         }

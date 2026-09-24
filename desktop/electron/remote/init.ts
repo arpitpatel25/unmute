@@ -30,7 +30,7 @@ import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
 import { claudeUnattendedArgs, refreshManagedPolicy } from './permission-ceiling'
 import { draftInput } from './task-input'
-import { safeArtifactURL, artifactPathAction } from './artifact-url'
+import { safeArtifactURL, artifactPathAction, sessionTaskID } from './artifact-url'
 import { ClaudeTaskSession, type ClaudeTaskModel } from './claude/task-session'
 import { agentModelName, claudeAgentModels, defaultAgentModel, setAgentModelChoices, type AgentModelChoices } from './agent/modelPolicy'
 import { claudeModelChoices } from './claude/model-choices'
@@ -3203,9 +3203,11 @@ function commandsFor(id: string): CommandItem[] | undefined {
 }
 
 async function openChatArtifactPath(path: string): Promise<void> {
-  const resolved = await fs.realpath(path)
+  const expanded = path === '~' || path.startsWith('~/') ? join(homedir(), path.slice(path === '~' ? 1 : 2)) : path
+  const resolved = await fs.realpath(expanded)
   const stat = await fs.stat(resolved)
-  if (!stat.isFile() || artifactPathAction(resolved) === 'reveal') { shell.showItemInFolder(resolved); return }
+  if (stat.isFile() && artifactPathAction(resolved) === 'reveal') { shell.showItemInFolder(resolved); return }
+  if (!stat.isFile() && !stat.isDirectory()) { shell.showItemInFolder(resolved); return }
   const error = await shell.openPath(resolved)
   if (error) throw new Error(error)
 }
@@ -6546,8 +6548,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           void (async () => {
             try {
               if (type === 'path') await openChatArtifactPath(value)
-              else await shell.openExternal(safeArtifactURL(value), { activate: false })
-            } catch (e) { log.warn('open-artifact failed', { type, value, error: (e as Error).message }) }
+              else await shell.openExternal(safeArtifactURL(value), { activate: true })
+            } catch (e) {
+              log.warn('open-artifact failed', { type, value, error: (e as Error).message })
+              notchController?.toast(`Could not open link: ${(e as Error).message}`)
+            }
           })()
         },
         acceptRouteOffer: async (newTaskId) => {
@@ -7827,16 +7832,20 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return manager ? manager.killAll() : false
   })
   ipcMain.handle('remote:get-output', async (_e, id: string) => manager?.getOutput(id) ?? '')
-  // Open a result artifact in the USER's default app (PRD §13.4 #3 + the
-  // consumption handoff): URLs open in the default browser, paths in Finder.
-  // activate:false ⇒ open in a background tab WITHOUT stealing focus from what
-  // the user is currently doing (DECIDED: never yank the user to it).
+  // Open chat links in the user's default app, and session links in the pocket.
+  // External links activate their destination so a click cannot disappear into
+  // a browser window behind the chat.
   ipcMain.handle('remote:open-artifact', async (_e, type: 'url' | 'path', value: string) => {
     try {
       if (type === 'path') {
         await openChatArtifactPath(value)
       } else {
-        await shell.openExternal(safeArtifactURL(value), { activate: false })
+        const taskID = sessionTaskID(value)
+        if (taskID) {
+          if (!notchController?.openSessionLink(taskID)) return false
+        } else {
+          await shell.openExternal(safeArtifactURL(value), { activate: true })
+        }
       }
       log.event('artifact-opened', { type, value })
       return true

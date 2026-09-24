@@ -39,6 +39,10 @@ test('file:// urls, including percent-encoding', () => {
   assert.equal(localPath('file:///Users/a%20b/c.png'), '/Users/a b/c.png')
 })
 
+test('Unmute task links are session links', () => {
+  assert.equal(linkKind('unmute://task/abc123'), 'session')
+})
+
 test('degenerate input falls through to web rather than throwing', () => {
   assert.equal(linkKind(''), 'web')
   assert.equal(linkKind('   '), 'web')
