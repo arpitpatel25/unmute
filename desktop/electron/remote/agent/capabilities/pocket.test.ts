@@ -18,8 +18,7 @@ const MIC: PocketTaskEntry = {
   working: true, live: true, provider: 'claude', updatedAt: 9_000, recentUserTurns: ['try the quiet gate again'],
 }
 
-/** A pocket holding exactly the given tasks. Every write refuses anything else
- *  — except delete, which reaches every task Unmute holds (`orchestrator`). */
+/** A pocket holding entries; Stop and delete can reach held tasks elsewhere. */
 function pocket(entries: PocketTaskEntry[] = [MIC], orchestrator: string[] = ['task-mic', 'task-elsewhere']): PocketAdapters & { asked: any[] } {
   const asked: any[] = []
   const held = (taskId: string) => entries.find(entry => entry.taskId === taskId)
@@ -29,9 +28,7 @@ function pocket(entries: PocketTaskEntry[] = [MIC], orchestrator: string[] = ['t
     async rename(input) { asked.push({ op: 'rename', ...input }); return held(input.taskId) ? { taskId: input.taskId, name: input.name } : null },
     async stop(input) {
       asked.push({ op: 'stop', ...input })
-      const entry = held(input.taskId)
-      if (!entry) return null
-      return entry.working ? { taskId: input.taskId, stopped: true } : { taskId: input.taskId, stopped: false, message: 'It was not running a turn, so there was nothing to stop.' }
+      return orchestrator.includes(input.taskId) ? { taskId: input.taskId, stopped: true } : null
     },
     async end(input) { asked.push({ op: 'end', ...input }); return held(input.taskId) ? { taskId: input.taskId, ended: true } : null },
     async removeFromPocket(input) { asked.push({ op: 'removeFromPocket', ...input }); return held(input.taskId) ? { taskId: input.taskId, removedFromPocket: true } : null },
@@ -66,16 +63,17 @@ test('a rename is cut to the card\'s 48 characters', async () => {
   assert.equal(a.asked[0].name.length, 48)
 })
 
-test('stopping a task that is not working is benign, not an error', async () => {
+test('stopping an idle or off-pocket task uses the same Stop action', async () => {
   const idle = { ...MIC, state: 'done', working: false }
-  const result = await new PocketCapability(pocket([idle])).call(ctx, 'task_stop', { taskId: 'task-mic' })
+  const capability = new PocketCapability(pocket([idle]))
+  const result = await capability.call(ctx, 'task_stop', { taskId: 'task-mic' })
   assert.equal(result.isError, undefined)
-  assert.equal(parse(result).result.stopped, false)
-  assert.match(parse(result).result.message, /not running/)
+  assert.equal(parse(result).result.stopped, true)
+  assert.equal(parse(await capability.call(ctx, 'task_stop', { taskId: 'task-elsewhere' })).result.stopped, true)
 })
 
-test('a task that is not in the pocket is refused, and the refusal says not to retry', async () => {
-  for (const tool of ['task_rename', 'task_stop', 'task_end', 'task_remove_from_pocket']) {
+test('pocket-only writes refuse a task outside the pocket', async () => {
+  for (const tool of ['task_rename', 'task_end', 'task_remove_from_pocket']) {
     const result = parse(await new PocketCapability(pocket()).call(ctx, tool, { taskId: 'task-elsewhere', name: 'x' }))
     assert.equal(result.ok, false, tool)
     assert.equal(result.error.code, 'not-in-pocket', tool)
@@ -118,9 +116,11 @@ test('only the Agent holds the pocket tools, and none is classed destructive', (
   // stop, end and remove-from-pocket all leave the task; task_delete does not,
   // and is gated by its own `confirmed: true` instead (tested below).
   assert.deepEqual(Object.fromEntries(capability.tools.map(t => [t.name, t.consequence])), {
+    tasks_list: 'read',
     pocket_list: 'read',
     task_rename: 'reversible-write',
     task_stop: 'reversible-write',
+    tasks_stop: 'reversible-write',
     task_end: 'reversible-write',
     task_remove_from_pocket: 'reversible-write',
     task_delete: 'reversible-write',

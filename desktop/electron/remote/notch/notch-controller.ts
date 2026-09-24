@@ -116,20 +116,14 @@ export interface TaskLite {
   chatOwned?: boolean
 }
 
-/**
- * WHETHER TO OFFER STOP: whenever work is visibly happening on a task that is
- * ours to stop. Deliberately NOT gated on `alive` or on `state` alone — both
- * lag the runtime (a reattach that lost the turn-start, a disconnect that
- * latched failed) and that is how cards streamed output with no Stop at all.
- * The runtime's own busy flag is the strongest witness; state is a fallback.
- */
+/** Stop is always available for a task whose runtime Unmute owns. */
 export function canStopTask(t: TaskLite): boolean {
   // The Agent's own chat is not a task and never reaches this rule — its Stop
   // is answered in sendAgentDetail, from the busy flag, because none of the
   // task signals below exist for it. Cards the Agent OPENED are ordinary tasks.
   if (t.id === 'unmute-agent') return false
   if (providerOf(t.agent).transport !== 'structured' || t.chatOwned === false) return false
-  return t.turnActive === true || t.state === 'processing' || t.state === 'needs-user'
+  return true
 }
 
 export interface ProposalLite {

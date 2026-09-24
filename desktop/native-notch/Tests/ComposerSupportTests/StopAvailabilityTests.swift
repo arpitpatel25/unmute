@@ -13,10 +13,10 @@ final class StopAvailabilityTests: XCTestCase {
         XCTAssertTrue(stopAvailable(isOwned: true, taskId: "t", canStop: false, status: "needs-user", lastTurnRunning: false))
     }
 
-    func testRunningBlocksOfferStopUnlessSettled() {
+    func testOwnedTaskAlwaysOffersStop() {
         XCTAssertTrue(stopAvailable(isOwned: true, taskId: "t", canStop: false, status: "ready", lastTurnRunning: true))
-        XCTAssertFalse(stopAvailable(isOwned: true, taskId: "t", canStop: false, status: "done", lastTurnRunning: true))
-        XCTAssertFalse(stopAvailable(isOwned: true, taskId: "t", canStop: false, status: "ready", lastTurnRunning: false))
+        XCTAssertTrue(stopAvailable(isOwned: true, taskId: "t", canStop: false, status: "done", lastTurnRunning: true))
+        XCTAssertTrue(stopAvailable(isOwned: true, taskId: "t", canStop: false, status: "ready", lastTurnRunning: false))
     }
 
     func testNeverForTasksThatAreNotOurs() {

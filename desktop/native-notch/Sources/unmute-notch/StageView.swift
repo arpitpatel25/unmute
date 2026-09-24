@@ -210,16 +210,16 @@ struct StageView: View {
                     KeyButton(label: "Open in \(t.foreignAppName)", symbol: "arrow.up.forward.app") {
                         model.emit(.openInTerminal(id: t.id))
                     }
+                } else if taskShowsStop(t, blocks: model.stageBlocks) {
+                    KeyButton(label: "Stop", danger: true, symbol: "stop.circle") {
+                        model.emit(.kill(id: t.id))
+                    }
                 } else if t.resuming == true {
                     HStack(spacing: 5) {
                         ProgressView().controlSize(.mini)
                         Text("Relaunching…").font(Theme.fCap).foregroundColor(Theme.textDim)
                     }
                     .padding(.horizontal, 8)
-                } else if taskShowsStop(t, blocks: model.stageBlocks) {
-                    KeyButton(label: "Stop", danger: true, symbol: "stop.circle") {
-                        model.emit(.kill(id: t.id))
-                    }
                 }
             }
             .padding(.leading, 6)

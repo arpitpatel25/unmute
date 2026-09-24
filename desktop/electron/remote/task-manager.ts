@@ -296,6 +296,9 @@ export interface Task {
   permissionLimit?: import('./permission-ceiling').PermissionLimit
   history?: import('./codex/app-server-events').HistoryState
   turnOutcome?: import('./blocks').TurnOutcome
+  /** A durable user stop; cleared only by an explicit new message. */
+  stopRequestedAt?: number
+  stopConfirmedAt?: number
   /** Codex reports its final assistant item before the separate turn-completed
    *  event. Retain that turn-local text so completion can persist a result. */
   currentTurnAssistantText?: string
@@ -556,6 +559,8 @@ export interface TaskManagerOpts {
    *  the other provider's skills still runs its own. */
   claudeSkillDirs?: (task: Task) => Promise<string[]>
   claudeTaskFactory?: (options: ClaudeTaskOptions, task: Task) => ClaudeTaskSession
+  /** Address an old detached Claude session by durable id, without spawning it. */
+  stopClaudeSession?: (task: Task) => Promise<boolean>
   claudeChoice?: (context?: { cwd: string; home: string; managedProjectId?: string }) => NonNullable<Task['claudeSessionSettings']>
   /** Creates a fresh executor per task (default: ClaudeCodeExecutor). */
   executorFactory: ExecutorFactory
@@ -682,7 +687,7 @@ export interface TaskManagerOpts {
   /** Best-effort reaper for an ORPHAN tmux session left by a past run (the app
    *  crashed/quit without killing it). Wired from init.ts (which owns the tmux
    *  bin + private socket). Omitted in tests. */
-  reapSession?: (taskId: string) => void
+  reapSession?: (taskId: string) => void | Promise<void>
   /** Runtime liveness registry. A persisted task is only reattached when its
    * id is present here; historical tickets remain visible and resumable. */
   listLiveRuntimeIds?: () => Promise<ReadonlySet<string>>
@@ -758,6 +763,7 @@ export class TaskManager extends EventEmitter {
   }
   async deliverQueuedDraft(id: string, record: FollowupRecord, expected: { sessionId: string; generation: number }): Promise<NewTurnOutcome> {
     const gate = this.followupGate(id), scope = this.followupScope(id), task = this.tasks.get(id)
+    if (task?.stopRequestedAt) return { kind: 'not-sent', reason: 'Task stopped by you. Follow-up saved.' }
     if (!task || !scope || scope.sessionId !== record.sessionId || scope.provider !== record.provider || gate.kind !== 'idle' || gate.blocked
       || gate.sessionId !== expected.sessionId || gate.generation !== expected.generation) return { kind: 'not-sent', reason: 'The conversation changed. Follow-up saved.' }
     const text = record.input.flatMap(p => p.type === 'text' ? [p.text] : []).join('')
@@ -778,6 +784,7 @@ export class TaskManager extends EventEmitter {
   private claudeHistoryWrites = new Map<string, Promise<void>>()
   private claudeStarting = new Map<string, Promise<void>>()
   private chatStopVersion = new Map<string, number>()
+  private stopInFlight = new Map<string, Promise<boolean>>()
   /** Tasks the user explicitly stopped, holding a one-shot claim on the next
    *  terminal state they reach. See transition(). */
   private stoppedByUser = new Set<string>()
@@ -858,8 +865,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'claudeSessionOptions' | 'claudeSkillDirs' | 'claudeTaskFactory' | 'claudeChoice' | 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>> &
-    Pick<TaskManagerOpts, 'claudeSessionOptions' | 'claudeSkillDirs' | 'claudeTaskFactory' | 'claudeChoice' | 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>
+    Required<Omit<TaskManagerOpts, 'claudeSessionOptions' | 'claudeSkillDirs' | 'claudeTaskFactory' | 'stopClaudeSession' | 'claudeChoice' | 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>> &
+    Pick<TaskManagerOpts, 'claudeSessionOptions' | 'claudeSkillDirs' | 'claudeTaskFactory' | 'stopClaudeSession' | 'claudeChoice' | 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice' | 'groupRegistry'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -873,6 +880,7 @@ export class TaskManager extends EventEmitter {
       claudeSessionOptions: opts.claudeSessionOptions,
       claudeSkillDirs: opts.claudeSkillDirs,
       claudeTaskFactory: opts.claudeTaskFactory,
+      stopClaudeSession: opts.stopClaudeSession,
       claudeChoice: opts.claudeChoice,
       codexHub: opts.codexHub,
       sandboxRoots: opts.sandboxRoots,
@@ -2439,6 +2447,15 @@ export class TaskManager extends EventEmitter {
   applyHubPatch(p: HubPatch): void {
     const task = this.tasks.get(p.taskId)
     if (!task) return
+    if (p.state === 'processing' && task.stopRequestedAt && task.stopConfirmedAt) {
+      // A provider started work after Stop was confirmed (or replayed a stale
+      // start). Keep the stop latch and target that work again immediately.
+      task.stopConfirmedAt = undefined
+      void this.persistStopFields(task).catch(error => { task.deliveryError = `Could not preserve Stop: ${(error as Error).message}`; this.emit('updated', task) })
+      const pending = this.stopInFlight.get(task.id)
+      void (pending ?? Promise.resolve()).then(() => this.stopTask(task.id))
+      return
+    }
     if (task.codexRolloutId && p.threadId && task.codexRolloutId !== p.threadId) {
       sessionLifecycleDev('stale-thread-patch-ignored', { taskId: task.id, sessionId: task.codexRolloutId, receivedSessionId: p.threadId })
       return
@@ -4289,91 +4306,121 @@ export class TaskManager extends EventEmitter {
       claudeResumeSessionAt: task.claudeResumeSessionAt,
       conversation: task.conversation ?? [],
       turnOutcome: task.turnOutcome,
+      stopRequestedAt: task.stopRequestedAt,
+      stopConfirmedAt: task.stopConfirmedAt,
     }, 'state')
     await this.metaChains.get(task.id)
   }
 
-  /** Instant kill (PRD §10.4). Closes the session; marks failed if not terminal. */
-  /** Explicit user stop (PRD §10.4). Hard-kills the session immediately. */
-  kill(id: string): void {
-    if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
-    const tlog = log.child({ taskId: id })
-    tlog.ui('task-row.killed', {})
-    this.stoppedByUser.add(id)
+  /** One task-level Stop path for the button and Agent. Idempotent at any state. */
+  kill(id: string): void { void this.stopTask(id) }
+
+  private stopAfterConnecting(task: Task, forStop?: boolean): void {
+    if (forStop || !task.stopRequestedAt || task.stopConfirmedAt) return
+    const pending = this.stopInFlight.get(task.id)
+    void (pending ?? Promise.resolve(false)).then(() => {
+      if (task.stopRequestedAt && !task.stopConfirmedAt) return this.stopTask(task.id)
+    })
+  }
+
+  stopTask(id: string): Promise<boolean> {
+    const pending = this.stopInFlight.get(id)
+    if (pending) return pending
     const task = this.tasks.get(id)
-    if (task?.claudeSessionSettings) {
-      this.chatStopVersion.set(id, (this.chatStopVersion.get(id) ?? 0) + 1)
-      const runtime = this.claudeTasks.get(id)
-      const noSession = () => this.transition(id, 'failed', { state: 'failed', error: { reason: 'Stopped before the session connected' } })
-      if (!runtime) { noSession(); return }
-      runtime.channel.requestStop()
-      task.codexActivity = { kind: 'lifecycle', label: 'Cancelling' }
-      this.emit('updated', task)
-      // ALWAYS ASK THE RUNTIME. `driver.busy` is this process's projection of
-      // the daemon and reads false across a reconnect (or before the replay
-      // lands) while the daemon's turn keeps running — which is exactly when
-      // the user is pressing Stop. The daemon's interrupt is a no-op on an
-      // idle session, so asking costs nothing.
-      void runtime.driver.interrupt().then(() => {
-        if (this.claudeTasks.get(id) !== runtime || runtime.driver.busy) return // the result event settles it
-        // Nothing was running (or it already ended): settle, never leave the
-        // card saying "Cancelling" over an idle session.
-        if (task.state === 'processing' || task.state === 'needs-user') {
-          this.applyHubPatch({ taskId: id, state: 'done', activity: null, turnOutcome: 'cancelled', clearQuestion: true, errorReason: '' })
-        } else if (task.codexActivity?.label === 'Cancelling') { task.codexActivity = undefined; this.emit('updated', task) }
-      }, error => {
-        task.codexActivity = undefined
-        // The daemon holds no session at all: nothing is running to stop.
-        if ((error as Error).message === CLAUDE_RUNTIME_RELEASED) { noSession(); return }
-        task.deliveryError = `Could not stop Claude: ${(error as Error).message}`
-        this.emit('updated', task)
-      })
-      return
-    }
-    // A stopped task must stop asking. Leaving the request on disk would keep
-    // re-blocking a card the user just killed, and would hold the Codex hook
-    // waiting for an answer that is never coming.
-    if (task?.codexThreadId) { this.surfacedApprovals.delete(task.codexThreadId); void clearApproval(task.codexThreadId) }
-    if (task?.codexSessionSettings) {
-      const hub = this.opts.codexHub
-      void (async () => {
-        if (!hub) return false
-        if (await hub.interrupt(id)) return true
-        // NO TURN ID IS NOT "NOTHING RUNNING" — the projection may simply be
-        // stale. Re-read the runtime's view once and try again before erroring.
-        try { await hub.refreshTask(id) } catch { /* keep the stale view */ }
-        if (hub.turnActive(id)) return hub.interrupt(id)
-        // Genuinely no turn: there is nothing to stop, so settle the card
-        // instead of reporting a failure to stop it.
-        if (task.state === 'processing' || task.state === 'needs-user') {
-          this.applyHubPatch({ taskId: id, state: 'done', activity: null, turnOutcome: 'cancelled', clearQuestion: true, errorReason: '' })
-        } else if (task.codexActivity) { task.codexActivity = undefined; this.emit('updated', task) }
-        return true
-      })().catch(() => false).then((ok) => {
-        if (!ok) {
-          task.deliveryError = 'Could not stop Codex. Reconnect and try again.'
-          task.codexActivity = undefined
-          this.emit('updated', task)
+    if (!task || task.importedFromCli || task.sessionOwnership === 'external' || isExternalAgent(task.agent)) return Promise.resolve(false)
+    const stopLog = log.child({ taskId: id })
+    const stopStartedAt = this.clock()
+    const stopProvider = task.claudeSessionSettings ? 'claude' : task.codexSessionSettings ? 'codex' : 'legacy'
+    stopLog.event('task-stop.requested', { provider: stopProvider, state: task.state, sessionId: task.sessionId ?? null, hadLiveRuntime: this.claudeTasks.has(id) || !!this.opts.codexHub?.threadIdFor(id) })
+    // Do this before any await: an in-flight send must see the fence immediately.
+    task.stopRequestedAt = this.clock()
+    task.stopConfirmedAt = undefined
+    this.chatStopVersion.set(id, (this.chatStopVersion.get(id) ?? 0) + 1)
+    this.stoppedByUser.add(id)
+    if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
+    log.child({ taskId: id }).ui('task-row.killed', {})
+    task.codexActivity = { kind: 'lifecycle', label: 'Stopping' }
+    this.emit('updated', task)
+    const savedStop = this.persistStopFields(task)
+    const work = (async () => {
+      try {
+        // The stop decision must be on disk before runtime recovery can race it.
+        await savedStop
+        if (task.claudeSessionSettings) {
+          try { await this.claudeStarting.get(id) } catch { /* still stop by durable session id */ }
+          const runtime = this.claudeTasks.get(id)
+          if (runtime) {
+            stopLog.event('task-stop.claude-runtime', { method: 'interrupt-then-terminate' })
+            runtime.channel.requestStop()
+            const interrupt = runtime.driver.interrupt().catch(error => {
+              if ((error as Error).message !== CLAUDE_RUNTIME_RELEASED) log.child({ taskId: id }).warn('claude interrupt failed; terminating session', { error: (error as Error).message })
+            })
+            await Promise.race([interrupt, new Promise<void>(resolve => setTimeout(resolve, 200))])
+            await runtime.driver.terminate()
+            if (this.claudeTasks.get(id) === runtime) this.claudeTasks.delete(id)
+          } else if (!task.chatUnstarted && this.opts.stopClaudeSession) {
+            stopLog.event('task-stop.claude-runtime', { method: 'close-persisted-session' })
+            if (!(await this.opts.stopClaudeSession(task))) throw new Error('Claude session is still running')
+          } else if (!task.chatUnstarted) {
+            // Non-persistent test and legacy managers have no direct daemon
+            // address; reattach the recorded identity before stopping it.
+            if (!(await this.resume(id, { touchActivity: false, hydrateHistory: false, forStop: true }))) throw new Error('Could not reconnect to Claude')
+            const attached = this.claudeTasks.get(id)
+            if (attached) { await attached.driver.terminate(); this.claudeTasks.delete(id) }
+          }
+        } else if (task.codexSessionSettings) {
+          const hub = this.opts.codexHub
+          if (!hub) throw new Error('Codex runtime is unavailable')
+          if (!hub.threadIdFor(id) && !task.chatUnstarted && !(await this.resume(id, { touchActivity: false, forStop: true }))) throw new Error('Could not reconnect to the Codex thread')
+          stopLog.event('task-stop.codex-runtime', { method: 'provider-interrupt', reconnected: !!hub.threadIdFor(id) })
+          await hub.refreshTask(id)
+          if (!hub.turnActive(id) && !task.chatUnstarted && task.sessionId) {
+            // A UI mirror can say idle after a reconnect while Codex still has
+            // a turn. Force a provider history read before declaring it stopped.
+            await hub.resumeThread(id, task.sessionId, task.codexSessionSettings, true)
+            await hub.refreshTask(id)
+          }
+          if (hub.turnActive(id)) {
+            if (!(await hub.interrupt(id))) throw new Error('Codex did not accept the interrupt')
+            // An RPC acknowledgement is not the end of the turn. Check the
+            // provider again, including after a delayed completion event.
+            for (let attempt = 0; attempt < 20 && hub.turnActive(id); attempt++) {
+              await new Promise(resolve => setTimeout(resolve, 150))
+              await hub.refreshTask(id)
+            }
+            if (hub.turnActive(id)) throw new Error('Codex is still running after the interrupt')
+          }
+        } else {
+          stopLog.event('task-stop.legacy-runtime', { method: 'kill-and-reap' })
+          this.hardKill(id)
+          if ((await this.opts.listLiveRuntimeIds?.())?.has(id)) {
+            await this.opts.reapSession?.(id)
+            if ((await this.opts.listLiveRuntimeIds?.())?.has(id)) throw new Error('The legacy task process is still running')
+          }
         }
-      })
-      return
-    }
-    if (task && !SETTLED.includes(task.state)) {
-      // STOPPING IS NOT FAILING.
-      //
-      // This settled an explicit stop as `failed` with "Stopped by you" as the
-      // reason — the card's red Errored state, carrying a sentence explaining
-      // that the user did the thing the user had just done. Red is for what
-      // they did not ask for.
-      //
-      // `done` + `turnOutcome: 'cancelled'` is not a new vocabulary: it is what
-      // the Claude and Codex branches above already settle a stop as when there
-      // was no turn running. This is the same verdict for the plain case, and
-      // going through transition() rather than assigning state here is what
-      // makes the record, the notification and the librarian handoff match it.
-      this.transition(id, 'done', { reason: 'stopped-by-you' } as Partial<StatusPayload>)
-    }
-    this.hardKill(id) // explicit stop ⇒ no warm window
+        if (task.codexThreadId) { this.surfacedApprovals.delete(task.codexThreadId); await clearApproval(task.codexThreadId) }
+        task.codexActivity = undefined
+        task.turnOutcome = 'cancelled'
+        task.stopConfirmedAt = this.clock()
+        task.error = undefined
+        task.deliveryError = undefined
+        if (task.state !== 'done') this.transition(id, 'done', { reason: 'stopped-by-you' } as Partial<StatusPayload>)
+        await this.persistStopFields(task)
+        await this.persistState(task)
+        this.emit('updated', task)
+        stopLog.event('task-stop.confirmed', { provider: stopProvider, durationMs: this.clock() - stopStartedAt })
+        return true
+      } catch (error) {
+        task.codexActivity = undefined
+        task.deliveryError = `Could not stop task: ${(error as Error).message}`
+        this.emit('updated', task)
+        stopLog.error('task-stop.failed', { provider: stopProvider, durationMs: this.clock() - stopStartedAt, error: (error as Error).message })
+        return false
+      }
+    })()
+    this.stopInFlight.set(id, work)
+    void work.finally(() => { if (this.stopInFlight.get(id) === work) this.stopInFlight.delete(id) })
+    return work
   }
 
   /**
@@ -4680,6 +4727,8 @@ export class TaskManager extends EventEmitter {
         // forever-spinning 'processing'. Sessions get `ready` instead (above).
         state: recoveredState,
         turnOutcome: (meta as Task).turnOutcome,
+        stopRequestedAt: (meta as Task).stopRequestedAt,
+        stopConfirmedAt: (meta as Task).stopConfirmedAt,
         createdAt: meta.createdAt ?? now,
         updatedAt: (await statusMtimeMs(statusPath)) ?? meta.createdAt ?? now,
         // Project-bound sessions ran in the user's real dir (meta.cwd); resume
@@ -4761,7 +4810,7 @@ export class TaskManager extends EventEmitter {
         && !task.runtimePinned
         && this.clock() - lastUse >= this.opts.persistentIdleMs
       if (expiredSession) {
-        try { this.opts.reapSession?.(task.id) } catch { /* best-effort */ }
+        try { await this.opts.reapSession?.(task.id) } catch { /* best-effort */ }
         if (!TERMINAL.includes(task.state)) task.state = 'done'
         task.error = undefined
         await this.persistState(task)
@@ -5161,38 +5210,19 @@ export class TaskManager extends EventEmitter {
         if (retentionExempt(meta) || meta.origin === 'unmute-agent') continue
       } catch { /* unidentified data is retained too */ }
       await this.retireRecord(id)
-      try { this.opts.reapSession?.(id) } catch { /* best-effort orphan runtime cleanup */ }
+      try { await this.opts.reapSession?.(id) } catch { /* best-effort orphan runtime cleanup */ }
       // No recursive deletion: even incomplete receipts can accompany projects.
       removed++
     }
     if (removed) log.event('purge-orphan-dirs', { removed })
   }
 
-  /**
-   * Master kill switch: terminate EVERY task's session at once (the UI "kill all"
-   * control + app-quit). Marks any still-running task as stopped; does NOT erase
-   * history. Guarantees no Claude/tmux session is left orphaned.
-   */
-  killAll(): void {
-    // Invalidate queued delivery before any state change or transport teardown.
-    for (const id of this.tasks.keys()) if (this.followupScope(id)) this.emit('followup-disarm', { taskId: id })
-    // Union of PTY-backed and external-backend tasks. Keying on `executors`
-    // alone leaked the poll interval of every codex-desktop task (no executor
-    // ⇒ never visited ⇒ setInterval outlived the manager).
-    const ids = [...new Set([...this.tasks.keys(), ...this.executors.keys(), ...this.scheduler.keys()])]
-    for (const id of ids) {
-      const task = this.tasks.get(id)
-      if (task && !SETTLED.includes(task.state)) {
-        task.state = 'failed'
-        task.error = { reason: 'Stopped (kill all)' }
-        task.updatedAt = this.clock()
-        this.emit('updated', task)
-        this.emit('failed', task)
-      }
-      this.hardKill(id)
-    }
-    this.opts.codexHub?.stop()
-    log.event('kill-all', { count: ids.length })
+  /** Apply the same durable task-level Stop to every owned task. */
+  async killAll(): Promise<boolean> {
+    const ids = [...this.tasks.values()].filter(task => !task.importedFromCli && task.sessionOwnership !== 'external' && !isExternalAgent(task.agent)).map(task => task.id)
+    const results = await Promise.all(ids.map(id => this.stopTask(id)))
+    log.event('kill-all', { count: ids.length, stopped: results.filter(Boolean).length })
+    return results.every(Boolean)
   }
 
   /** App shutdown is not the UI's destructive Kill All. Every live terminal
@@ -5271,6 +5301,30 @@ export class TaskManager extends EventEmitter {
       .catch((e) => log.child({ taskId: task.id }).warn(`${op}: meta persist failed`, { error: (e as Error).message }))
     this.metaChains.set(task.id, next)
     void next.finally(() => { if (this.metaChains.get(task.id) === next) this.metaChains.delete(task.id) })
+  }
+
+  /** Unlike best-effort metadata updates, Stop cannot acknowledge a lost disk write. */
+  private async persistStopFields(task: Task): Promise<void> {
+    const metaPath = join(task.home, 'meta.json')
+    const previous = this.metaChains.get(task.id) ?? Promise.resolve()
+    const next = previous.catch(() => {}).then(async () => {
+      const raw = await fs.readFile(metaPath, 'utf8').then(text => JSON.parse(text) as Record<string, unknown>, error => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        // Old task homes can have a recoverable status/transcript but no meta.
+        return { id: task.id, intent: task.intent, sessionId: task.sessionId,
+          agent: task.agent, cwd: task.cwd, createdAt: task.createdAt,
+          claudeSessionSettings: task.claudeSessionSettings,
+          codexSessionSettings: task.codexSessionSettings }
+      })
+      await writeFileAtomic(metaPath, JSON.stringify({ ...raw,
+        stopRequestedAt: task.stopRequestedAt ?? null,
+        stopConfirmedAt: task.stopConfirmedAt ?? null,
+      }))
+    })
+    this.metaChains.set(task.id, next)
+    void next.then(() => { if (this.metaChains.get(task.id) === next) this.metaChains.delete(task.id) },
+      () => { if (this.metaChains.get(task.id) === next) this.metaChains.delete(task.id) })
+    await next
   }
 
   /** Record durable user activity for the persistent-runtime idle policy. */
@@ -5832,6 +5886,7 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     const ex = this.executors.get(id)
     const task = this.tasks.get(id)
+    const stopVersion = this.chatStopVersion.get(id) ?? 0
     // Codex desktop: "warm" has no meaning — the thread always exists in the app,
     // so a follow-up is simply a send. This is also the UNBLOCK path: answering a
     // Codex task that is `ready` is just its next turn.
@@ -5895,7 +5950,7 @@ export class TaskManager extends EventEmitter {
       // / router / librarian) already gates on isReady(); this just makes
       // followUp consistent with them.
       await ex.isReady()
-      if (!ex.alive) { tlog.warn('followUp: session died before it went idle — instruction NOT delivered', {}); return }
+      if (!ex.alive || task.stopRequestedAt || (this.chatStopVersion.get(id) ?? 0) !== stopVersion) { tlog.warn('followUp: stopped before delivery', {}); return }
       ex.writeStdin(payload)
       if (wasBusy) {
         // Delivered — retire the queued label (the session's own status writes
@@ -5913,7 +5968,7 @@ export class TaskManager extends EventEmitter {
       // Same submit-confirm as dispatch: the multi-line payload occasionally
       // lands one Enter short of submitting in Claude's input box.
       await new Promise((r) => setTimeout(r, this.opts.submitConfirmMs))
-      if (ex.alive) { ex.write('\r'); tlog.event('submit-confirm-enter', { afterMs: this.opts.submitConfirmMs, via: 'followUp' }) }
+      if (ex.alive && !task.stopRequestedAt && (this.chatStopVersion.get(id) ?? 0) === stopVersion) { ex.write('\r'); tlog.event('submit-confirm-enter', { afterMs: this.opts.submitConfirmMs, via: 'followUp' }) }
     })()
     return true
   }
@@ -6021,6 +6076,17 @@ export class TaskManager extends EventEmitter {
       if (inputTrace) emitTaskReplyStep(log, inputTrace, 'delivery-preflight', 'failed', { reason: 'task-no-longer-exists' })
       return false
     }
+    const stopVersion = this.chatStopVersion.get(id) ?? 0
+    const stopping = this.stopInFlight.get(id)
+    if (stopping && !(await stopping)) return false
+    // This call may have entered before Stop and waited for a connection.
+    if ((this.chatStopVersion.get(id) ?? 0) !== stopVersion) return false
+    if (task.stopRequestedAt && !task.stopConfirmedAt) return false
+    if (task.stopRequestedAt) {
+      task.stopRequestedAt = undefined
+      task.stopConfirmedAt = undefined
+      await this.persistStopFields(task)
+    }
     if (context) {
       if (attachments.length) return false
       return this.answerQuestion(id, text, context)
@@ -6040,7 +6106,6 @@ export class TaskManager extends EventEmitter {
       log.child({ taskId: id }).event('chat-delivery-attempt', {
         state: task.state, chatUnstarted: task.chatUnstarted ?? false, chars: text.length,
       })
-      const stopVersion = this.chatStopVersion.get(id) ?? 0
       try {
         await this.connectClaude(task, true)
         if ((this.chatStopVersion.get(id) ?? 0) !== stopVersion) throw new Error('Stopped before submission')
@@ -6074,6 +6139,7 @@ export class TaskManager extends EventEmitter {
           log.child({ taskId: id }).event('chat-send-waited-for-idle', { waitedMs: CHAT_BUSY_WAIT_MS - (deadline - this.clock()) })
         }
         const submissionId = randomUUID()
+        if ((this.chatStopVersion.get(id) ?? 0) !== stopVersion) throw new Error('Stopped before submission')
         runtime.channel.expectSubmission(submissionId, ordered ?? [{ type: 'text', text }, ...attachments.map(path => ({ type: 'image' as const, path }))])
         await runtime.driver.send(text, [...attachments], submissionId, ordered)
         if (task.chatUnstarted) {
@@ -6209,6 +6275,7 @@ export class TaskManager extends EventEmitter {
       return outcome(false, 'codex-resume-failed', { draftRetained: true })
     }
     if (task.agent === 'codex' && this.opts.codexHub?.threadIdFor(id)) {
+      if ((this.chatStopVersion.get(id) ?? 0) !== stopVersion) return false
       selected('codex-app-server', { hubThreadId: this.opts.codexHub.threadIdFor(id) })
       emitTaskReplyStep(tlog, trace, 'provider-call', 'started', { operation: 'turn/start', localImages: attachments.length })
       const ok = await this.opts.codexHub.send(id, text, {
@@ -6338,6 +6405,7 @@ export class TaskManager extends EventEmitter {
       }
       return false
     }
+    if ((this.chatStopVersion.get(id) ?? 0) !== stopVersion) { ex.clearDraft?.(); return false }
     ex.submitDraft()
     emitTaskReplyStep(tlog, trace, 'submit-key', 'succeeded', { attempt: 1, submittedBefore, rolloutTurnsBefore, claudeTurnsBefore })
     // A single Enter is occasionally ignored by both TUIs, so confirm once
@@ -6383,10 +6451,11 @@ export class TaskManager extends EventEmitter {
    * comes back alive + warm (re-attachable terminal, ready for a follow-up).
    * Returns false if the task is unknown, already alive, or its dir was removed.
    */
-  async resume(id: string, opts: { touchActivity?: boolean; hydrateHistory?: boolean } = {}): Promise<boolean> {
+  async resume(id: string, opts: { touchActivity?: boolean; hydrateHistory?: boolean; forStop?: boolean } = {}): Promise<boolean> {
     const tlog = log.child({ taskId: id })
     const task = this.tasks.get(id)
     if (!task) { tlog.warn('resume: no such task'); return false }
+    if (task.stopRequestedAt && !opts.forStop) return false
     if (task.importedFromCli || task.sessionOwnership === 'external') {
       task.resumeError = 'This session is owned outside Unmute and is read-only here. Start a new conversation to avoid simultaneous writers.'
       this.emit('updated', task)
@@ -6426,6 +6495,7 @@ export class TaskManager extends EventEmitter {
           await this.metaChains.get(id)
         }
         task.deliveryError = undefined; task.resumeError = undefined
+        this.stopAfterConnecting(task, opts.forStop)
         return true
       }
       catch (error) {
@@ -6462,6 +6532,7 @@ export class TaskManager extends EventEmitter {
           await this.metaChains.get(id)
         }
         task.deliveryError = undefined; task.resumeError = undefined
+        this.stopAfterConnecting(task, opts.forStop)
         return true
       } catch (error) {
         if (legacyMigration) {
@@ -6611,6 +6682,7 @@ export class TaskManager extends EventEmitter {
       this.parkWarm(id)
       this.emit('updated', task)
       tlog.event('resume-silent', {})
+      this.stopAfterConnecting(task, opts.forStop)
       return true
     } catch (e) {
       const error = (e as Error).message
@@ -6662,6 +6734,7 @@ export class TaskManager extends EventEmitter {
     // still needs its card hydrated, while an inactive card remains
     // metadata-only until this explicit user gesture.
     void this.loadBlocksFor(id).catch(() => {})
+    if (task.stopRequestedAt) return
     if (task.chatUnstarted) return
     if (isExternalAgent(task.agent)) return
     if (this.executors.get(id)?.alive) return

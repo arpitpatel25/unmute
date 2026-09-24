@@ -54,15 +54,8 @@ public func composerState(alive: Bool, canCompose: Bool? = nil, canResume: Bool 
 }
 
 // WHETHER TO OFFER STOP — whenever work is VISIBLY happening on a task that is
-// ours to stop.
-//
-// The old gate was `isOwned && alive && (processing || needsUser)`. Both
-// `alive` and `status` lag the runtime (a reattach that lost the turn-start, a
-// disconnect that latched failed), so users watched a card stream output with
-// no way to stop it. The engine now sends `canStop` from the runtime's own busy
-// flag; the blocks' running turn — the very signal the chat's working
-// indicator draws from — is the backstop, except over a settled `done` (a
-// dangling turn-start left by a crash is not live work).
+// ours to stop. Provider and card state can lag one another, so neither may
+// remove the user's task-level kill switch.
 
 /// - Parameters:
 ///   - canStop: the engine's answer (absent from an older engine).
@@ -83,7 +76,7 @@ public func stopAvailable(isOwned: Bool, taskId: String, canStop: Bool?,
     // now says so outright in `canStop`.
     if taskId == "unmute-agent" { return canStop ?? (status == "processing") }
     guard isOwned else { return false }
-    if canStop == true { return true }
-    if status == "processing" || status == "needs-user" { return true }
-    return lastTurnRunning && status != "done" && status != "failed"
+    // Stop is a task command, including when the runtime and card disagree.
+    // Repeating it on an idle task is harmless and records the user's intent.
+    return true
 }

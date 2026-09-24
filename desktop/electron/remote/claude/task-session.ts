@@ -43,7 +43,7 @@ export interface ClaudeTaskOptions {
   chrome?: boolean
   env?: NodeJS.ProcessEnv
   onEvent: (event: ClaudeTaskEvent) => void
-  spawn?: (binary: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdio: 'pipe' }) => ChildProcessWithoutNullStreams
+  spawn?: (binary: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdio: 'pipe'; detached?: boolean }) => ChildProcessWithoutNullStreams
   controlTimeoutMs?: number
   readImage?: (path: string) => Promise<Buffer>
 }
@@ -102,6 +102,7 @@ export class ClaudeTaskSession {
   /** The mode Claude confirmed at startup, after any step-up. */
   permissionMode?: string
   private child?: ChildProcessWithoutNullStreams
+  private isolatedProcessGroup = false
   private starting?: Promise<void>
   private closed = false
   private ready = false
@@ -147,7 +148,8 @@ export class ClaudeTaskSession {
     delete env.ANTHROPIC_AUTH_TOKEN
     delete env.CLAUDE_API_KEY
     try {
-      const child = (o.spawn ?? ((binary, argv, options) => spawn(binary, argv, options)))(o.binary, args, { cwd: o.cwd, env, stdio: 'pipe' })
+      this.isolatedProcessGroup = !o.spawn && process.platform !== 'win32'
+      const child = (o.spawn ?? ((binary, argv, options) => spawn(binary, argv, options)))(o.binary, args, { cwd: o.cwd, env, stdio: 'pipe', detached: this.isolatedProcessGroup })
       this.child = child
       child.stdout.on('data', (chunk: Buffer | string) => this.consume(typeof chunk === 'string' ? chunk : this.decoder.write(chunk)))
       child.stderr.on('data', chunk => { this.stderr = (this.stderr + String(chunk)).slice(-8192) })
@@ -288,12 +290,43 @@ export class ClaudeTaskSession {
     const child = this.child
     if (child) {
       child.stdin.end()
-      child.kill('SIGTERM')
-      const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') }, 2000)
+      this.signalProcess('SIGTERM')
+      const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) this.signalProcess('SIGKILL') }, 2000)
       timer.unref()
       child.once('close', () => clearTimeout(timer))
     }
     this.emit({ type: 'closed' })
+  }
+
+  /** Stop the owned process and wait for it to exit before acknowledging Stop. */
+  async terminate(): Promise<void> {
+    const child = this.child
+    this.close()
+    if (!child) return
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Claude process did not exit')), 3500)
+        timer.unref()
+        child.once('close', () => { clearTimeout(timer); resolve() })
+      })
+    }
+    // A CLI may have spawned a tool child that outlives the CLI. The dedicated
+    // process group lets Stop remove those descendants without touching tasks
+    // hosted by the same background daemon.
+    if (this.isolatedProcessGroup && child.pid) {
+      try { process.kill(-child.pid, 'SIGKILL') }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+    }
+  }
+
+  private signalProcess(signal: NodeJS.Signals): void {
+    const child = this.child
+    if (!child) return
+    if (this.isolatedProcessGroup && child.pid) {
+      try { process.kill(-child.pid, signal); return }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+    }
+    try { child.kill(signal) } catch { /* already exited */ }
   }
 
   private emit(event: ClaudeTaskEvent): void { this.options.onEvent(event) }

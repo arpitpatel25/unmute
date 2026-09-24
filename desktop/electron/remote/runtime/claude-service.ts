@@ -209,7 +209,7 @@ export class ClaudeRuntimeService {
       case 'sendNewTurn': return driver.sendNewTurn(rest[0], rest[1], rest[2], rest[3])
       case 'answer': await driver.answer(rest[0], rest[1]); return this.state(driver)
       case 'interrupt': await driver.interrupt(); return this.state(driver)
-      case 'close': driver.close(); return this.state(driver)
+      case 'close': await driver.terminate(); return this.state(driver)
       default: throw new Error('Unknown Claude runtime method')
     }
   }

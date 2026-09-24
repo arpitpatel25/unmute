@@ -106,6 +106,14 @@ export class PersistentClaudeTaskSession extends ClaudeTaskSession {
     this.runtimeState = await this.rpc.call('claude.answer', this.sessionId, id, decision)
   }
   override async interrupt(): Promise<void> { this.runtimeState = await this.rpc.call('claude.interrupt', this.sessionId) }
+  override async terminate(): Promise<void> {
+    try {
+      this.runtimeState = await this.rpc.call('claude.close', this.sessionId)
+      if (this.runtimeState.alive) throw new Error('Claude session is still alive')
+    } catch (error) {
+      if ((error as Error).message !== CLAUDE_RUNTIME_RELEASED) throw error
+    } finally { this.detach() }
+  }
   override close(): void {
     void this.rpc.call('claude.close', this.sessionId).catch(error => this.remoteOptions.onEvent({ type: 'error', message: error.message }))
     this.detach()

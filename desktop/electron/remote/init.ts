@@ -157,6 +157,7 @@ import { SkillCatalog, codexExtraRoots, type CommandItem } from './skill-catalog
 import { CodexHub, type CodexInputMetadata } from './codex/hub'
 import { CodexAppServer } from './codex/app-server-client'
 import { PersistentRuntimeClient } from './runtime/client'
+import { CLAUDE_RUNTIME_RELEASED } from './runtime/claude-service'
 import { PersistentCodexHub } from './runtime/codex-client'
 import { CompatibleCodexRuntime } from './runtime/codex-routing'
 import { fileOwnershipStore } from './runtime/codex-ownership'
@@ -954,10 +955,35 @@ function listPocketTasks() {
     })
 }
 
+/** Task-level stop searches the orchestrator, not just the visible pocket. */
+function listTasksForStop(sinceDays?: number) {
+  if (!manager) return []
+  const cutoff = sinceDays ? Date.now() - sinceDays * 86_400_000 : 0
+  return manager.list()
+    .filter(task => task.createdAt >= cutoff && task.id !== NotchController.AGENT_SLOT)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map(task => ({
+      taskId: task.id, createdAt: task.createdAt, title: task.name,
+      owned: !task.importedFromCli && task.sessionOwnership !== 'external' && !isExternalAgent(task.agent),
+      intent: clip(task.intent ?? '', 300), state: task.state,
+      working: task.state === 'processing' || task.state === 'stuck' || manager!.turnActive(task.id),
+      live: manager!.isLive(task.id), ...(task.agent === 'codex' || task.agent === 'claude' ? { provider: task.agent } : {}),
+      cwd: task.cwd, workspace: task.group, updatedAt: task.updatedAt,
+      recentUserTurns: (task.blocks ?? []).flatMap(block => block.kind === 'message' && block.role === 'user' ? [clip(block.text, 240)] : []).slice(-3),
+    }))
+}
+
 /** The card's own actions, for the Agent — each calls what the card's button
  *  calls. Each returns null when the task is not in the pocket, which the
  *  capability turns into a plain refusal. */
 const pocketActions = {
+  listAll: async (sinceDays?: number) => listTasksForStop(sinceDays),
+  stopMany: async (taskIds: string[]) => Promise.all(taskIds.map(async taskId => {
+    const task = manager?.get(taskId)
+    if (!task || !manager) return { taskId, stopped: false, message: 'Task not found.' }
+    const stopped = await manager.stopTask(taskId)
+    return { taskId, stopped, ...(!stopped ? { message: manager.get(taskId)?.deliveryError ?? 'Could not stop this task.' } : {}) }
+  })),
   async rename(input: { taskId: string; name: string }) {
     const task = pocketTask(input.taskId)
     if (!task || !manager) return null
@@ -966,13 +992,10 @@ const pocketActions = {
     return { taskId: task.id, name: manager.get(task.id)?.name ?? name }
   },
   async stop(input: { taskId: string }): Promise<{ taskId: string; stopped: boolean; message?: string } | null> {
-    const task = pocketTask(input.taskId)
+    const task = manager?.get(input.taskId)
     if (!task || !manager) return null
-    if (task.state !== 'processing' && task.state !== 'stuck') {
-      return { taskId: task.id, stopped: false, message: 'It was not running a turn, so there was nothing to stop.' }
-    }
-    manager.kill(task.id)
-    return { taskId: task.id, stopped: true }
+    const stopped = await manager.stopTask(task.id)
+    return { taskId: task.id, stopped, ...(!stopped ? { message: manager.get(task.id)?.deliveryError ?? 'Could not stop this task.' } : {}) }
   },
   async end(input: { taskId: string }) {
     const task = pocketTask(input.taskId)
@@ -4678,6 +4701,8 @@ async function invokeRuntimeHost(method: string, args: any[]): Promise<unknown> 
   if (method === 'sessions.open') return openAgentSessions((args[0] as { limit?: number } | undefined)?.limit)
   if (method === 'sessions.close') return closeAgentSession((args[0] as { taskId: string }).taskId)
   if (method === 'pocket.list') return listPocketTasks()
+  if (method === 'tasks.list') return listTasksForStop((args[0] as { sinceDays?: number } | undefined)?.sinceDays)
+  if (method === 'tasks.stop') return pocketActions.stopMany((args[0] as { taskIds: string[] }).taskIds)
   if (method === 'pocket.rename') return pocketActions.rename(args[0])
   if (method === 'pocket.stop') return pocketActions.stop(args[0])
   if (method === 'pocket.end') return pocketActions.end(args[0])
@@ -5849,6 +5874,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // skills only Codex had are discoverable by `/name` in this session.
     claudeSkillDirs: (task) => skillCatalog.claudeAddDirs(task.cwd),
     claudeTaskFactory: (options, task) => new PersistentClaudeTaskSession(task.claudeResumeSessionAt ? claudeEditRuntime! : persistentRuntime!, options),
+    stopClaudeSession: async task => {
+      const runtime = task.claudeResumeSessionAt ? claudeEditRuntime : persistentRuntime
+      if (!runtime) throw new Error('Claude background runtime is unavailable')
+      try {
+        const state = await runtime.call<{ alive: boolean }>('claude.close', task.sessionId)
+        return !state.alive
+      } catch (error) {
+        if ((error as Error).message === CLAUDE_RUNTIME_RELEASED) return true
+        throw error
+      }
+    },
     groupRegistry,
     codexHub,
     // The path fence, read fresh per dispatch so a task started after the
@@ -5899,7 +5935,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       (await findSessionCwd(sessionId)) ?? (await findCodexSessionCwd(sessionId).catch(() => null)),
     reapSession: (id) => {
       if (!tmuxBin) return
-      try { execFile(tmuxBin, tmuxKillSessionArgs(sessionNameFor(id)), () => {}) } catch { /* best-effort */ }
+      return new Promise<void>((resolve, reject) => {
+        execFile(tmuxBin!, tmuxKillSessionArgs(sessionNameFor(id)), { timeout: 3_000 }, error => {
+          if (error) reject(error)
+          else resolve()
+        })
+      })
     },
     listLiveRuntimeIds: async () => {
       if (!tmuxBin) return new Set<string>()
@@ -6230,7 +6271,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // cleanup deletes them; removal never touches the original file.
         },
         sendDraft: (id, context) => sendTaskDraft(id, 'task-composer', undefined, context ?? null),
-        kill: (id) => mgr.kill(id),
+        kill: (id) => { void mgr.stopTask(id) },
         remove: (id) => mgr.remove(id),
         killAll: () => mgr.killAll(),
         resume: (id) => mgr.resume(id),
@@ -6724,13 +6765,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   void manager.rehydrate().then(async () => {
     await persistentRuntimeReady
     await (codexHub as PersistentCodexHub).reconnect()
-    await Promise.all(manager!.list().filter(task => task.codexSessionSettings && task.state === 'processing' && !codexHub?.threadIdFor(task.id))
+    // A stop recorded by the previous build/process wins over recovery.
+    await Promise.all(manager!.list().filter(task => task.stopRequestedAt && !task.stopConfirmedAt)
+      .map(task => manager!.stopTask(task.id).catch(() => false)))
+    await Promise.all(manager!.list().filter(task => !task.stopRequestedAt && task.codexSessionSettings && task.state === 'processing' && !codexHub?.threadIdFor(task.id))
       .map(task => manager!.resume(task.id, { touchActivity: false }).catch(() => false)))
-    await Promise.all(manager!.list().filter(task => task.agent === 'codex' || !!task.codexSessionSettings)
+    await Promise.all(manager!.list().filter(task => !task.stopRequestedAt && (task.agent === 'codex' || !!task.codexSessionSettings))
       .map(task => manager!.settleFromRollout(task.id).catch(() => false)))
     const claudeSessions = await listClaudeRuntimeSessions()
     const liveClaude = new Set(claudeSessions.filter(session => session.alive).map(session => session.sessionId))
-    await Promise.all(manager!.list().filter(task => task.claudeSessionSettings && liveClaude.has(task.sessionId))
+    await Promise.all(manager!.list().filter(task => !task.stopRequestedAt && task.claudeSessionSettings && liveClaude.has(task.sessionId))
       .map(task => manager!.resume(task.id, { touchActivity: false, hydrateHistory: false })))
     await manager?.reattachPersistent()
   }).catch(error => {
@@ -7707,8 +7751,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return true
   })
   ipcMain.handle('remote:kill', async (_e, id: string) => {
-    manager?.kill(id)
-    return true
+    return manager ? manager.stopTask(id) : false
   })
   // Kill/Delete a task entirely (terminate + erase). UI confirms before calling.
   ipcMain.handle('remote:remove-task', async (_e, id: string) => {
@@ -7721,8 +7764,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:resume', async (_e, id: string) => (await manager?.resume(id)) ?? false)
   // Master kill switch from the UI ("kill all tasks" above the table).
   ipcMain.handle('remote:kill-all', async () => {
-    manager?.killAll()
-    return true
+    return manager ? manager.killAll() : false
   })
   ipcMain.handle('remote:get-output', async (_e, id: string) => manager?.getOutput(id) ?? '')
   // Open a result artifact in the USER's default app (PRD §13.4 #3 + the

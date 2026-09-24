@@ -25,7 +25,7 @@ async function claudeManager(driver: Record<string, unknown>) {
     baseDir, executorFactory: () => { throw new Error('No PTY') },
     claudeSessionOptions: async task => ({ binary: 'fake', cwd: task.cwd }),
     claudeTaskFactory: () => ({ alive: true, followupBlocked: false, followupUnavailable: false,
-      async start() {}, async send() { return { submissionId: 's', sessionId: 'x' } }, close() {}, detach() {}, ...driver } as never),
+      async start() {}, async send() { return { submissionId: 's', sessionId: 'x' } }, close() {}, async terminate() {}, detach() {}, ...driver } as never),
   })
   const id = await manager.dispatch('long running work', { agent: 'claude' })
   return { manager, id }
@@ -35,8 +35,7 @@ test('Claude Stop interrupts the runtime even when the local projection reads id
   let interrupts = 0
   const { manager, id } = await claudeManager({ busy: false, async interrupt() { interrupts++ } })
   assert.equal(manager.get(id)?.state, 'processing')
-  manager.kill(id)
-  await tick()
+  assert.equal(await manager.stopTask(id), true)
   assert.equal(interrupts, 1, 'the daemon is asked; its interrupt is a no-op when idle')
   // Nothing was running by the runtime's account: settle, never "failed".
   assert.equal(manager.get(id)?.state, 'done')
@@ -45,32 +44,28 @@ test('Claude Stop interrupts the runtime even when the local projection reads id
   manager.shutdown()
 })
 
-test('Claude Stop on a busy turn leaves settling to the result event', async () => {
+test('Claude Stop on a busy turn terminates its session', async () => {
   let interrupts = 0
   const { manager, id } = await claudeManager({ busy: true, async interrupt() { interrupts++ } })
   assert.equal(manager.turnActive(id), true)
-  manager.kill(id)
-  await tick()
+  assert.equal(await manager.stopTask(id), true)
   assert.equal(interrupts, 1)
-  assert.equal(manager.get(id)?.state, 'processing')
-  assert.equal(manager.get(id)?.codexActivity?.label, 'Cancelling')
+  assert.equal(manager.get(id)?.state, 'done')
+  assert.equal(manager.get(id)?.stopConfirmedAt !== undefined, true)
   manager.shutdown()
 })
 
 test('Claude Stop with no daemon session falls back to marking the task stopped', async () => {
   const { manager, id } = await claudeManager({ busy: false, async interrupt() { throw new Error(CLAUDE_RUNTIME_RELEASED) } })
-  manager.kill(id)
-  await tick()
-  assert.equal(manager.get(id)?.state, 'failed')
-  assert.equal(manager.get(id)?.error?.reason, 'Stopped before the session connected')
+  assert.equal(await manager.stopTask(id), true)
+  assert.equal(manager.get(id)?.state, 'done')
   manager.shutdown()
 })
 
-test('Claude Stop surfaces an interrupt failure instead of pretending', async () => {
+test('Claude Stop terminates after an interrupt failure', async () => {
   const { manager, id } = await claudeManager({ busy: true, async interrupt() { throw new Error('socket closed') } })
-  manager.kill(id)
-  await tick()
-  assert.match(manager.get(id)?.deliveryError ?? '', /Could not stop Claude: socket closed/)
+  assert.equal(await manager.stopTask(id), true)
+  assert.equal(manager.get(id)?.state, 'done')
   manager.shutdown()
 })
 
@@ -116,6 +111,7 @@ function codexFixture() {
       request: async (method: string): Promise<any> => {
         requests.push(method)
         if (method === 'turn/start') return { turn: { id: 'turn-1' } }
+        if (method === 'turn/interrupt') queueMicrotask(() => notify({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn-1', status: 'interrupted' } } }))
         return { thread: { id: 'thread', turns: [] } }
       },
     }
@@ -163,9 +159,9 @@ test('Codex Stop with no turn to interrupt settles a stale working card instead 
   h.manager.shutdown()
 })
 
-test('canStopTask: offered whenever work is in flight on a task that is ours', () => {
+test('canStopTask: offered for every owned task regardless of projected state', () => {
   const base: TaskLite = { id: 't', intent: 'x', agent: 'claude', state: 'done' }
-  assert.equal(canStopTask(base), false)
+  assert.equal(canStopTask(base), true)
   assert.equal(canStopTask({ ...base, state: 'processing' }), true)
   assert.equal(canStopTask({ ...base, state: 'needs-user' }), true)
   // The bug: runtime busy while state reads failed/ready, alive false.

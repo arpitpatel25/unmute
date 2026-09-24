@@ -107,6 +107,13 @@ struct TaskSurfaceView: View {
                     case .finished:
                         EmptyView()
                     }
+                    if taskShowsStop(t, blocks: model.taskBlocks),
+                       composerState(alive: t.alive, canCompose: t.canCompose, canResume: t.canResume,
+                                     status: t.status.rawValue, kind: t.kind) != .composable {
+                        Button("Stop") { model.emit(.kill(id: t.id)) }
+                            .buttonStyle(.bordered)
+                            .padding(.top, 9)
+                    }
                 }
 
                 actions(t)
