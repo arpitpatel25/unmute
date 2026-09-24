@@ -262,6 +262,16 @@ test('saying what makes it a different instance lets the handoff through', async
   assert.equal(a.created[0].sameJobNewInstance, 'the same comp, but for a different customer')
 })
 
+test('a related new task cannot omit the earlier session and its findings', async () => {
+  const a = adapters({ async cardForSession() { return { taskId: 'build-card', title: 'Build CLI support' } } })
+  const result = await new HandoffCapability(a).call(ctx, 'task_create', {
+    title: 'Install CLI support build', group: 'Unmute', intent: 'Install the existing build.', kind: 'session',
+    sameJobNewInstance: 'Installation is a separate step from building the artifact.',
+  })
+  assert.equal(parse(result).error.code, 'invalid-input')
+  assert.deepEqual(a.created, [])
+})
+
 test('a handoff whose sources have no card is unaffected', async () => {
   const a = adapters({ async cardForSession() { return null } })
   const result = await new HandoffCapability(a).call(ctx, 'task_create', create)

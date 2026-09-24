@@ -337,6 +337,9 @@ export class HandoffCapability implements CapabilityModule {
           return fail('invalid-input', 'sameJobNewInstance must be a short sentence saying what differs')
         }
         const newInstance = typeof rawInstance === 'string' ? rawInstance.trim() : ''
+        if (newInstance && (!carried || !Array.isArray(sourceSessions) || sourceSessions.length === 0)) {
+          return fail('invalid-input', 'A related new instance needs context and sourceSessions from the earlier work')
+        }
         // ONE PIECE OF WORK, ONE SESSION. Decided here, from facts, rather than
         // left to the rules: on 2026-09-16 the Agent read the right card's own
         // session and then made a second session for the same work, because

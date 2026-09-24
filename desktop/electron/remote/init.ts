@@ -1032,7 +1032,10 @@ const agentContinuations = new AgentContinuationService({
   manager: () => manager && {
     list: () => manager!.list(),
     resume: (id: string) => manager!.resume(id),
-    deliverDraft: (id: string, text: string, attachments: readonly string[]) => manager!.deliverDraft(id, text, [...attachments]),
+    isStopped: (id: string) => manager!.isStopped(id),
+    prepareExplicitMessage: (id: string) => manager!.prepareExplicitMessage(id),
+    deliverDraft: (id: string, text: string, attachments: readonly string[], inputTrace?: unknown, ordered?: unknown, context?: null, expectedStopVersion?: number) =>
+      manager!.deliverDraft(id, text, [...attachments], inputTrace as Parameters<TaskManager['deliverDraft']>[3], ordered as Parameters<TaskManager['deliverDraft']>[4], context, expectedStopVersion),
     attachProviderSession: (i: Parameters<TaskManager['attachProviderSession']>[0]) => manager!.attachProviderSession(i),
     forkProviderSession: (i: Parameters<TaskManager['forkProviderSession']>[0]) => manager!.forkProviderSession(i),
     // Only fills a non-descriptive title on resume — automatic, never a rename.

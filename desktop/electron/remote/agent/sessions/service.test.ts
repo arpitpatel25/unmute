@@ -250,6 +250,53 @@ test('a relay speaks into the card that already exists and creates nothing', asy
   ])
 })
 
+test('a relay after Stop prepares a new turn before waking the old session', async () => {
+  const { service, calls } = fixture(true)
+  const manager = service.deps.manager()!
+  let prepared = false
+  service.deps.manager = () => ({
+    ...manager,
+    async prepareExplicitMessage(id: string) { calls.push({ op: 'prepare', input: id }); prepared = true; return 4 },
+    async resume(id: string) { calls.push({ op: 'wake', input: id }); return prepared },
+    async deliverDraft(id: string, text: string, attachments: readonly string[], trace?: unknown, ordered?: unknown, context?: unknown, stopVersion?: number) {
+      calls.push({ op: 'deliver', input: { id, text, stopVersion } })
+      return stopVersion === 4
+    },
+  })
+  const result = await service.send({ taskId: 'existing-task', message: 'Use the signed 1.5.44 dev build.' })
+  assert.equal(result.delivered, true)
+  assert.deepEqual(calls.filter(c => ['prepare', 'wake', 'deliver'].includes(c.op)), [
+    { op: 'prepare', input: 'existing-task' },
+    { op: 'wake', input: 'existing-task' },
+    { op: 'deliver', input: { id: 'existing-task', text: 'Use the signed 1.5.44 dev build.', stopVersion: 4 } },
+  ])
+})
+
+test('a stopped card can be reopened to read without restarting its turn', async () => {
+  const { service, calls } = fixture(true)
+  const manager = service.deps.manager()!
+  service.deps.manager = () => ({ ...manager, isStopped: () => true,
+    async resume(id: string) { calls.push({ op: 'wake', input: id }); return false },
+  })
+  const result = await service.resume({ ...metadata, sessionId: 'source-session' })
+  assert.equal(result.taskId, 'existing-task')
+  assert.equal(calls.some(c => c.op === 'wake'), false)
+  assert.equal(calls.some(c => c.op === 'opened'), true)
+})
+
+test('a relay refused while Stop is pending saves its message on the visible card', async () => {
+  const { service, calls } = fixture(true)
+  const manager = service.deps.manager()!
+  service.deps.manager = () => ({ ...manager, async prepareExplicitMessage() { return null },
+    landInPocket(id: string) { calls.push({ op: 'land', input: id }) },
+  })
+  const result = await service.send({ taskId: 'existing-task', message: 'Use the signed build.' })
+  assert.deepEqual(result, { taskId: 'existing-task', operation: 'send', delivered: false })
+  assert.equal(calls.some(c => c.op === 'wake'), false)
+  assert.equal(calls.some(c => c.op === 'saveDraft'), true)
+  assert.equal(calls.some(c => c.op === 'land'), true)
+})
+
 test('a relay to a card Unmute is not holding is refused, never turned into a new one', async () => {
   const { service, calls } = fixture(true)
   await assert.rejects(service.send({ taskId: 'no-such-task', message: 'anything' }), /not holding/i)
