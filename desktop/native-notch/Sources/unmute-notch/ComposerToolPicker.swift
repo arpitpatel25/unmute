@@ -67,6 +67,9 @@ struct ComposerToolPicker: View {
     /// nil = nothing armed, which is the resting state and must look like it.
     let armed: ComposerTool?
     let pick: (ComposerTool?) -> Void
+    /// Small notch: the wand alone until a tool is armed (an armed tool keeps
+    /// its name — that is the state worth reading).
+    var iconOnly = false
 
     @State private var open = false
     @State private var hovering = false
@@ -94,7 +97,9 @@ struct ComposerToolPicker: View {
             HStack(spacing: 5) {
                 symbol(for: armed)
                     .font(.system(size: 10.5, weight: .medium))
-                Text(armed?.label ?? "Visual").font(.system(size: 11.5, weight: .medium))
+                if !(iconOnly && armed == nil) {
+                    Text(armed?.label ?? "Visual").font(.system(size: 11.5, weight: .medium))
+                }
                 if armed != nil {
                     // The dismiss affordance is spelled out, so "how do I turn
                     // this off" is answered by looking rather than by guessing.

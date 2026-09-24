@@ -284,12 +284,20 @@ struct TaskSurfaceView: View {
         // Stop lives in the composer now, at the send position.
     }
 
+    @ViewBuilder
     private func footer(_ t: TaskDetail) -> some View {
-        ViewThatFits(in: .horizontal) {
-            footerControls(compact: false)
-            footerControls(compact: true)
+        // A small notch always takes the icon-only keys: they are tooltip-
+        // labelled and the arrows are on the keyboard anyway. Larger surfaces
+        // still spell them out whenever they fit.
+        if model.compactSurface {
+            footerControls(compact: true).padding(.top, 12)
+        } else {
+            ViewThatFits(in: .horizontal) {
+                footerControls(compact: false)
+                footerControls(compact: true)
+            }
+            .padding(.top, 12)
         }
-        .padding(.top, 12)
     }
 
     private func footerControls(compact: Bool) -> some View {

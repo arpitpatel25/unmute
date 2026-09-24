@@ -18,6 +18,8 @@ struct ComposerControls: View {
     /// ComposerToolPicker for why this is a control rather than an inference.
     var tool: ComposerTool? = nil
     var pickTool: ((ComposerTool?) -> Void)? = nil
+    /// Small notch: Visual and dictation drop their words, keep their icons.
+    var compact = false
 
     private var fields: [ComposerSetupField] {
         composerSetupFields(hasModels: !config.models.isEmpty,
@@ -46,7 +48,7 @@ struct ComposerControls: View {
                 // does not exist. This is the feature's only entry point, so it
                 // holds its place at every width.
                 if let pickTool {
-                    ComposerToolPicker(armed: tool, pick: pickTool)
+                    ComposerToolPicker(armed: tool, pick: pickTool, iconOnly: compact)
                 }
 
 
@@ -54,6 +56,7 @@ struct ComposerControls: View {
                     Button(action: dictate) {
                         Label(state == "recording" ? "Stop dictation" : state == "transcribing" ? "Transcribing…" : "Right ⌥ to dictate",
                               systemImage: state == "recording" ? "stop.circle" : "mic")
+                            .labelStyle(DictationLabelStyle(iconOnly: compact && state != "recording" && state != "transcribing"))
                             .foregroundColor(Theme.textFaint)
                     }
                     .buttonStyle(.plain)
@@ -139,5 +142,19 @@ private struct SetupRowLabel: View {
         .background(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(Theme.raised))
         .accessibilityLabel("\(label): \(value)")
         .contentShape(Rectangle())
+    }
+}
+
+/// Dictation's label: words and icon, or — on a small notch, at rest — the icon
+/// alone. While recording or transcribing the words always show, because then
+/// they are the state, not a hint.
+private struct DictationLabelStyle: LabelStyle {
+    let iconOnly: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        if iconOnly {
+            configuration.icon
+        } else {
+            HStack(spacing: 6) { configuration.icon; configuration.title }
+        }
     }
 }

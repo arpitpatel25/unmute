@@ -294,6 +294,12 @@ struct StageComposer: View {
     @ObservedObject private var staging = ComposerStagingStore.shared
     @StateObject private var slash = SlashMenuState()
     @FocusState private var focused: Bool
+    /// Whether the text view holds the keyboard, from its own first-responder
+    /// callbacks. @FocusState does not track an NSViewRepresentable's AppKit
+    /// view, so this is the signal the composer's resting shape follows.
+    @State private var editorFocused = false
+    /// Bumped to put the caret in the editor (the collapsed summary chip).
+    @State private var focusRequest = 0
     /// Theme.composerFill follows Appearance.tone, and a computed colour
     /// changing does not invalidate a view on its own — the same belt-and-
     /// braces UserBubble carries, for the same reason.
@@ -319,6 +325,37 @@ struct StageComposer: View {
         }
         return ids.sorted { rank($0) < rank($1) }
     }
+    /// AT REST THE COMPOSER IS ONE LINE.
+    ///
+    /// The settings row (provider, model, effort, access, folder, Visual,
+    /// dictation) is for the moment you are about to send — and most of the
+    /// time the card is being read, not written to. Left open it cost the
+    /// conversation 34pt on every card, which on a small notch is a third of
+    /// what is left for the words. So it folds into a summary chip until you
+    /// click in, type, dictate, attach, or something needs saying (an armed
+    /// tool, an error, a send in flight). Everything it hides is one click away.
+    ///
+    /// Only composers that HAVE the settings row collapse; the Agent's chat
+    /// and a thread without a config are unchanged.
+    private var collapsed: Bool {
+        guard let config, taskId != "unmute-agent" else { return false }
+        let dictating = config.dictation == "recording" || config.dictation == "transcribing"
+        return text.isEmpty
+            && !editorFocused
+            && (draft?.attachments.isEmpty ?? true) && stagingItems.isEmpty
+            && (draft?.operations?.isEmpty ?? true)
+            && draft?.tool == nil
+            && !dictating && !sending && !newChatOpen && !slash.isOpen
+            && config.error == nil && config.dictationError == nil
+            && attachmentError == nil && draft?.error == nil
+    }
+    /// "Codex CLI · 6 Sol · Medium" — what the folded settings row would say.
+    private var settingsSummary: String {
+        guard let config else { return "" }
+        var parts = [config.providerLabel, config.modelLabel]
+        if let effort = config.efforts.first(where: { $0.id == config.effort })?.label { parts.append(effort) }
+        return parts.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
     private var stagingCount: Int { (draft?.stagingCount ?? 0) + stagingItems.filter { $0.phase == .pending }.count }
     private var canSend: Bool { composerFollowupCanSend(mode: composerMode) && !staging.blocksSend(task: taskId, attachmentIds: draftAttachmentIds) && (draft?.operations?.isEmpty ?? true) && (draft?.stagingCount ?? 0) == 0 && (!text.trimmingCharacters(in: .whitespaces).isEmpty || !(draft?.attachments.isEmpty ?? true)) }
 
@@ -332,10 +369,10 @@ struct StageComposer: View {
                         ScrollView(.horizontal, showsIndicators: true) {
                             HStack(spacing: 6) {
                                 ForEach(followup.attachments, id: \.id) { attachment in
-                                    ComposerAttachmentTile(attachment: attachment, remove: {}, restore: {}, readOnly: true)
+                                    ComposerAttachmentTile(attachment: attachment, remove: {}, restore: {}, readOnly: true, style: .chip)
                                 }
                             }
-                        }.frame(height: 66)
+                        }.frame(height: 34)
                     }
                     HStack {
                         if followup.canCancel { Button("Cancel queued delivery") { model.emit(.cancelTaskFollowup(id: taskId, queueId: followup.id)) } }
@@ -377,121 +414,7 @@ struct StageComposer: View {
                 }
                 .foregroundColor(Theme.cError)
             }
-            VStack(alignment: .leading, spacing: 6) {
-                // SHOW THE PICTURE, NOT ITS FILENAME.
-                //
-                // The chip led with `unmute-draft-BAD18C81-D345-484D-….png` and
-                // a 22pt thumbnail beside it, so a staged image read as a row of
-                // UUID rather than as the thing you captured. You cannot tell
-                // WHICH screenshot is attached, or that three are, from a
-                // filename — and not being able to see that is what turned "the
-                // images went missing" into a night of log reading.
-                //
-                // So the preview IS the chip: a tile of the real image with its
-                // remove control on the corner, the way every composer that
-                // takes images does it. A file we cannot render still falls back
-                // to a name, because then the name is all there is.
-                if !(draft?.attachments.isEmpty ?? true) || !stagingItems.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: true) {
-                    HStack(spacing: 8) {
-                        ForEach(trayIds, id: \.self) { id in
-                            if let attachment = draft?.attachments.first(where: { $0.id == id }) {
-                                ComposerAttachmentTile(attachment: attachment,
-                                    remove: { model.emit(.removeDraftAttachment(id: taskId, attachmentId: attachment.id)) },
-                                    restore: { model.emit(.restoreDraftAttachment(id: taskId, attachmentId: attachment.id)) })
-                            } else if let item = stagingItems.first(where: { $0.id == id }) {
-                                ComposerStagingTile(item: item, retry: { staging.retry(item.id) }, remove: {
-                                    if staging.items(task: taskId).contains(where: { $0.id == item.id }) { staging.remove(item.id) }
-                                    else { model.emit(.removeDraftAttachment(id: taskId, attachmentId: item.id)) }
-                                })
-                            }
-                        }
-                    }
-                    .padding(2)
-                    }
-                    .frame(height: 66)
-                }
-                HStack(alignment: .bottom, spacing: 8) {
-                    Menu {
-                        Button("Attach files and images", action: pickFiles)
-                    } label: {
-                        Image(systemName: "plus").frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Up to 10 attachments · PNG/JPEG/GIF/WebP images 10 MB · files 25 MB · total 50 MB")
-                    .accessibilityLabel("Attach files and images")
-                    SubmitTextEditor(text: Binding(get: { text }, set: editText), measuredHeight: $editorHeight, taskId: taskId, pastePolicy: pastePolicy,
-                                     placeholder: placeholder, onSubmit: send, onImagePaste: attachImage,
-                                     onFocusChange: reportFocus,
-                                     onKey: handleKey,
-                                     commandTokens: Set(commands.map(\.token)),
-                                     onSelectionChange: { editorSelection = $0 },
-                                     onAttachmentReserved: { [taskId, clientRevision] operation, name, selection, snapshot in
-                                         model.emit(.reserveDraftAttachment(id: taskId, operationId: operation, name: name,
-                                             insertionOffset: selection.location, selectedLength: selection.length, clientRevision: clientRevision, insertionText: snapshot))
-                                     },
-                                     onAttachmentFailed: { [taskId] operation, error in model.emit(.failDraftAttachment(id: taskId, operationId: operation, error: error)) },
-                                     onAttachmentCanceled: { [taskId] operation in model.emit(.removeDraftAttachment(id: taskId, attachmentId: operation)) },
-                                     onAdmissionError: { attachmentError = $0 },
-                                     onAttachmentUndo: { [taskId] operationId, redo in
-                                         model.emit(redo ? .redoDraftAttachment(id: taskId, attachmentId: operationId) : .undoDraftAttachment(id: taskId, attachmentId: operationId))
-                                     })
-                        .frame(height: ComposerHeight.resolve(measured: editorHeight))
-                        .focused($focused)
-                    if taskId == "unmute-agent", let config {
-                        AgentProviderSwitch(model: model, config: config)
-                    } else if config == nil, let m = modelLabel, !m.isEmpty {
-                        Text(m).font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
-                    }
-                    if sending {
-                        // Sending is a round-trip through another app's window;
-                        // silence for a second reads as "nothing happened".
-                        Text(composerMode == "queue" ? "Saving follow-up…" : "Sending…").font(.system(size: 11)).foregroundColor(Theme.textFaint)
-                    }
-                    // The composer's ONE primary action, and the only tinted
-                    // thing on this surface.
-                    //
-                    // WHILE THE TASK WORKS, STOP TAKES THIS PLACE — the way
-                    // every chat app does it. Send stays beside it only once a
-                    // follow-up has been typed, so the draft can still go (it
-                    // queues); Stop is always the right-most control.
-                    if onStop == nil || canSend {
-                        Button(action: send) {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(canSend ? Theme.accentInk : Theme.textFaint)
-                                .frame(width: 24, height: 24)
-                                .background(Circle().fill(canSend ? Theme.accent : Theme.raised))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(sending ? "Submitting message" : composerFollowupSendLabel(mode: composerMode))
-                        .disabled(!canSend || sending || model.questionBusy(taskId, question))
-                        .animation(Theme.hover, value: canSend)
-                    }
-                    if let onStop {
-                        // A filled square in a filled disc — deliberately not
-                        // the dictation mic's outlined `stop.circle`.
-                        Button(action: onStop) {
-                            Image(systemName: "stop.fill")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundColor(canSend ? Theme.text : Theme.accentInk)
-                                .frame(width: 24, height: 24)
-                                .background(Circle().fill(canSend ? Theme.raisedHover : Theme.accent))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Stop")
-                        .accessibilityLabel("Stop")
-                    }
-                }
-                controls
-            }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Theme.composerFill))
-            .overlay(RoundedRectangle(cornerRadius: 14)
-                .stroke(focused ? Theme.accent.opacity(0.55) : Theme.composerEdge,
-                        lineWidth: focused ? 1 : 0.75))
-            .animation(Theme.hover, value: focused)
+            composerBox
         }
         .onAppear {
             text = draft?.text ?? ""
@@ -593,6 +516,185 @@ struct StageComposer: View {
         }
     }
 
+    /// The composer itself: attachments, the input row, the settings row.
+    private var composerBox: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // SHOW THE PICTURE, NOT ITS FILENAME.
+            //
+            // The chip led with `unmute-draft-BAD18C81-D345-484D-….png` and
+            // a 22pt thumbnail beside it, so a staged image read as a row of
+            // UUID rather than as the thing you captured. You cannot tell
+            // WHICH screenshot is attached, or that three are, from a
+            // filename — and not being able to see that is what turned "the
+            // images went missing" into a night of log reading.
+            //
+            // So the preview IS the chip: a small square of the real image,
+            // its name and its remove control (see ComposerAttachmentTile's
+            // `.chip`). A file we cannot render still falls back to a name,
+            // because then the name is all there is.
+            if !(draft?.attachments.isEmpty ?? true) || !stagingItems.isEmpty {
+                ScrollView(.horizontal, showsIndicators: true) {
+                HStack(spacing: 8) {
+                    ForEach(trayIds, id: \.self) { id in
+                        if let attachment = draft?.attachments.first(where: { $0.id == id }) {
+                            ComposerAttachmentTile(attachment: attachment,
+                                remove: { model.emit(.removeDraftAttachment(id: taskId, attachmentId: attachment.id)) },
+                                restore: { model.emit(.restoreDraftAttachment(id: taskId, attachmentId: attachment.id)) },
+                                style: .chip)
+                        } else if let item = stagingItems.first(where: { $0.id == id }) {
+                            ComposerStagingTile(item: item, retry: { staging.retry(item.id) }, remove: {
+                                if staging.items(task: taskId).contains(where: { $0.id == item.id }) { staging.remove(item.id) }
+                                else { model.emit(.removeDraftAttachment(id: taskId, attachmentId: item.id)) }
+                            })
+                        }
+                    }
+                }
+                .padding(2)
+                }
+                .frame(height: 34)
+            }
+            inputRow
+            if !collapsed { controls.transition(.opacity) }
+        }
+        .animation(Motion.resize, value: collapsed)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Theme.composerFill))
+        .overlay(RoundedRectangle(cornerRadius: 14)
+            .stroke(focused || editorFocused ? Theme.accent.opacity(0.55) : Theme.composerEdge,
+                    lineWidth: focused || editorFocused ? 1 : 0.75))
+        .animation(Theme.hover, value: focused || editorFocused)
+    }
+
+    /// ＋ · editor · (folded settings) · send/stop. EXTRACTED for the same
+    /// reason as `controls` below: inline, the body no longer type-checks.
+    private var inputRow: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            Menu {
+                Button("Attach files and images", action: pickFiles)
+            } label: {
+                Image(systemName: "plus").frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .help("Up to 10 attachments · PNG/JPEG/GIF/WebP images 10 MB · files 25 MB · total 50 MB")
+            .accessibilityLabel("Attach files and images")
+            SubmitTextEditor(text: Binding(get: { text }, set: editText), measuredHeight: $editorHeight, taskId: taskId, pastePolicy: pastePolicy,
+                             placeholder: placeholder, onSubmit: send, onImagePaste: attachImage,
+                             onFocusChange: { isFocused in
+                                 withAnimation(Motion.resize) { editorFocused = isFocused }
+                                 reportFocus(isFocused)
+                             },
+                             focusRequest: focusRequest,
+                             onKey: handleKey,
+                             commandTokens: Set(commands.map(\.token)),
+                             onSelectionChange: { editorSelection = $0 },
+                             onAttachmentReserved: { [taskId, clientRevision] operation, name, selection, snapshot in
+                                 model.emit(.reserveDraftAttachment(id: taskId, operationId: operation, name: name,
+                                     insertionOffset: selection.location, selectedLength: selection.length, clientRevision: clientRevision, insertionText: snapshot))
+                             },
+                             onAttachmentFailed: { [taskId] operation, error in model.emit(.failDraftAttachment(id: taskId, operationId: operation, error: error)) },
+                             onAttachmentCanceled: { [taskId] operation in model.emit(.removeDraftAttachment(id: taskId, attachmentId: operation)) },
+                             onAdmissionError: { attachmentError = $0 },
+                             onAttachmentUndo: { [taskId] operationId, redo in
+                                 model.emit(redo ? .redoDraftAttachment(id: taskId, attachmentId: operationId) : .undoDraftAttachment(id: taskId, attachmentId: operationId))
+                             })
+                .frame(height: ComposerHeight.resolve(measured: editorHeight))
+                .focused($focused)
+                .overlay(alignment: .leading) {
+                    // The editor never drew its placeholder; an empty
+                    // one-line composer needs to say what it is for.
+                    if text.isEmpty {
+                        Text("Reply…").font(.system(size: 13.5)).foregroundColor(Theme.textFaint)
+                            .padding(.leading, 5).allowsHitTesting(false)
+                    }
+                }
+            if collapsed { collapsedSettings }
+            if taskId == "unmute-agent", let config {
+                AgentProviderSwitch(model: model, config: config)
+            } else if config == nil, let m = modelLabel, !m.isEmpty {
+                Text(m).font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
+            }
+            if sending {
+                // Sending is a round-trip through another app's window;
+                // silence for a second reads as "nothing happened".
+                Text(composerMode == "queue" ? "Saving follow-up…" : "Sending…").font(.system(size: 11)).foregroundColor(Theme.textFaint)
+            }
+            // The composer's ONE primary action, and the only tinted
+            // thing on this surface.
+            //
+            // WHILE THE TASK WORKS, STOP TAKES THIS PLACE — the way
+            // every chat app does it. Send stays beside it only once a
+            // follow-up has been typed, so the draft can still go (it
+            // queues); Stop is always the right-most control.
+            if onStop == nil || canSend {
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(canSend ? Theme.accentInk : Theme.textFaint)
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(canSend ? Theme.accent : Theme.raised))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(sending ? "Submitting message" : composerFollowupSendLabel(mode: composerMode))
+                .disabled(!canSend || sending || model.questionBusy(taskId, question))
+                .animation(Theme.hover, value: canSend)
+            }
+            if let onStop {
+                // A filled square in a filled disc — deliberately not
+                // the dictation mic's outlined `stop.circle`.
+                Button(action: onStop) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(canSend ? Theme.text : Theme.accentInk)
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(canSend ? Theme.raisedHover : Theme.accent))
+                }
+                .buttonStyle(.plain)
+                .help("Stop")
+                .accessibilityLabel("Stop")
+            }
+        }
+    }
+
+    /// The settings row, folded: one chip naming what the next message runs on,
+    /// and the mic. The chip puts the caret in the editor, which opens the full
+    /// row — so changing a setting is the same click-then-pick it always was.
+    @ViewBuilder private var collapsedSettings: some View {
+        Button { focusRequest += 1 } label: {
+            HStack(spacing: 5) {
+                Text(settingsSummary).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            }
+            .foregroundColor(Theme.textDim)
+            .padding(.horizontal, 9)
+            .frame(maxWidth: 260)
+            .frame(height: 24)
+            .background(Capsule().fill(Theme.raised))
+            .overlay(Capsule().stroke(Theme.hairline, lineWidth: 0.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("Change provider, model, effort, access and folder")
+        .accessibilityLabel("Settings: \(settingsSummary)")
+        .frame(height: 28)
+        if config?.dictation != nil {
+            Button(action: dictate) {
+                Image(systemName: "mic").font(.system(size: 12)).foregroundColor(Theme.textFaint)
+                    .frame(width: 24, height: 28).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Dictate — or hold right ⌥")
+            .accessibilityLabel("Dictate")
+        }
+    }
+
+    private func dictate() {
+        model.emit(.toggleDraftDictation(id: taskId, insertionOffset: editorSelection.location,
+                                         selectedLength: editorSelection.length,
+                                         clientRevision: clientRevision, insertionText: text))
+    }
+
     /// EXTRACTED, not inlined. The composer's body is already at the limit of
     /// what Swift's type checker will infer in one expression — adding two more
     /// arguments to this call tipped it over into "unable to type-check in
@@ -603,11 +705,7 @@ struct StageComposer: View {
             ComposerControls(
                 config: config,
                 change: { model.emit(.configureChat(id: taskId, field: $0, value: $1)) },
-                dictate: {
-                    model.emit(.toggleDraftDictation(id: taskId, insertionOffset: editorSelection.location,
-                                                     selectedLength: editorSelection.length,
-                                                     clientRevision: clientRevision, insertionText: text))
-                },
+                dictate: dictate,
                 cancelDictation: { model.emit(.cancelDraftDictation(id: taskId)) },
                 newConversation: { newChatOpen = true },
                 newAgentConversation: taskId == "unmute-agent" ? { model.emit(.agentNewConversation) } : nil,
@@ -621,7 +719,8 @@ struct StageComposer: View {
                 // there is nowhere to arm a tool. A visible control that
                 // silently did nothing would be worse than its absence.
                 pickTool: taskId == "unmute-agent" ? nil
-                    : { model.emit(.setDraftTool(id: taskId, tool: $0?.rawValue)) })
+                    : { model.emit(.setDraftTool(id: taskId, tool: $0?.rawValue)) },
+                compact: model.compactSurface)
         }
     }
 
@@ -695,6 +794,9 @@ private struct SubmitTextEditor: NSViewRepresentable {
     let onSubmit: () -> Void
     let onImagePaste: (String, String, String, NSRange?, String?, String?) -> Void
     let onFocusChange: (Bool) -> Void
+    /// A change in this value puts the caret here. Compared, never counted, so
+    /// a re-render cannot steal focus.
+    var focusRequest: Int = 0
     /// Returns true when the composer's menu consumed the key.
     let onKey: (ComposerKeyCommand) -> Bool
     /// The tokens this thread offers; the one the draft starts with is painted.
@@ -737,6 +839,7 @@ private struct SubmitTextEditor: NSViewRepresentable {
         view.allowsUndo = true
         view.string = text
         scroll.documentView = view
+        context.coordinator.focusRequest = focusRequest
         context.coordinator.commandTokens = commandTokens
         context.coordinator.paintCommand(view)
         context.coordinator.measure(view)
@@ -768,6 +871,10 @@ private struct SubmitTextEditor: NSViewRepresentable {
             let length = (text as NSString).length
             view.setSelectedRange(NSRange(location: min(selection.location, length), length: min(selection.length, max(0, length - selection.location))))
         }
+        if context.coordinator.focusRequest != focusRequest {
+            context.coordinator.focusRequest = focusRequest
+            DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
+        }
         context.coordinator.commandTokens = commandTokens
         context.coordinator.paintCommand(view)
         context.coordinator.measure(view)
@@ -779,6 +886,7 @@ private struct SubmitTextEditor: NSViewRepresentable {
         var onImagePaste: (String, String, String, NSRange?, String?, String?) -> Void
         var onKey: (ComposerKeyCommand) -> Bool
         var commandTokens: Set<String> = []
+        var focusRequest = 0
         var onSelectionChange: (NSRange) -> Void
         init(text: Binding<String>, measuredHeight: Binding<CGFloat>, onSubmit: @escaping () -> Void, onImagePaste: @escaping (String, String, String, NSRange?, String?, String?) -> Void, onKey: @escaping (ComposerKeyCommand) -> Bool, onSelectionChange: @escaping (NSRange) -> Void) {
             self.text = text

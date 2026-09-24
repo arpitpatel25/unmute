@@ -295,6 +295,10 @@ final class NotchModel: ObservableObject {
     /// selected fill and clears it when the expansion closes.
     @Published var selectedSurfaceFill: CGFloat = 0.8
     var selectSurfaceFill: (CGFloat) -> Void = { _ in }
+    /// A SMALL NOTCH: the size control at 55% or below. Controls that would
+    /// otherwise spell themselves out (the footer's keys, Visual, dictation)
+    /// show as icons, so the words on the card are the conversation's.
+    var compactSurface: Bool { selectedSurfaceFill <= 0.55 }
 
     /// Is there somewhere to go back TO? False on the bare wall, where the only
     /// move left is closing — and a back arrow that just closes is a lie about
