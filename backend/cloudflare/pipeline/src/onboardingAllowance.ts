@@ -110,6 +110,17 @@ function objectStub(env: PipelineEnv, name: string): DurableObjectStub {
   return env.ONBOARDING_ALLOWANCE.get(env.ONBOARDING_ALLOWANCE.idFromName(name))
 }
 
+// The verified Supabase user ID is the coordination key. A Durable Object
+// serializes submissions from every Cloudflare location for that account.
+export async function reserveBugReportSlot(env: PipelineEnv, userId: string): Promise<{ allowed: boolean; retryAfter: number }> {
+  const response = await objectStub(env, `bug-report:${userId}`).fetch('https://allowance.internal/bug-report-quota', {
+    method: 'POST',
+  })
+  if (response.status === 204) return { allowed: true, retryAfter: 0 }
+  if (response.status === 429) return { allowed: false, retryAfter: Number(response.headers.get('Retry-After')) || 3600 }
+  throw new Error(`Bug report quota unavailable (${response.status})`)
+}
+
 async function postObject(env: PipelineEnv, name: string, path: string, body: unknown): Promise<Response> {
   return objectStub(env, name).fetch(`https://allowance.internal${path}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -176,6 +187,7 @@ export class OnboardingAllowance {
 
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname
+    if (path === '/bug-report-quota' && request.method === 'POST') return this.reserveBugReport()
     const body = await request.json<Record<string, unknown>>()
     if (path === '/issue') return this.issue(body)
     if (path === '/initialize') return this.initialize(body)
@@ -186,6 +198,23 @@ export class OnboardingAllowance {
       return new Response(null, { status: 204 })
     }
     return new Response('Not found', { status: 404 })
+  }
+
+  private async reserveBugReport(): Promise<Response> {
+    const now = Date.now()
+    const windowMs = 60 * 60_000
+    const result = await this.ctx.storage.transaction(async storage => {
+      const recent = (await storage.get<number[]>('bug-report-times') ?? [])
+        .filter(time => Number.isFinite(time) && time > now - windowMs && time <= now)
+      if (recent.length >= 10) {
+        return { allowed: false, retryAfter: Math.max(1, Math.ceil((recent[0] + windowMs - now) / 1000)) }
+      }
+      await storage.put('bug-report-times', [...recent, now])
+      return { allowed: true, retryAfter: 0 }
+    })
+    return result.allowed
+      ? new Response(null, { status: 204 })
+      : new Response('Bug report limit reached', { status: 429, headers: { 'Retry-After': String(result.retryAfter) } })
   }
 
   private async issue(body: Record<string, unknown>): Promise<Response> {

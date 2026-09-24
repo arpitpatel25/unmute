@@ -14,6 +14,7 @@ compatibility_flags = ["nodejs_compat"]
 # OPENROUTER_API_KEY        — OpenRouter key for Notetaker Qwen3 ASR 0.6B
 # SUPABASE_URL              — Same Supabase project as BoloAI
 # SUPABASE_SERVICE_ROLE_KEY — Server-side write access (RLS bypassed)
+# BUG_REPORT_ADMIN_PASSWORD — private bug-report viewer HTTP Basic password
 
 # ─── KV namespace binding ──────────────────────────────────────
 # Provision once with:  wrangler kv:namespace create "USER_BALANCE"

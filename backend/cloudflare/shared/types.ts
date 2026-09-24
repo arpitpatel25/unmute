@@ -10,6 +10,7 @@ export interface PipelineEnv {
   SUPABASE_URL: string
   SUPABASE_SERVICE_ROLE_KEY: string
   ONBOARDING_GRANT_SECRET: string
+  BUG_REPORT_ADMIN_PASSWORD: string
 
   // KV namespace binding (declared in wrangler.toml)
   USER_BALANCE: KVNamespace

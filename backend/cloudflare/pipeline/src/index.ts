@@ -50,8 +50,9 @@ import type {
   LLMRequest,
 } from '../../shared/types'
 import { transcribeNotetakerWithFallback } from './notetakerSttCascade'
-import { authorizeOnboardingGrant, issueOnboardingGrant, OnboardingAllowance } from './onboardingAllowance'
+import { authorizeOnboardingGrant, issueOnboardingGrant, OnboardingAllowance, reserveBugReportSlot } from './onboardingAllowance'
 import { receiveBugReport } from './bugReports'
+import { showBugReports } from './bugReportAdmin'
 export { OnboardingAllowance }
 
 // ─── Durable usage recording (the BILL we must never lose) ──────────────────
@@ -146,6 +147,10 @@ export default {
       return json({ ok: true, grant: result.grant, expires_at: result.expiresAt })
     }
 
+    if (req.method === 'GET' && url.pathname === '/admin/bug-reports') {
+      return showBugReports(req, env)
+    }
+
     // ─── Auth: extract + verify JWT ─────────────────────────────
     const token = extractBearer(req)
     const onboardingGrant = req.headers.get('X-Unmute-Onboarding-Grant')
@@ -166,6 +171,11 @@ export default {
       }
       if (req.method === 'POST' && url.pathname === '/v1/bug-reports') {
         if (!userId) return err('UNAUTHORIZED', 'Sign-in required', 401)
+        const quota = await reserveBugReportSlot(env, userId)
+        if (!quota.allowed) {
+          return json({ ok: false, code: 'RATE_LIMITED', message: 'You can send up to 10 bug reports per hour. Please try again later.' }, 429,
+            { 'Retry-After': String(quota.retryAfter) })
+        }
         return await receiveBugReport(req, env, userId)
       }
       if (req.method === 'POST' && url.pathname === '/v1/stt') {
