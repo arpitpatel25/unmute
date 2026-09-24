@@ -273,6 +273,7 @@ export class UnmuteAgentController {
       diagnostic('agent-history-prefetch', { status: history.status, terms: history.terms ?? 0,
         matchedSessions: history.matchedSessions ?? 0, injectedChars: history.text?.length ?? 0,
         helperUsed: history.helperUsed ?? false, searchedTurns: history.searchedTurns ?? null,
+        queryStrategy: history.queryStrategy ?? null, searchPasses: history.searchPasses ?? 0,
         remaining: history.remaining ?? null, candidateSessionIds: history.candidateSessionIds ?? [],
         conclusions: history.conclusions ?? 0,
         durationMs: history.durationMs ?? null })

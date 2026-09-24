@@ -244,7 +244,20 @@ interface ContentBlock {
  */
 /** What a driver remembers between stream lines: a model switch announced
  *  mid-turn, to be said with that turn's answer. */
-export interface HeadlessTurnState { notice?: string; contextTokens?: number; modelCalls?: number }
+interface ClaudeCallUsage {
+  contextTokens: number
+  inputTokens: unknown
+  cacheCreationInputTokens: unknown
+  cacheReadInputTokens: unknown
+  outputTokens: unknown
+}
+export interface HeadlessTurnState {
+  notice?: string
+  contextTokens?: number
+  modelCalls?: number
+  callUsage?: Map<string, ClaudeCallUsage>
+  anonymousCalls?: number
+}
 
 function claudeContextTokens(value: unknown): number | undefined {
   if (!value || typeof value !== 'object') return undefined
@@ -255,7 +268,11 @@ function claudeContextTokens(value: unknown): number | undefined {
   return parts.reduce<number>((sum, part) => sum + (Number.isSafeInteger(part) && Number(part) >= 0 ? Number(part) : 0), 0)
 }
 
-export function headlessEvents(value: unknown, state: HeadlessTurnState = {}): AgentProcessEvent[] {
+export function headlessEvents(
+  value: unknown,
+  state: HeadlessTurnState = {},
+  log: typeof diagnostic = diagnostic,
+): AgentProcessEvent[] {
   if (!value || typeof value !== 'object') return []
   const record = value as Record<string, unknown>
 
@@ -275,19 +292,24 @@ export function headlessEvents(value: unknown, state: HeadlessTurnState = {}): A
   }
 
   if (record.type === 'assistant') {
-    const message = record.message as { content?: unknown; usage?: unknown } | undefined
+    const message = record.message as { id?: unknown; content?: unknown; usage?: unknown } | undefined
     const contextTokens = claudeContextTokens(message?.usage)
     if (contextTokens !== undefined) {
       state.contextTokens = contextTokens
-      state.modelCalls = (state.modelCalls ?? 0) + 1
+      state.callUsage ??= new Map()
+      // Claude may emit thinking and tool/text blocks with the same message ID.
+      // Their usage is a changing snapshot of one call, not separate calls.
+      const id = typeof message?.id === 'string' && message.id
+        ? message.id : `anonymous-${state.anonymousCalls = (state.anonymousCalls ?? 0) + 1}`
       const usage = message?.usage as Record<string, unknown>
-      diagnostic('agent-claude-model-call', {
-        call: state.modelCalls, contextTokens,
+      state.callUsage.set(id, {
+        contextTokens,
         inputTokens: usage.input_tokens ?? null,
         cacheCreationInputTokens: usage.cache_creation_input_tokens ?? null,
         cacheReadInputTokens: usage.cache_read_input_tokens ?? null,
         outputTokens: usage.output_tokens ?? null,
       })
+      state.modelCalls = state.callUsage.size
     }
     const blocks = Array.isArray(message?.content) ? message.content as ContentBlock[] : []
     const events: AgentProcessEvent[] = []
@@ -305,8 +327,13 @@ export function headlessEvents(value: unknown, state: HeadlessTurnState = {}): A
   if (record.type === 'result') {
     const contextTokens = state.contextTokens
     state.contextTokens = undefined
-    diagnostic('agent-claude-turn-usage', { modelCalls: state.modelCalls ?? 0, finalContextTokens: contextTokens ?? null })
+    for (const [index, usage] of [...(state.callUsage?.values() ?? [])].entries()) {
+      log('agent-claude-model-call', { call: index + 1, ...usage })
+    }
+    log('agent-claude-turn-usage', { modelCalls: state.modelCalls ?? 0, finalContextTokens: contextTokens ?? null })
     state.modelCalls = undefined
+    state.callUsage = undefined
+    state.anonymousCalls = undefined
     // Trust the negative signals over the positive one: a result that is not
     // explicitly a success is a failure, so a shape we have not seen before
     // can never be reported to the user as a good answer.

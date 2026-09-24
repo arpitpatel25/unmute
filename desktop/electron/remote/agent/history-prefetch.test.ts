@@ -64,3 +64,23 @@ test('history prefetch includes a bounded concluding answer when the transcript 
     assert.equal(result.conclusions, 1)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
+
+test('history prefetch tries distinctive adjacent phrases before broad single words', async () => {
+  const searches: string[][] = []
+  const result = await prefetchSessionHistory('What happened with the earlier Vinyas company-laptop Agent issue?',
+    async input => { searches.push([...input.terms]); return found })
+  assert.equal(result.status, 'matched')
+  assert.equal(searches.length, 1)
+  assert.ok(searches[0]!.includes('company laptop'))
+  assert.ok(!searches[0]!.some(term => /happened|earlier|agent|issue/.test(term)))
+})
+
+test('history prefetch falls back to distinctive single words if phrases miss', async () => {
+  const searches: string[][] = []
+  const empty = { ...found, matchedSessions: 0, matchedTurns: 0, sessions: [] }
+  const result = await prefetchSessionHistory('What happened with the earlier Vinyas company-laptop Agent issue?',
+    async input => { searches.push([...input.terms]); return searches.length === 1 ? empty : found })
+  assert.equal(result.status, 'matched')
+  assert.equal(searches.length, 2)
+  assert.ok(searches[1]!.includes('vinyas'))
+})

@@ -90,6 +90,23 @@ test('completion carries the final Claude call context rather than cumulative ca
     [{ type: 'completion', outcome: 'completed', finalText: 'next' }])
 })
 
+test('repeated Claude stream records for one message count as one model call', () => {
+  const state = {}
+  const logged: Array<{ event: string; fields: Record<string, unknown> }> = []
+  const log = (event: string, fields: Record<string, unknown>) => { logged.push({ event, fields }) }
+  const base = { input_tokens: 2, cache_creation_input_tokens: 1_000, cache_read_input_tokens: 100_000 }
+  headlessEvents({ type: 'assistant', message: { id: 'msg-1', content: [{ type: 'thinking', thinking: '...' }],
+    usage: { ...base, output_tokens: 8 } } }, state, log)
+  headlessEvents({ type: 'assistant', message: { id: 'msg-1', content: [{ type: 'tool_use', name: 'Grep' }],
+    usage: { ...base, output_tokens: 159 } } }, state, log)
+  assert.deepEqual(headlessEvents({ type: 'result', subtype: 'success', result: 'done' }, state, log),
+    [{ type: 'completion', outcome: 'completed', finalText: 'done', contextTokens: 101_002 }])
+  const calls = logged.filter(row => row.event === 'agent-claude-model-call')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0]?.fields.outputTokens, 159)
+  assert.equal(logged.find(row => row.event === 'agent-claude-turn-usage')?.fields.modelCalls, 1)
+})
+
 test('an errored result fails the turn rather than completing it emptily', () => {
   // The CLI says WHY, and the parser now carries it (see the failure field) —
   // this expectation was left behind when it started to.
