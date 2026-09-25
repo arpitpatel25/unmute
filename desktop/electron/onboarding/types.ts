@@ -67,6 +67,7 @@ export type PresenterCard = null | {
   kind: 'permission' | 'speak' | 'provider' | 'repair' | 'success'
   title?: string
   phrase?: string
+  copyText?: string
   detail?: string
   providers?: Record<ProviderId, ProviderUiStatus>
 }

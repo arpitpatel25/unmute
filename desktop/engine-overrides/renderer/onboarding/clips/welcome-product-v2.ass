@@ -1,0 +1,25 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Avenir Next Demi Bold,44,&H00FFFFFF,&H00FFFFFF,&H70000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,72,72,30,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.10,0:00:02.30,Default,,0,0,0,,Hey, welcome to Unmute.
+Dialogue: 0,0:00:02.46,0:00:05.58,Default,,0,0,0,,We believe that ideas don't appear in a chat box.
+Dialogue: 0,0:00:05.82,0:00:07.70,Default,,0,0,0,,They happen when you're reading a Slack
+Dialogue: 0,0:00:07.70,0:00:11.02,Default,,0,0,0,,conversation or browsing the web or watching a
+Dialogue: 0,0:00:11.02,0:00:12.86,Default,,0,0,0,,YouTube video or scrolling through Twitter.
+Dialogue: 0,0:00:13.50,0:00:16.38,Default,,0,0,0,,Unmute lets you convert those thoughts, those ideas,
+Dialogue: 0,0:00:16.38,0:00:18.38,Default,,0,0,0,,into actions there and then itself.
+Dialogue: 0,0:00:18.94,0:00:21.50,Default,,0,0,0,,With press of a key, you can create new tasks,
+Dialogue: 0,0:00:21.90,0:00:23.98,Default,,0,0,0,,continue working on existing tasks, or
+Dialogue: 0,0:00:24.54,0:00:26.06,Default,,0,0,0,,dictate anywhere across your Mac
+Dialogue: 0,0:00:26.38,0:00:29.50,Default,,0,0,0,,you can think of Unmute like a pair of ears for your MacBook.
+Dialogue: 0,0:00:29.58,0:00:30.54,Default,,0,0,0,,Let's try it out.

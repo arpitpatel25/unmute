@@ -1,0 +1,47 @@
+1
+00:00:01,098 --> 00:00:02,298
+Hey, welcome to Unmute.
+
+2
+00:00:02,458 --> 00:00:05,578
+We believe that ideas don't appear in a chat box.
+
+3
+00:00:05,817 --> 00:00:07,698
+They happen when you're reading a Slack
+
+4
+00:00:07,698 --> 00:00:11,018
+conversation or browsing the web or watching a
+
+5
+00:00:11,018 --> 00:00:12,858
+YouTube video or scrolling through Twitter.
+
+6
+00:00:13,496 --> 00:00:16,378
+Unmute lets you convert those thoughts, those ideas,
+
+7
+00:00:16,378 --> 00:00:18,378
+into actions there and then itself.
+
+8
+00:00:18,937 --> 00:00:21,498
+With press of a key, you can create new tasks,
+
+9
+00:00:21,897 --> 00:00:23,978
+continue working on existing tasks, or
+
+10
+00:00:24,538 --> 00:00:26,057
+dictate anywhere across your Mac
+
+11
+00:00:26,378 --> 00:00:29,498
+you can think of Unmute like a pair of ears for your MacBook.
+
+12
+00:00:29,577 --> 00:00:30,538
+Let's try it out.

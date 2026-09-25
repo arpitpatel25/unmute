@@ -4,6 +4,7 @@ export type PresenterCard = null | {
   kind: 'permission' | 'speak' | 'provider' | 'repair' | 'success'
   title?: string
   phrase?: string
+  copyText?: string
   detail?: string
   providers?: Record<'claude' | 'codex', { state: ProviderUiState; detail?: string }>
 }
@@ -20,6 +21,8 @@ export type PresenterSnapshot = {
 
 export type PresenterState = PresenterSnapshot & {
   videoUnavailable: boolean
+  videoFinished: boolean
+  pending: PresenterSnapshot | null
   checkpoint: PresenterSnapshot | null
   history: PresenterSnapshot[]
   historyIndex: number | null
@@ -31,6 +34,7 @@ export type PresenterMessage =
   | { type: 'video-unavailable' }
   | { type: 'back' }
   | { type: 'forward' }
+  | { type: 'video-ended' | 'skip-video' | 'replay-video' }
 
 const loading: PresenterSnapshot = {
   action: 'loading', clipId: '', caption: '', card: null, step: 0, totalSteps: 0,
@@ -40,6 +44,8 @@ export function emptyPresenter(): PresenterState {
   return {
     ...loading,
     videoUnavailable: false,
+    videoFinished: false,
+    pending: null,
     checkpoint: null,
     history: [],
     historyIndex: null,
@@ -66,11 +72,21 @@ function display(state: PresenterState, snapshot: PresenterSnapshot, historyInde
     historyIndex,
     reviewing: historyIndex !== null,
     videoUnavailable: false,
+    videoFinished: !snapshot.clipId,
+    pending: null,
   }
 }
 
 export function reducePresenter(state: PresenterState, message: PresenterMessage): PresenterState {
-  if (message.type === 'video-unavailable') return { ...state, videoUnavailable: true }
+  if (message.type === 'video-unavailable') {
+    const updated = { ...state, videoUnavailable: true, videoFinished: true }
+    return updated.pending ? advanceTo(updated, updated.pending) : updated
+  }
+  if (message.type === 'replay-video') return { ...state, videoFinished: false }
+  if (message.type === 'video-ended' || message.type === 'skip-video') {
+    const updated = { ...state, videoFinished: true }
+    return updated.pending ? advanceTo(updated, updated.pending) : updated
+  }
 
   if (message.type === 'back') {
     if (!state.history.length) return state
@@ -93,9 +109,17 @@ export function reducePresenter(state: PresenterState, message: PresenterMessage
 
   if (state.checkpoint.action === next.action) {
     const updated = { ...state, checkpoint: next }
-    return state.reviewing ? updated : display(updated, next, null)
+    return state.reviewing ? updated : { ...updated, ...next }
   }
 
+  if (!state.videoFinished && !state.videoUnavailable && !state.reviewing) {
+    return { ...state, pending: next }
+  }
+  return advanceTo(state, next)
+}
+
+function advanceTo(state: PresenterState, next: PresenterSnapshot): PresenterState {
+  if (!state.checkpoint) return display({ ...state, checkpoint: next }, next, null)
   const resetJourney = next.step > 0 && next.step <= state.checkpoint.step
   const history = resetJourney
     ? []

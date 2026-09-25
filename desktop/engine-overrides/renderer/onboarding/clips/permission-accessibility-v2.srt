@@ -1,0 +1,11 @@
+1
+00:00:00,832 --> 00:00:02,351
+Next you need to allow accessibility.
+
+2
+00:00:02,672 --> 00:00:05,551
+So this lets unmute recognize its shortcuts and
+
+3
+00:00:05,871 --> 00:00:08,432
+place the transcribed text wherever your cursor is.

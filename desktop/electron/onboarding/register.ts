@@ -13,12 +13,14 @@ export interface OnboardingRuntimeDeps {
 export class OnboardingRuntime {
   private unsubscribe: (() => void) | undefined
   private verifyTask: OnboardingRuntimeDeps['verifyOrchestratorTask']
+  private closing = false
 
   constructor(private readonly deps: OnboardingRuntimeDeps) {
     this.verifyTask = deps.verifyOrchestratorTask
   }
 
   async boot(options: { signedIn?: boolean } = {}): Promise<PresenterCommand> {
+    this.closing = false
     let command = await this.deps.coordinator.start()
     // Resolve existing accounts before creating a window, even if an old tour
     // checkpoint was left unfinished. Replay is an explicit, separate reset.
@@ -56,6 +58,7 @@ export class OnboardingRuntime {
 
   async reset(): Promise<PresenterCommand> {
     const command = await this.deps.coordinator.reset()
+    this.closing = false
     this.deps.presenter.show()
     this.publish(command)
     return command
@@ -78,15 +81,19 @@ export class OnboardingRuntime {
   }
 
   async dismiss(): Promise<PresenterCommand> {
-    const command = await this.accept({ type: 'onboarding-dismissed' })
-    this.deps.allowance.complete()
+    // A close click must remove the overlay immediately. Progress writes can
+    // wait behind other disk work; leaving the window up during that await
+    // makes the whole app look unresponsive.
+    this.closing = true
     this.deps.presenter.close()
-    return command
+    this.deps.allowance.complete()
+    return this.accept({ type: 'onboarding-dismissed' })
   }
 
   dispose(): void { this.unsubscribe?.(); this.unsubscribe = undefined }
 
   private publish(command: PresenterCommand): void {
+    if (this.closing) return
     this.deps.allowance.arm(command.action)
     if (command.action !== 'complete') this.deps.presenter.send(command)
   }

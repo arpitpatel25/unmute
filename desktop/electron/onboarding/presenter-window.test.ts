@@ -145,6 +145,12 @@ test('hands-on presenter controls do not steal focus from the destination app', 
   presenter.send(presenterSnapshot('notes-dictation'))
   assert.equal(window.focusable.at(-1), false)
 
+  presenter.send(presenterSnapshot('clipboard-capture'))
+  assert.equal(window.focusable.at(-1), true)
+
+  presenter.send(presenterSnapshot('screenshot-capture'))
+  assert.equal(window.focusable.at(-1), false)
+
   presenter.send(presenterSnapshot('microphone'))
   assert.equal(window.focusable.at(-1), true)
 })

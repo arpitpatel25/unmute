@@ -1,0 +1,51 @@
+1
+00:00:00,526 --> 00:00:04,605
+You can also copy texts, links, or anything while you're dictating.
+
+2
+00:00:05,166 --> 00:00:06,605
+So press the Function key again,
+
+3
+00:00:06,846 --> 00:00:08,766
+or dictate whatever you want to dictate,
+
+4
+00:00:08,846 --> 00:00:11,406
+and maybe copy the below text that is shown.
+
+5
+00:00:11,486 --> 00:00:14,726
+Select the text, copy it by Command+C, dictate something more,
+
+6
+00:00:14,726 --> 00:00:16,686
+and then place your cursor
+
+7
+00:00:17,085 --> 00:00:20,365
+in the Apple Notes and tap the Function key again to submit.
+
+8
+00:00:20,365 --> 00:00:23,686
+What you will see is that it pastes the links,
+
+9
+00:00:23,686 --> 00:00:26,745
+the copied links or copied text along with the dictation.
+
+10
+00:00:27,146 --> 00:00:31,146
+And it's a really good way to gather input while you're dictating
+
+11
+00:00:31,545 --> 00:00:33,265
+so that you can paste the whole thing.
+
+12
+00:00:33,265 --> 00:00:37,466
+You can submit the whole thing in a chat box, or in Claude Code,
+
+13
+00:00:37,466 --> 00:00:38,665
+or in Codex, whatever.

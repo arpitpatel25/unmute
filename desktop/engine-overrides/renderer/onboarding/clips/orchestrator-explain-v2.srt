@@ -1,0 +1,119 @@
+1
+00:00:00,621 --> 00:00:03,181
+Now let's turn a thought to a task.
+
+2
+00:00:03,500 --> 00:00:05,721
+So press Right Option key,
+
+3
+00:00:05,980 --> 00:00:08,381
+say the request shown below and press the right
+
+4
+00:00:08,381 --> 00:00:09,740
+option key again to submit.
+
+5
+00:00:09,820 --> 00:00:12,221
+What this will do is this will create a new Claude
+
+6
+00:00:12,221 --> 00:00:14,461
+or a Codex session based on whatever you selected,
+
+7
+00:00:15,101 --> 00:00:18,300
+and it will send you a request as the input for that session.
+
+8
+00:00:18,780 --> 00:00:21,420
+And you can just look at the notch at the top
+
+9
+00:00:21,821 --> 00:00:24,701
+and your request would be in, sending state initially.
+
+10
+00:00:25,210 --> 00:00:26,170
+Once the request is sent,
+
+11
+00:00:26,170 --> 00:00:28,931
+you can open the chat box basically by tapping the
+
+12
+00:00:28,931 --> 00:00:32,970
+notch and it will have your message as well as the model's response
+
+13
+00:00:33,290 --> 00:00:34,091
+there itself.
+
+14
+00:00:34,651 --> 00:00:37,570
+So this is a really easy way for you to trigger
+
+15
+00:00:37,570 --> 00:00:39,930
+new tasks from anywhere across your Mac.
+
+16
+00:00:39,930 --> 00:00:42,731
+You don't have to switch windows, you don't have to
+
+17
+00:00:43,610 --> 00:00:44,371
+switch apps.
+
+18
+00:00:44,371 --> 00:00:45,850
+And look for, you know,
+
+19
+00:00:45,930 --> 00:00:49,170
+the terminal or where the Codex or Claude app is.
+
+20
+00:00:49,170 --> 00:00:50,011
+You just have to.
+
+21
+00:00:50,250 --> 00:00:51,290
+Well, if you had a thought,
+
+22
+00:00:51,290 --> 00:00:54,411
+you just have to unmute yourself by pressing the Right Option key and
+
+23
+00:00:55,371 --> 00:00:56,570
+say, what do you want to say?
+
+24
+00:00:56,570 --> 00:00:57,771
+Capture whatever you want to capture.
+
+25
+00:00:57,771 --> 00:00:59,530
+If it's a Slack link, if it's a Twitter link,
+
+26
+00:00:59,530 --> 00:01:01,811
+if it's a YouTube video, if it's a blog that you're reading,
+
+27
+00:01:01,811 --> 00:01:04,290
+you can just copy that along with your dictation
+
+28
+00:01:04,290 --> 00:01:07,090
+while you're dictating and you can just press the Right Option again.
+
+29
+00:01:07,090 --> 00:01:09,331
+You can just press submit again and it will create
+
+30
+00:01:09,331 --> 00:01:11,051
+a new task there and there itself.

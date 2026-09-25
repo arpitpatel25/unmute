@@ -1,0 +1,19 @@
+1
+00:00:01,008 --> 00:00:02,769
+Finally, you need to allow system audio,
+
+2
+00:00:03,088 --> 00:00:05,528
+so Unmute only uses that when you deliberately
+
+3
+00:00:05,528 --> 00:00:06,689
+activate the Notetaker.
+
+4
+00:00:06,769 --> 00:00:08,689
+yeah, we do have a Notetaker as well.
+
+5
+00:00:08,849 --> 00:00:10,048
+More details on that later.

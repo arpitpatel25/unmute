@@ -1,0 +1,199 @@
+1
+00:00:00,729 --> 00:00:04,168
+So the task, the session that you just created was a vanilla
+
+2
+00:00:04,168 --> 00:00:05,368
+Claude or Codex session.
+
+3
+00:00:06,168 --> 00:00:09,448
+But we also have a concept of Unmute Agent.
+
+4
+00:00:09,528 --> 00:00:13,048
+So Unmute Agent is a specialized session that we create
+
+5
+00:00:13,528 --> 00:00:16,489
+and it has these tools and some capabilities
+
+6
+00:00:17,048 --> 00:00:18,969
+that allows it to find tasks,
+
+7
+00:00:18,969 --> 00:00:21,969
+allows to create new tasks and continue working on
+
+8
+00:00:21,969 --> 00:00:23,129
+existing tasks for you.
+
+9
+00:00:23,719 --> 00:00:26,599
+So think of it like a task manager or a session manager.
+
+10
+00:00:26,998 --> 00:00:30,199
+Let's say you were working on something a couple of days back
+
+11
+00:00:30,518 --> 00:00:32,679
+and you want to start working on it again.
+
+12
+00:00:33,158 --> 00:00:35,478
+So what you could do is you can just unmute yourself.
+
+13
+00:00:35,478 --> 00:00:39,399
+You can talk to Unmute Agent and you can tell it, hey, let's start,
+
+14
+00:00:39,478 --> 00:00:41,238
+let's continue working on the landing page.
+
+15
+00:00:41,319 --> 00:00:41,959
+That's it.
+
+16
+00:00:42,039 --> 00:00:43,719
+That's the, you know,
+
+17
+00:00:43,798 --> 00:00:47,319
+simplest of a request that you have to make to the Unmute Agent.
+
+18
+00:00:48,039 --> 00:00:50,598
+What it will do is it will find the right session
+
+19
+00:00:51,018 --> 00:00:54,698
+that you are already working on and it will resume that session.
+
+20
+00:00:54,859 --> 00:00:56,819
+It will make sure that it has the right set of
+
+21
+00:00:56,819 --> 00:00:59,499
+contexts and you can just proceed from there.
+
+22
+00:00:59,899 --> 00:01:01,378
+So it's like a sessions manager.
+
+23
+00:01:01,378 --> 00:01:05,379
+It's really useful and you don't have to think about what session you
+
+24
+00:01:05,379 --> 00:01:06,299
+were, you were working on earlier.
+
+25
+00:01:06,299 --> 00:01:07,739
+You don't have to look for those sessions.
+
+26
+00:01:07,978 --> 00:01:08,539
+At the same time.
+
+27
+00:01:08,539 --> 00:01:10,459
+You can say, hey, can you do this,
+
+28
+00:01:10,709 --> 00:01:13,739
+can you do this task A again for this particular thing?
+
+29
+00:01:14,138 --> 00:01:16,659
+And it'll just make sure to find the right set of
+
+30
+00:01:16,659 --> 00:01:18,379
+context from your past session.
+
+31
+00:01:19,418 --> 00:01:22,379
+Just bring that in front of you so you don't have to think about
+
+32
+00:01:22,698 --> 00:01:23,659
+or worry about
+
+33
+00:01:24,328 --> 00:01:27,299
+resuming a previous session, finding the right session, etc.
+
+34
+00:01:27,299 --> 00:01:29,338
+So it's a really good, it's a really important feature.
+
+35
+00:01:29,659 --> 00:01:31,899
+And yeah, think of it like a task manager.
+
+36
+00:01:32,138 --> 00:01:36,459
+What you have to do is double tap the Right Command key to talk to
+
+37
+00:01:36,459 --> 00:01:37,259
+Unmute Agent
+
+38
+00:01:38,138 --> 00:01:41,578
+and just say out loud whatever you want to say.
+
+39
+00:01:41,578 --> 00:01:44,459
+You can say the follow up message as shown here to test it
+
+40
+00:01:44,759 --> 00:01:47,438
+and once done tap the Right Command key again and
+
+41
+00:01:47,438 --> 00:01:49,399
+that will submit a Unmute Agent request.
+
+42
+00:01:49,748 --> 00:01:51,478
+it will also pop up in a notch.
+
+43
+00:01:51,478 --> 00:01:55,638
+So you can just tap on the notch and it will just show Unmute
+
+44
+00:01:55,638 --> 00:01:59,078
+Agent specific task or Unmute Agent specific chat box.
+
+45
+00:01:59,159 --> 00:02:02,438
+So that's a chat of yours and the Unmute Agent.
+
+46
+00:02:02,679 --> 00:02:05,308
+And once the Unmute Agent is done with the follow up,
+
+47
+00:02:05,308 --> 00:02:08,038
+it will most likely give you a link
+
+48
+00:02:08,359 --> 00:02:12,278
+and you can tap that link and it will open the right session.
+
+49
+00:02:12,598 --> 00:02:13,919
+So it's a really cool feature.
+
+50
+00:02:13,919 --> 00:02:14,838
+You can just try it out.

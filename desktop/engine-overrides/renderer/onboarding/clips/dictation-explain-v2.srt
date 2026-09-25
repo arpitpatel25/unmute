@@ -1,0 +1,27 @@
+1
+00:00:00,733 --> 00:00:01,772
+Let's start with dictation.
+
+2
+00:00:01,853 --> 00:00:03,932
+So, we've already opened Apple Notes for you.
+
+3
+00:00:04,293 --> 00:00:07,293
+you need to press the Function key and say whatever you want to say.
+
+4
+00:00:07,293 --> 00:00:08,733
+Maybe the phrase that is shown below,
+
+5
+00:00:09,132 --> 00:00:11,372
+and tap the Function key again to submit.
+
+6
+00:00:11,532 --> 00:00:13,332
+And this will transcribe your dictation,
+
+7
+00:00:13,332 --> 00:00:16,013
+transcribe your audio and paste it near the cursor.

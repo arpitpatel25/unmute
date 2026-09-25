@@ -1,0 +1,103 @@
+1
+00:00:00,900 --> 00:00:02,819
+Finally, Unmute also has a Notetaker.
+
+2
+00:00:02,980 --> 00:00:04,160
+What we found out is that,
+
+3
+00:00:04,160 --> 00:00:06,820
+notes that are captured and summarized using your
+
+4
+00:00:06,820 --> 00:00:10,179
+Claude and Codex harnesses are significantly better
+
+5
+00:00:10,500 --> 00:00:12,500
+compared to any other Notetaker out there.
+
+6
+00:00:12,580 --> 00:00:13,779
+And the reason is simple.
+
+7
+00:00:13,779 --> 00:00:15,300
+You're using the best set of models.
+
+8
+00:00:15,699 --> 00:00:19,379
+On top of it, you are attaching a really good agentic loop,
+
+9
+00:00:19,379 --> 00:00:21,620
+a harness which has good context,
+
+10
+00:00:22,420 --> 00:00:24,100
+and you're not paying for it additionally.
+
+11
+00:00:24,100 --> 00:00:26,339
+You already pay for your Claude and Codex plan,
+
+12
+00:00:26,829 --> 00:00:30,109
+so you don't have to pay for any better model for
+
+13
+00:00:30,109 --> 00:00:31,390
+a particular Notetaker.
+
+14
+00:00:31,469 --> 00:00:32,509
+So that's really good.
+
+15
+00:00:32,829 --> 00:00:35,590
+And the good part here, the most important part,
+
+16
+00:00:35,590 --> 00:00:38,109
+would be that the Unmute Agent
+
+17
+00:00:38,429 --> 00:00:42,509
+has context about every note that was ever captured on Unmute.
+
+18
+00:00:42,588 --> 00:00:43,390
+So you can just
+
+19
+00:00:44,109 --> 00:00:45,189
+invoke Unmute Agent.
+
+20
+00:00:45,189 --> 00:00:49,310
+You can ask anything about any note and it will bring you,
+
+21
+00:00:49,310 --> 00:00:51,630
+fetch you the set, the right set of details.
+
+22
+00:00:52,179 --> 00:00:54,420
+And you can just fire up any task.
+
+23
+00:00:54,420 --> 00:00:56,380
+You can just ask Unmute Agent that go through
+
+24
+00:00:56,380 --> 00:01:00,420
+these set of notes and figure out what tasks that I have to work on.
+
+25
+00:01:00,500 --> 00:01:04,739
+And it'll just create sessions for you like Claude or Codex sessions.
+
+26
+00:01:04,900 --> 00:01:06,900
+And yeah, that's as simple as that.
