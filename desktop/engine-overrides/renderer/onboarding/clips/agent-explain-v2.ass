@@ -1,0 +1,63 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Avenir Next Demi Bold,44,&H00FFFFFF,&H00FFFFFF,&H70000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,72,72,30,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.73,0:00:04.17,Default,,0,0,0,,So the task, the session that you just created was a vanilla
+Dialogue: 0,0:00:04.17,0:00:05.37,Default,,0,0,0,,Claude or Codex session.
+Dialogue: 0,0:00:06.17,0:00:09.45,Default,,0,0,0,,But we also have a concept of Unmute Agent.
+Dialogue: 0,0:00:09.53,0:00:13.05,Default,,0,0,0,,So Unmute Agent is a specialized session that we create
+Dialogue: 0,0:00:13.53,0:00:16.49,Default,,0,0,0,,and it has these tools and some capabilities
+Dialogue: 0,0:00:17.05,0:00:18.97,Default,,0,0,0,,that allows it to find tasks,
+Dialogue: 0,0:00:18.97,0:00:21.97,Default,,0,0,0,,allows to create new tasks and continue working on
+Dialogue: 0,0:00:21.97,0:00:23.13,Default,,0,0,0,,existing tasks for you.
+Dialogue: 0,0:00:23.72,0:00:26.60,Default,,0,0,0,,So think of it like a task manager or a session manager.
+Dialogue: 0,0:00:27.00,0:00:30.20,Default,,0,0,0,,Let's say you were working on something a couple of days back
+Dialogue: 0,0:00:30.52,0:00:32.68,Default,,0,0,0,,and you want to start working on it again.
+Dialogue: 0,0:00:33.16,0:00:35.48,Default,,0,0,0,,So what you could do is you can just unmute yourself.
+Dialogue: 0,0:00:35.48,0:00:39.40,Default,,0,0,0,,You can talk to Unmute Agent and you can tell it, hey, let's start,
+Dialogue: 0,0:00:39.48,0:00:41.24,Default,,0,0,0,,let's continue working on the landing page.
+Dialogue: 0,0:00:41.32,0:00:41.96,Default,,0,0,0,,That's it.
+Dialogue: 0,0:00:42.04,0:00:43.72,Default,,0,0,0,,That's the, you know,
+Dialogue: 0,0:00:43.80,0:00:47.32,Default,,0,0,0,,simplest of a request that you have to make to the Unmute Agent.
+Dialogue: 0,0:00:48.04,0:00:50.60,Default,,0,0,0,,What it will do is it will find the right session
+Dialogue: 0,0:00:51.02,0:00:54.70,Default,,0,0,0,,that you are already working on and it will resume that session.
+Dialogue: 0,0:00:54.86,0:00:56.82,Default,,0,0,0,,It will make sure that it has the right set of
+Dialogue: 0,0:00:56.82,0:00:59.50,Default,,0,0,0,,contexts and you can just proceed from there.
+Dialogue: 0,0:00:59.90,0:01:01.38,Default,,0,0,0,,So it's like a sessions manager.
+Dialogue: 0,0:01:01.38,0:01:05.38,Default,,0,0,0,,It's really useful and you don't have to think about what session you
+Dialogue: 0,0:01:05.38,0:01:06.30,Default,,0,0,0,,were, you were working on earlier.
+Dialogue: 0,0:01:06.30,0:01:07.74,Default,,0,0,0,,You don't have to look for those sessions.
+Dialogue: 0,0:01:07.98,0:01:08.54,Default,,0,0,0,,At the same time.
+Dialogue: 0,0:01:08.54,0:01:10.46,Default,,0,0,0,,You can say, hey, can you do this,
+Dialogue: 0,0:01:10.71,0:01:13.74,Default,,0,0,0,,can you do this task A again for this particular thing?
+Dialogue: 0,0:01:14.14,0:01:16.66,Default,,0,0,0,,And it'll just make sure to find the right set of
+Dialogue: 0,0:01:16.66,0:01:18.38,Default,,0,0,0,,context from your past session.
+Dialogue: 0,0:01:19.42,0:01:22.38,Default,,0,0,0,,Just bring that in front of you so you don't have to think about
+Dialogue: 0,0:01:22.70,0:01:23.66,Default,,0,0,0,,or worry about
+Dialogue: 0,0:01:24.33,0:01:27.30,Default,,0,0,0,,resuming a previous session, finding the right session, etc.
+Dialogue: 0,0:01:27.30,0:01:29.34,Default,,0,0,0,,So it's a really good, it's a really important feature.
+Dialogue: 0,0:01:29.66,0:01:31.90,Default,,0,0,0,,And yeah, think of it like a task manager.
+Dialogue: 0,0:01:32.14,0:01:36.46,Default,,0,0,0,,What you have to do is double tap the Right Command key to talk to
+Dialogue: 0,0:01:36.46,0:01:37.26,Default,,0,0,0,,Unmute Agent
+Dialogue: 0,0:01:38.14,0:01:41.58,Default,,0,0,0,,and just say out loud whatever you want to say.
+Dialogue: 0,0:01:41.58,0:01:44.46,Default,,0,0,0,,You can say the follow up message as shown here to test it
+Dialogue: 0,0:01:44.76,0:01:47.44,Default,,0,0,0,,and once done tap the Right Command key again and
+Dialogue: 0,0:01:47.44,0:01:49.40,Default,,0,0,0,,that will submit a Unmute Agent request.
+Dialogue: 0,0:01:49.75,0:01:51.48,Default,,0,0,0,,it will also pop up in a notch.
+Dialogue: 0,0:01:51.48,0:01:55.64,Default,,0,0,0,,So you can just tap on the notch and it will just show Unmute
+Dialogue: 0,0:01:55.64,0:01:59.08,Default,,0,0,0,,Agent specific task or Unmute Agent specific chat box.
+Dialogue: 0,0:01:59.16,0:02:02.44,Default,,0,0,0,,So that's a chat of yours and the Unmute Agent.
+Dialogue: 0,0:02:02.68,0:02:05.31,Default,,0,0,0,,And once the Unmute Agent is done with the follow up,
+Dialogue: 0,0:02:05.31,0:02:08.04,Default,,0,0,0,,it will most likely give you a link
+Dialogue: 0,0:02:08.36,0:02:12.28,Default,,0,0,0,,and you can tap that link and it will open the right session.
+Dialogue: 0,0:02:12.60,0:02:13.92,Default,,0,0,0,,So it's a really cool feature.
+Dialogue: 0,0:02:13.92,0:02:14.84,Default,,0,0,0,,You can just try it out.

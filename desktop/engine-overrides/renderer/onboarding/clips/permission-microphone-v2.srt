@@ -1,0 +1,7 @@
+1
+00:00:00,778 --> 00:00:02,298
+First you need to allow microphone access.
+
+2
+00:00:02,617 --> 00:00:05,977
+So Unmute only listens when you deliberately activate the dictation.

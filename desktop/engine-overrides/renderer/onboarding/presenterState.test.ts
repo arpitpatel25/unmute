@@ -50,6 +50,7 @@ test('Back reviews the previous chapter without replacing the live checkpoint', 
   let state = reducePresenter(emptyPresenter(), {
     type: 'snapshot', action: 'welcome', clipId: 'welcome-v1', caption: 'Welcome.', card: null,
   })
+  state = reducePresenter(state, { type: 'video-ended' })
   state = reducePresenter(state, {
     type: 'snapshot', action: 'privacy', clipId: 'privacy-v1', caption: 'Privacy.', card: null,
   })
@@ -64,6 +65,7 @@ test('Forward returns from chapter history to the live checkpoint', () => {
   let state = reducePresenter(emptyPresenter(), {
     type: 'snapshot', action: 'welcome', clipId: 'welcome-v1', caption: 'Welcome.', card: null,
   })
+  state = reducePresenter(state, { type: 'video-ended' })
   state = reducePresenter(state, {
     type: 'snapshot', action: 'privacy', clipId: 'privacy-v1', caption: 'Privacy.', card: null,
   })
@@ -72,6 +74,32 @@ test('Forward returns from chapter history to the live checkpoint', () => {
 
   assert.equal(state.action, 'privacy')
   assert.equal((state as unknown as { reviewing: boolean }).reviewing, false)
+})
+
+test('a real action can finish early without cutting off its current video', () => {
+  let state = reducePresenter(emptyPresenter(), {
+    type: 'snapshot', action: 'agent-task-link', clipId: 'agent-v2', caption: 'Agent.', card: null,
+  })
+  state = reducePresenter(state, {
+    type: 'snapshot', action: 'notetaker-save', clipId: 'notetaker-v2', caption: 'Notes.', card: null,
+  })
+  assert.equal(state.action, 'agent-task-link')
+  assert.equal(state.pending?.action, 'notetaker-save')
+  state = reducePresenter(state, { type: 'video-ended' })
+  assert.equal(state.action, 'notetaker-save')
+  assert.equal(state.pending, null)
+})
+
+test('a live text-only step can advance without waiting for a nonexistent video', () => {
+  let state = reducePresenter(emptyPresenter(), {
+    type: 'snapshot', action: 'agent-notes', clipId: '', caption: 'Ask about notes.', card: null,
+  })
+  assert.equal(state.videoFinished, true)
+  state = reducePresenter(state, {
+    type: 'snapshot', action: 'product-orientation', clipId: 'orientation-v2', caption: 'Explore.', card: null,
+  })
+  assert.equal(state.action, 'product-orientation')
+  assert.equal(state.pending, null)
 })
 
 test('the provider card hides an agent that is not on this Mac', () => {

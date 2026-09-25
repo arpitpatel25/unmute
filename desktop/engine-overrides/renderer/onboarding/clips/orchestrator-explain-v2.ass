@@ -1,0 +1,43 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Avenir Next Demi Bold,44,&H00FFFFFF,&H00FFFFFF,&H70000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,72,72,30,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.62,0:00:03.18,Default,,0,0,0,,Now let's turn a thought to a task.
+Dialogue: 0,0:00:03.50,0:00:05.72,Default,,0,0,0,,So press Right Option key,
+Dialogue: 0,0:00:05.98,0:00:08.38,Default,,0,0,0,,say the request shown below and press the right
+Dialogue: 0,0:00:08.38,0:00:09.74,Default,,0,0,0,,option key again to submit.
+Dialogue: 0,0:00:09.82,0:00:12.22,Default,,0,0,0,,What this will do is this will create a new Claude
+Dialogue: 0,0:00:12.22,0:00:14.46,Default,,0,0,0,,or a Codex session based on whatever you selected,
+Dialogue: 0,0:00:15.10,0:00:18.30,Default,,0,0,0,,and it will send you a request as the input for that session.
+Dialogue: 0,0:00:18.78,0:00:21.42,Default,,0,0,0,,And you can just look at the notch at the top
+Dialogue: 0,0:00:21.82,0:00:24.70,Default,,0,0,0,,and your request would be in, sending state initially.
+Dialogue: 0,0:00:25.21,0:00:26.17,Default,,0,0,0,,Once the request is sent,
+Dialogue: 0,0:00:26.17,0:00:28.93,Default,,0,0,0,,you can open the chat box basically by tapping the
+Dialogue: 0,0:00:28.93,0:00:32.97,Default,,0,0,0,,notch and it will have your message as well as the model's response
+Dialogue: 0,0:00:33.29,0:00:34.09,Default,,0,0,0,,there itself.
+Dialogue: 0,0:00:34.65,0:00:37.57,Default,,0,0,0,,So this is a really easy way for you to trigger
+Dialogue: 0,0:00:37.57,0:00:39.93,Default,,0,0,0,,new tasks from anywhere across your Mac.
+Dialogue: 0,0:00:39.93,0:00:42.73,Default,,0,0,0,,You don't have to switch windows, you don't have to
+Dialogue: 0,0:00:43.61,0:00:44.37,Default,,0,0,0,,switch apps.
+Dialogue: 0,0:00:44.37,0:00:45.85,Default,,0,0,0,,And look for, you know,
+Dialogue: 0,0:00:45.93,0:00:49.17,Default,,0,0,0,,the terminal or where the Codex or Claude app is.
+Dialogue: 0,0:00:49.17,0:00:50.01,Default,,0,0,0,,You just have to.
+Dialogue: 0,0:00:50.25,0:00:51.29,Default,,0,0,0,,Well, if you had a thought,
+Dialogue: 0,0:00:51.29,0:00:54.41,Default,,0,0,0,,you just have to unmute yourself by pressing the Right Option key and
+Dialogue: 0,0:00:55.37,0:00:56.57,Default,,0,0,0,,say, what do you want to say?
+Dialogue: 0,0:00:56.57,0:00:57.77,Default,,0,0,0,,Capture whatever you want to capture.
+Dialogue: 0,0:00:57.77,0:00:59.53,Default,,0,0,0,,If it's a Slack link, if it's a Twitter link,
+Dialogue: 0,0:00:59.53,0:01:01.81,Default,,0,0,0,,if it's a YouTube video, if it's a blog that you're reading,
+Dialogue: 0,0:01:01.81,0:01:04.29,Default,,0,0,0,,you can just copy that along with your dictation
+Dialogue: 0,0:01:04.29,0:01:07.09,Default,,0,0,0,,while you're dictating and you can just press the Right Option again.
+Dialogue: 0,0:01:07.09,0:01:09.33,Default,,0,0,0,,You can just press submit again and it will create
+Dialogue: 0,0:01:09.33,0:01:11.05,Default,,0,0,0,,a new task there and there itself.

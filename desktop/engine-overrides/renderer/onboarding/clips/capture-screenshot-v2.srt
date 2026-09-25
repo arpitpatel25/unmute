@@ -1,0 +1,87 @@
+1
+00:00:00,736 --> 00:00:02,976
+And the same thing works for screenshots as well.
+
+2
+00:00:03,375 --> 00:00:06,416
+So tap the Function key again and dictate whatever
+
+3
+00:00:06,416 --> 00:00:07,216
+you want to dictate.
+
+4
+00:00:07,376 --> 00:00:09,656
+And along with the dictation you can grab screenshots.
+
+5
+00:00:09,656 --> 00:00:12,455
+You can navigate across different screens and grab
+
+6
+00:00:12,455 --> 00:00:14,656
+screenshots like you would, in a Mac.
+
+7
+00:00:14,896 --> 00:00:16,495
+Maybe you can copy links as well.
+
+8
+00:00:16,576 --> 00:00:18,896
+And once you are done gathering all the context
+
+9
+00:00:19,056 --> 00:00:22,576
+along with your dictation, go back to Apple Notes or any,
+
+10
+00:00:22,955 --> 00:00:24,335
+input box for that matter.
+
+11
+00:00:24,835 --> 00:00:27,335
+maybe try Apple Notes for now and tap the
+
+12
+00:00:27,335 --> 00:00:29,696
+Function key again to submit the whole thing finally.
+
+13
+00:00:29,775 --> 00:00:31,856
+And what you'll see is that it pastes your
+
+14
+00:00:31,856 --> 00:00:34,896
+dictation along with the things that you might have copied,
+
+15
+00:00:35,136 --> 00:00:37,216
+like the links or some texts.
+
+16
+00:00:37,536 --> 00:00:40,975
+And it also attaches all the screenshots, multiple of them,
+
+17
+00:00:41,555 --> 00:00:43,695
+in the same dictation attempt.
+
+18
+00:00:44,015 --> 00:00:48,335
+So this makes the entire input gathering process really easy for you.
+
+19
+00:00:48,496 --> 00:00:49,936
+It's as if you are thinking
+
+20
+00:00:50,816 --> 00:00:53,136
+and in the same flow you are capturing the context
+
+21
+00:00:53,576 --> 00:00:58,216
+so that you can send all of it as a, input to AI,
+
+22
+00:00:58,216 --> 00:01:02,295
+ agent like ChatGPT or maybe Claude or Codex.

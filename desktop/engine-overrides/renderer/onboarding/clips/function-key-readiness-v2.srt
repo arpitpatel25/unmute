@@ -1,0 +1,23 @@
+1
+00:00:00,528 --> 00:00:03,728
+So before dictation, we need to make sure that your macOS leaves
+
+2
+00:00:03,728 --> 00:00:04,828
+Function key available for unmute.
+
+3
+00:00:04,828 --> 00:00:08,208
+so we've opened keyboard settings for you.
+
+4
+00:00:08,288 --> 00:00:12,208
+Set “Press Globe key to” to “Do Nothing.”
+
+5
+00:00:12,528 --> 00:00:16,088
+Once that is done, come back and tap the Function key again so that
+
+6
+00:00:16,088 --> 00:00:17,728
+Unmute can verify it for you.

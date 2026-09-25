@@ -117,6 +117,7 @@ export class PresenterWindow {
     const interactive = command.card?.kind === 'permission'
       || command.card?.kind === 'provider'
       || command.card?.kind === 'repair'
+      || command.action === 'clipboard-capture'
     this.window?.setFocusable?.(interactive)
     this.window?.webContents.send('onboarding:presenter-command', command)
   }

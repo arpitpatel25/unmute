@@ -181,6 +181,10 @@ export async function initOnboarding(
     const usesWorkspace = command.action === 'orchestrator-task' || command.action === 'agent-task-link'
     setOnboardingTaskWorkspace(usesWorkspace ? workspace : null)
     await actionEntry.run(command.action, async () => {
+      if (command.action === 'function-key') {
+        await shell.openExternal('x-apple.systempreferences:com.apple.Keyboard-Settings.extension')
+          .catch(error => console.warn('[onboarding] could not open Keyboard Settings:', error))
+      }
       if (command.action === 'notes-dictation') {
         await openNotesPractice({ launch: async () => launchFreshNotesNote(), frontmostBundleId, sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) })
       }

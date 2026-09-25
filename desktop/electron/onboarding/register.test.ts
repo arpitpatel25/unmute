@@ -6,26 +6,54 @@ import { initialProgress } from './machine'
 import { OnboardingRuntime, type OnboardingRuntimeDeps } from './register'
 import type { OnboardingProgress, PresenterCommand } from './types'
 
-function harness(progress: OnboardingProgress) {
+function harness(progress: OnboardingProgress, onSave?: () => Promise<void>) {
   let saved = progress
   let shown = 0
   let closed = 0
+  let sentAfterClose = 0
   const commands: PresenterCommand[] = []
   const coordinator = new OnboardingCoordinator({
     load: async () => saved,
-    save: async value => { saved = value },
+    save: async value => { saved = value; await onSave?.() },
     reset: async () => { saved = initialProgress() },
   } as never, () => 10)
   const deps: OnboardingRuntimeDeps = {
     coordinator,
-    presenter: { show: () => { shown += 1 }, send: c => { commands.push(c) }, close: () => { closed += 1 } },
+    presenter: { show: () => { shown += 1 }, send: c => { commands.push(c); if (closed) sentAfterClose += 1 }, close: () => { closed += 1 } },
     allowance: { arm() {}, complete() {} },
     onReceipt: () => () => {},
     verifyOrchestratorTask: async () => true,
     onNavigate: () => {},
   }
-  return { runtime: new OnboardingRuntime(deps), get shown() { return shown }, get closed() { return closed }, commands }
+  return { runtime: new OnboardingRuntime(deps), get shown() { return shown }, get closed() { return closed }, get sentAfterClose() { return sentAfterClose }, commands }
 }
+
+test('closing onboarding removes the presenter without waiting for progress storage', async () => {
+  let releaseSave!: () => void
+  const saving = new Promise<void>(resolve => { releaseSave = resolve })
+  const h = harness(initialProgress({ action: 'notes-dictation' }), () => saving)
+  await h.runtime.boot()
+
+  const closing = h.runtime.dismiss()
+  assert.equal(h.closed, 1)
+  releaseSave()
+  await closing
+  assert.equal(h.runtime.snapshot().action, 'complete')
+})
+
+test('a queued receipt cannot reopen the presenter after close', async () => {
+  let releaseFirstSave!: () => void
+  const firstSave = new Promise<void>(resolve => { releaseFirstSave = resolve })
+  let saves = 0
+  const h = harness(initialProgress({ action: 'notes-dictation' }), () => ++saves === 1 ? firstSave : Promise.resolve())
+  await h.runtime.boot()
+  const receipt = h.runtime.accept({ type: 'shortcut-started', lane: 'dictation' })
+  const closing = h.runtime.dismiss()
+  assert.equal(h.closed, 1)
+  releaseFirstSave()
+  await Promise.all([receipt, closing])
+  assert.equal(h.sentAfterClose, 0)
+})
 
 test('first launch shows presenter before sign-in and completion waits for sign-in', async () => {
   const h = harness(initialProgress({ action: 'sign-in', completed: ['privacy'] }))

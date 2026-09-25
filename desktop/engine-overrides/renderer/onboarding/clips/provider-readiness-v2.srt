@@ -1,0 +1,15 @@
+1
+00:00:01,332 --> 00:00:03,771
+Unmute runs these tasks, these sessions,
+
+2
+00:00:03,771 --> 00:00:06,772
+using your already subscribed Claude Code or Codex plan.
+
+3
+00:00:06,772 --> 00:00:09,651
+And, we'll check what is already configured and
+
+4
+00:00:10,051 --> 00:00:12,852
+get back to you if any additional setup is required from your part.

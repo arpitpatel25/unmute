@@ -33,25 +33,30 @@ function ProviderButton({ provider, card }: { provider: 'claude' | 'codex'; card
   return <button type="button" onClick={() => send({ type: 'retry-provider', provider })}>Check {label} again</button>
 }
 
-function CompanionCard({ action, card, reviewing, phase, escapeReady }: { action: string; card: NonNullable<PresenterCard>; reviewing: boolean; phase?: 'ready' | 'listening' | 'processing'; escapeReady: boolean }) {
+function CompanionCard({ action, card, reviewing, waitingForClip, phase, escapeReady }: { action: string; card: NonNullable<PresenterCard>; reviewing: boolean; waitingForClip: boolean; phase?: 'ready' | 'listening' | 'processing'; escapeReady: boolean }) {
   const send = (action: PresenterAction) => api().onboardingPresenterAction?.(action)
   const successButton = successButtonForAction(action)
+  const interactive = !reviewing && !waitingForClip
   return <section className={`ob-presenter__card ob-presenter__card--${card.kind}`} aria-label={card.title ?? 'Next action'}>
     {card.title && <h1>{card.title}</h1>}
     {card.phrase && <blockquote>{card.phrase}</blockquote>}
+    {card.copyText && <label className="ob-presenter__copy-label">Click to select · Command+C to copy
+      <input className="ob-presenter__copy-text" aria-label="Text to copy into your dictation" readOnly value={card.copyText} onFocus={event => event.currentTarget.select()} onClick={event => event.currentTarget.select()} />
+    </label>}
     {card.detail && <p>{card.detail}</p>}
-    {!reviewing && card.kind === 'provider' && <div className="ob-presenter__choices">
+    {waitingForClip && <p className="ob-presenter__waiting">Done. The next step will open when this video finishes.</p>}
+    {interactive && card.kind === 'provider' && <div className="ob-presenter__choices">
       {shownProviders(card.providers).map((provider) => <ProviderButton key={provider} provider={provider} card={card} />)}
     </div>}
-    {!reviewing && (card.kind === 'permission' || card.kind === 'repair') &&
+    {interactive && (card.kind === 'permission' || card.kind === 'repair') &&
       <button className="ob-presenter__primary" type="button" onClick={() => send({ type: card.kind === 'repair' ? 'open-settings' : 'continue' })}>
         {card.kind === 'repair' ? 'Open Keyboard Settings' : 'Continue'}
       </button>}
-    {!reviewing && card.kind === 'speak' && phase === 'processing' && <div className="ob-presenter__escape">
+    {interactive && card.kind === 'speak' && phase === 'processing' && <div className="ob-presenter__escape">
       {escapeReady && <button type="button" onClick={() => send({ type: 'retry' })}>Try again</button>}
       <button className="ob-presenter__primary" type="button" onClick={() => send({ type: 'skip-section' })}>Skip and continue</button>
     </div>}
-    {!reviewing && card.kind === 'success' && <button className="ob-presenter__primary" type="button" onClick={() => send({ type: successButton.type })}>
+    {interactive && card.kind === 'success' && <button className="ob-presenter__primary" type="button" onClick={() => send({ type: successButton.type })}>
       {successButton.label}
     </button>}
   </section>
@@ -83,17 +88,22 @@ export function OnboardingPresenter() {
   const togglePlayback = () => {
     const video = videoRef.current
     if (!video) return
+    if (video.ended) { dispatch({ type: 'replay-video' }); video.currentTime = 0 }
     if (video.paused) void video.play()
     else video.pause()
   }
 
   const replay = () => {
+    if (!hasVideo) return
     const video = videoRef.current
+    dispatch({ type: 'replay-video' })
     if (video) { video.currentTime = 0; void video.play() }
     api().onboardingPresenterAction?.({ type: 'replay-clip' })
   }
 
   const finishClip = () => {
+    dispatch({ type: 'video-ended' })
+    if (state.pending) return
     if (state.reviewing) return
     const action = clipEndActionFor(state.action)
     if (action) api().onboardingPresenterAction?.({ type: action })
@@ -186,13 +196,13 @@ export function OnboardingPresenter() {
       </div>
       <footer className="ob-presenter__controls">
         <button type="button" title="Previous step" disabled={!state.history.length || state.historyIndex === 0} onClick={() => dispatch({ type: 'back' })}><UIIcon name="back" size={12} />Back</button>
-        <button type="button" aria-label={paused ? 'Play video' : 'Pause video'} title={paused ? 'Play video' : 'Pause video'} onClick={togglePlayback}><UIIcon name={paused ? 'play' : 'pause'} size={14} /></button>
-        <button type="button" aria-label="Replay video" title="Replay video" onClick={replay}><UIIcon name="replay" size={14} /></button>
+        <button type="button" aria-label={paused ? 'Play video' : 'Pause video'} title={paused ? 'Play video' : 'Pause video'} disabled={!hasVideo} onClick={togglePlayback}><UIIcon name={paused ? 'play' : 'pause'} size={14} /></button>
+        <button type="button" aria-label="Replay video" title="Replay video" disabled={!hasVideo} onClick={replay}><UIIcon name="replay" size={14} /></button>
         {state.reviewing && <button type="button" onClick={() => dispatch({ type: 'forward' })}>Next<UIIcon name="chevron" size={12} /></button>}
         {!state.reviewing && state.phase !== 'processing' && canSkipAction(state.action, state.phase) &&
-          <button className="ob-presenter__skip" type="button" onClick={() => api().onboardingPresenterAction?.({ type: 'skip-section' })}>Skip section</button>}
+          <button className="ob-presenter__skip" type="button" onClick={() => { dispatch({ type: 'skip-video' }); if (!state.pending) api().onboardingPresenterAction?.({ type: 'skip-section' }) }}>Skip section</button>}
       </footer>
     </section>
-    {state.card && <CompanionCard action={state.action} card={state.card} reviewing={state.reviewing} phase={state.phase} escapeReady={escapeReady} />}
+    {state.card && <CompanionCard action={state.action} card={state.card} reviewing={state.reviewing} waitingForClip={Boolean(state.pending)} phase={state.phase} escapeReady={escapeReady} />}
   </main>
 }

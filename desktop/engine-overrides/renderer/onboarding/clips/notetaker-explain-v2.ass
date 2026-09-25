@@ -1,0 +1,39 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Avenir Next Demi Bold,44,&H00FFFFFF,&H00FFFFFF,&H70000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,72,72,30,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.90,0:00:02.82,Default,,0,0,0,,Finally, Unmute also has a Notetaker.
+Dialogue: 0,0:00:02.98,0:00:04.16,Default,,0,0,0,,What we found out is that,
+Dialogue: 0,0:00:04.16,0:00:06.82,Default,,0,0,0,,notes that are captured and summarized using your
+Dialogue: 0,0:00:06.82,0:00:10.18,Default,,0,0,0,,Claude and Codex harnesses are significantly better
+Dialogue: 0,0:00:10.50,0:00:12.50,Default,,0,0,0,,compared to any other Notetaker out there.
+Dialogue: 0,0:00:12.58,0:00:13.78,Default,,0,0,0,,And the reason is simple.
+Dialogue: 0,0:00:13.78,0:00:15.30,Default,,0,0,0,,You're using the best set of models.
+Dialogue: 0,0:00:15.70,0:00:19.38,Default,,0,0,0,,On top of it, you are attaching a really good agentic loop,
+Dialogue: 0,0:00:19.38,0:00:21.62,Default,,0,0,0,,a harness which has good context,
+Dialogue: 0,0:00:22.42,0:00:24.10,Default,,0,0,0,,and you're not paying for it additionally.
+Dialogue: 0,0:00:24.10,0:00:26.34,Default,,0,0,0,,You already pay for your Claude and Codex plan,
+Dialogue: 0,0:00:26.83,0:00:30.11,Default,,0,0,0,,so you don't have to pay for any better model for
+Dialogue: 0,0:00:30.11,0:00:31.39,Default,,0,0,0,,a particular Notetaker.
+Dialogue: 0,0:00:31.47,0:00:32.51,Default,,0,0,0,,So that's really good.
+Dialogue: 0,0:00:32.83,0:00:35.59,Default,,0,0,0,,And the good part here, the most important part,
+Dialogue: 0,0:00:35.59,0:00:38.11,Default,,0,0,0,,would be that the Unmute Agent
+Dialogue: 0,0:00:38.43,0:00:42.51,Default,,0,0,0,,has context about every note that was ever captured on Unmute.
+Dialogue: 0,0:00:42.59,0:00:43.39,Default,,0,0,0,,So you can just
+Dialogue: 0,0:00:44.11,0:00:45.19,Default,,0,0,0,,invoke Unmute Agent.
+Dialogue: 0,0:00:45.19,0:00:49.31,Default,,0,0,0,,You can ask anything about any note and it will bring you,
+Dialogue: 0,0:00:49.31,0:00:51.63,Default,,0,0,0,,fetch you the set, the right set of details.
+Dialogue: 0,0:00:52.18,0:00:54.42,Default,,0,0,0,,And you can just fire up any task.
+Dialogue: 0,0:00:54.42,0:00:56.38,Default,,0,0,0,,You can just ask Unmute Agent that go through
+Dialogue: 0,0:00:56.38,0:01:00.42,Default,,0,0,0,,these set of notes and figure out what tasks that I have to work on.
+Dialogue: 0,0:01:00.50,0:01:04.74,Default,,0,0,0,,And it'll just create sessions for you like Claude or Codex sessions.
+Dialogue: 0,0:01:04.90,0:01:06.90,Default,,0,0,0,,And yeah, that's as simple as that.

@@ -1,0 +1,15 @@
+1
+00:00:00,639 --> 00:00:02,619
+Before we begin, a quick note on privacy.
+
+2
+00:00:03,178 --> 00:00:06,139
+So only your dictation goes through Unmute so that
+
+3
+00:00:06,139 --> 00:00:08,538
+we can transcribe it and we never store it.
+
+4
+00:00:08,698 --> 00:00:12,618
+Your Claude Code and Codex activities never pass through Unmute.
