@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#eef0ed">
+  <title>Unmute — Voice as Material</title>
+  <meta name="description" content="A design probe where voice changes the shape and rhythm of the page.">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    :root {
+      --paper: #eef0ed;
+      --paper-deep: #dde2df;
+      --ink: #161816;
+      --muted: #666d68;
+      --mineral: #456575;
+      --ember: #b9553a;
+      --line: rgba(22, 24, 22, .18);
+      --energy: .18;
+      --font: "Helvetica Neue", "SF Pro Display", -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+    }
+    html { scroll-behavior: smooth; background: var(--paper); }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    a { color: inherit; }
+    :focus-visible { outline: 3px solid var(--mineral); outline-offset: 4px; }
+
+    .nav {
+      position: absolute;
+      inset: 0 0 auto;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 24px clamp(20px, 4vw, 58px);
+      font-size: 14px;
+    }
+    .brand { display: inline-flex; align-items: center; gap: 9px; font-weight: 680; text-decoration: none; }
+    .brand svg { width: 24px; height: 24px; overflow: visible; }
+    .nav-links { display: flex; align-items: center; gap: 24px; }
+    .nav-links a { text-underline-offset: 5px; text-decoration-thickness: 1px; }
+    .download { text-decoration: none; border-bottom: 1px solid currentColor; padding-bottom: 3px; }
+
+    .hero {
+      min-height: 100svh;
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 28vw);
+      grid-template-rows: 1fr auto;
+      gap: 30px;
+      padding: clamp(110px, 15vh, 170px) clamp(20px, 4vw, 58px) 36px;
+      overflow: hidden;
+      isolation: isolate;
+    }
+    .hero-copy { align-self: center; min-width: 0; }
+    .hero h1 {
+      margin: 0;
+      max-width: 12ch;
+      font-size: clamp(58px, 10.4vw, 154px);
+      font-weight: 650;
+      line-height: .78;
+      letter-spacing: -.085em;
+      text-wrap: balance;
+    }
+    .voice-line { display: block; white-space: nowrap; }
+    .word {
+      display: inline-block;
+      transform-origin: left bottom;
+      transition: transform 80ms linear, letter-spacing 80ms linear, color 140ms ease;
+      will-change: transform;
+    }
+    .word:nth-child(1) { transform: translateY(calc(var(--energy) * -12px)) scaleY(calc(1 + var(--energy) * .16)); }
+    .word:nth-child(2) { transform: translateY(calc(var(--energy) * 9px)) scaleX(calc(1 + var(--energy) * .08)); }
+    .voice-line:nth-child(2) .word:nth-child(1) { transform: translateY(calc(var(--energy) * -4px)) scaleY(calc(1 + var(--energy) * .26)); }
+    .voice-line:nth-child(2) .word:nth-child(2) { transform: translateY(calc(var(--energy) * 15px)) scaleX(calc(1 - var(--energy) * .08)); }
+    .voice-line:nth-child(3) .word { color: color-mix(in srgb, var(--ink), var(--mineral) calc(var(--energy) * 75%)); }
+    .subhead {
+      max-width: 40ch;
+      margin: clamp(34px, 5vh, 62px) 0 0;
+      font-size: clamp(17px, 1.5vw, 22px);
+      line-height: 1.45;
+      color: var(--muted);
+      letter-spacing: -.015em;
+    }
+
+    .instrument {
+      align-self: center;
+      border-left: 1px solid var(--line);
+      padding-left: clamp(20px, 3vw, 44px);
+    }
+    .instrument p { margin: 0 0 24px; max-width: 27ch; line-height: 1.5; color: var(--muted); }
+    .voice-control {
+      width: 100%;
+      min-height: 52px;
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 16px 8px 9px;
+      display: grid;
+      grid-template-columns: 36px 1fr auto;
+      gap: 11px;
+      align-items: center;
+      background: var(--ink);
+      color: white;
+      cursor: pointer;
+      text-align: left;
+      box-shadow: none;
+    }
+    .voice-control[aria-pressed="true"] { background: var(--mineral); }
+    .mic {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: white;
+      color: var(--ink);
+    }
+    .mic svg { width: 17px; height: 17px; }
+    .hold-label { font-size: 14px; font-weight: 650; }
+    .key { color: rgba(255,255,255,.58); font-size: 12px; }
+    .voice-control[aria-pressed="true"] .hold-label::after { content: "ing"; }
+    .voice-control[aria-pressed="true"] .hold-label { font-size: 0; }
+    .voice-control[aria-pressed="true"] .hold-label::before { content: "Listen"; font-size: 14px; }
+    .voice-control[aria-pressed="true"] .hold-label::after { font-size: 14px; }
+
+    .energy-control { margin-top: 28px; }
+    .energy-control label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+    input[type="range"] {
+      width: 100%;
+      margin: 12px 0 0;
+      accent-color: var(--ink);
+      cursor: ew-resize;
+    }
+    .spoken {
+      margin-top: 28px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+      min-height: 88px;
+      font-size: 15px;
+      line-height: 1.48;
+    }
+    .spoken .cursor { display: inline-block; width: 1px; height: 1em; background: currentColor; vertical-align: -.12em; margin-left: 2px; }
+    .spoken[data-live="true"] .cursor { animation: blink .8s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .score {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(32, 1fr);
+      align-items: end;
+      gap: clamp(3px, .5vw, 9px);
+      height: clamp(54px, 9vh, 100px);
+      border-bottom: 1px solid var(--ink);
+      overflow: hidden;
+    }
+    .score i {
+      display: block;
+      height: calc(8px + (var(--energy) * var(--beat) * 1px));
+      max-height: 92%;
+      background: var(--ink);
+      transform-origin: bottom;
+      transition: height 70ms linear, background-color 160ms ease;
+    }
+    .score i:nth-child(7n), .score i:nth-child(11n) { background: var(--ember); }
+
+    .modes {
+      display: grid;
+      grid-template-columns: 1.05fr 1fr;
+      min-height: 82vh;
+      border-top: 1px solid var(--line);
+    }
+    .mode-list { padding: clamp(64px, 9vw, 132px) clamp(20px, 4vw, 58px); }
+    .mode-list h2 { margin: 0 0 52px; font-size: clamp(28px, 4vw, 62px); line-height: 1; letter-spacing: -.055em; max-width: 11ch; }
+    .mode-tabs { display: flex; flex-direction: column; align-items: stretch; border-top: 1px solid var(--line); }
+    .mode-tab {
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+      padding: 19px 0;
+      display: grid;
+      grid-template-columns: minmax(90px, .32fr) 1fr auto;
+      gap: 18px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .mode-tab strong { color: var(--ink); font-size: 17px; font-weight: 620; }
+    .mode-tab span { line-height: 1.45; }
+    .mode-tab .mode-key { font-size: 12px; color: var(--muted); }
+    .mode-tab[aria-selected="true"] { color: var(--ink); }
+    .mode-tab[aria-selected="true"] strong { color: var(--mineral); }
+    .mode-tab[aria-selected="true"] .mode-key::before { content: "● "; color: var(--ember); }
+
+    .landing {
+      position: sticky;
+      top: 0;
+      min-height: 100svh;
+      padding: clamp(88px, 10vw, 148px) clamp(26px, 5vw, 76px);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      background: var(--ink);
+      color: white;
+      overflow: hidden;
+    }
+    .landing::before {
+      content: "";
+      position: absolute;
+      inset: 14% 0 auto;
+      height: 1px;
+      background: rgba(255,255,255,.2);
+      box-shadow: 0 110px 0 rgba(255,255,255,.12), 0 220px 0 rgba(255,255,255,.08);
+    }
+    .landing-key { color: rgba(255,255,255,.56); margin-bottom: 26px; font-size: 13px; }
+    .landing-copy { position: relative; margin: 0; font-size: clamp(38px, 5.8vw, 82px); line-height: .98; letter-spacing: -.06em; max-width: 9ch; }
+    .landing-detail { position: relative; max-width: 39ch; margin: 34px 0 0; line-height: 1.55; color: rgba(255,255,255,.64); }
+    .attachment {
+      position: relative;
+      margin-top: 46px;
+      width: min(270px, 100%);
+      aspect-ratio: 1.8;
+      display: grid;
+      grid-template-columns: 42% 1fr;
+      border: 1px solid rgba(255,255,255,.24);
+      background: var(--paper);
+      color: var(--ink);
+    }
+    .attachment-image { background: var(--mineral); padding: 12px; color: white; font-size: 11px; display: flex; align-items: flex-end; }
+    .attachment-text { padding: 15px; font-size: 13px; line-height: 1.35; }
+    .attachment-text b { display: block; margin-bottom: 8px; font-weight: 650; }
+
+    .close {
+      min-height: 72vh;
+      padding: clamp(80px, 11vw, 160px) clamp(20px, 4vw, 58px) 42px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 100px;
+      border-top: 1px solid var(--line);
+    }
+    .close h2 { margin: 0; max-width: 12ch; font-size: clamp(48px, 8vw, 118px); line-height: .88; letter-spacing: -.075em; }
+    .close-bottom { display: flex; align-items: end; justify-content: space-between; gap: 24px; border-top: 1px solid var(--line); padding-top: 22px; }
+    .close-bottom p { margin: 0; max-width: 42ch; color: var(--muted); line-height: 1.5; }
+    .close-bottom a { text-decoration: none; font-weight: 650; border-bottom: 1px solid currentColor; padding-bottom: 5px; white-space: nowrap; }
+
+    @media (max-width: 860px) {
+      .hero { grid-template-columns: 1fr; grid-template-rows: auto auto auto; padding-top: 120px; }
+      .hero h1 { font-size: clamp(55px, 17vw, 106px); }
+      .instrument { border-left: 0; border-top: 1px solid var(--line); padding: 26px 0 0; }
+      .score { grid-column: 1; }
+      .modes { grid-template-columns: 1fr; }
+      .landing { position: relative; min-height: 82vh; }
+      .mode-tab { grid-template-columns: 100px 1fr; }
+      .mode-key { grid-column: 2; }
+    }
+    @media (max-width: 560px) {
+      .nav-links a:first-child { display: none; }
+      .voice-line { white-space: normal; }
+      .hero h1 { line-height: .83; }
+      .score { grid-template-columns: repeat(16, 1fr); }
+      .score i:nth-child(n+17) { display: none; }
+      .mode-tab { grid-template-columns: 1fr auto; }
+      .mode-tab span:not(.mode-key) { grid-column: 1 / -1; }
+      .mode-key { grid-column: auto; grid-row: 1; }
+      .close-bottom { align-items: flex-start; flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+      .word { transform: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav" aria-label="Primary">
+    <a class="brand" href="../" aria-label="Unmute concepts home">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6M8 5v14M13 2v20M18 7v10M23 10v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      <span>unmute</span>
+    </a>
+    <div class="nav-links"><a href="#ways">How it works</a><a class="download" href="#download">Download for Mac</a></div>
+  </nav>
+
+  <main>
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <h1 id="hero-title" aria-label="Your voice moves the work">
+          <span class="voice-line"><span class="word">Your</span> <span class="word">voice</span></span>
+          <span class="voice-line"><span class="word">moves</span> <span class="word">the</span></span>
+          <span class="voice-line"><span class="word">work.</span></span>
+        </h1>
+        <p class="subhead">Speak where your cursor already is. Dictate a thought, carry a screenshot with it, or hand the whole thing to Claude Code or Codex.</p>
+      </div>
+
+      <aside class="instrument" aria-label="Try voice energy">
+        <p>The page listens without a microphone. Hold the control and give the sentence some weight.</p>
+        <button class="voice-control" id="voice-control" type="button" aria-pressed="false" aria-describedby="hold-help">
+          <span class="mic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6a4 4 0 0 1 8 0v6a4 4 0 0 1-8 0V6Zm-3 6a7 7 0 0 0 14 0M12 19v3M8.5 22h7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+          <span class="hold-label">Hold to speak</span>
+          <span class="key" aria-hidden="true">space</span>
+        </button>
+        <span id="hold-help" hidden>Hold Space or press and hold this button to simulate speaking.</span>
+        <div class="energy-control">
+          <label for="energy"><span>Voice energy</span><output id="energy-output" for="energy">18%</output></label>
+          <input id="energy" type="range" min="0" max="100" value="18" aria-label="Voice energy">
+        </div>
+        <div class="spoken" id="spoken" aria-live="polite"><span id="spoken-text">“Tighten the type scale and keep the screenshot with it.”</span><span class="cursor" aria-hidden="true"></span></div>
+      </aside>
+
+      <div class="score" aria-hidden="true">
+        <i style="--beat:18"></i><i style="--beat:42"></i><i style="--beat:73"></i><i style="--beat:28"></i><i style="--beat:56"></i><i style="--beat:90"></i><i style="--beat:34"></i><i style="--beat:66"></i>
+        <i style="--beat:45"></i><i style="--beat:79"></i><i style="--beat:25"></i><i style="--beat:58"></i><i style="--beat:95"></i><i style="--beat:49"></i><i style="--beat:70"></i><i style="--beat:31"></i>
+        <i style="--beat:62"></i><i style="--beat:85"></i><i style="--beat:38"></i><i style="--beat:74"></i><i style="--beat:22"></i><i style="--beat:53"></i><i style="--beat:88"></i><i style="--beat:40"></i>
+        <i style="--beat:69"></i><i style="--beat:29"></i><i style="--beat:81"></i><i style="--beat:47"></i><i style="--beat:93"></i><i style="--beat:36"></i><i style="--beat:64"></i><i style="--beat:20"></i>
+      </div>
+    </section>
+
+    <section class="modes" id="ways" aria-labelledby="ways-title">
+      <div class="mode-list">
+        <h2 id="ways-title">One voice. Four destinations.</h2>
+        <div class="mode-tabs" role="tablist" aria-label="Unmute voice modes" aria-orientation="vertical">
+          <button class="mode-tab" id="tab-dictate" role="tab" aria-selected="true" aria-controls="mode-preview" data-mode="dictate"><strong>Dictate</strong><span>Words land in the app you are already using.</span><span class="mode-key">Fn</span></button>
+          <button class="mode-tab" id="tab-format" role="tab" aria-selected="false" aria-controls="mode-preview" data-mode="format" tabindex="-1"><strong>Format</strong><span>Say what should change in the text you selected.</span><span class="mode-key">Caps Lock</span></button>
+          <button class="mode-tab" id="tab-hand-off" role="tab" aria-selected="false" aria-controls="mode-preview" data-mode="hand-off" tabindex="-1"><strong>Hand off</strong><span>Open a real Claude Code or Codex session by voice.</span><span class="mode-key">right ⌥</span></button>
+          <button class="mode-tab" id="tab-notes" role="tab" aria-selected="false" aria-controls="mode-preview" data-mode="notes" tabindex="-1"><strong>Take notes</strong><span>Capture the room and your microphone, then write notes.</span><span class="mode-key">left ⌃ ×2</span></button>
+        </div>
+      </div>
+
+      <div class="landing" id="mode-preview" role="tabpanel" tabindex="0" aria-labelledby="tab-dictate">
+        <div class="landing-key" id="landing-key">Hold Fn · release to paste</div>
+        <p class="landing-copy" id="landing-copy">The sentence lands at the cursor.</p>
+        <p class="landing-detail" id="landing-detail">No new window. No copy and paste. A screenshot taken halfway through travels with the words and arrives in the same paste.</p>
+        <div class="attachment" id="attachment" aria-label="Screenshot attached to spoken text">
+          <div class="attachment-image">screenshot 14:32</div>
+          <div class="attachment-text"><b>Design review</b>Keep this image with the typography note.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="close" id="download">
+      <h2>Stay in the work. Say the next move.</h2>
+      <div class="close-bottom"><p>Unmute lives in the Notch, keeps agent tasks in a Pocket, and waits until the work needs your voice.</p><a href="#top">Try the voice again</a></div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const root = document.documentElement;
+      const slider = document.querySelector('#energy');
+      const output = document.querySelector('#energy-output');
+      const control = document.querySelector('#voice-control');
+      const spoken = document.querySelector('#spoken');
+      const spokenText = document.querySelector('#spoken-text');
+      const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+      let speaking = false;
+      let frame = 0;
+      let started = 0;
+
+      function setEnergy(value) {
+        const safe = Math.max(0, Math.min(100, Number(value) || 0));
+        slider.value = String(Math.round(safe));
+        output.value = `${Math.round(safe)}%`;
+        output.textContent = output.value;
+        root.style.setProperty('--energy', (safe / 100).toFixed(3));
+      }
+
+      function animate(now) {
+        if (!speaking) return;
+        const elapsed = now - started;
+        const pulse = 52 + Math.sin(elapsed / 115) * 19 + Math.sin(elapsed / 47) * 11;
+        setEnergy(reduceMotion.matches ? 58 : pulse);
+        frame = requestAnimationFrame(animate);
+      }
+
+      function startSpeaking(event) {
+        if (speaking) return;
+        if (event?.type === 'pointerdown' && event.button !== 0) return;
+        speaking = true;
+        started = performance.now();
+        control.setAttribute('aria-pressed', 'true');
+        spoken.dataset.live = 'true';
+        spokenText.textContent = '“Tighten the type scale—and keep the screenshot with it…';
+        if (!reduceMotion.matches) frame = requestAnimationFrame(animate);
+        else setEnergy(58);
+        if (event?.pointerId != null) control.setPointerCapture(event.pointerId);
+      }
+
+      function stopSpeaking() {
+        if (!speaking) return;
+        speaking = false;
+        cancelAnimationFrame(frame);
+        control.setAttribute('aria-pressed', 'false');
+        spoken.dataset.live = 'false';
+        spokenText.textContent = '“Tighten the type scale—and keep the screenshot with it.”';
+        setEnergy(32);
+      }
+
+      slider.addEventListener('input', () => setEnergy(slider.value));
+      control.addEventListener('pointerdown', startSpeaking);
+      control.addEventListener('pointerup', stopSpeaking);
+      control.addEventListener('pointercancel', stopSpeaking);
+      control.addEventListener('lostpointercapture', stopSpeaking);
+      control.addEventListener('keydown', (event) => {
+        if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
+          event.preventDefault();
+          startSpeaking(event);
+        }
+      });
+      control.addEventListener('keyup', (event) => {
+        if (event.key === ' ' || event.key === 'Enter') {
+          event.preventDefault();
+          stopSpeaking();
+        }
+      });
+
+      const modes = {
+        dictate: {
+          key: 'Hold Fn · release to paste',
+          copy: 'The sentence lands at the cursor.',
+          detail: 'No new window. No copy and paste. A screenshot taken halfway through travels with the words and arrives in the same paste.',
+          attachment: true
+        },
+        format: {
+          key: 'Hold Caps Lock · say the change',
+          copy: 'Selected words take your direction.',
+          detail: 'Ask for a tighter version, a change in tone, or a cleanup. Unmute returns the edit to the same selection.',
+          attachment: false
+        },
+        'hand-off': {
+          key: 'Hold right ⌥ · release to start',
+          copy: 'A spoken task becomes a real session.',
+          detail: 'Choose Claude Code or Codex. The session works in the background, waits in the Pocket, and returns to the Notch when it needs you.',
+          attachment: false
+        },
+        notes: {
+          key: 'Press left ⌃ twice · press twice to end',
+          copy: 'The meeting leaves notes, not a transcript.',
+          detail: 'Unmute listens to your microphone and system audio. Ending the capture is deliberate, and the connected agent writes the notes.',
+          attachment: false
+        }
+      };
+      const tabs = [...document.querySelectorAll('.mode-tab')];
+      const panel = document.querySelector('#mode-preview');
+      const landingKey = document.querySelector('#landing-key');
+      const landingCopy = document.querySelector('#landing-copy');
+      const landingDetail = document.querySelector('#landing-detail');
+      const attachment = document.querySelector('#attachment');
+
+      function selectMode(tab, focus = false) {
+        tabs.forEach((item) => {
+          const active = item === tab;
+          item.setAttribute('aria-selected', String(active));
+          item.tabIndex = active ? 0 : -1;
+        });
+        const mode = modes[tab.dataset.mode];
+        panel.setAttribute('aria-labelledby', tab.id);
+        landingKey.textContent = mode.key;
+        landingCopy.textContent = mode.copy;
+        landingDetail.textContent = mode.detail;
+        attachment.hidden = !mode.attachment;
+        if (focus) tab.focus();
+      }
+
+      tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => selectMode(tab));
+        tab.addEventListener('keydown', (event) => {
+          let next = index;
+          if (event.key === 'ArrowDown') next = (index + 1) % tabs.length;
+          else if (event.key === 'ArrowUp') next = (index - 1 + tabs.length) % tabs.length;
+          else if (event.key === 'Home') next = 0;
+          else if (event.key === 'End') next = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          selectMode(tabs[next], true);
+        });
+      });
+
+      setEnergy(slider.value);
+    })();
+  </script>
+</body>
+</html>

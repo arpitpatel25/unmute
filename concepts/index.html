@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Unmute — six possible worlds</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root { color: #111; background: #f7f7f5; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; }
+    body { margin: 0; }
+    header { min-height: 52vh; display: grid; align-content: end; padding: clamp(28px, 6vw, 88px); border-bottom: 1px solid #d8d8d2; }
+    .mark { width: 42px; height: 42px; object-fit: contain; margin-bottom: clamp(42px, 9vh, 96px); }
+    h1 { max-width: 920px; margin: 0; font-size: clamp(46px, 8vw, 112px); line-height: .9; letter-spacing: -.07em; font-weight: 620; }
+    header p { max-width: 620px; margin: 28px 0 0; font-size: clamp(17px, 2vw, 22px); line-height: 1.45; color: #565652; }
+    main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    a { position: relative; min-height: 42vh; padding: clamp(28px, 5vw, 72px); color: inherit; text-decoration: none; border-right: 1px solid #d8d8d2; border-bottom: 1px solid #d8d8d2; overflow: hidden; }
+    a:nth-child(even) { border-right: 0; }
+    .number { font-variant-numeric: tabular-nums; color: #777770; }
+    h2 { margin: clamp(64px, 10vh, 120px) 0 14px; font-size: clamp(30px, 4.4vw, 64px); line-height: .95; letter-spacing: -.055em; }
+    a p { max-width: 440px; margin: 0; line-height: 1.5; color: #61615c; }
+    .arrow { position: absolute; top: clamp(28px, 5vw, 72px); right: clamp(28px, 5vw, 72px); font-size: 24px; transition: transform .2s ease; }
+    a:hover .arrow, a:focus-visible .arrow { transform: translate(5px, -5px); }
+    a:focus-visible { outline: 3px solid #111; outline-offset: -3px; }
+    footer { padding: 26px clamp(28px, 6vw, 88px) 48px; color: #70706a; }
+    @media (max-width: 720px) { main { grid-template-columns: 1fr; } a { border-right: 0; min-height: 360px; } }
+    @media (prefers-reduced-motion: reduce) { .arrow { transition: none; } }
+  </style>
+</head>
+<body>
+  <header>
+    <img class="mark" src="../icon.png" alt="Unmute">
+    <h1>Six possible worlds for Unmute.</h1>
+    <p>These are design probes, not finished pages. Judge the personality, product-story structure, and interaction language—not the final copy.</p>
+  </header>
+  <main>
+    <a href="product-theatre/"><span class="number">01</span><span class="arrow" aria-hidden="true">↗</span><h2>Product Theatre</h2><p>The product performs. Everything else gets out of its way.</p></a>
+    <a href="mac-native/"><span class="number">02</span><span class="arrow" aria-hidden="true">↗</span><h2>Mac Native</h2><p>A deeply native Mac sensibility without impersonating Apple.</p></a>
+    <a href="voice-material/"><span class="number">03</span><span class="arrow" aria-hidden="true">↗</span><h2>Voice as Material</h2><p>Speech is not an input field. It is the page’s physical medium.</p></a>
+    <a href="spatial-desktop/"><span class="number">04</span><span class="arrow" aria-hidden="true">↗</span><h2>Spatial Desktop</h2><p>An explorable working surface where Unmute lives between apps.</p></a>
+    <a href="quiet-editorial/"><span class="number">05</span><span class="arrow" aria-hidden="true">↗</span><h2>Quiet Editorial</h2><p>Typography, silence, and precise product evidence.</p></a>
+    <a href="guided-film/"><span class="number">06</span><span class="arrow" aria-hidden="true">↗</span><h2>Guided Film</h2><p>A scroll-directed performance of the full product flow.</p></a>
+  </main>
+  <footer>Open each route at desktop width first. Every concept also adapts for mobile and reduced motion.</footer>
+</body>
+</html>

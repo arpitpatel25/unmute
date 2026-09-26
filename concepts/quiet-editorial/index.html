@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8fa">
+  <meta name="description" content="A quiet editorial landing-page concept for Unmute, the voice interface for your Mac.">
+  <title>Unmute — say it where you are</title>
+  <style>
+    :root {
+      --paper: #f7f8fa;
+      --white: #ffffff;
+      --ink: #08090b;
+      --muted: #5d636d;
+      --faint: #a6abb3;
+      --line: #d9dde3;
+      --blue: #1557ff;
+      --green: #6fbf9a;
+      --red: #c4482e;
+      --indigo: #775cff;
+      --sans: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+      --ease: cubic-bezier(.2,.75,.25,1);
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--paper); scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, a { font: inherit; }
+    a { color: inherit; }
+    button { color: inherit; }
+    ::selection { color: var(--white); background: var(--blue); }
+
+    .skip {
+      position: fixed;
+      left: 16px;
+      top: 12px;
+      z-index: 20;
+      padding: 9px 12px;
+      background: var(--ink);
+      color: var(--white);
+      transform: translateY(-150%);
+      transition: transform 140ms ease;
+    }
+    .skip:focus { transform: translateY(0); }
+
+    .masthead {
+      min-height: 78px;
+      padding: 0 clamp(22px, 4vw, 64px);
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      width: max-content;
+      text-decoration: none;
+      font-size: 17px;
+      font-weight: 650;
+      letter-spacing: -.02em;
+    }
+    .mark {
+      width: 18px;
+      height: 18px;
+      display: grid;
+      place-items: end center;
+      grid-template-columns: repeat(3, 3px);
+      gap: 2px;
+    }
+    .mark i { display: block; width: 3px; border-radius: 3px; background: var(--ink); }
+    .mark i:nth-child(1) { height: 8px; }
+    .mark i:nth-child(2) { height: 15px; }
+    .mark i:nth-child(3) { height: 11px; }
+    .masthead-note { font-size: 13px; color: var(--muted); }
+    .nav-link { justify-self: end; font-size: 14px; text-underline-offset: 4px; }
+    .nav-link:focus-visible, .brand:focus-visible, .text-link:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 5px;
+    }
+
+    main { overflow: clip; }
+    .hero {
+      min-height: calc(100svh - 79px);
+      padding: clamp(56px, 9vh, 112px) clamp(22px, 4vw, 64px) 42px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr);
+      grid-template-rows: 1fr auto;
+      column-gap: clamp(40px, 8vw, 136px);
+    }
+    .hero h1 {
+      max-width: 9.3ch;
+      margin: 0;
+      font-size: clamp(68px, 10.4vw, 168px);
+      font-weight: 590;
+      line-height: .84;
+      letter-spacing: -.079em;
+    }
+    .hero-side {
+      align-self: end;
+      padding-bottom: clamp(18px, 5vw, 68px);
+    }
+    .hero-side p {
+      max-width: 32ch;
+      margin: 0 0 34px;
+      font-size: clamp(18px, 1.75vw, 25px);
+      line-height: 1.36;
+      letter-spacing: -.025em;
+    }
+    .hero-side small {
+      display: block;
+      max-width: 38ch;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    kbd {
+      display: inline-block;
+      min-width: 1.85em;
+      padding: .18em .42em .22em;
+      border: 1px solid #bcc1c9;
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      background: var(--white);
+      font: 600 .78em/1 var(--sans);
+      text-align: center;
+      white-space: nowrap;
+    }
+    .hero-index {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 24px;
+      border-top: 1px solid var(--ink);
+      padding-top: 13px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .hero-index strong { color: var(--ink); font-weight: 600; }
+
+    .evidence {
+      padding: clamp(88px, 14vw, 210px) clamp(22px, 4vw, 64px);
+      background: var(--white);
+    }
+    .evidence-head {
+      display: grid;
+      grid-template-columns: 1fr 2fr;
+      gap: 36px;
+      margin-bottom: clamp(68px, 9vw, 130px);
+    }
+    .evidence-head p {
+      margin: 0;
+      max-width: 15ch;
+      font-size: clamp(38px, 5.7vw, 86px);
+      line-height: .98;
+      letter-spacing: -.058em;
+      font-weight: 590;
+    }
+    .evidence-head aside {
+      align-self: end;
+      max-width: 44ch;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    .proof {
+      display: grid;
+      grid-template-columns: minmax(220px, .7fr) minmax(0, 1.8fr);
+      min-height: 620px;
+      border-top: 1px solid var(--ink);
+      border-bottom: 1px solid var(--ink);
+    }
+    .proof-nav {
+      padding: 32px 34px 32px 0;
+      border-right: 1px solid var(--line);
+    }
+    .proof-nav h2 {
+      margin: 0 0 54px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -.01em;
+    }
+    .proof-tabs { display: grid; }
+    .proof-tab {
+      appearance: none;
+      border: 0;
+      border-top: 1px solid var(--line);
+      background: transparent;
+      padding: 17px 0;
+      display: grid;
+      grid-template-columns: 35px 1fr auto;
+      align-items: baseline;
+      gap: 10px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .proof-tab:last-child { border-bottom: 1px solid var(--line); }
+    .proof-tab .num { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .proof-tab .label { font-size: 17px; letter-spacing: -.02em; }
+    .proof-tab .key { color: var(--faint); font-size: 11px; }
+    .proof-tab[aria-selected="true"] .label { color: var(--blue); font-weight: 600; }
+    .proof-tab[aria-selected="true"] .num { color: var(--blue); }
+    .proof-tab:hover .label { color: var(--blue); }
+    .proof-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+
+    .proof-stage {
+      position: relative;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      padding: clamp(30px, 5vw, 76px) 0 28px clamp(30px, 5vw, 76px);
+      overflow: hidden;
+    }
+    .specimen {
+      align-self: center;
+      min-height: 390px;
+      display: grid;
+      place-items: center;
+    }
+    .specimen-copy {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      border-top: 1px solid var(--line);
+      padding-top: 18px;
+    }
+    .specimen-copy h3 {
+      margin: 0;
+      font-size: clamp(25px, 3vw, 43px);
+      font-weight: 590;
+      letter-spacing: -.045em;
+      line-height: 1;
+    }
+    .specimen-copy p {
+      margin: 0;
+      max-width: 42ch;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.58;
+    }
+
+    .desktop-fragment {
+      width: min(100%, 680px);
+      aspect-ratio: 16 / 8.7;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid #cdd1d8;
+      background: #eef0f3;
+    }
+    .menu-bar {
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 11px;
+      color: #383c43;
+      background: #f8f9fa;
+      border-bottom: 1px solid #d6d9de;
+      font-size: 8px;
+    }
+    .camera {
+      position: absolute;
+      left: 50%; top: 0;
+      width: 106px; height: 24px;
+      transform: translateX(-50%);
+      border-radius: 0 0 7px 7px;
+      background: #000;
+      z-index: 3;
+    }
+    .note-window {
+      position: absolute;
+      inset: 54px 8% 26px;
+      background: #fff;
+      border: 1px solid #d7d9dc;
+      box-shadow: 0 12px 35px rgba(20,25,34,.09);
+    }
+    .window-bar { height: 28px; border-bottom: 1px solid #e4e5e8; display: flex; align-items: center; gap: 5px; padding: 0 9px; }
+    .window-bar i { width: 7px; height: 7px; border-radius: 50%; background: #d7d9dd; }
+    .typed {
+      max-width: 540px;
+      padding: 25px 32px;
+      font-size: clamp(11px, 1.5vw, 15px);
+      line-height: 1.6;
+      color: #17191d;
+    }
+    .typed p { margin: 0; }
+    .attachment {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin: 0 3px;
+      padding: 3px 6px 3px 3px;
+      border: 1px solid #cfd3d9;
+      border-radius: 5px;
+      color: #555b65;
+      font-size: .73em;
+      vertical-align: middle;
+    }
+    .attachment i { width: 19px; height: 13px; border-radius: 2px; background: #9fb5cf; }
+    .caret { display: inline-block; width: 1px; height: 1em; margin-left: 2px; background: var(--ink); vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .product-pill {
+      position: absolute;
+      left: 50%; bottom: 16px;
+      transform: translateX(-50%);
+      min-width: 176px;
+      height: 36px;
+      padding: 0 12px;
+      border: 1px solid rgba(255,255,255,.28);
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: #fff;
+      background: #000;
+      font-size: 10px;
+      font-weight: 550;
+      transition: width 240ms var(--ease), min-width 240ms var(--ease);
+      z-index: 5;
+    }
+    .dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #fff; }
+    .wave { height: 14px; display: flex; align-items: center; gap: 2px; }
+    .wave i { width: 2px; border-radius: 2px; background: #fff; animation: wave 850ms ease-in-out infinite alternate; }
+    .wave i:nth-child(1), .wave i:nth-child(7) { height: 4px; opacity: .5; }
+    .wave i:nth-child(2), .wave i:nth-child(6) { height: 8px; animation-delay: -300ms; }
+    .wave i:nth-child(3), .wave i:nth-child(5) { height: 12px; animation-delay: -500ms; }
+    .wave i:nth-child(4) { height: 7px; animation-delay: -120ms; }
+    @keyframes wave { to { transform: scaleY(.38); opacity: .58; } }
+    .esc { margin-left: 8px; color: #8e9298; font-size: 8px; }
+
+    .desktop-fragment[data-mode="dictate"] .attachment { display: none; }
+    .desktop-fragment[data-mode="dictate"] .dot { background: #fff; }
+    .desktop-fragment[data-mode="capture"] .dot { background: var(--blue); }
+    .desktop-fragment[data-mode="capture"] .product-pill { min-width: 204px; }
+    .desktop-fragment[data-mode="remote"] .product-pill { min-width: 268px; bottom: auto; top: 34px; }
+    .desktop-fragment[data-mode="remote"] .dot { background: var(--indigo); }
+    .desktop-fragment[data-mode="remote"] .typed { opacity: .35; }
+    .desktop-fragment[data-mode="notes"] .product-pill { display: none; }
+
+    .remote-mark { display: none; width: 15px; height: 15px; color: var(--indigo); }
+    [data-mode="remote"] .remote-mark { display: grid; place-items: center; }
+    [data-mode="remote"] .remote-mark::before { content: "⌁"; font-size: 18px; line-height: 1; }
+    [data-mode="remote"] .dot { display: none; }
+    .pill-label::after { content: "Listening"; }
+    [data-mode="capture"] .pill-label::after { content: "Screenshot attached"; }
+    [data-mode="remote"] .pill-label::after { content: "Tighten the typography scale"; }
+
+    .meeting-pill {
+      display: none;
+      position: absolute;
+      left: 18px; bottom: 18px;
+      height: 36px;
+      padding: 0 13px;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(255,255,255,.3);
+      border-radius: 999px;
+      background: #000;
+      color: white;
+      font-size: 10px;
+    }
+    [data-mode="notes"] .meeting-pill { display: flex; }
+    .meeting-pill .dot { background: var(--red); }
+    .meeting-wave { width: 48px; height: 18px; display: flex; align-items: center; justify-content: center; gap: 2px; border-bottom: 1px solid #343434; }
+    .meeting-wave i { width: 2px; background: white; border-radius: 2px; animation: room 1.6s ease-in-out infinite alternate; }
+    .meeting-wave i:nth-child(1) { height: 4px; }
+    .meeting-wave i:nth-child(2) { height: 11px; animation-delay: -.4s; }
+    .meeting-wave i:nth-child(3) { height: 7px; animation-delay: -.8s; }
+    .meeting-wave i:nth-child(4) { height: 14px; animation-delay: -.2s; }
+    .meeting-wave i:nth-child(5) { height: 6px; animation-delay: -.6s; }
+    @keyframes room { to { transform: scaleY(.35); opacity: .55; } }
+
+    .large-statement {
+      min-height: 90svh;
+      padding: clamp(90px, 14vw, 200px) clamp(22px, 4vw, 64px);
+      display: flex;
+      align-items: center;
+    }
+    .large-statement p {
+      margin: 0;
+      max-width: 17ch;
+      font-size: clamp(50px, 8.2vw, 128px);
+      font-weight: 590;
+      line-height: .93;
+      letter-spacing: -.07em;
+    }
+    .large-statement p::first-line { color: var(--blue); }
+
+    .uses {
+      margin: 0 clamp(22px, 4vw, 64px);
+      padding: 0 0 clamp(100px, 14vw, 190px);
+    }
+    .use-row {
+      display: grid;
+      grid-template-columns: minmax(180px, .7fr) minmax(0, 1.6fr) minmax(150px, .5fr);
+      gap: 28px;
+      padding: 23px 0 27px;
+      border-top: 1px solid var(--line);
+      align-items: baseline;
+    }
+    .use-row:last-child { border-bottom: 1px solid var(--line); }
+    .use-row h3 { margin: 0; font-size: 15px; font-weight: 600; }
+    .use-row p { margin: 0; font-size: clamp(22px, 3vw, 42px); line-height: 1.08; letter-spacing: -.045em; }
+    .use-row span { justify-self: end; color: var(--muted); font-size: 12px; }
+
+    footer {
+      min-height: 72svh;
+      padding: 60px clamp(22px, 4vw, 64px) 38px;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      color: white;
+      background: var(--ink);
+    }
+    .finale { align-self: center; }
+    .finale p { margin: 0 0 34px; max-width: 12ch; font-size: clamp(55px, 9vw, 138px); line-height: .88; letter-spacing: -.075em; font-weight: 590; }
+    .download {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 49px;
+      padding: 0 20px;
+      border: 1px solid white;
+      background: white;
+      color: black;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .download:hover { background: transparent; color: white; }
+    .download:focus-visible { outline: 2px solid white; outline-offset: 5px; }
+    .footer-line { display: flex; justify-content: space-between; gap: 20px; border-top: 1px solid #383a3d; padding-top: 16px; color: #9ca0a6; font-size: 11px; }
+
+    @media (max-width: 800px) {
+      .masthead { grid-template-columns: 1fr auto; }
+      .masthead-note { display: none; }
+      .hero { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; gap: 64px; }
+      .hero h1 { font-size: clamp(66px, 21vw, 118px); }
+      .hero-side { align-self: start; padding-bottom: 0; }
+      .hero-index { align-self: end; }
+      .evidence-head { grid-template-columns: 1fr; }
+      .evidence-head aside { justify-self: end; }
+      .proof { grid-template-columns: 1fr; }
+      .proof-nav { padding: 24px 0; border-right: 0; border-bottom: 1px solid var(--line); }
+      .proof-nav h2 { margin-bottom: 24px; }
+      .proof-tabs { grid-template-columns: 1fr 1fr; }
+      .proof-tab { padding-right: 14px; }
+      .proof-tab:nth-child(2) { border-top: 1px solid var(--line); }
+      .proof-stage { padding-left: 0; }
+      .specimen-copy { grid-template-columns: 1fr; }
+      .use-row { grid-template-columns: 1fr; gap: 10px; }
+      .use-row span { justify-self: start; }
+    }
+
+    @media (max-width: 500px) {
+      .hero-index span:last-child { display: none; }
+      .proof-tabs { grid-template-columns: 1fr; }
+      .proof-tab:nth-child(n) { border-top: 1px solid var(--line); }
+      .proof-stage { overflow: visible; }
+      .specimen { min-height: 320px; }
+      .desktop-fragment { aspect-ratio: 1 / 1.1; }
+      .note-window { inset: 45px 5% 48px; }
+      .typed { padding: 19px; }
+      .product-pill { bottom: 9px; max-width: 92%; }
+      .desktop-fragment[data-mode="remote"] .product-pill { top: 30px; min-width: 0; width: 86%; }
+      .large-statement { min-height: 76svh; }
+      .footer-line { flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="masthead">
+    <a class="brand" href="#top" aria-label="Unmute home">
+      <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>Unmute</span>
+    </a>
+    <span class="masthead-note">Voice, without a voice app.</span>
+    <a class="nav-link" href="#download">Get the Mac app</a>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <h1>Say it where you are.</h1>
+      <div class="hero-side">
+        <p>Unmute puts voice inside the work already open on your Mac.</p>
+        <small>Hold <kbd>Fn</kbd> to dictate. Use <kbd>right ⌥</kbd> to hand work to Claude Code or Codex. Double-tap <kbd>left ⌃</kbd> for meeting notes.</small>
+      </div>
+      <div class="hero-index" aria-hidden="true">
+        <span><strong>One small surface.</strong> Four kinds of work.</span>
+        <span>Continue ↓</span>
+      </div>
+    </section>
+
+    <section class="evidence" aria-labelledby="evidence-title">
+      <div class="evidence-head">
+        <p id="evidence-title">It appears only when it has something to say.</p>
+        <aside>Not a dashboard to keep open. Not a chat window to manage. The product stays at the edge of the screen, gives exact feedback, then gets out of the way.</aside>
+      </div>
+
+      <div class="proof">
+        <div class="proof-nav">
+          <h2>Product evidence</h2>
+          <div class="proof-tabs" role="tablist" aria-label="Choose an Unmute interaction">
+            <button class="proof-tab" id="tab-dictate" role="tab" aria-selected="true" aria-controls="proof-panel" data-mode="dictate">
+              <span class="num">01</span><span class="label">Dictate</span><span class="key">D</span>
+            </button>
+            <button class="proof-tab" id="tab-capture" role="tab" aria-selected="false" aria-controls="proof-panel" tabindex="-1" data-mode="capture">
+              <span class="num">02</span><span class="label">Capture</span><span class="key">S</span>
+            </button>
+            <button class="proof-tab" id="tab-remote" role="tab" aria-selected="false" aria-controls="proof-panel" tabindex="-1" data-mode="remote">
+              <span class="num">03</span><span class="label">Hand off</span><span class="key">R</span>
+            </button>
+            <button class="proof-tab" id="tab-notes" role="tab" aria-selected="false" aria-controls="proof-panel" tabindex="-1" data-mode="notes">
+              <span class="num">04</span><span class="label">Take notes</span><span class="key">M</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="proof-stage" id="proof-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-dictate">
+          <div class="specimen" aria-live="polite">
+            <div class="desktop-fragment" id="desktop" data-mode="dictate">
+              <div class="menu-bar"><span><strong>Notes</strong>&nbsp;&nbsp; File&nbsp;&nbsp; Edit&nbsp;&nbsp; Format</span><span>12:04</span></div>
+              <div class="camera" aria-hidden="true"></div>
+              <div class="note-window">
+                <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i></div>
+                <div class="typed"><p id="typed-copy">Move the release notes below the install steps<span class="attachment"><i></i>Screenshot</span>, then make the heading more direct.<span class="caret" aria-hidden="true"></span></p></div>
+              </div>
+              <div class="product-pill" aria-hidden="true">
+                <span class="dot"></span>
+                <span class="remote-mark"></span>
+                <span class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                <span class="pill-label"></span>
+                <span class="esc">esc</span>
+              </div>
+              <div class="meeting-pill" aria-hidden="true">
+                <span class="dot"></span>
+                <span class="meeting-wave"><i></i><i></i><i></i><i></i><i></i></span>
+                <span>Meeting notes</span>
+              </div>
+            </div>
+          </div>
+          <div class="specimen-copy">
+            <h3 id="mode-title">Talk into the cursor.</h3>
+            <p id="mode-copy">Hold Fn. Your words land in the field that already has focus — Notes, Messages, a terminal, anywhere you can type.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="large-statement">
+      <p>Voice is not the destination. The work is.</p>
+    </section>
+
+    <section class="uses" aria-label="What Unmute does">
+      <article class="use-row">
+        <h3>Dictation</h3>
+        <p>Speak naturally. Unmute cleans the phrasing and types it at the cursor.</p>
+        <span>Hold Fn</span>
+      </article>
+      <article class="use-row">
+        <h3>Remote tasks</h3>
+        <p>Describe the work once. A real coding session starts in the background.</p>
+        <span>Hold right ⌥</span>
+      </article>
+      <article class="use-row">
+        <h3>Meeting notes</h3>
+        <p>Leave with decisions and next steps, not another transcript to read.</p>
+        <span>Tap left ⌃ twice</span>
+      </article>
+    </section>
+  </main>
+
+  <footer id="download">
+    <div class="finale">
+      <p>Your hands can stay where the work is.</p>
+      <a class="download" href="#top">Download for Mac <span aria-hidden="true">↓</span></a>
+    </div>
+    <div class="footer-line">
+      <span>Unmute for macOS</span>
+      <span>Works with Claude Code and Codex CLI on your existing plan.</span>
+    </div>
+  </footer>
+
+  <script>
+    (() => {
+      const tabs = [...document.querySelectorAll('.proof-tab')];
+      const panel = document.getElementById('proof-panel');
+      const desktop = document.getElementById('desktop');
+      const title = document.getElementById('mode-title');
+      const copy = document.getElementById('mode-copy');
+      const typed = document.getElementById('typed-copy');
+      const modes = {
+        dictate: {
+          title: 'Talk into the cursor.',
+          copy: 'Hold Fn. Your words land in the field that already has focus — Notes, Messages, a terminal, anywhere you can type.',
+          typed: 'Move the release notes below the install steps, then make the heading more direct.'
+        },
+        capture: {
+          title: 'Show it mid-sentence.',
+          copy: 'Take a screenshot while you speak. The image travels with the words, so the instruction arrives with the part you meant.',
+          typed: 'Move the release notes below this <span class="attachment"><i></i>Screenshot</span>, then make the heading more direct.'
+        },
+        remote: {
+          title: 'Say the work. Leave it running.',
+          copy: 'Hold right Option to start a real Claude Code or Codex session. Unmute returns only when the task needs a decision.',
+          typed: 'The task is running outside this document. Your cursor stays here.'
+        },
+        notes: {
+          title: 'Keep the meeting. Lose the transcript.',
+          copy: 'Double-tap left Control. Unmute listens to your microphone and room audio, then prepares decisions, context, and next steps.',
+          typed: '<strong>Design review</strong><br><br>Decision: ship the simpler install path.<br>Next: Zod to revise the release notes by Friday.'
+        }
+      };
+
+      function select(mode, focus = false) {
+        const next = modes[mode];
+        if (!next) return;
+        desktop.dataset.mode = mode;
+        title.textContent = next.title;
+        copy.textContent = next.copy;
+        typed.innerHTML = next.typed + (mode === 'dictate' || mode === 'capture' ? '<span class="caret" aria-hidden="true"></span>' : '');
+        tabs.forEach(tab => {
+          const active = tab.dataset.mode === mode;
+          tab.setAttribute('aria-selected', active);
+          tab.tabIndex = active ? 0 : -1;
+          if (active) panel.setAttribute('aria-labelledby', tab.id);
+        });
+        if (focus) tabs.find(tab => tab.dataset.mode === mode)?.focus();
+      }
+
+      tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => select(tab.dataset.mode));
+        tab.addEventListener('keydown', event => {
+          let next = index;
+          if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+          else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+          else if (event.key === 'Home') next = 0;
+          else if (event.key === 'End') next = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          select(tabs[next].dataset.mode, true);
+        });
+      });
+
+      document.addEventListener('keydown', event => {
+        if (event.metaKey || event.ctrlKey || event.altKey || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) return;
+        const shortcuts = { d: 'dictate', s: 'capture', r: 'remote', m: 'notes' };
+        if (shortcuts[event.key.toLowerCase()]) select(shortcuts[event.key.toLowerCase()]);
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090a0c">
+  <meta name="description" content="A guided product film concept for Unmute, told through the interface itself.">
+  <title>Unmute — a voice interface for your Mac</title>
+  <style>
+    :root {
+      --black: #090a0c;
+      --panel: #111317;
+      --raised: #191c21;
+      --white: #f7f8fa;
+      --dim: #9ba1aa;
+      --faint: #5b6068;
+      --line: #292d33;
+      --blue: #7d9fff;
+      --green: #6fbf9a;
+      --red: #c4482e;
+      --indigo: #8d78ff;
+      --sans: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+      --ease: cubic-bezier(.2,.8,.2,1);
+    }
+    * { box-sizing: border-box; }
+    html { background: var(--black); scroll-behavior: smooth; }
+    body { margin: 0; color: var(--white); background: var(--black); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+    button, a { font: inherit; }
+    button { color: inherit; }
+    a { color: inherit; }
+    ::selection { color: var(--black); background: var(--white); }
+
+    .skip { position: fixed; z-index: 100; left: 15px; top: 12px; padding: 9px 12px; background: white; color: black; transform: translateY(-150%); transition: transform 140ms ease; }
+    .skip:focus { transform: translateY(0); }
+    .topbar {
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 40;
+      height: 66px;
+      padding: 0 clamp(20px, 3.4vw, 52px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      pointer-events: none;
+      mix-blend-mode: difference;
+    }
+    .brand { display: inline-flex; align-items: center; gap: 8px; color: white; text-decoration: none; font-size: 16px; font-weight: 650; letter-spacing: -.02em; pointer-events: auto; }
+    .mark { display: flex; align-items: center; gap: 2px; height: 16px; }
+    .mark i { width: 3px; border-radius: 2px; background: currentColor; }
+    .mark i:nth-child(1) { height: 7px; } .mark i:nth-child(2) { height: 15px; } .mark i:nth-child(3) { height: 10px; }
+    .topbar span:last-child { font-size: 11px; color: white; }
+    .brand:focus-visible { outline: 2px solid white; outline-offset: 5px; }
+
+    .progress {
+      position: fixed;
+      right: clamp(18px, 3vw, 46px);
+      top: 50%;
+      z-index: 45;
+      transform: translateY(-50%);
+      display: grid;
+      gap: 12px;
+    }
+    .progress button {
+      appearance: none;
+      width: 10px;
+      height: 10px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: #4b4e54;
+      cursor: pointer;
+      box-shadow: 0 0 0 0 rgba(255,255,255,0);
+      transition: background 180ms ease, box-shadow 180ms ease;
+    }
+    .progress button[aria-current="step"] { background: white; box-shadow: 0 0 0 4px rgba(255,255,255,.13); }
+    .progress button:focus-visible { outline: 2px solid white; outline-offset: 4px; }
+
+    .intro {
+      min-height: 100svh;
+      padding: 15vh clamp(22px, 5vw, 78px) 8vh;
+      display: grid;
+      grid-template-columns: 1.4fr .6fr;
+      align-items: end;
+      gap: 70px;
+      background: var(--white);
+      color: var(--black);
+    }
+    .intro h1 { margin: 0; max-width: 10ch; font-size: clamp(64px, 10vw, 152px); line-height: .86; letter-spacing: -.078em; font-weight: 590; }
+    .intro-aside { align-self: end; padding-bottom: 2vw; }
+    .intro-aside p { margin: 0 0 28px; max-width: 31ch; font-size: clamp(17px, 1.7vw, 24px); line-height: 1.4; letter-spacing: -.02em; }
+    .intro-aside span { color: #666c74; font-size: 12px; }
+
+    .film { position: relative; }
+    .stage {
+      position: sticky;
+      top: 0;
+      z-index: 4;
+      height: 100svh;
+      overflow: hidden;
+      background: var(--black);
+    }
+    .screen {
+      position: absolute;
+      inset: 5.5vh clamp(18px, 5vw, 78px) 5.5vh;
+      overflow: hidden;
+      border: 1px solid #282b30;
+      border-radius: 17px;
+      background: #17191d;
+      box-shadow: 0 28px 90px rgba(0,0,0,.35);
+    }
+    .screen::after { content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 1px rgba(255,255,255,.025); }
+    .menu {
+      height: 32px;
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #6e747d;
+      background: #22252a;
+      border-bottom: 1px solid #2c3036;
+      font-size: 9px;
+      transition: opacity 300ms ease;
+    }
+    .housing {
+      position: absolute;
+      left: 50%; top: 0;
+      z-index: 9;
+      width: clamp(126px, 14vw, 200px);
+      height: 32px;
+      transform: translateX(-50%);
+      border-radius: 0 0 10px 10px;
+      background: #000;
+    }
+    .housing::after { content: ""; position: absolute; left: 50%; top: 12px; width: 6px; height: 6px; transform: translateX(-50%); border-radius: 50%; background: #111723; }
+
+    .workspace { position: absolute; inset: 32px 0 0; background: #e9edf2; color: #16191e; transition: background 500ms ease; }
+    .app-window {
+      position: absolute;
+      left: 50%; top: 12%;
+      width: min(70%, 820px);
+      height: 68%;
+      transform: translateX(-50%);
+      background: #fff;
+      border: 1px solid #d4d7dc;
+      box-shadow: 0 28px 70px rgba(38,44,54,.16);
+      transition: opacity 350ms ease, transform 550ms var(--ease), width 550ms var(--ease);
+    }
+    .appbar { height: 38px; border-bottom: 1px solid #e5e7ea; display: flex; align-items: center; gap: 6px; padding: 0 13px; color: #999da3; font-size: 10px; }
+    .traffic { width: 8px; height: 8px; border-radius: 50%; background: #d4d6da; }
+    .doc { padding: clamp(24px, 4vw, 52px); max-width: 780px; font-size: clamp(13px, 1.4vw, 17px); line-height: 1.7; }
+    .doc h2 { margin: 0 0 20px; font-size: 1.45em; line-height: 1.1; letter-spacing: -.035em; }
+    .doc p { margin: 0 0 14px; }
+    .doc-muted { color: #9ca1a8; }
+    .live-line { color: #181b20; }
+    .cursor { display: inline-block; width: 1.5px; height: 1em; background: #111; margin-left: 2px; vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .shot-chip { display: inline-flex; align-items: center; gap: 5px; margin: 0 3px; padding: 3px 6px 3px 3px; border: 1px solid #cbd0d7; border-radius: 5px; color: #59606b; font-size: .72em; vertical-align: middle; opacity: 0; transform: translateY(4px); transition: opacity 250ms ease, transform 250ms ease; }
+    .shot-chip i { width: 21px; height: 14px; border-radius: 2px; background: #91a8c3; }
+
+    .product {
+      position: absolute;
+      z-index: 12;
+      left: 50%;
+      bottom: 9%;
+      width: 188px;
+      min-height: 36px;
+      transform: translateX(-50%);
+      color: white;
+      background: #000;
+      border: 1px solid rgba(255,255,255,.27);
+      border-radius: 999px;
+      overflow: hidden;
+      transition: width 600ms var(--ease), min-height 600ms var(--ease), top 600ms var(--ease), bottom 600ms var(--ease), border-radius 600ms var(--ease), border-color 350ms ease, transform 600ms var(--ease);
+    }
+    .pill-row { height: 34px; padding: 0 12px; display: flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; transition: opacity 200ms ease, height 400ms ease; }
+    .status-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: white; transition: background 250ms ease; }
+    .remote-glyph { display: none; color: var(--indigo); font-size: 18px; line-height: 1; }
+    .sound { height: 15px; display: flex; align-items: center; gap: 2px; }
+    .sound i { width: 2px; border-radius: 2px; background: white; animation: sound 950ms ease-in-out infinite alternate; }
+    .sound i:nth-child(1), .sound i:nth-child(7) { height: 4px; opacity: .45; }
+    .sound i:nth-child(2), .sound i:nth-child(6) { height: 8px; animation-delay: -.3s; }
+    .sound i:nth-child(3), .sound i:nth-child(5) { height: 13px; animation-delay: -.55s; }
+    .sound i:nth-child(4) { height: 7px; animation-delay: -.12s; }
+    @keyframes sound { to { transform: scaleY(.34); opacity: .55; } }
+    .product-label { font-size: 10px; font-weight: 550; letter-spacing: -.01em; }
+    .esc { color: #72767c; font-size: 8px; margin-left: 7px; }
+
+    .notch-row { display: none; height: 34px; align-items: center; font-size: 10px; }
+    .notch-side { width: calc((100% - clamp(126px, 14vw, 200px)) / 2); padding: 0 13px; display: flex; align-items: center; gap: 7px; overflow: hidden; }
+    .notch-side:last-child { justify-content: flex-end; color: #c4c6ca; }
+    .notch-gap { width: clamp(126px, 14vw, 200px); flex: none; }
+    .working-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: breathe 2.4s ease-in-out infinite; }
+    @keyframes breathe { 50% { opacity: .38; } }
+
+    .pocket { display: none; padding: 12px 14px 13px; }
+    .pocket-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .pocket-head strong { font-size: 13px; font-weight: 620; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .provider { width: 17px; height: 17px; display: grid; place-items: center; border-radius: 50%; background: #fff; color: #000; font: 700 10px/1 var(--sans); }
+    .pocket p { margin: 0 0 12px; color: #c3c6cc; font-size: 12px; line-height: 1.4; }
+    .pocket-foot { display: flex; align-items: center; gap: 8px; color: var(--blue); font-size: 10px; }
+    .pips { display: flex; gap: 4px; margin-right: auto; }
+    .pips i { width: 5px; height: 5px; border-radius: 50%; background: #454950; }
+    .pips i:first-child { background: white; }
+    .choices { display: flex; gap: 7px; margin-top: 13px; }
+    .choices[hidden] { display: none; }
+    .choices button { appearance: none; border: 1px solid #3a3e45; border-radius: 8px; padding: 8px 10px; background: #17191d; color: #dddfe2; cursor: pointer; font-size: 10px; }
+    .choices button:hover { border-color: #7d828a; }
+    .choices button:focus-visible { outline: 2px solid white; outline-offset: 3px; }
+    .choices button:first-child { background: white; color: black; border-color: white; }
+
+    .meeting-widget {
+      position: absolute;
+      z-index: 12;
+      left: 18px; bottom: 18px;
+      height: 36px;
+      padding: 0 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(255,255,255,.3);
+      border-radius: 999px;
+      background: black;
+      color: white;
+      opacity: 0;
+      transform: translateY(10px);
+      pointer-events: none;
+      transition: opacity 350ms ease, transform 350ms var(--ease);
+    }
+    .meeting-widget .status-dot { background: var(--red); }
+    .room-wave { position: relative; width: 52px; height: 20px; display: flex; align-items: center; justify-content: center; gap: 2px; }
+    .room-wave::before { content: ""; position: absolute; left: 0; right: 0; height: 1px; background: #333; }
+    .room-wave i { position: relative; width: 2px; border-radius: 2px; background: white; animation: room 1.3s ease-in-out infinite alternate; }
+    .room-wave i:nth-child(1) { height: 4px; } .room-wave i:nth-child(2) { height: 13px; animation-delay: -.4s; } .room-wave i:nth-child(3) { height: 8px; animation-delay: -.7s; } .room-wave i:nth-child(4) { height: 16px; animation-delay: -.2s; } .room-wave i:nth-child(5) { height: 7px; animation-delay: -.55s; }
+    @keyframes room { to { transform: scaleY(.3); opacity: .5; } }
+    .meeting-widget span:last-child { font-size: 10px; font-weight: 550; }
+
+    .caption {
+      position: absolute;
+      z-index: 18;
+      left: clamp(32px, 8vw, 128px);
+      bottom: clamp(32px, 9vh, 104px);
+      width: min(510px, 38vw);
+      pointer-events: none;
+      color: #111318;
+    }
+    .caption-step { display: block; margin-bottom: 18px; color: #686e77; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .caption h2 { margin: 0; font-size: clamp(38px, 5vw, 78px); line-height: .91; letter-spacing: -.06em; font-weight: 590; }
+    .caption p { margin: 22px 0 0; max-width: 37ch; color: #555c66; font-size: clamp(14px, 1.3vw, 18px); line-height: 1.48; }
+    .key { display: inline-block; min-width: 1.8em; padding: .17em .4em .22em; border: 1px solid #747a83; border-bottom-width: 2px; border-radius: 5px; color: #111318; font: 600 .75em/1 var(--sans); text-align: center; white-space: nowrap; }
+
+    .scenes { position: relative; z-index: 8; margin-top: -100svh; pointer-events: none; }
+    .scene { min-height: 100svh; }
+    .scene:first-child { min-height: 135svh; }
+    .scene:last-child { min-height: 120svh; }
+
+    /* Dictation */
+    body[data-scene="0"] .caption { --scene: 0; }
+    body[data-scene="0"] .product { width: 188px; }
+
+    /* Screenshot joins the same spoken instruction. */
+    body[data-scene="1"] .shot-chip { opacity: 1; transform: translateY(0); }
+    body[data-scene="1"] .product { width: 222px; }
+    body[data-scene="1"] .product .status-dot { background: var(--blue); }
+
+    /* Remote work moves the surface into the notch. */
+    body[data-scene="2"] .app-window { transform: translateX(-50%) scale(.94); opacity: .32; }
+    body[data-scene="2"] .product {
+      top: 5.5vh;
+      bottom: auto;
+      width: min(78%, 830px);
+      min-height: 34px;
+      border-radius: 0 0 13px 13px;
+      border-color: rgba(255,255,255,.08);
+    }
+    body[data-scene="2"] .pill-row { display: none; }
+    body[data-scene="2"] .notch-row { display: flex; }
+
+    /* Pocket expands directly from the notch mass. */
+    body[data-scene="3"] .app-window { transform: translateX(-50%) scale(.88); opacity: .2; }
+    body[data-scene="3"] .product {
+      top: 5.5vh;
+      bottom: auto;
+      width: min(92%, 520px);
+      min-height: 172px;
+      border-radius: 0 0 18px 18px;
+      border-color: #2f3339;
+    }
+    body[data-scene="3"] .pill-row { display: none; }
+    body[data-scene="3"] .notch-row { display: flex; }
+    body[data-scene="3"] .pocket { display: block; }
+
+    /* Meeting notes are independent and peripheral. */
+    body[data-scene="4"] .workspace { background: #dce2e9; }
+    body[data-scene="4"] .app-window { width: min(62%, 720px); transform: translateX(-50%); opacity: 1; }
+    body[data-scene="4"] .product { opacity: 0; pointer-events: none; }
+    body[data-scene="4"] .meeting-widget { opacity: 1; transform: translateY(0); }
+
+    .outro {
+      position: relative;
+      z-index: 20;
+      min-height: 100svh;
+      padding: 14vh clamp(22px, 5vw, 78px) 7vh;
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      align-items: end;
+      gap: 60px;
+      background: var(--white);
+      color: var(--black);
+    }
+    .outro h2 { margin: 0; max-width: 10ch; font-size: clamp(62px, 9.5vw, 145px); line-height: .86; letter-spacing: -.077em; font-weight: 590; }
+    .outro-side { padding-bottom: 2vw; }
+    .outro-side p { margin: 0 0 28px; max-width: 32ch; color: #555b63; font-size: 17px; line-height: 1.5; }
+    .cta { display: inline-flex; min-height: 50px; align-items: center; padding: 0 20px; background: black; color: white; text-decoration: none; font-weight: 600; font-size: 14px; }
+    .cta:hover { background: #30343a; }
+    .cta:focus-visible { outline: 2px solid black; outline-offset: 5px; }
+
+    @media (max-width: 820px) {
+      .intro, .outro { grid-template-columns: 1fr; gap: 55px; }
+      .intro { align-items: end; }
+      .intro-aside, .outro-side { align-self: start; }
+      .screen { inset: 5.5vh 14px; }
+      .app-window { width: 88%; height: 62%; top: 13%; }
+      .caption { left: 32px; bottom: 45px; width: calc(100% - 78px); }
+      .caption h2 { max-width: 9ch; }
+      .caption p { max-width: 34ch; }
+      body[data-scene="2"] .product, body[data-scene="3"] .product { top: 5.5vh; }
+      .progress { right: 14px; }
+    }
+
+    @media (max-width: 560px) {
+      .topbar { height: 54px; }
+      .topbar span:last-child { display: none; }
+      .screen { inset: 4vh 8px; border-radius: 12px; }
+      .app-window { top: 12%; width: 94%; height: 55%; }
+      .doc { padding: 22px; font-size: 12px; }
+      .caption { left: 23px; bottom: 36px; width: calc(100% - 58px); }
+      .caption h2 { font-size: clamp(39px, 12vw, 58px); }
+      .caption p { margin-top: 14px; font-size: 13px; }
+      .caption-step { margin-bottom: 12px; }
+      .product { bottom: 11%; }
+      body[data-scene="2"] .product { width: calc(100% - 16px); }
+      body[data-scene="3"] .product { width: calc(100% - 16px); }
+      .notch-side { padding: 0 8px; }
+      .notch-side:last-child { display: none; }
+      .notch-side:first-child { width: calc(100% - clamp(126px, 38vw, 180px)); }
+      .notch-gap { width: clamp(126px, 38vw, 180px); }
+      .meeting-widget { left: 10px; bottom: 10px; }
+      .progress { display: none; }
+      .outro { min-height: 90svh; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    }
+  </style>
+</head>
+<body data-scene="0">
+  <a class="skip" href="#film">Skip to film</a>
+  <header class="topbar">
+    <a class="brand" href="#start" aria-label="Unmute home"><span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>Unmute</a>
+    <span>Scroll to use the product</span>
+  </header>
+
+  <nav class="progress" aria-label="Product film chapters">
+    <button aria-label="Go to dictation" aria-current="step" data-go="0"></button>
+    <button aria-label="Go to screenshot capture" data-go="1"></button>
+    <button aria-label="Go to remote task" data-go="2"></button>
+    <button aria-label="Go to Pocket" data-go="3"></button>
+    <button aria-label="Go to meeting notes" data-go="4"></button>
+  </nav>
+
+  <main>
+    <section class="intro" id="start">
+      <h1>One voice. No new place to work.</h1>
+      <div class="intro-aside">
+        <p>Unmute lives at the edge of your Mac and moves the work forward from wherever you already are.</p>
+        <span>Scroll, use the chapter dots, or press ↓</span>
+      </div>
+    </section>
+
+    <section class="film" id="film" aria-label="Guided Unmute product film">
+      <div class="stage" aria-live="polite">
+        <div class="screen">
+          <div class="menu"><span><strong>Notes</strong>&nbsp;&nbsp; File&nbsp;&nbsp; Edit&nbsp;&nbsp; Format&nbsp;&nbsp; View</span><span>Thu 9 Sep&nbsp;&nbsp;12:04</span></div>
+          <div class="housing" aria-hidden="true"></div>
+          <div class="workspace">
+            <div class="app-window">
+              <div class="appbar"><i class="traffic"></i><i class="traffic"></i><i class="traffic"></i><span style="margin-left:auto;margin-right:auto">Release notes</span></div>
+              <div class="doc">
+                <h2>September release</h2>
+                <p class="doc-muted">Installation is now one step. Existing users do not need to reconfigure their shortcuts.</p>
+                <p class="live-line">Move this section below the install steps <span class="shot-chip"><i></i>Screenshot</span>, then make the heading more direct.<span class="cursor" aria-hidden="true"></span></p>
+              </div>
+            </div>
+
+            <div class="product" id="product">
+              <div class="pill-row">
+                <span class="status-dot"></span>
+                <span class="remote-glyph">⌁</span>
+                <span class="sound" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                <span class="product-label">Listening</span>
+                <span class="esc">esc</span>
+              </div>
+              <div class="notch-row">
+                <div class="notch-side"><span class="working-dot"></span><span id="notch-status">Working</span></div>
+                <div class="notch-gap"></div>
+                <div class="notch-side"><span id="notch-detail">Tighten the typography scale</span></div>
+              </div>
+              <div class="pocket">
+                <div class="pocket-head"><span class="provider">C</span><strong>Tighten the typography scale</strong></div>
+                <p id="pocket-question">The type ramp is shared by marketing and the app shell. Apply the new scale to the whole site, or marketing only?</p>
+                <div class="pocket-foot"><span class="pips" aria-hidden="true"><i></i><i></i></span><span id="pocket-state">Needs you</span></div>
+                <div class="choices" id="choices">
+                  <button type="button" data-answer="Whole site">Whole site</button>
+                  <button type="button" data-answer="Marketing only">Marketing only</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="meeting-widget" aria-label="Meeting notes are recording">
+              <span class="status-dot"></span>
+              <span class="room-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+              <span>Meeting notes</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="caption">
+          <span class="caption-step" id="caption-step">1 / 5</span>
+          <h2 id="caption-title">Speak into the cursor.</h2>
+          <p id="caption-copy">Hold <span class="key">Fn</span>. The words appear in the document that already has focus. Release the key and they land.</p>
+        </div>
+      </div>
+
+      <div class="scenes" aria-hidden="true">
+        <div class="scene" id="scene-0"></div>
+        <div class="scene" id="scene-1"></div>
+        <div class="scene" id="scene-2"></div>
+        <div class="scene" id="scene-3"></div>
+        <div class="scene" id="scene-4"></div>
+      </div>
+    </section>
+
+    <section class="outro">
+      <h2>The interface leaves. The work stays.</h2>
+      <div class="outro-side">
+        <p>Dictation, screenshots, coding sessions, and meeting notes — driven by a few keys, without another window to manage.</p>
+        <a class="cta" href="#start">Get Unmute for Mac</a>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const body = document.body;
+      const scenes = [...document.querySelectorAll('.scene')];
+      const dots = [...document.querySelectorAll('[data-go]')];
+      const title = document.getElementById('caption-title');
+      const copy = document.getElementById('caption-copy');
+      const step = document.getElementById('caption-step');
+      const notchStatus = document.getElementById('notch-status');
+      const notchDetail = document.getElementById('notch-detail');
+      const chapters = [
+        {
+          title: 'Speak into the cursor.',
+          copy: 'Hold <span class="key">Fn</span>. The words appear in the document that already has focus. Release the key and they land.'
+        },
+        {
+          title: 'Show the part you mean.',
+          copy: 'Take a screenshot while you are still speaking. It joins the sentence instead of becoming a separate thing to explain.'
+        },
+        {
+          title: 'Send the work, not a prompt.',
+          copy: 'Hold <span class="key">right ⌥</span>. Unmute starts a real Claude Code or Codex session on the plan you already use.'
+        },
+        {
+          title: 'It returns when it needs you.',
+          copy: 'The task waits in Pocket with one specific question. Answer it here; the session keeps moving in the background.'
+        },
+        {
+          title: 'Leave with the meeting.',
+          copy: 'Double-tap <span class="key">left ⌃</span>. Unmute listens to you and the room, then prepares decisions and next steps — not a transcript.'
+        }
+      ];
+      let active = -1;
+
+      function setScene(index) {
+        index = Math.max(0, Math.min(chapters.length - 1, index));
+        if (index === active) return;
+        active = index;
+        body.dataset.scene = index;
+        title.textContent = chapters[index].title;
+        copy.innerHTML = chapters[index].copy;
+        step.textContent = `${index + 1} / ${chapters.length}`;
+        dots.forEach((dot, i) => i === index ? dot.setAttribute('aria-current', 'step') : dot.removeAttribute('aria-current'));
+        if (index === 2) {
+          notchStatus.textContent = 'Working';
+          notchDetail.textContent = 'Tighten the typography scale';
+        }
+      }
+
+      const observer = new IntersectionObserver(entries => {
+        const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible) setScene(scenes.indexOf(visible.target));
+      }, { rootMargin: '-35% 0px -35% 0px', threshold: [0, .25, .5, .75, 1] });
+      scenes.forEach(scene => observer.observe(scene));
+
+      function go(index, focus = false) {
+        scenes[index]?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
+        if (focus) dots[index]?.focus({ preventScroll: true });
+      }
+      dots.forEach((dot, index) => dot.addEventListener('click', () => go(index)));
+
+      document.addEventListener('keydown', event => {
+        if (event.metaKey || event.ctrlKey || event.altKey || /INPUT|TEXTAREA|SELECT|BUTTON|A/.test(event.target.tagName)) return;
+        if (event.key === 'ArrowDown' || event.key === 'PageDown') { event.preventDefault(); go(Math.min(active + 1, 4)); }
+        if (event.key === 'ArrowUp' || event.key === 'PageUp') { event.preventDefault(); go(Math.max(active - 1, 0)); }
+        if (event.key === 'Home') { event.preventDefault(); go(0); }
+        if (event.key === 'End') { event.preventDefault(); go(4); }
+      });
+
+      document.getElementById('choices').addEventListener('click', event => {
+        const button = event.target.closest('button[data-answer]');
+        if (!button) return;
+        document.getElementById('pocket-question').textContent = button.dataset.answer === 'Whole site' ? 'Applying the new scale to all four pages.' : 'Applying the new scale to the two marketing pages.';
+        document.getElementById('pocket-state').textContent = 'Working';
+        document.getElementById('pocket-state').style.color = 'var(--green)';
+        event.currentTarget.hidden = true;
+        notchStatus.textContent = 'Working';
+        notchDetail.textContent = button.dataset.answer === 'Whole site' ? 'Applying to 4 pages' : 'Applying to 2 pages';
+      });
+
+      setScene(0);
+    })();
+  </script>
+</body>
+</html>

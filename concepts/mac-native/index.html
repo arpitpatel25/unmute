@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="A Mac-native design probe for Unmute, the voice layer for dictation, agents, meetings, and the notch Pocket.">
+  <title>Unmute — Mac Native</title>
+  <style>
+    :root {
+      --ink: #17181b;
+      --subtle: #666a73;
+      --quiet: #8b8f97;
+      --line: #e3e5e9;
+      --snow: #fbfcfe;
+      --blue: #2572f4;
+      --desktop: #bed9e8;
+      --desktop-deep: #7fa9c2;
+      --green: #31c96b;
+      --orange: #ff9f37;
+      --red: #ff5a52;
+      --ease: cubic-bezier(.2, .8, .2, 1);
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0; color: var(--ink); background: var(--snow);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, a { font: inherit; }
+    button { color: inherit; }
+    :focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+    .skip {
+      position: fixed; z-index: 100; top: 10px; left: 12px; padding: 9px 13px;
+      border-radius: 999px; color: white; background: #000; transform: translateY(-160%);
+    }
+    .skip:focus { transform: none; }
+
+    .topbar {
+      width: min(1480px, calc(100% - 48px)); height: 76px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .brand { display: inline-flex; align-items: center; gap: 9px; font-size: 20px; font-weight: 730; letter-spacing: -.05em; }
+    .unmark { width: 18px; height: 14px; display: flex; gap: 2px; align-items: end; }
+    .unmark i { width: 3px; border-radius: 5px; background: currentColor; }
+    .unmark i:nth-child(1), .unmark i:nth-child(5) { height: 5px; }
+    .unmark i:nth-child(2), .unmark i:nth-child(4) { height: 10px; }
+    .unmark i:nth-child(3) { height: 14px; }
+    .top-links { display: flex; align-items: center; gap: 28px; font-size: 13px; }
+    .top-links a { color: #42454b; text-decoration: none; }
+    .top-links .get { padding: 10px 15px; border-radius: 999px; color: #fff; background: #18191c; font-weight: 620; }
+
+    .hero {
+      width: min(1480px, calc(100% - 48px)); margin: 0 auto;
+      padding: 74px 0 40px; text-align: center;
+    }
+    h1 {
+      max-width: 940px; margin: 0 auto; font-size: clamp(48px, 6vw, 88px); line-height: .97;
+      font-weight: 650; letter-spacing: -.065em;
+    }
+    .lede {
+      max-width: 630px; margin: 26px auto 0; color: var(--subtle);
+      font-size: clamp(17px, 1.65vw, 22px); line-height: 1.45; letter-spacing: -.025em;
+    }
+    .hero-action {
+      display: inline-flex; align-items: center; gap: 8px; margin-top: 30px; padding: 13px 18px;
+      border: 0; border-radius: 999px; color: white; background: var(--ink); cursor: pointer;
+      text-decoration: none; font-size: 14px; font-weight: 620;
+    }
+    .hero-action svg { width: 14px; height: 14px; }
+    .compat { margin-top: 12px; color: var(--quiet); font-size: 11px; }
+
+    .demo { width: min(1480px, calc(100% - 32px)); margin: 0 auto; padding: 26px 0 110px; }
+    .machine-wrap { position: relative; padding: 0 1.6%; }
+    .machine {
+      position: relative; width: min(1280px, 100%); margin: 0 auto; padding: 10px 10px 12px;
+      border-radius: 25px 25px 10px 10px; background: #0a0a0b;
+      box-shadow: 0 42px 75px rgba(33, 43, 53, .18), 0 2px 4px rgba(0,0,0,.18);
+    }
+    .camera { position: absolute; z-index: 50; top: 5px; left: 50%; width: 5px; height: 5px; border-radius: 50%; background: #172433; transform: translateX(-50%); }
+    .screen {
+      position: relative; overflow: hidden; aspect-ratio: 16 / 9.75; border-radius: 16px 16px 5px 5px;
+      background: var(--desktop); isolation: isolate;
+    }
+    .wallpaper { position: absolute; inset: 0; overflow: hidden; z-index: -1; }
+    .wallpaper::before {
+      content: ""; position: absolute; width: 66%; height: 96%; right: -10%; bottom: -45%;
+      border-radius: 50% 50% 0 0; background: var(--desktop-deep); transform: rotate(-17deg);
+    }
+    .wallpaper::after {
+      content: ""; position: absolute; width: 48%; height: 80%; left: -17%; top: 24%;
+      border-radius: 50%; background: #dceaf2; transform: rotate(24deg);
+    }
+    .menu-bar {
+      height: 28px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between;
+      background: rgba(248,251,253,.78); backdrop-filter: blur(18px) saturate(1.25);
+      color: #2c3a44; font-size: 10px;
+    }
+    .menus, .sys { display: flex; gap: 13px; align-items: center; }
+    .menus b { font-weight: 680; }
+    .apple { font-size: 13px; line-height: 1; }
+
+    .notch {
+      position: absolute; z-index: 40; top: 0; left: 50%; width: 180px; height: 29px;
+      transform: translateX(-50%); border: 0; border-radius: 0 0 10px 10px;
+      color: white; background: #000; cursor: pointer;
+      transition: width .45s var(--ease), height .5s var(--ease), border-radius .45s var(--ease);
+    }
+    .notch::before, .notch::after { content: ""; position: absolute; top: 0; width: 11px; height: 11px; }
+    .notch::before { left: -11px; border-radius: 0 8px 0 0; box-shadow: 5px -5px #000; }
+    .notch::after { right: -11px; border-radius: 8px 0 0 0; box-shadow: -5px -5px #000; }
+    .notch-compact {
+      height: 29px; padding: 0 13px; display: flex; align-items: center; justify-content: space-between;
+      opacity: 0; transition: opacity .18s ease .14s; font-size: 9px;
+    }
+    .notch-compact span { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .notch-compact i { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+    .notch-compact em { color: rgba(255,255,255,.55); font-style: normal; overflow: hidden; text-overflow: ellipsis; }
+    .notch[data-running="true"] { width: 340px; }
+    .notch[data-running="true"] .notch-compact { opacity: 1; }
+
+    .pocket-panel {
+      position: absolute; z-index: 38; top: 0; left: 50%; width: 350px; min-height: 204px;
+      padding: 47px 18px 16px; border-radius: 0 0 19px 19px; color: #fff; background: #000;
+      transform: translate(-50%, -104%); visibility: hidden;
+      transition: transform .5s var(--ease), visibility 0s linear .5s;
+      box-shadow: 0 20px 35px rgba(0,0,0,.24);
+    }
+    .screen[data-mode="pocket"] .pocket-panel { transform: translate(-50%, 0); visibility: visible; transition-delay: 0s; }
+    .screen[data-mode="pocket"] .notch { width: 180px; }
+    .screen[data-mode="pocket"] .notch-compact { opacity: 0; }
+    .pocket-meta { display: flex; align-items: center; justify-content: space-between; font-size: 10px; }
+    .pocket-meta b { display: flex; align-items: center; gap: 7px; font-weight: 620; }
+    .pocket-meta b::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--orange); }
+    .pocket-meta span { color: var(--orange); }
+    .pocket-panel p { margin: 16px 0 15px; font-size: 17px; line-height: 1.25; letter-spacing: -.025em; }
+    .pocket-replies { display: flex; gap: 7px; }
+    .pocket-replies button {
+      padding: 8px 10px; border: 1px solid #33343a; border-radius: 8px; color: white; background: #1c1d20;
+      cursor: pointer; font-size: 10px;
+    }
+    .pocket-replies button:first-child { color: #000; background: #fff; border-color: #fff; }
+
+    .notes-window {
+      position: absolute; left: 7.5%; top: 14%; width: 58%; height: 67%; overflow: hidden;
+      border-radius: 12px; background: rgba(255,255,255,.94); box-shadow: 0 20px 45px rgba(48,69,83,.19), 0 0 0 1px rgba(26,42,52,.08);
+      transition: transform .5s var(--ease), opacity .3s ease;
+    }
+    .window-bar {
+      position: relative; height: 34px; display: flex; align-items: center; padding: 0 13px;
+      border-bottom: 1px solid #e2e4e7; background: #f5f5f5;
+    }
+    .lights { display: flex; gap: 6px; }
+    .lights i { width: 9px; height: 9px; border-radius: 50%; }
+    .lights i:nth-child(1) { background: #ff5f57; }
+    .lights i:nth-child(2) { background: #febc2e; }
+    .lights i:nth-child(3) { background: #28c840; }
+    .window-title { position: absolute; left: 50%; transform: translateX(-50%); color: #777b82; font-size: 9px; }
+    .note-content { padding: 8% 9%; }
+    .note-label { color: #92959c; font-size: clamp(7px, .8vw, 11px); }
+    .note-content h2 {
+      margin: 10px 0 15px; max-width: 12ch; font-size: clamp(20px, 3.3vw, 47px); line-height: 1.02;
+      font-weight: 640; letter-spacing: -.052em;
+    }
+    .note-content p { margin: 0; max-width: 520px; color: #4d525b; font-size: clamp(9px, 1.15vw, 16px); line-height: 1.55; }
+    .caret { display: inline-block; width: 1.5px; height: .95em; margin-left: 1px; vertical-align: -.08em; background: #17181b; animation: blink 1s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .side-note {
+      position: absolute; right: 5.8%; top: 25%; width: 24%; padding: 20px;
+      border: 1px solid rgba(51,75,90,.1); border-radius: 14px; color: #244256;
+      background: rgba(244,249,252,.78); backdrop-filter: blur(16px);
+      box-shadow: 0 15px 32px rgba(49,72,87,.1); transition: transform .4s var(--ease), opacity .3s ease;
+    }
+    .side-note b { display: block; margin-bottom: 7px; font-size: clamp(10px, 1.25vw, 16px); letter-spacing: -.02em; }
+    .side-note p { margin: 0; color: #567181; font-size: clamp(8px, .85vw, 12px); line-height: 1.5; }
+
+    .pill {
+      position: absolute; z-index: 25; left: 50%; bottom: 5.5%; min-width: 90px; height: 34px;
+      padding: 0 13px; border: 0; border-radius: 999px; color: #fff; background: #000;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.29), 0 8px 20px rgba(0,0,0,.2);
+      transform: translateX(-50%); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: min-width .32s var(--ease), opacity .25s ease;
+    }
+    .wave { display: flex; gap: 3px; align-items: center; height: 13px; }
+    .wave i { width: 2.5px; height: 3px; border-radius: 3px; background: #fff; opacity: .65; }
+    .screen[data-mode="dictate"] .wave i { animation: voice .65s ease-in-out infinite alternate; }
+    .screen[data-mode="dictate"] .wave i:nth-child(2), .screen[data-mode="dictate"] .wave i:nth-child(6) { animation-delay: -.2s; }
+    .screen[data-mode="dictate"] .wave i:nth-child(3), .screen[data-mode="dictate"] .wave i:nth-child(5) { animation-delay: -.4s; }
+    .screen[data-mode="dictate"] .wave i:nth-child(4) { animation-delay: -.55s; }
+    @keyframes voice { to { height: 13px; opacity: 1; } }
+    .pill-label { display: none; color: rgba(255,255,255,.62); font-size: 9px; }
+    .screen[data-mode="remote"] .pill { min-width: 126px; }
+    .screen[data-mode="remote"] .pill-label { display: inline; }
+    .screen[data-mode="pocket"] .pill { opacity: 0; pointer-events: none; }
+
+    .meeting {
+      position: absolute; z-index: 26; left: 3%; bottom: 5.5%; width: 205px; height: 34px;
+      padding: 0 10px 0 12px; border-radius: 999px; color: white; background: #000;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.28), 0 8px 20px rgba(0,0,0,.18);
+      display: flex; align-items: center; gap: 8px; opacity: 0; transform: translateY(8px); pointer-events: none;
+      transition: opacity .25s ease, transform .35s var(--ease);
+    }
+    .screen[data-mode="meeting"] .meeting { opacity: 1; transform: none; pointer-events: auto; }
+    .record-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+    .meeting span { font-size: 9px; white-space: nowrap; }
+    .meeting small { margin-left: auto; color: rgba(255,255,255,.5); font-size: 8px; font-variant-numeric: tabular-nums; }
+    .meeting button { width: 21px; height: 21px; padding: 0; border: 0; border-radius: 50%; background: #26272b; color: white; cursor: pointer; font-size: 10px; }
+
+    .dock {
+      position: absolute; z-index: 22; left: 50%; bottom: 1.1%; height: 38px; padding: 5px;
+      display: flex; align-items: center; gap: 5px; border: 1px solid rgba(255,255,255,.54); border-radius: 11px;
+      background: rgba(235,243,248,.5); backdrop-filter: blur(18px) saturate(1.2); transform: translateX(-50%);
+      box-shadow: 0 7px 16px rgba(31,48,60,.16);
+    }
+    .dock button {
+      width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; cursor: pointer;
+      display: grid; place-items: center; color: #fff; background: #fff; box-shadow: inset 0 0 0 1px rgba(0,0,0,.07);
+    }
+    .dock .notes-icon { background: #ffd84f; color: #7e6410; }
+    .dock .terminal-icon { background: #1a1b1e; color: #fff; font: 700 10px/1 ui-monospace, monospace; }
+    .dock .unmute-icon { background: #fff; color: #111; }
+    .dock .calendar-icon { color: #d84a43; font-size: 8px; font-weight: 700; }
+    .dock .separator { width: 1px; height: 24px; background: rgba(49,67,78,.23); }
+
+    .screen[data-mode="remote"] .notes-window { transform: translateX(-2%) scale(.985); opacity: .72; }
+    .screen[data-mode="remote"] .side-note { transform: translateY(-7%); }
+    .screen[data-mode="meeting"] .side-note { transform: translateY(5%); opacity: .68; }
+    .screen[data-mode="pocket"] .notes-window, .screen[data-mode="pocket"] .side-note { opacity: .55; }
+
+    .base {
+      position: relative; width: min(1380px, 108%); height: 16px; margin: -1px auto 0;
+      border-radius: 0 0 45% 45%; background: #d8dadd;
+      box-shadow: inset 0 1px #f8f9fa, 0 7px 8px rgba(36,45,51,.12);
+    }
+    .base::before { content: ""; position: absolute; top: 0; left: 50%; width: 13%; height: 6px; border-radius: 0 0 9px 9px; background: #b8bbc0; transform: translateX(-50%); }
+
+    .controls {
+      width: min(980px, calc(100% - 24px)); margin: 50px auto 0;
+      display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+      background: #fff; box-shadow: 0 12px 30px rgba(23, 29, 36, .05);
+    }
+    .control {
+      min-height: 92px; padding: 18px; border: 0; border-right: 1px solid var(--line); background: #fff;
+      text-align: left; cursor: pointer; transition: background .18s ease;
+    }
+    .control:last-child { border-right: 0; }
+    .control:hover { background: #f7f8fa; }
+    .control[aria-pressed="true"] { background: #eff5ff; }
+    .control-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
+    .control b { font-size: 13px; font-weight: 650; }
+    .control span { color: var(--quiet); font-size: 11px; }
+    .control kbd {
+      padding: 4px 7px; border: 1px solid #d8dae0; border-bottom-width: 2px; border-radius: 6px;
+      color: #50535a; background: white; font: 600 10px/1 -apple-system, sans-serif;
+    }
+    .control[aria-pressed="true"] kbd { border-color: #aac8fb; color: #175ccf; }
+    .demo-caption { margin: 18px auto 0; color: var(--quiet); text-align: center; font-size: 11px; }
+    .live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+    @media (max-width: 900px) {
+      .top-links a:not(.get) { display: none; }
+      .hero { padding-top: 48px; }
+      .machine { padding: 7px 7px 9px; border-radius: 18px 18px 8px 8px; }
+      .screen { border-radius: 11px 11px 4px 4px; }
+      .menu-bar { height: 22px; }
+      .notch { width: 132px; height: 23px; }
+      .notch[data-running="true"] { width: 260px; }
+      .notch-compact { height: 23px; }
+      .notes-window { top: 13%; }
+      .controls { grid-template-columns: repeat(2, 1fr); }
+      .control:nth-child(2) { border-right: 0; }
+      .control:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+    }
+    @media (max-width: 620px) {
+      .topbar { width: calc(100% - 28px); height: 64px; }
+      .get { font-size: 12px; }
+      .hero { width: calc(100% - 28px); padding: 39px 0 20px; }
+      h1 { font-size: clamp(43px, 14vw, 64px); }
+      .lede { margin-top: 20px; font-size: 17px; }
+      .demo { width: 100%; padding-top: 18px; overflow: hidden; }
+      .machine-wrap { width: 146%; margin-left: -23%; padding: 0; }
+      .machine { border-radius: 15px 15px 6px 6px; }
+      .menus span, .sys span:not(:last-child) { display: none; }
+      .side-note { display: none; }
+      .notes-window { left: 12%; width: 76%; }
+      .pocket-panel { width: 300px; min-height: 184px; padding-top: 42px; }
+      .pocket-panel p { font-size: 15px; }
+      .meeting { width: 165px; }
+      .dock { transform: translateX(-50%) scale(.85); transform-origin: center bottom; }
+      .controls { margin-top: 34px; grid-template-columns: 1fr; border-radius: 15px; }
+      .control { min-height: 74px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .control:last-child { border-bottom: 0; }
+      .control:nth-child(3) { border-bottom: 1px solid var(--line); }
+      .demo-caption { padding: 0 24px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; transition-delay: 0s !important; }
+      .caret { opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#mac-demo">Skip to the Mac demo</a>
+  <header class="topbar">
+    <div class="brand"><span class="unmark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>unmute</div>
+    <nav class="top-links" aria-label="Primary navigation">
+      <a href="#mac-demo">How it works</a>
+      <a href="#controls">Shortcuts</a>
+      <a class="get" href="#mac-demo">Download for Mac</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="page-title">
+      <h1 id="page-title">Your Mac already has a place for this.</h1>
+      <p class="lede">Unmute turns the keys you can reach—and the notch you barely notice—into a voice layer for every app.</p>
+      <a class="hero-action" href="#mac-demo">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12.7 5.2V14l3-3 1.4 1.4-5.4 5.4-5.4-5.4L7.7 11l3 3V5.2h2ZM5 19h14v2H5v-2Z"/></svg>
+        Try it on the Mac below
+      </a>
+      <p class="compat">Runs locally on macOS. Your current apps stay exactly where they are.</p>
+    </section>
+
+    <section class="demo" id="mac-demo" aria-label="Interactive Mac showing Unmute">
+      <div class="machine-wrap">
+        <div class="machine">
+          <span class="camera" aria-hidden="true"></span>
+          <div class="screen" id="screen" data-mode="dictate">
+            <div class="wallpaper" aria-hidden="true"></div>
+            <div class="menu-bar" aria-hidden="true">
+              <div class="menus"><span class="apple">●</span><b>Notes</b><span>File</span><span>Edit</span><span>Format</span><span>View</span></div>
+              <div class="sys"><span>◒</span><span>100%</span><span>Fri 9:41</span></div>
+            </div>
+
+            <button class="notch" id="notch" type="button" data-running="false" aria-label="Open the Pocket">
+              <span class="notch-compact"><span><i></i>Working</span><em>Reviewing the opening</em></span>
+            </button>
+            <section class="pocket-panel" aria-label="Pocket question">
+              <div class="pocket-meta"><b>Tighten the opening</b><span id="pocket-state">your move</span></div>
+              <p id="pocket-question">Use the new type scale on every page, or marketing only?</p>
+              <div class="pocket-replies" id="pocket-replies">
+                <button type="button" data-reply="Marketing only">Marketing only</button>
+                <button type="button" data-reply="Every page">Every page</button>
+              </div>
+            </section>
+
+            <article class="notes-window" aria-label="Notes document">
+              <div class="window-bar"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="window-title">Landing page notes</span></div>
+              <div class="note-content">
+                <span class="note-label">Today, 9:41 AM</span>
+                <h2>A quieter first impression.</h2>
+                <p><span id="note-text">Give the product room to speak.</span><span class="caret" aria-hidden="true"></span></p>
+              </div>
+            </article>
+
+            <aside class="side-note" aria-label="Unmute product note">
+              <b>The workspace stays yours.</b>
+              <p>Voice appears where the cursor is. Agent work returns to the notch when it needs you.</p>
+            </aside>
+
+            <button class="pill" id="pill" type="button" aria-label="Start dictation">
+              <span class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              <span class="pill-label">Claude Code</span>
+            </button>
+
+            <div class="meeting" aria-label="Meeting notes are recording">
+              <i class="record-dot" aria-hidden="true"></i><span>Design review</span><small>12:08</small><button id="end-meeting" type="button" aria-label="End meeting">■</button>
+            </div>
+
+            <div class="dock" aria-label="Mac Dock">
+              <button class="notes-icon" type="button" aria-label="Show Notes">▤</button>
+              <button class="terminal-icon" type="button" aria-label="Give work to an agent">›_</button>
+              <span class="separator" aria-hidden="true"></span>
+              <button class="unmute-icon" type="button" aria-label="Open Unmute Pocket"><span class="unmark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></button>
+              <button class="calendar-icon" type="button" aria-label="Start meeting notes">26</button>
+            </div>
+          </div>
+        </div>
+        <div class="base" aria-hidden="true"></div>
+      </div>
+
+      <div class="controls" id="controls" role="group" aria-label="Choose an Unmute action">
+        <button class="control" type="button" data-mode="dictate" aria-pressed="true">
+          <span class="control-top"><b>Dictate here</b><kbd>Fn</kbd></span>
+          <span>Words land at the cursor.</span>
+        </button>
+        <button class="control" type="button" data-mode="remote" aria-pressed="false">
+          <span class="control-top"><b>Give the work</b><kbd>right ⌥</kbd></span>
+          <span>Start Claude Code or Codex by voice.</span>
+        </button>
+        <button class="control" type="button" data-mode="pocket" aria-pressed="false">
+          <span class="control-top"><b>Open the Pocket</b><kbd>P</kbd></span>
+          <span>Answer only when the work needs you.</span>
+        </button>
+        <button class="control" type="button" data-mode="meeting" aria-pressed="false">
+          <span class="control-top"><b>Take the notes</b><kbd>left ⌃ ×2</kbd></span>
+          <span>Keep the decisions, not the transcript.</span>
+        </button>
+      </div>
+      <p class="demo-caption">Click a control, the notch, or the dock. Keyboard: D for dictation, A for agent work, P for Pocket, M for meeting notes.</p>
+      <p class="live" id="live" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const screen = document.querySelector('#screen');
+      const controls = [...document.querySelectorAll('.control')];
+      const pill = document.querySelector('#pill');
+      const notch = document.querySelector('#notch');
+      const noteText = document.querySelector('#note-text');
+      const live = document.querySelector('#live');
+      const pocketReplies = document.querySelector('#pocket-replies');
+      const pocketQuestion = document.querySelector('#pocket-question');
+      const pocketState = document.querySelector('#pocket-state');
+      const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let mode = 'dictate';
+      let timer = 0;
+      const sentence = 'Give the product room to speak. Keep the next step obvious.';
+
+      function selectMode(next, perform = true) {
+        mode = next;
+        screen.dataset.mode = next;
+        controls.forEach(control => control.setAttribute('aria-pressed', String(control.dataset.mode === next)));
+        notch.dataset.running = String(next === 'remote');
+        pill.setAttribute('aria-label', next === 'remote' ? 'Agent task is recording' : 'Start dictation');
+        const messages = {
+          dictate: 'Dictation is ready at the cursor.',
+          remote: 'Claude Code is reviewing the opening.',
+          pocket: 'The Pocket is open with one question.',
+          meeting: 'Meeting notes are recording.'
+        };
+        live.textContent = messages[next];
+        if (perform && next === 'dictate') typeSentence();
+      }
+
+      function typeSentence() {
+        clearInterval(timer);
+        noteText.textContent = '';
+        let index = 0;
+        if (reduceMotion) {
+          noteText.textContent = sentence;
+          live.textContent = 'Dictation inserted at the cursor.';
+          return;
+        }
+        timer = setInterval(() => {
+          noteText.textContent = sentence.slice(0, ++index);
+          if (index >= sentence.length) {
+            clearInterval(timer);
+            live.textContent = 'Dictation inserted at the cursor.';
+          }
+        }, 28);
+      }
+
+      controls.forEach(control => control.addEventListener('click', () => selectMode(control.dataset.mode)));
+      pill.addEventListener('click', () => selectMode(mode === 'remote' ? 'remote' : 'dictate'));
+      notch.addEventListener('click', () => selectMode('pocket', false));
+      document.querySelector('.notes-icon').addEventListener('click', () => selectMode('dictate'));
+      document.querySelector('.terminal-icon').addEventListener('click', () => selectMode('remote'));
+      document.querySelector('.unmute-icon').addEventListener('click', () => selectMode('pocket', false));
+      document.querySelector('.calendar-icon').addEventListener('click', () => selectMode('meeting', false));
+      document.querySelector('#end-meeting').addEventListener('click', () => {
+        selectMode('dictate', false);
+        live.textContent = 'Meeting ended. Notes saved locally.';
+      });
+
+      pocketReplies.addEventListener('click', event => {
+        const reply = event.target.closest('[data-reply]');
+        if (!reply) return;
+        pocketQuestion.textContent = `Applying the new scale to ${reply.dataset.reply.toLowerCase()}.`;
+        pocketState.textContent = 'working';
+        pocketState.style.color = 'var(--green)';
+        pocketReplies.hidden = true;
+        live.textContent = `${reply.dataset.reply} selected. The agent is working again.`;
+        notch.dataset.running = 'true';
+      });
+
+      document.addEventListener('keydown', event => {
+        if (event.target.closest('button, a, input, textarea, select')) return;
+        const shortcuts = { d: 'dictate', a: 'remote', p: 'pocket', m: 'meeting' };
+        const next = shortcuts[event.key.toLowerCase()];
+        if (next) { event.preventDefault(); selectMode(next, next !== 'pocket' && next !== 'meeting'); }
+      });
+
+      selectMode('dictate', false);
+    })();
+  </script>
+</body>
+</html>
