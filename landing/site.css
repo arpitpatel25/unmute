@@ -264,3 +264,27 @@ footer{padding:30px 4vw 50px;display:flex;justify-content:space-between;font-siz
   .trip .counter { margin: 18px 0 10px }
   .trip .ha br { display: none }
 }
+
+/* ── WHAT YOU SAID → WHAT IT DID (annotation layer over the real UI) ───────── */
+.stage .voice{position:absolute;left:0;top:0;width:1440px;height:900px;z-index:9;pointer-events:none}
+.bubble{position:absolute;transform:translate(-50%,-100%) scale(.6);transform-origin:50% 100%;opacity:0;
+  background:#fff;color:#111113;border-radius:22px;padding:14px 22px 16px;box-shadow:0 28px 70px -16px rgba(20,10,60,.6),0 0 0 2px rgba(123,92,255,.55);
+  font:640 26px/1.25 var(--ui);letter-spacing:-.015em;text-align:left;width:max-content;
+  transition:opacity .2s cubic-bezier(0,0,.58,1),transform .35s cubic-bezier(.34,1.4,.64,1)}
+.bubble::after{content:"";position:absolute;left:50%;bottom:-10px;width:18px;height:18px;background:#fff;transform:translateX(-50%) rotate(45deg);border-radius:0 0 4px 0;box-shadow:2px 2px 0 0 rgba(123,92,255,.55)}
+.bubble.on{opacity:1;transform:translate(-50%,-100%) scale(1)}
+.bubble.sent{opacity:0;transform:translate(-50%,-100%) translateY(30px) scale(.25);transition:opacity .3s ease-in,transform .35s cubic-bezier(.42,0,1,1)}
+.bubble .hd{display:flex;gap:10px;align-items:center;margin-bottom:6px;font:650 14px var(--mono);color:#7B5CFF}
+.bubble kbd{font:700 13px var(--mono);padding:3px 8px;border-radius:7px;background:#f4f4f6;border:1px solid #d6d6da;box-shadow:0 2px 0 #cfcfd4;color:#111}
+.bubble q{quotes:none}
+.bubble q i{font-style:normal;color:#7B5CFF}
+.bubble .w{display:inline-block;opacity:0;animation:word .3s cubic-bezier(0,0,.58,1) forwards}
+.stage .flight{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis;
+  background:#7B5CFF;color:#fff;border-radius:999px;padding:8px 16px;font:620 19px var(--ui);box-shadow:0 12px 30px -10px rgba(123,92,255,.7)}
+.stage .result{position:absolute;transform:translate(-50%,6px);opacity:0;white-space:nowrap;
+  background:#111113;color:#fff;border-radius:999px;padding:9px 16px;font:620 20px var(--ui);box-shadow:0 14px 34px -12px rgba(0,0,0,.6);
+  transition:opacity .25s,transform .35s cubic-bezier(.34,1.4,.64,1)}
+.stage .result::before{content:"✓ ";color:#30D158;font-weight:800}
+.stage .result.on{opacity:1;transform:translate(-50%,0)}
+@media (max-width:900px){ .bubble{font-size:24px;padding:12px 18px 14px} .stage .result{font-size:22px} }
+@media (prefers-reduced-motion:reduce){ .bubble .w{animation:none;opacity:1} }
