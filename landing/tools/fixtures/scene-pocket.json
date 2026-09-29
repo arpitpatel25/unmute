@@ -1,0 +1,350 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "idle",
+     "attention": 0,
+     "working": 1
+    },
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "closed",
+      "at": 0,
+      "waiting": 1,
+      "remoteKey": "fn",
+      "slots": [
+       {
+        "id": "unmute-agent",
+        "title": "Unmute Agent",
+        "kind": "agent",
+        "status": "ready",
+        "demanding": false
+       },
+       {
+        "id": "t-landing",
+        "title": "landing page",
+        "status": "processing",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       },
+       {
+        "id": "t-auth",
+        "title": "auth service",
+        "status": "needs-user",
+        "ask": "Should the refresh retry on a 401?",
+        "demanding": true,
+        "backend": "codex",
+        "terminal": false
+       },
+       {
+        "id": "t-csv",
+        "title": "csv parser",
+        "status": "done",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pocket-closed"
+  },
+  {
+   "send": [
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "open",
+      "at": 1,
+      "waiting": 1,
+      "remoteKey": "fn",
+      "slots": [
+       {
+        "id": "unmute-agent",
+        "title": "Unmute Agent",
+        "kind": "agent",
+        "status": "ready",
+        "demanding": false
+       },
+       {
+        "id": "t-landing",
+        "title": "landing page",
+        "status": "processing",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       },
+       {
+        "id": "t-auth",
+        "title": "auth service",
+        "status": "needs-user",
+        "ask": "Should the refresh retry on a 401?",
+        "demanding": true,
+        "backend": "codex",
+        "terminal": false
+       },
+       {
+        "id": "t-csv",
+        "title": "csv parser",
+        "status": "done",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "pocket-open-landing"
+  },
+  {
+   "send": [
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "open",
+      "at": 2,
+      "waiting": 1,
+      "remoteKey": "fn",
+      "slots": [
+       {
+        "id": "unmute-agent",
+        "title": "Unmute Agent",
+        "kind": "agent",
+        "status": "ready",
+        "demanding": false
+       },
+       {
+        "id": "t-landing",
+        "title": "landing page",
+        "status": "processing",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       },
+       {
+        "id": "t-auth",
+        "title": "auth service",
+        "status": "needs-user",
+        "ask": "Should the refresh retry on a 401?",
+        "demanding": true,
+        "backend": "codex",
+        "terminal": false
+       },
+       {
+        "id": "t-csv",
+        "title": "csv parser",
+        "status": "done",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "pocket-open-auth"
+  },
+  {
+   "send": [
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "open",
+      "at": 3,
+      "waiting": 1,
+      "remoteKey": "fn",
+      "slots": [
+       {
+        "id": "unmute-agent",
+        "title": "Unmute Agent",
+        "kind": "agent",
+        "status": "ready",
+        "demanding": false
+       },
+       {
+        "id": "t-landing",
+        "title": "landing page",
+        "status": "processing",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       },
+       {
+        "id": "t-auth",
+        "title": "auth service",
+        "status": "needs-user",
+        "ask": "Should the refresh retry on a 401?",
+        "demanding": true,
+        "backend": "codex",
+        "terminal": false
+       },
+       {
+        "id": "t-csv",
+        "title": "csv parser",
+        "status": "done",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "pocket-open-csv"
+  },
+  {
+   "send": [
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "open",
+      "at": 2,
+      "waiting": 1,
+      "remoteKey": "fn",
+      "slots": [
+       {
+        "id": "unmute-agent",
+        "title": "Unmute Agent",
+        "kind": "agent",
+        "status": "ready",
+        "demanding": false
+       },
+       {
+        "id": "t-landing",
+        "title": "landing page",
+        "status": "processing",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       },
+       {
+        "id": "t-auth",
+        "title": "auth service",
+        "status": "needs-user",
+        "ask": "Should the refresh retry on a 401?",
+        "demanding": true,
+        "backend": "codex",
+        "terminal": false
+       },
+       {
+        "id": "t-csv",
+        "title": "csv parser",
+        "status": "done",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       }
+      ]
+     }
+    },
+    {
+     "type": "capturePhase",
+     "phase": "listening"
+    },
+    {
+     "type": "pill",
+     "state": {
+      "phase": "recording",
+      "level": 0,
+      "elapsed": 2,
+      "taskId": "t-auth",
+      "kind": "remote",
+      "agent": "Codex CLI",
+      "agentConnected": true,
+      "agentOptions": [
+       {
+        "id": "claude",
+        "label": "Claude Code CLI",
+        "available": true,
+        "terminal": false
+       },
+       {
+        "id": "codex",
+        "label": "Codex CLI",
+        "available": true,
+        "terminal": false
+       }
+      ],
+      "modelOptions": [],
+      "modelAxes": [],
+      "modelEmpty": "Settings are managed in the original application"
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "pocket-aimed"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "hidden"
+     }
+    },
+    {
+     "type": "capturePhase",
+     "phase": "routing"
+    },
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "open",
+      "at": 2,
+      "waiting": 0,
+      "remoteKey": "fn",
+      "slots": [
+       {
+        "id": "unmute-agent",
+        "title": "Unmute Agent",
+        "kind": "agent",
+        "status": "ready",
+        "demanding": false
+       },
+       {
+        "id": "t-landing",
+        "title": "landing page",
+        "status": "processing",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       },
+       {
+        "id": "t-auth",
+        "title": "auth service",
+        "status": "processing",
+        "ask": null,
+        "demanding": false,
+        "backend": "codex",
+        "terminal": false
+       },
+       {
+        "id": "t-csv",
+        "title": "csv parser",
+        "status": "done",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "pocket-sent"
+  }
+ ]
+}

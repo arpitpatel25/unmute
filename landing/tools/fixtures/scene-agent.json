@@ -1,0 +1,229 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "unmute-agent",
+      "title": "Unmute Agent",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "save this — good example of onboarding, for the redesign"
+       }
+      ]
+     }
+    },
+    {
+     "type": "setState",
+     "state": "task",
+     "attention": 0,
+     "working": 0
+    },
+    {
+     "type": "surfaceFill",
+     "fill": 0.45
+    }
+   ],
+   "wait": 1300,
+   "shot": "agent-save-1"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "unmute-agent",
+      "title": "Unmute Agent",
+      "status": "ready",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "save this — good example of onboarding, for the redesign"
+       },
+       {
+        "kind": "message",
+        "role": "assistant",
+        "text": "Saved **Onboarding teardown** with your note: *\"good example of onboarding, for the redesign.\"*"
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "agent-save-2"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "unmute-agent",
+      "title": "Unmute Agent",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "what was that onboarding video I saved?"
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "agent-ask-1"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "unmute-agent",
+      "title": "Unmute Agent",
+      "status": "ready",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "what was that onboarding video I saved?"
+       },
+       {
+        "kind": "message",
+        "role": "assistant",
+        "text": "**Onboarding teardown** — youtube.com/watch?v=onb-teardown\n\nYou saved it on Sep 14 and said: *\"good example of onboarding, for the redesign.\"*"
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "agent-ask-2"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "unmute-agent",
+      "title": "Unmute Agent",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "any follow-ups for me from that call?"
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "agent-meet-1"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "unmute-agent",
+      "title": "Unmute Agent",
+      "status": "ready",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "any follow-ups for me from that call?"
+       },
+       {
+        "kind": "message",
+        "role": "assistant",
+        "text": "Two are yours from **Onboarding redesign**:\n\n1. Rewrite the onboarding copy for the three-screen flow\n2. Share the Figma with Priya before Friday"
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "agent-meet-2"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "unmute-agent",
+      "title": "Unmute Agent",
+      "status": "ready",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "any follow-ups for me from that call?"
+       },
+       {
+        "kind": "message",
+        "role": "assistant",
+        "text": "Two are yours from **Onboarding redesign**:\n\n1. Rewrite the onboarding copy for the three-screen flow\n2. Share the Figma with Priya before Friday"
+       },
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "start a task for the first one"
+       },
+       {
+        "kind": "message",
+        "role": "assistant",
+        "text": "Started **Onboarding copy** in Claude Code with the call notes attached."
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "agent-meet-3"
+  }
+ ]
+}

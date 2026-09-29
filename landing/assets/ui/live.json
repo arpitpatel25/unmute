@@ -1,0 +1,252 @@
+{
+ "agent-ask-2.notch": {
+  "wave": {
+   "x": 340.5,
+   "cy": 187,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 1
+  }
+ },
+ "agent-meet-3.notch": {
+  "wave": {
+   "x": 423,
+   "cy": 187.75,
+   "count": 7,
+   "pitch": 3.75,
+   "barW": 1.5
+  }
+ },
+ "agent-save-1.notch": {
+  "wave": {
+   "x": 295,
+   "cy": 127.5,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 6
+  }
+ },
+ "agent-save-2.notch": {
+  "wave": {
+   "x": 295,
+   "cy": 104.5,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 6
+  }
+ },
+ "bar-agent-done.notch": {
+  "wave": {
+   "x": 303,
+   "cy": 17.75,
+   "count": 7,
+   "pitch": 3.25,
+   "barW": 3.5
+  }
+ },
+ "bar-agent-searching.notch": {
+  "wave": {
+   "x": 348,
+   "cy": 18.25,
+   "count": 7,
+   "pitch": 3.25,
+   "barW": 4.5
+  }
+ },
+ "bar-agent-thinking.notch": {
+  "dot": {
+   "cx": 307,
+   "cy": 17,
+   "d": 7
+  }
+ },
+ "bar-inpocket.notch": {
+  "wave": {
+   "x": 57.5,
+   "cy": 19.5,
+   "count": 7,
+   "pitch": 3.3333333333333335,
+   "barW": 7
+  }
+ },
+ "bar-sending.notch": {
+  "wave": {
+   "x": 321,
+   "cy": 18.25,
+   "count": 7,
+   "pitch": 3.3333333333333335,
+   "barW": 4.5
+  }
+ },
+ "pad-1.pill": {
+  "wave": {
+   "x": 296.5,
+   "cy": 18.5,
+   "count": 7,
+   "pitch": 3.25,
+   "barW": 4
+  }
+ },
+ "pad-2.pill": {
+  "wave": {
+   "x": 296.5,
+   "cy": 18.5,
+   "count": 7,
+   "pitch": 3.25,
+   "barW": 4
+  }
+ },
+ "pad-3.pill": {
+  "wave": {
+   "x": 296.5,
+   "cy": 18.5,
+   "count": 7,
+   "pitch": 3.25,
+   "barW": 4
+  }
+ },
+ "pad-4.pill": {
+  "wave": {
+   "x": 296.5,
+   "cy": 18.5,
+   "count": 7,
+   "pitch": 3.25,
+   "barW": 4
+  }
+ },
+ "pad-5.pill": {
+  "wave": {
+   "x": 296.5,
+   "cy": 18.5,
+   "count": 7,
+   "pitch": 3.25,
+   "barW": 4
+  }
+ },
+ "pad-sending.pill": {
+  "wave": {
+   "x": 260,
+   "cy": 18.5,
+   "count": 7,
+   "pitch": 3.25,
+   "barW": 4
+  }
+ },
+ "pill-agent-proc.pill": {
+  "wave": {
+   "x": 22,
+   "cy": 19,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 4
+  }
+ },
+ "pill-agent-rec.pill": {
+  "wave": {
+   "x": 22.5,
+   "cy": 19,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 4
+  }
+ },
+ "pill-flash.pill": {
+  "wave": {
+   "x": 47,
+   "cy": 19.75,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 5.5
+  }
+ },
+ "pill-fn-rec.pill": {
+  "wave": {
+   "x": 38,
+   "cy": 18.25,
+   "count": 11,
+   "pitch": 5.5,
+   "barW": 1.5
+  }
+ },
+ "pill-paused.pill": {
+  "wave": {
+   "x": 260,
+   "cy": 18.5,
+   "count": 7,
+   "pitch": 3.25,
+   "barW": 4
+  }
+ },
+ "pill-ropt-proc.pill": {
+  "wave": {
+   "x": 47,
+   "cy": 19.75,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 5.5
+  }
+ },
+ "pill-ropt-rec.pill": {
+  "wave": {
+   "x": 47,
+   "cy": 19.75,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 5.5
+  }
+ },
+ "pill-scratch-rec.pill": {
+  "wave": {
+   "x": 38,
+   "cy": 18.25,
+   "count": 11,
+   "pitch": 5.5,
+   "barW": 1.5
+  }
+ },
+ "pocket-aimed.notch": {
+  "wave": {
+   "x": 286,
+   "cy": 122.75,
+   "count": 7,
+   "pitch": 3.5,
+   "barW": 1.5
+  }
+ },
+ "pocket-aimed.pill": {
+  "wave": {
+   "x": 179.5,
+   "cy": 18.25,
+   "count": 11,
+   "pitch": 5.5,
+   "barW": 1.5
+  }
+ },
+ "task-1.notch": {
+  "wave": {
+   "x": 475.5,
+   "cy": 127.75,
+   "count": 7,
+   "pitch": 3.75,
+   "barW": 6.5
+  }
+ },
+ "task-2.notch": {
+  "wave": {
+   "x": 475.5,
+   "cy": 127.75,
+   "count": 7,
+   "pitch": 3.75,
+   "barW": 6.5
+  }
+ },
+ "task-3.notch": {
+  "wave": {
+   "x": 475.5,
+   "cy": 127.75,
+   "count": 7,
+   "pitch": 3.75,
+   "barW": 6.5
+  }
+ }
+}

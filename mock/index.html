@@ -1,0 +1,841 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>unmute — landing mock (throwaway probe)</title>
+<link rel="icon" href="../icon.png" />
+<!-- THROWAWAY PROBE. Rough shapes, not pixel-exact UI. Purpose: feel the structure and where motion goes. -->
+<style>
+:root{
+  --bg:#FAFAF7; --ink:#111113; --dim:#6b6b70; --line:rgba(0,0,0,.08);
+  --accent:#7B5CFF; --teal:#00D2E0; --green:#30D158; --orange:#FF9230; --cream:#FBF6EA;
+  --ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;color:var(--ink);font-family:var(--ui);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit}
+h1,h2,h3{margin:0;letter-spacing:-.035em;font-weight:680}
+.eyebrow{font:500 13px/1 var(--mono);color:var(--dim);letter-spacing:.02em;display:flex;align-items:center;gap:10px}
+
+/* ---------- nav ---------- */
+nav.top{position:fixed;inset:0 0 auto 0;z-index:50;display:flex;justify-content:space-between;align-items:center;padding:16px 4vw;transition:padding .3s,background .3s,backdrop-filter .3s}
+nav.top.scrolled{padding:10px 4vw;background:rgba(250,250,247,.75);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+nav.top img{height:36px;display:block}
+nav.top .links{display:flex;gap:26px;align-items:center;font-size:14px;color:#3a3a40}
+nav.top .links a{text-decoration:none}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:999px;background:var(--ink);color:#fff;text-decoration:none;font-weight:600;font-size:15px;border:0;cursor:pointer;transition:transform .2s}
+.btn:hover{transform:translateY(-1px)}
+.btn.ghost{background:transparent;color:var(--ink);box-shadow:inset 0 0 0 1px rgba(0,0,0,.15)}
+.btn.sm{padding:8px 14px;font-size:13px}
+
+/* ---------- shared Mac stage ---------- */
+.mac{position:relative;width:100%;aspect-ratio:16/10;border-radius:18px;overflow:hidden;
+  background:radial-gradient(120% 90% at 20% 0%,#eef0f6 0%,#e2e5ee 55%,#d9dce6 100%);
+  border:1px solid rgba(0,0,0,.07);box-shadow:0 50px 100px -40px rgba(30,30,60,.35),0 2px 6px rgba(0,0,0,.04)}
+.menubar{position:absolute;inset:0 0 auto 0;height:26px;display:flex;justify-content:space-between;align-items:center;padding:0 14px;font-size:11px;color:#333;background:rgba(255,255,255,.5);backdrop-filter:blur(10px);z-index:4}
+.menubar b{font-weight:700}
+.notch{position:absolute;top:0;left:50%;translate:-50% 0;width:170px;height:26px;background:#000;border-radius:0 0 13px 13px;z-index:6;overflow:hidden;color:#fff}
+.notch .row{position:absolute;inset:auto 0 0 0;height:30px;display:flex;align-items:center;gap:8px;padding:0 12px;font-size:12px;opacity:0;white-space:nowrap}
+.notch .row img{width:15px;height:15px;border-radius:4px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex:none}
+.dot.breathe{animation:breathe 1.2s ease-in-out infinite alternate}
+.dot.orange{background:var(--orange)} .dot.grey{background:#8e8e93}
+@keyframes breathe{from{opacity:.35}to{opacity:1}}
+.tick{margin-left:auto;color:var(--green);font-weight:700}
+
+.win{position:absolute;left:50%;top:13%;translate:-50% 0;width:64%;height:60%;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 20px 50px -20px rgba(0,0,0,.25),0 0 0 1px rgba(0,0,0,.05)}
+.win .bar{height:28px;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid #eee;font-size:11px;color:#777}
+.win .bar i{width:9px;height:9px;border-radius:50%;background:#ddd;display:block}
+.win .bar i:nth-child(1){background:#ff5f57}.win .bar i:nth-child(2){background:#febc2e}.win .bar i:nth-child(3){background:#28c840}
+.win .bar span{margin-left:8px}
+.win .body{padding:14px 16px;font-size:13px;line-height:1.5;color:#333}
+.panel{position:absolute;inset:28px 0 0 0;padding:14px 16px;font-size:13px;line-height:1.5;opacity:0}
+.panel.on{opacity:1}
+.skel{height:9px;border-radius:5px;background:#eceef2;margin:8px 0}
+.msg{display:flex;gap:8px;margin:8px 0}.msg .av{width:22px;height:22px;border-radius:6px;background:#dfe3ea;flex:none}
+.msg .av.p{background:#f3c6a8}.msg b{font-size:12px}
+.compose{position:absolute;left:14px;right:14px;bottom:12px;min-height:34px;border:1px solid #e3e3e3;border-radius:9px;padding:8px 10px;font-size:13px;color:#111}
+.compose:empty::before{content:"Message #launch";color:#aaa}
+
+.pill{position:absolute;left:50%;translate:-50% 0;bottom:20px;height:40px;display:flex;align-items:center;gap:9px;padding:0 8px 0 10px;background:#0c0c0e;border-radius:999px;z-index:7;box-shadow:0 12px 30px -8px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.08)}
+.pill .pad{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;color:#9a9aa0;font-size:12px;background:#1c1c20}
+.pill .wave{display:flex;align-items:center;gap:3px;height:22px;transform-origin:center;transform:scaleY(.25)}
+.pill .wave i{display:block;width:3px;height:100%;border-radius:2px;background:#fff;animation:wv .9s ease-in-out infinite alternate}
+.pill .wave i:nth-child(2n){animation-delay:-.3s}.pill .wave i:nth-child(3n){animation-delay:-.55s}.pill .wave i:nth-child(5n){animation-delay:-.15s}
+@keyframes wv{0%{transform:scaleY(.25)}100%{transform:scaleY(1)}}
+.pill .ok{width:24px;height:24px;border-radius:50%;background:#fff;color:#000;display:grid;place-items:center;font-size:13px;font-weight:800}
+.pill .thumb{width:0;height:24px;border-radius:5px;background:linear-gradient(135deg,#cfd6e6,#9aa6c2);overflow:hidden}
+
+.caps .caption{position:absolute;left:50%;translate:-50% 0;bottom:74px;z-index:8;white-space:nowrap;font-size:16px;font-weight:600;letter-spacing:-.01em;padding:9px 15px;border-radius:12px;background:rgba(255,255,255,.92);box-shadow:0 10px 30px -10px rgba(0,0,0,.25);opacity:0}
+.caps .caption .w{display:inline-block}
+.keys .kc{position:absolute;right:16px;bottom:16px;z-index:9;min-width:44px;height:38px;padding:0 12px;border-radius:9px;background:#fff;border:1px solid #d6d6da;box-shadow:0 3px 0 #cfcfd4;font:700 13px/38px var(--mono);text-align:center;opacity:0}
+
+/* ---------- hero ---------- */
+.hero{min-height:100vh;padding:120px 4vw 60px;display:flex;flex-direction:column;align-items:center;text-align:center}
+.hero .eyebrow{justify-content:center}
+.hero .philo{font:600 clamp(15px,1.3vw,18px)/1.2 var(--ui);color:var(--accent);letter-spacing:-.01em}
+.hero h1{font-size:clamp(48px,7.4vw,112px);line-height:.95;margin-top:18px}
+.hero h1 .w{display:inline-block}
+.hero .sub{max-width:640px;margin:22px auto 0;font-size:clamp(17px,1.5vw,21px);line-height:1.45;color:#46464c}
+.hero .ctas{display:flex;gap:12px;justify-content:center;margin-top:28px}
+.works{display:flex;gap:14px;align-items:center;justify-content:center;margin-top:18px;font-size:13px;color:var(--dim)}
+.works img{width:18px;height:18px;border-radius:5px;vertical-align:-4px;margin-right:5px}
+.hero .stage{width:min(1080px,94vw);margin-top:54px;text-align:left}
+.outcomes{display:flex;gap:28px;justify-content:center;margin-top:22px;font:500 14px var(--mono);color:#b3b3b8}
+.outcomes span{transition:color .3s}
+.outcomes span.on{color:var(--ink)}
+.outcomes span.on::before{content:"● ";color:var(--accent)}
+
+/* ---------- the trip ---------- */
+.trip{height:100vh;position:relative;overflow:hidden}
+.trip .head{position:absolute;top:11vh;left:0;right:0;text-align:center}
+.trip h2{font-size:clamp(34px,4.6vw,68px);line-height:1}
+.trip .hb{position:absolute;left:0;right:0;top:0;opacity:0}
+.trip .counter{position:absolute;top:calc(11vh + 160px);font-size:16px !important;left:50%;translate:-50% 0;font:600 14px var(--mono);padding:8px 14px;border-radius:999px;background:#fff;box-shadow:0 0 0 1px var(--line);white-space:nowrap}
+.trip .path{position:absolute;left:50%;translate:-50% 0;top:56%;display:flex;gap:18px;width:min(1180px,92vw)}
+.trip .line{position:absolute;left:0;right:0;top:50%;height:2px;background:repeating-linear-gradient(90deg,#c4c4cb 0 6px,transparent 6px 12px);transform-origin:left;transform:scaleX(0)}
+.step{flex:1;height:138px;background:#fff;border-radius:14px;box-shadow:0 14px 34px -18px rgba(0,0,0,.28),0 0 0 1px var(--line);padding:12px;position:relative;opacity:0;overflow:hidden}
+.step .lab{font:600 10.5px var(--mono);color:var(--dim);letter-spacing:.04em;text-transform:uppercase}
+.step .t{font-weight:650;font-size:14px;margin-top:4px;letter-spacing:-.01em}
+.step .viz{position:absolute;left:12px;right:12px;bottom:12px;height:56px;border-radius:8px;background:#f2f3f6;font:10.5px/1.5 var(--mono);padding:6px 8px;overflow:hidden;color:#555}
+.step .viz.term{background:#101114;color:#d8d8dc}
+.step .viz .sq{display:inline-block;width:20px;height:20px;border-radius:5px;margin:8px 3px 0 0;background:#d9dce4}
+.step .viz .sq.on{background:var(--ink)}
+.step .viz .box{position:absolute;inset:8px 30% 8px 10px;border:2px dashed var(--accent);border-radius:5px}
+.idea{position:absolute;top:calc(56% - 74px);left:0;padding:10px 16px;border-radius:18px 18px 18px 4px;background:var(--accent);color:#fff;font-weight:600;font-size:15px;white-space:nowrap;box-shadow:0 14px 30px -10px rgba(123,92,255,.6);opacity:0;z-index:5}
+.idea::before{content:"💡 "}
+.trip .again{position:absolute;left:0;right:0;top:calc(56% + 170px);text-align:center;font-size:clamp(20px,2vw,28px);font-weight:650;letter-spacing:-.02em;color:#c0392b;opacity:0}
+.trip .idea2{left:50%;translate:-50% 0;top:calc(60% - 140px)}
+.trip .pill{bottom:auto;top:60%;height:52px;scale:1.2;opacity:0}
+.trip .caps .caption{bottom:auto;top:calc(60% - 70px)}
+.trip .result{position:absolute;left:50%;translate:-50% 0;top:calc(60% + 70px);display:flex;gap:9px;align-items:center;padding:10px 16px;border-radius:12px;background:#101114;color:#fff;font-size:14px;font-weight:600;opacity:0;white-space:nowrap}
+.trip .result img{width:18px;height:18px;border-radius:5px}
+
+/* ---------- everywhere ---------- */
+.everywhere{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:84px 4vw 24px;gap:18px;text-align:center}
+.everywhere h2{font-size:clamp(32px,4.2vw,60px);line-height:1.02;max-width:1000px}
+.everywhere h2 span{color:var(--dim)}
+.applist{display:flex;gap:22px;font:600 14px var(--mono);color:#b3b3b8}
+.everywhere .stage{width:min(820px,80vw);text-align:left;margin-top:6px}
+.everywhere .mac{aspect-ratio:16/9}
+.everywhere .win{top:12%;height:62%}
+.toast{position:absolute;right:4%;top:10%;z-index:8;padding:9px 13px;border-radius:10px;background:#fff;box-shadow:0 14px 30px -12px rgba(0,0,0,.3),0 0 0 1px var(--line);font-size:13px;font-weight:650;opacity:0;color:#1d7a3a}
+.figcanvas{position:absolute;inset:28px 0 0 0;background:#e9e9ec;display:grid;place-items:center}
+.figcanvas div{width:46%;height:60%;background:#fff;border:2px solid #a259ff;border-radius:6px;position:relative;padding:10px;font-size:12px}
+.figcanvas div::before{content:"Pricing card";position:absolute;top:-18px;left:0;font-size:10px;color:#a259ff}
+.files{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:16px}
+.files i{display:block;height:48px;border-radius:6px;background:linear-gradient(135deg,#dfe6f3,#b9c5dc)}
+.files span{display:block;font-size:9.5px;color:#777;margin-top:3px;white-space:nowrap;overflow:hidden}
+
+/* ---------- keys ---------- */
+.keysec{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:48px;padding:0 4vw}
+.keysec h2{font-size:clamp(34px,4.4vw,64px);text-align:center}
+.keyrow{display:flex;gap:22px}
+.bigkey{width:150px;height:118px;border-radius:18px;background:#fff;border:1px solid #d9d9de;box-shadow:0 6px 0 #d2d2d8;display:flex;flex-direction:column;justify-content:space-between;padding:14px;font:700 16px var(--mono);color:#aaa}
+.bigkey small{font:500 12px var(--ui);color:#aaa}
+.keydesc{position:relative;height:90px;width:min(760px,90vw);text-align:center}
+.keydesc p{position:absolute;inset:0;margin:0;font-size:clamp(20px,2vw,28px);line-height:1.35;letter-spacing:-.02em;opacity:0}
+.keydesc p b{color:var(--accent)}
+
+/* ---------- chapters ---------- */
+.chapter{min-height:100vh;display:grid;grid-template-columns:.78fr 1.22fr;gap:6vw;align-items:center;padding:90px 5vw 40px;max-width:1500px;margin:0 auto}
+.chapter .copy h2{font-size:clamp(34px,3.8vw,58px);line-height:1.02;margin-top:18px}
+.chapter .copy p{font-size:18px;line-height:1.5;color:#4a4a50;max-width:440px;margin-top:18px}
+.chapter .copy .steps{margin-top:26px;display:flex;flex-direction:column;gap:8px;font:500 13px var(--mono);color:#b0b0b6}
+.chapter .copy .steps span.on{color:var(--ink)}
+.kcap{display:inline-block;padding:4px 9px;border-radius:7px;background:#fff;border:1px solid #d6d6da;box-shadow:0 2px 0 #cfcfd4;font:700 12px var(--mono);color:var(--ink)}
+
+.session{position:absolute;right:5%;bottom:14%;width:46%;height:52%;background:#101114;color:#e8e8ea;border-radius:12px;box-shadow:0 30px 60px -20px rgba(0,0,0,.5);font:12px/1.6 var(--mono);opacity:0;overflow:hidden}
+.session .hd{display:flex;gap:8px;align-items:center;padding:9px 12px;border-bottom:1px solid #222;font:600 12px var(--ui)}
+.session .hd img{width:16px;height:16px;border-radius:4px}
+.session .ln{padding:0 12px;opacity:0}
+.session .ln:first-of-type{padding-top:10px}
+.session .ln.u{color:#fff}.session .ln.g{color:#7ee787}
+
+.pocket{position:absolute;top:0;left:50%;translate:-50% 0;width:58%;height:26px;background:#000;border-radius:0 0 16px 16px;z-index:6;overflow:hidden;color:#fff}
+.pocket .tabs{position:absolute;top:30px;left:10px;right:10px;display:flex;gap:8px;opacity:0}
+.pocket .tab{flex:1;display:flex;align-items:center;gap:7px;padding:8px 10px;border-radius:10px;background:#18181b;font-size:12px;white-space:nowrap;border:1px solid transparent}
+.pocket .tab img{width:14px;height:14px;border-radius:3px}
+.pocket .tab.sel{border-color:#fff;background:#232327}
+.pocket .tab .st{margin-left:auto;font-size:10px;color:#8e8e93}
+.pocket .chat{position:absolute;top:78px;left:12px;right:12px;bottom:12px;font-size:12px;line-height:1.5;opacity:0}
+.pocket .chat .b{max-width:78%;padding:7px 10px;border-radius:10px;background:#1f1f23;margin:6px 0}
+.pocket .chat .b.me{margin-left:auto;background:#2b2b31}
+.flybubble{position:absolute;left:50%;bottom:66px;translate:-50% 0;z-index:9;padding:7px 12px;border-radius:12px;background:var(--ink);color:#fff;font-size:12px;opacity:0;white-space:nowrap}
+
+.savebtn{position:absolute;left:28%;top:52%;padding:9px 18px;border-radius:8px;background:#e6e6ea;color:#a4a4aa;font-weight:600;font-size:14px}
+.selbox{position:absolute;left:26%;top:48%;width:0;height:0;border:2px dashed var(--accent);background:rgba(123,92,255,.08);border-radius:6px;z-index:5}
+.flash{position:absolute;inset:0;background:#fff;opacity:0;z-index:10;pointer-events:none}
+.scratch{position:absolute;right:4%;top:12%;width:42%;background:var(--cream);border-radius:14px;box-shadow:0 30px 60px -24px rgba(0,0,0,.35),0 0 0 1px rgba(0,0,0,.05);opacity:0;z-index:8;overflow:hidden}
+.scratch .hd{padding:10px 14px;font-weight:700;font-size:13px;border-bottom:1px solid rgba(0,0,0,.06)}
+.scratch .rw{display:flex;align-items:center;gap:8px;padding:9px 14px;font-size:12.5px;border-bottom:1px solid rgba(0,0,0,.05);height:0;padding-top:0;padding-bottom:0;opacity:0;overflow:hidden}
+.scratch .rw .t{margin-left:auto;font:500 11px var(--mono);color:#8a8272}
+.scratch .rw .img{width:26px;height:18px;border-radius:3px;background:linear-gradient(135deg,#cfd6e6,#9aa6c2)}
+.scratch .ft{display:flex;gap:6px;padding:10px 12px;font-size:11.5px}
+.scratch .ft span{padding:6px 9px;border-radius:7px;background:rgba(0,0,0,.05)}
+.scratch .ft span.new{background:var(--ink);color:#fff}
+.pill .pad.teal{background:var(--teal);color:#003}
+
+.video{position:absolute;inset:0;background:linear-gradient(135deg,#2a2f45,#141722);display:grid;place-items:center;color:#fff}
+.video .play{width:52px;height:36px;border-radius:10px;background:#ff0033;display:grid;place-items:center;font-size:14px}
+.video .ttl{position:absolute;left:14px;bottom:26px;font-weight:600;font-size:14px}
+.video .prog{position:absolute;left:14px;right:14px;bottom:12px;height:3px;background:rgba(255,255,255,.2);border-radius:2px}
+.video .prog i{display:block;height:100%;width:0;background:#ff0033;border-radius:2px}
+.card{position:absolute;right:5%;top:14%;width:44%;background:#fff;border-radius:12px;padding:12px 14px;box-shadow:0 30px 60px -20px rgba(0,0,0,.35),0 0 0 1px rgba(0,0,0,.05);font-size:12.5px;line-height:1.45;opacity:0;z-index:8}
+.card .k{font:600 10.5px var(--mono);color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+.card .l{color:#2a5bd7;font-weight:600;margin:4px 0}
+.card .r{background:#f3efff;border-radius:7px;padding:6px 8px;margin-top:6px}
+.later{position:absolute;inset:0;background:#0c0c0e;color:#fff;display:grid;place-items:center;font-size:22px;font-weight:650;letter-spacing:-.02em;opacity:0;z-index:9}
+
+.call{position:absolute;inset:28px 0 0 0;display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:8px;background:#1b1c20}
+.call div{border-radius:8px;background:#2a2c33;display:grid;place-items:center;color:#cfd0d6;font-weight:700;font-size:18px}
+.nt{position:absolute;right:5%;top:12%;z-index:8;display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:999px;background:#0c0c0e;color:#fff;font-size:12px;box-shadow:0 10px 24px -8px rgba(0,0,0,.5)}
+.nt .rec{width:8px;height:8px;border-radius:50%;background:#ff453a;animation:breathe 1.2s infinite alternate}
+.notes{position:absolute;left:50%;top:13%;translate:-50% 0;width:64%;height:62%;background:#fff;border-radius:12px;padding:16px 18px;box-shadow:0 30px 60px -24px rgba(0,0,0,.3);font-size:12.5px;line-height:1.5;opacity:0;overflow:hidden}
+.notes h4{margin:0 0 4px;font-size:11px;font-family:var(--mono);color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+.notes .it{opacity:0;display:flex;gap:7px;align-items:baseline;border-radius:6px;padding:1px 4px}
+.notes .it .cb{width:11px;height:11px;border:1.5px solid #bbb;border-radius:3px;flex:none;translate:0 1px}
+.notes .it.me{transition:background .2s}
+
+/* ---------- dictation / layer / pricing / close ---------- */
+.plain{padding:140px 5vw;max-width:1300px;margin:0 auto}
+.plain h2{font-size:clamp(34px,4vw,60px);line-height:1.02;max-width:780px}
+.plain .lede{font-size:19px;line-height:1.5;color:#4a4a50;max-width:620px;margin-top:18px}
+.apps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:48px}
+.app{background:#fff;border-radius:14px;box-shadow:0 20px 50px -30px rgba(0,0,0,.3),0 0 0 1px var(--line);overflow:hidden;min-height:170px}
+.app .bar{height:30px;display:flex;align-items:center;padding:0 12px;font-size:12px;color:#777;border-bottom:1px solid #eee;gap:8px}
+.app .tx{padding:14px;font-size:14px;line-height:1.5;min-height:80px}
+.app.term{background:#101114;color:#e8e8ea}.app.term .bar{border-color:#222;color:#999}.app.term .tx{font-family:var(--mono);font-size:13px}
+.caret::after{content:"";display:inline-block;width:2px;height:1em;background:currentColor;vertical-align:-2px;margin-left:1px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.facts{display:flex;gap:40px;margin-top:36px;flex-wrap:wrap}
+.facts div{font-size:15px;color:#4a4a50}.facts b{display:block;font-size:30px;color:var(--ink);letter-spacing:-.03em}
+.net{display:inline-flex;gap:8px;align-items:center;margin-top:22px;padding:7px 12px;border-radius:999px;background:#fff;box-shadow:0 0 0 1px var(--line);font:500 13px var(--mono)}
+.net .dot{background:var(--green)}.net.off .dot{background:var(--orange)}
+
+.layer-wrap{display:grid;grid-template-columns:1fr 1fr;gap:5vw;align-items:center;min-height:100vh;padding:90px 5vw;max-width:1400px;margin:0 auto}
+.layer-wrap h2{font-size:clamp(34px,4vw,60px);line-height:1.02}
+.layer-wrap ul{list-style:none;padding:0;margin:28px 0 0;display:flex;flex-direction:column;gap:14px;font-size:17px;line-height:1.45;color:#3d3d43}
+.layer-wrap li b{color:var(--ink)}
+.stack{height:520px;perspective:1400px;display:grid;place-items:center}
+.layers{position:relative;width:360px;height:240px;transform-style:preserve-3d;transform:rotateX(58deg) rotateZ(-38deg)}
+.layer{position:absolute;inset:0;border-radius:22px;display:flex;align-items:flex-end;padding:18px;font-weight:650;font-size:17px;letter-spacing:-.01em}
+.layer.mac1{background:#e6e8ef;box-shadow:0 0 0 1px rgba(0,0,0,.06);color:#666}
+.layer.ai{background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.08),0 30px 50px -20px rgba(0,0,0,.25)}
+.layer.ai img{width:22px;height:22px;border-radius:6px;margin-right:6px}
+.layer.um{background:linear-gradient(135deg,rgba(123,92,255,.92),rgba(0,210,224,.85));color:#fff;height:60px;inset:auto 0 0 0;top:90px;box-shadow:0 30px 60px -20px rgba(123,92,255,.6)}
+
+.pricing{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:44px}
+.price{background:#fff;border-radius:18px;padding:26px;box-shadow:0 0 0 1px var(--line);transition:transform .25s,box-shadow .25s}
+.price:hover{transform:translateY(-4px);box-shadow:0 30px 60px -30px rgba(0,0,0,.25),0 0 0 1px var(--line)}
+.price.hl{background:var(--ink);color:#fff}
+.price .n{font-weight:650}.price .p{font-size:40px;font-weight:700;letter-spacing:-.04em;margin:14px 0 6px}.price .d{font-size:14px;line-height:1.5;opacity:.7}
+
+.close{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 4vw;position:relative}
+.close h2{font-size:clamp(56px,10vw,170px);line-height:.92;letter-spacing:-.055em}
+.close h2 .w{display:inline-block}
+.close .pill{position:relative;left:auto;bottom:auto;translate:none;margin:46px auto 0}
+.close .pill .wave{transform:scaleY(.6)}
+footer{padding:30px 4vw 50px;display:flex;justify-content:space-between;font-size:13px;color:var(--dim);border-top:1px solid var(--line)}
+
+/* ---------- motion notes (probe only) ---------- */
+.note{position:absolute;z-index:40;right:18px;top:78px;width:300px;padding:12px 14px;border-radius:12px;background:#fff8c7;color:#3b3200;font-size:12.5px;line-height:1.45;box-shadow:0 12px 30px -12px rgba(0,0,0,.3);border:1px solid #efe08a}
+.note b{display:block;font:700 11px var(--mono);letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
+section{position:relative}
+body.nonotes .note{display:none}
+.notetoggle{position:fixed;left:16px;bottom:16px;z-index:60;padding:9px 14px;border-radius:999px;border:0;background:#fff8c7;box-shadow:0 8px 20px -8px rgba(0,0,0,.35),0 0 0 1px #efe08a;font:600 12px var(--mono);cursor:pointer}
+.probe-tag{position:fixed;right:16px;bottom:16px;z-index:60;padding:8px 12px;border-radius:999px;background:#111;color:#fff;font:600 11px var(--mono);opacity:.75}
+
+@media (max-width: 900px){
+  .chapter,.layer-wrap{grid-template-columns:1fr}
+  .apps,.pricing{grid-template-columns:1fr}
+  .keyrow{flex-wrap:wrap;justify-content:center}.bigkey{width:120px;height:96px}
+  .note{position:relative;right:auto;top:auto;width:auto;margin:0 5vw 16px}
+  nav.top .links a:not(.btn){display:none}
+  .caps .caption{font-size:12px}
+}
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <img src="../unmute-wordmark-black.png" alt="unmute" />
+  <div class="links"><a href="#chapters">Features</a><a href="#pricing">Pricing</a><a href="#">Manifesto</a><a class="btn sm" href="#"> Download</a></div>
+</nav>
+
+<!-- ============ 1. HERO ============ -->
+<section class="hero" id="hero">
+  <aside class="note" style="top:400px"><b>Motion · hero</b>Headline words rise in once. Below, a looping ~14s product film: keycap → the spoken sentence appears word-by-word → drains into the pill → a different outcome each beat (typed · started · saved · resumed). The outcome rail underneath lights in sync. Pauses when off-screen.</aside>
+  <p class="eyebrow philo">Have a thought? Say it right where you are.</p>
+  <h1 id="heroH1">Just unmute for everything.</h1>
+  <p class="sub">The best interface for Claude Code and Codex. Talk to them from anywhere on your Mac.</p>
+  <div class="ctas"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#chapters">Watch it work ↓</a></div>
+  <div class="works">works with <span><img src="../replica/assets/mark-claude.png" alt="" />Claude Code</span><span><img src="../replica/assets/mark-codex.png" alt="" />Codex</span></div>
+
+  <div class="stage" id="heroStage">
+    <div class="mac">
+      <div class="menubar"><span><b></b>&nbsp;&nbsp;Slack&nbsp;&nbsp;File&nbsp;&nbsp;Edit</span><span>Tue 9:41</span></div>
+      <div class="notch"><div class="row" id="hRowStart"><img src="../replica/assets/mark-claude.png" alt="" />pricing landing page<span class="dot breathe" style="margin-left:auto"></span></div><div class="row" id="hRowResume"><img src="../replica/assets/mark-codex.png" alt="" />landing page · resumed<span class="tick">✓</span></div></div>
+      <div class="win">
+        <div class="bar"><i></i><i></i><i></i><span id="hWinTitle">Slack — #launch</span></div>
+        <div class="panel on" id="hP1">
+          <div class="msg"><div class="av p"></div><div><b>Priya</b><br/>Design's done. Are we still good for Tuesday?</div></div>
+          <div class="msg"><div class="av"></div><div><b>Sam</b><br/>QA found two blockers 😬</div></div>
+          <div class="compose" id="hCompose"></div>
+        </div>
+        <div class="panel" id="hP2"><b style="font-size:15px">Pricing launch — brief</b><div class="skel" style="width:92%"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:86%"></div><div class="skel" style="width:60%"></div><div class="skel" style="width:74%"></div></div>
+        <div class="panel" id="hP3" style="padding:0"><div class="video"><div class="play">▶</div><div class="ttl">Onboarding teardown</div><div class="prog"><i style="width:38%"></i></div></div></div>
+        <div class="panel" id="hP4"><div style="font:12px/1.7 var(--mono);color:#555"><div>› Mon · landing page</div><div style="color:#999">  hero copy ✓ · nav ✓ · pricing section …</div><div style="margin-top:8px;color:#111">› next: the pricing section</div><div style="color:#2a8a3e">  picking up with full context…</div></div></div>
+      </div>
+      <div class="card" id="hSaved"><div class="k">Saved</div><div class="l">Onboarding teardown ↗</div><div class="r">“good onboarding example, for the redesign”</div></div>
+      <div class="caps"></div><div class="keys"></div>
+      <div class="pill"><span class="pad">✎</span><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="ok">✓</span></div>
+    </div>
+    <div class="outcomes"><span>typed</span><span>started</span><span>saved</span><span>resumed</span></div>
+  </div>
+</section>
+
+<!-- ============ 2. THE TRIP (philosophy) ============ -->
+<section class="trip" id="trip">
+  <aside class="note" style="top:auto;bottom:70px"><b>Motion · the trip (pinned, scrubbed) — the WHY</b>An idea appears. Then the real trip plays out step by step (leave what you're doing → open Claude Code/Codex → find the chat or ⌘N → type/dictate it all → drag screenshots in → press enter). A counter ticks up, and the idea bubble travels along the path, shrinking and blurring with every step until it's "…what was it again?" and a red line says it's the same trip every single time. Then the headline flips: same idea, one key, running in two seconds.</aside>
+  <div class="head"><h2 class="ha">A good idea shouldn't have<br/>to survive the trip.</h2><h2 class="hb">Or just say it where you are.</h2></div>
+  <div class="counter">0 steps · 0s</div>
+  <div class="path">
+    <div class="line"></div>
+    <div class="step"><div class="lab">01 · ⌘ tab</div><div class="t">Leave what you were doing</div><div class="viz"><span class="sq"></span><span class="sq"></span><span class="sq on"></span><span class="sq"></span><span class="sq"></span></div></div>
+    <div class="step"><div class="lab">02 · open</div><div class="t">Go to Claude Code or Codex</div><div class="viz"><img src="../replica/assets/mark-claude.png" alt="" style="width:26px;height:26px;border-radius:7px;margin:8px 6px 0 0"/><img src="../replica/assets/mark-codex.png" alt="" style="width:26px;height:26px;border-radius:7px;margin-top:8px;opacity:.5"/></div></div>
+    <div class="step"><div class="lab">03 · find it</div><div class="t">Find the right chat, or ⌘N a new one</div><div class="viz">onboarding v2?<br/>pricing fixes??<br/><b style="color:#111">+ New chat ⌘N</b></div></div>
+    <div class="step"><div class="lab">04 · explain</div><div class="t">Type or dictate the whole thing</div><div class="viz">so basically what I want is, like we discussed last week, the…</div></div>
+    <div class="step"><div class="lab">05 · screenshots</div><div class="t">Grab them from other windows, drag them in</div><div class="viz"><span class="box"></span></div></div>
+    <div class="step"><div class="lab">06 · ↵</div><div class="t">Finally, press enter</div><div class="viz" style="display:grid;place-items:center"><span style="font:700 13px var(--mono);padding:5px 14px;border-radius:7px;background:#fff;border:1px solid #d6d6da;box-shadow:0 2px 0 #cfcfd4">return ↵</span></div></div>
+  </div>
+  <div class="again">…and it's the same trip. Every. Single. Time.</div>
+  <div class="idea i1">let users export reports as CSV</div>
+  <div class="idea idea2">let users export reports as CSV</div>
+  <div class="caps"></div><div class="keys"></div>
+  <div class="pill"><span class="pad">✎</span><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="ok">✓</span></div>
+  <div class="result"><img src="../replica/assets/mark-claude.png" alt="" />Claude Code · export reports<span class="dot breathe"></span>running</div>
+</section>
+
+<!-- ============ 2b. EVERYWHERE ============ -->
+<section class="everywhere" id="everywhere">
+  <aside class="note"><b>Motion · everywhere (pinned, scrubbed) — the WHERE</b>The pill never moves. Behind it, the app keeps changing: Mail, Figma, Chrome, Slack, Finder. In each one: a key, one sentence, a result toast. The app list on top lights in sync. The point: Claude Code and Codex aren't inside an app anymore; they're at the level of your Mac.</aside>
+  <h2>Not an AI inside your app.<br/><span>Your AI, across your whole Mac.</span></h2>
+  <div class="applist"><span>Mail</span><span>Figma</span><span>Chrome</span><span>Slack</span><span>Finder</span></div>
+  <div class="stage"><div class="mac">
+    <div class="menubar"><span><b></b>&nbsp;&nbsp;<span class="appname">Mail</span></span><span>Tue 9:41</span></div>
+    <div class="notch"></div>
+    <div class="win"><div class="bar"><i></i><i></i><i></i><span class="wt">New Message</span></div>
+      <div class="panel on e0"><div style="color:#888">To: Priya &nbsp;·&nbsp; Re: launch date</div><div class="mailbody" style="margin-top:12px"></div></div>
+      <div class="panel e1" style="padding:0"><div class="figcanvas" style="inset:0"><div><b>Team</b><br/>$8.99/mo<br/><br/>▢ ▢ ▢</div></div></div>
+      <div class="panel e2"><b>Show HN: how we price team plans</b><div class="skel" style="width:90%;margin-top:12px"></div><div class="skel" style="width:76%"></div><div class="skel" style="width:84%"></div><div class="skel" style="width:58%"></div></div>
+      <div class="panel e3"><div class="msg"><div class="av p"></div><div><b>Priya</b><br/>Can you go through this thread and turn it into tasks? Need owners by Friday.</div></div><div class="msg"><div class="av"></div><div><b>Sam</b><br/>+1, 8 messages of chaos above 😅</div></div></div>
+      <div class="panel e4" style="padding:0"><div class="files"><div><i></i><span>Screenshot 09-12…</span></div><div><i></i><span>Screenshot 09-14…</span></div><div><i></i><span>Screenshot 09-02…</span></div><div><i></i><span>Screenshot 09-21…</span></div><div><i></i><span>Screenshot 09-07…</span></div><div><i></i><span>Screenshot 09-18…</span></div><div><i></i><span>Screenshot 09-11…</span></div><div><i></i><span>Screenshot 09-25…</span></div></div></div>
+    </div>
+    <div class="toast"></div>
+    <div class="caps"></div><div class="keys"></div>
+    <div class="pill"><span class="pad">✎</span><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="ok">✓</span></div>
+  </div></div>
+</section>
+
+<!-- ============ 3. THE KEYS ============ -->
+<section class="keysec" id="keys">
+  <aside class="note"><b>Motion · the keys (pinned)</b>Four keycaps. As you scroll, each one physically presses down and lights up, and its one-line meaning swaps in below. Teaches the whole product in one screen before the chapters.</aside>
+  <h2>Four keys. Everything else is your voice.</h2>
+  <div class="keyrow">
+    <div class="bigkey">fn<small>dictate</small></div>
+    <div class="bigkey">⌥ right<small>start</small></div>
+    <div class="bigkey">⌘ right ×2<small>unmute agent</small></div>
+    <div class="bigkey">⌘ left<small>capture</small></div>
+  </div>
+  <div class="keydesc">
+    <p><b>fn</b> — talk, and it types. Into any app, or straight into a running session.</p>
+    <p><b>right ⌥</b> — talk, and a Claude Code or Codex session starts. From anywhere.</p>
+    <p><b>right ⌘ twice</b> — talk to unmute itself. Save, find, pick things back up.</p>
+    <p><b>left ⌘</b> — screenshot mid-sentence. Words and picture arrive together.</p>
+  </div>
+</section>
+
+<div id="chapters"></div>
+
+<!-- ============ 4. START ANYTHING ============ -->
+<section class="chapter" id="chStart">
+  <aside class="note"><b>Motion · chapter (pinned, scrubbed)</b>Background app cycles Finder → browser → spreadsheet to say "from anywhere". Keycap ⌥ → sentence → drains into pill → a session panel slides up and starts writing, and the notch picks up a live dot. Left-side step list lights in sync.</aside>
+  <div class="copy">
+    <p class="eyebrow"><span class="kcap">right ⌥</span> start anything</p>
+    <h2>The session exists before the thought finishes.</h2>
+    <p>Wherever you are, one key and one sentence. A Claude Code or Codex session starts right there. No terminal, no window hunt.</p>
+    <div class="steps"><span>01 from any app</span><span>02 say it</span><span>03 it's running</span></div>
+  </div>
+  <div class="stage"><div class="mac">
+    <div class="menubar"><span><b></b>&nbsp;&nbsp;<span class="appname">Finder</span></span><span>Tue 9:41</span></div>
+    <div class="notch"><div class="row"><img src="../replica/assets/mark-claude.png" alt="" />csv parser<span class="dot breathe" style="margin-left:auto"></span></div></div>
+    <div class="win a1"><div class="bar"><i></i><i></i><i></i><span>Downloads</span></div><div class="body"><div class="skel" style="width:40%"></div><div class="skel" style="width:55%"></div><div class="skel" style="width:35%"></div><div class="skel" style="width:48%"></div></div></div>
+    <div class="win a2" style="opacity:0"><div class="bar"><i></i><i></i><i></i><span>news.ycombinator.com</span></div><div class="body"><div class="skel" style="width:90%"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:84%"></div></div></div>
+    <div class="win a3" style="opacity:0"><div class="bar"><i></i><i></i><i></i><span>sales_q3.csv — Numbers</span></div><div class="body" style="font:11px/1.9 var(--mono)">region, month, revenue<br/>EMEA, Jul, 41,200<br/>APAC, Jul, 38,950<br/>NA, Jul, 77,410<br/>…</div></div>
+    <div class="session"><div class="hd"><img src="../replica/assets/mark-claude.png" alt="" />Claude Code · csv parser</div>
+      <div class="ln u">› write a quick script to parse this csv</div><div class="ln">Reading sales_q3.csv…</div><div class="ln">Writing parse.py</div><div class="ln g">✓ 3 regions · 12 months parsed</div></div>
+    <div class="caps"></div><div class="keys"></div>
+    <div class="pill"><span class="pad">✎</span><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="ok">✓</span></div>
+  </div></div>
+</section>
+
+<!-- ============ 5. POCKET ============ -->
+<section class="chapter" id="chPocket">
+  <aside class="note"><b>Motion · chapter (pinned, scrubbed)</b>The notch widens into the Pocket and three sessions slide in with status dots (breathing = working, orange = your move). Selection glides to "auth service". fn → sentence → a message bubble flies up from the pill into that tab → "sent ✓". Then the Pocket drops open to show the chat. The editor behind never changes.</aside>
+  <div class="copy">
+    <p class="eyebrow"><span class="kcap">fn</span> the pocket</p>
+    <h2>Talk to any session without opening it.</h2>
+    <p>Every session sits in the notch. Pick one, press fn, say it. It lands there while you stay exactly where you are.</p>
+    <div class="steps"><span>01 every session, one glance</span><span>02 pick one, talk</span><span>03 it lands, you stay</span></div>
+  </div>
+  <div class="stage"><div class="mac">
+    <div class="menubar"><span><b></b>&nbsp;&nbsp;Code</span><span>Tue 9:41</span></div>
+    <div class="win"><div class="bar"><i></i><i></i><i></i><span>auth/refresh.ts</span></div><div class="body" style="font:11.5px/1.8 var(--mono)"><span style="color:#8250df">export async function</span> refreshToken(t) {<br/>&nbsp;&nbsp;<span style="color:#999">// TODO</span><br/>&nbsp;&nbsp;<span style="color:#8250df">const</span> res = <span style="color:#8250df">await</span> api.post(<span style="color:#0a7c3e">'/refresh'</span>, t)<br/>&nbsp;&nbsp;<span style="color:#8250df">return</span> res.token<br/>}</div></div>
+    <div class="pocket">
+      <div class="tabs">
+        <div class="tab"><img src="../replica/assets/mark-claude.png" alt="" />landing page<span class="dot breathe" style="margin-left:auto"></span></div>
+        <div class="tab" data-auth><img src="../replica/assets/mark-codex.png" alt="" />auth service<span class="dot orange" style="margin-left:auto"></span></div>
+        <div class="tab"><img src="../replica/assets/mark-claude.png" alt="" />csv parser<span class="st">done</span></div>
+      </div>
+      <div class="chat"><div class="b">Refresh flow is wired. Want tests next?</div><div class="b me">add a retry limit to the refresh call</div><div class="b">On it — adding maxRetries = 3 with backoff.</div></div>
+    </div>
+    <div class="flybubble">add a retry limit to the refresh call</div>
+    <div class="caps"></div><div class="keys"></div>
+    <div class="pill"><span class="pad">✎</span><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="ok">✓</span></div>
+  </div></div>
+</section>
+
+<!-- ============ 6. CAPTURE + SCRATCHPAD ============ -->
+<section class="chapter" id="chCapture">
+  <aside class="note"><b>Motion · chapter (pinned, scrubbed, longer)</b>Part A: mid-sentence, keycap "L-⌘ hold", a dashed box draws around the broken button, white flash, a thumbnail flies into the pill. Part B: the pencil turns teal (Scratchpad). Rows stack into the cream card ("Still transcribing…" → text + duration), a screenshot row joins, footer appears, "New task" presses, the whole pile collapses and flies into the notch as one task.</aside>
+  <div class="copy">
+    <p class="eyebrow"><span class="kcap">left ⌘</span> capture · scratchpad</p>
+    <h2>Show it. Think it through. Send it once.</h2>
+    <p>Grab a screenshot in the middle of a sentence. Or turn on Scratchpad and pause as long as you want. Thoughts pile up, then go as one.</p>
+    <div class="steps"><span>01 words + screenshot, one input</span><span>02 scratchpad: say, pause, add</span><span>03 send the whole pile</span></div>
+  </div>
+  <div class="stage"><div class="mac">
+    <div class="menubar"><span><b></b>&nbsp;&nbsp;Chrome</span><span>Tue 9:41</span></div>
+    <div class="notch"><div class="row"><img src="../replica/assets/mark-claude.png" alt="" />review: auth PR<span class="dot breathe" style="margin-left:auto"></span></div></div>
+    <div class="win"><div class="bar"><i></i><i></i><i></i><span>acme.app/settings</span></div><div class="body"><b>Profile settings</b><div class="skel" style="width:60%;margin-top:14px"></div><div class="skel" style="width:45%"></div></div></div>
+    <div class="savebtn">Save changes</div>
+    <div class="selbox"></div>
+    <div class="scratch"><div class="hd">Scratchpad</div>
+      <div class="rw"><span class="tx">Still transcribing…</span><span class="t">0:04</span></div>
+      <div class="rw"><span>Also, where's the retry limit?</span><span class="t">0:06</span></div>
+      <div class="rw"><span class="img"></span><span>Unmute-screenshot</span><span class="t">✕</span></div>
+      <div class="rw"><span>Section 4 contradicts section 2</span><span class="t">0:05</span></div>
+      <div class="ft"><span class="new">New task</span><span>Paste at cursor</span><span>Discard</span></div>
+    </div>
+    <div class="flash"></div>
+    <div class="caps"></div><div class="keys"></div>
+    <div class="pill"><span class="pad">✎</span><span class="thumb"></span><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="ok">✓</span></div>
+  </div></div>
+</section>
+
+<!-- ============ 7. AGENT ============ -->
+<section class="chapter" id="chAgent">
+  <aside class="note"><b>Motion · chapter (pinned, scrubbed)</b>A video plays (progress bar moves). Keycap "R-⌘ ×2" → "save this…" → a Saved card drops in with the reason highlighted. Screen cuts to black "Two weeks later". Different app, same key, "what was that onboarding video?" → the answer card returns the link AND the reason. Then "continue the landing page…" → notch shows it resumed.</aside>
+  <div class="copy">
+    <p class="eyebrow"><span class="kcap">right ⌘ ×2</span> unmute agent</p>
+    <h2>Save it with a reason. Ask for it later.</h2>
+    <p>No folders, no app to remember. Say why it matters, and weeks later ask for it in plain words. Or say "continue the landing page" and pick right back up.</p>
+    <div class="steps"><span>01 save, with why</span><span>02 ask, get it back</span><span>03 continue anything</span></div>
+  </div>
+  <div class="stage"><div class="mac">
+    <div class="menubar"><span><b></b>&nbsp;&nbsp;<span class="appname">YouTube</span></span><span>Tue 9:41</span></div>
+    <div class="notch"><div class="row"><img src="../replica/assets/mark-codex.png" alt="" />landing page · resumed<span class="tick">✓</span></div></div>
+    <div class="win"><div class="bar"><i></i><i></i><i></i><span class="wt">youtube.com</span></div>
+      <div class="panel on p1" style="padding:0"><div class="video"><div class="play">▶</div><div class="ttl">Onboarding teardown</div><div class="prog"><i></i></div></div></div>
+      <div class="panel p2"><b>Inbox</b><div class="skel" style="width:88%;margin-top:12px"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:52%"></div></div>
+    </div>
+    <div class="card c1"><div class="k">Saved</div><div class="l">Onboarding teardown ↗</div><div class="r">“good onboarding example, for the redesign”</div></div>
+    <div class="card c2"><div class="k">You saved this 2 weeks ago</div><div class="l">Onboarding teardown ↗</div><div class="r">You said: “good onboarding example, for the redesign”</div></div>
+    <div class="later">Two weeks later</div>
+    <div class="caps"></div><div class="keys"></div>
+    <div class="pill"><span class="pad">✎</span><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="ok">✓</span></div>
+  </div></div>
+</section>
+
+<!-- ============ 8. MEETINGS ============ -->
+<section class="chapter" id="chMeet">
+  <aside class="note"><b>Motion · chapter (pinned, scrubbed)</b>A call with the Notetaker capsule recording. Call ends → the notes sheet slides up and fills: summary, decisions, action items (staggered). Keycap "R-⌘ ×2" → "any follow-ups for me?" → your two items highlight. "Start a task for the first one" → that item lifts and flies into the notch as a running session.</aside>
+  <div class="copy">
+    <p class="eyebrow"><span class="kcap">one click</span> meetings</p>
+    <h2>The call ends. The work starts.</h2>
+    <p>Notetaker writes the summary, decisions and action items. Then just ask what's yours, and hand it straight to a session.</p>
+    <div class="steps"><span>01 notes, already written</span><span>02 "any follow-ups for me?"</span><span>03 "start the first one"</span></div>
+  </div>
+  <div class="stage"><div class="mac">
+    <div class="menubar"><span><b></b>&nbsp;&nbsp;Meet</span><span>Tue 9:41</span></div>
+    <div class="notch"><div class="row"><img src="../replica/assets/mark-claude.png" alt="" />onboarding copy<span class="dot breathe" style="margin-left:auto"></span></div></div>
+    <div class="win"><div class="bar"><i></i><i></i><i></i><span>Onboarding redesign — call</span></div><div class="call"><div>AP</div><div>SM</div><div>PR</div><div>JL</div></div></div>
+    <div class="nt"><span class="rec"></span>Notetaker · 03:41</div>
+    <div class="notes">
+      <h4>Summary</h4><div class="it">Agreed to ship the new onboarding in two steps; keep the old flow for enterprise.</div>
+      <h4 style="margin-top:10px">Decisions</h4><div class="it">• Drop the email-verify wall</div><div class="it">• Three screens, not five</div>
+      <h4 style="margin-top:10px">Action items</h4>
+      <div class="it me a1"><span class="cb"></span>Arpit — rewrite onboarding copy</div>
+      <div class="it"><span class="cb"></span>Sam — update analytics events</div>
+      <div class="it me"><span class="cb"></span>Arpit — share Figma with Priya</div>
+    </div>
+    <div class="caps"></div><div class="keys"></div>
+    <div class="pill"><span class="pad">✎</span><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="ok">✓</span></div>
+  </div></div>
+</section>
+
+<!-- ============ 9. AND IT DICTATES ============ -->
+<section class="plain" id="dictate">
+  <aside class="note"><b>Motion · autoplay when in view</b>Text types into three apps one after another. During the middle one, the network badge flips to "offline · on-device" and typing just keeps going. Short, confident, not the headline.</aside>
+  <p class="eyebrow">// and yes, it dictates</p>
+  <h2>Under a second to text. Even with the Wi-Fi off.</h2>
+  <p class="lede">Press fn anywhere. Ten seconds or ten minutes, same speed. If the network drops mid-word it falls back on-device without you noticing.</p>
+  <div class="net" id="net"><span class="dot"></span><span id="netTx">online · cloud</span></div>
+  <div class="apps">
+    <div class="app"><div class="bar"> Mail — Re: launch</div><div class="tx" data-t="Hey Priya, Thursday works. I'll send the final copy tonight."></div></div>
+    <div class="app"><div class="bar"> Notes</div><div class="tx" data-t="pricing: test annual-first on the team plan, ask Sam about churn data"></div></div>
+    <div class="app term"><div class="bar">› claude</div><div class="tx" data-t="refactor the auth middleware and keep the public API the same"></div></div>
+  </div>
+  <div class="facts"><div><b>&lt; 1s</b>speech to text</div><div><b>On-device</b>fallback, automatic</div><div><b>$0</b>offline dictation, no account</div></div>
+</section>
+
+<!-- ============ 10. A LAYER ============ -->
+<section class="layer-wrap" id="layer">
+  <aside class="note"><b>Motion · scroll-scrubbed 3D</b>Three flat slabs (your Mac → Claude Code/Codex → unmute) start stacked as one, then separate in 3D as you scroll, so you literally see unmute as a thin layer on top of what you already use.</aside>
+  <div>
+    <p class="eyebrow">// a layer, not a replacement</p>
+    <h2>We didn't build another AI. We gave yours ears.</h2>
+    <ul>
+      <li><b>Your sessions stay yours.</b> Start one the normal way and it behaves exactly like it always has.</li>
+      <li><b>Runs on your subscription.</b> Claude Code or Codex, the ones you already pay for.</li>
+      <li><b>Nothing to switch.</b> No new app to live in, nothing new to trust.</li>
+    </ul>
+  </div>
+  <div class="stack"><div class="layers">
+    <div class="layer mac1">your Mac</div>
+    <div class="layer ai"><img src="../replica/assets/mark-claude.png" alt="" /><img src="../replica/assets/mark-codex.png" alt="" />Claude Code · Codex</div>
+    <div class="layer um">unmute</div>
+  </div></div>
+</section>
+
+<!-- ============ 11. PRICING ============ -->
+<section class="plain" id="pricing">
+  <aside class="note"><b>Motion · light</b>Cards rise in with a stagger; hover lifts. Nothing more — this section should feel calm. (Prices copied from prod; need confirming.)</aside>
+  <p class="eyebrow">// pricing</p>
+  <h2>Simple. Cheaper than one lunch.</h2>
+  <div class="pricing">
+    <div class="price"><div class="n">Offline dictation</div><div class="p">$0</div><div class="d">No account. On your Mac. Forever.</div></div>
+    <div class="price"><div class="n">Dictation</div><div class="p">$5.99<small style="font-size:15px">/mo</small></div><div class="d">Cloud dictation, fastest on the Mac.</div></div>
+    <div class="price hl"><div class="n">unmute</div><div class="p">$8.99<small style="font-size:15px">/mo</small></div><div class="d">Everything: sessions, pocket, agent, scratchpad, meetings.</div></div>
+  </div>
+</section>
+
+<!-- ============ 12. CLOSE ============ -->
+<section class="close" id="close">
+  <aside class="note"><b>Motion · scroll-scrubbed</b>The sign-off rises word by word as you arrive, and the pill underneath is gently "listening". Ends on the download button.</aside>
+  <h2 id="closeH">Just unmute for everything.</h2>
+  <div class="pill"><span class="pad">✎</span><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="ok">✓</span></div>
+  <div style="display:flex;gap:12px;margin-top:40px"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#">Book 15 minutes</a></div>
+</section>
+<footer><span>© 2026 unmute</span><span>dictation · remote · pricing · manifesto · privacy · terms</span></footer>
+
+<button class="notetoggle" id="noteToggle">motion notes: on</button>
+<div class="probe-tag">MOCK · throwaway probe</div>
+
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollTrigger.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/TextPlugin.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lenis@1.3.4/dist/lenis.min.js"></script>
+<script>
+gsap.registerPlugin(ScrollTrigger, TextPlugin);
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// smooth scroll — the "fluid" feel
+if (!reduce) {
+  const lenis = new Lenis({ lerp: 0.09 });
+  lenis.on('scroll', ScrollTrigger.update);
+  gsap.ticker.add(t => lenis.raf(t * 1000));
+  gsap.ticker.lagSmoothing(0);
+}
+ScrollTrigger.create({ start: 40, onToggle: s => $('nav.top').classList.toggle('scrolled', s.isActive) });
+$('#noteToggle').onclick = () => { const off = document.body.classList.toggle('nonotes'); $('#noteToggle').textContent = 'motion notes: ' + (off ? 'off' : 'on'); ScrollTrigger.refresh(); };
+
+gsap.defaults({ ease: 'power2.inOut' });           // one motion language everywhere
+const splitWords = (el, text) => { el.innerHTML = (text ?? el.textContent).split(' ').map(w => `<span class="w">${w}</span>`).join(' '); return $$('.w', el); };
+
+/* ---- shared scene verbs ---- */
+function key(tl, stage, label, at) {
+  const k = document.createElement('div'); k.className = 'kc'; k.textContent = label; $('.keys', stage).append(k);
+  tl.fromTo(k, { opacity: 0, scale: .7, y: 8 }, { opacity: 1, scale: 1, y: 0, duration: .25, ease: 'back.out(2)' }, at)
+    .to(k, { y: 3, boxShadow: '0 0 0 #cfcfd4', duration: .08 })
+    .to(k, { y: 0, boxShadow: '0 3px 0 #cfcfd4', duration: .1 });
+  return k;
+}
+function say(tl, stage, text, { hold = .5, after } = {}) {
+  const pill = $('.pill', stage), wave = $('.wave', pill);
+  const c = document.createElement('div'); c.className = 'caption'; $('.caps', stage).append(c);
+  const ws = splitWords(c, text);
+  tl.set(c, { opacity: 1 })
+    .to(wave, { scaleY: 1, duration: .2 }, '<')
+    .fromTo(ws, { opacity: 0, y: 6, filter: 'blur(4px)' }, { opacity: 1, y: 0, filter: 'blur(0px)', stagger: .06, duration: .3, ease: 'power2.out' }, '<')
+    .to(c, { y: 36, scale: .45, opacity: 0, filter: 'blur(3px)', duration: .4, ease: 'power2.in' }, `+=${hold}`)
+    .to(pill, { scale: 1.07, duration: .12 }, '-=.08')
+    .to(pill, { scale: 1, duration: .2 })
+    .to(wave, { scaleY: .25, duration: .2 }, '<');
+  if (after) $$('.kc', stage).forEach(k => tl.to(k, { opacity: 0, duration: .2 }, '<'));
+  return c;
+}
+const hideKeys = (tl, stage) => tl.to($$('.kc', stage), { opacity: 0, duration: .2 }, '<');
+const steps = (tl, sec, i) => { const s = $$('.steps span', sec); tl.set(s, { color: (j) => j <= i ? '#111113' : '#b0b0b6' }, '<'); };
+
+/* ---- 1. hero ---- */
+gsap.from(splitWords($('#heroH1')), { y: 60, opacity: 0, rotate: 3, stagger: .08, duration: .9, ease: 'power4.out', delay: .1 });
+gsap.from(['.hero .philo', '.hero .sub', '.hero .ctas', '.works', '#heroStage'], { y: 24, opacity: 0, stagger: .1, duration: .8, ease: 'power3.out', delay: .5 });
+(() => {
+  const st = $('#heroStage'), outs = $$('.outcomes span');
+  const on = i => tl.call(() => outs.forEach((o, j) => o.classList.toggle('on', i === j)));
+  const panel = (id, title) => { tl.to($$('.panel', st), { opacity: 0, duration: .3 }).to('#' + id, { opacity: 1, duration: .3 }, '<'); tl.set('#hWinTitle', { text: title }, '<'); };
+  const tl = gsap.timeline({ repeat: -1, repeatDelay: .6, delay: 1.2 });
+  // beat 1 — typed
+  on(0); key(tl, st, 'fn'); say(tl, st, 'can we push the launch to Thursday?'); hideKeys(tl, st);
+  tl.to('#hCompose', { text: 'can we push the launch to Thursday?', duration: .8, ease: 'none' }).to({}, { duration: 1 });
+  // beat 2 — started
+  panel('hP2', 'Docs — Pricing launch brief'); on(1);
+  key(tl, st, 'R-⌥'); say(tl, st, 'build a landing page for the pricing launch'); hideKeys(tl, st);
+  tl.to($('.notch', st), { width: 300, height: 34, duration: .3 }).to('#hRowStart', { opacity: 1, duration: .2 }).to({}, { duration: 1.2 });
+  // beat 3 — saved
+  tl.to('#hRowStart', { opacity: 0, duration: .15 }).to($('.notch', st), { width: 170, height: 26, duration: .25 });
+  panel('hP3', 'YouTube — Onboarding teardown'); on(2);
+  key(tl, st, 'R-⌘ ×2'); say(tl, st, 'save this — good onboarding example, for the redesign'); hideKeys(tl, st);
+  tl.fromTo('#hSaved', { opacity: 0, y: -14, scale: .96 }, { opacity: 1, y: 0, scale: 1, duration: .35, ease: 'back.out(1.6)' }).to({}, { duration: 1.2 }).to('#hSaved', { opacity: 0, duration: .25 });
+  // beat 4 — resumed
+  panel('hP4', 'Codex — landing page'); on(3);
+  key(tl, st, 'R-⌘ ×2'); say(tl, st, 'continue the landing page from Monday'); hideKeys(tl, st);
+  tl.to($('.notch', st), { width: 290, height: 34, duration: .3 }).to('#hRowResume', { opacity: 1, duration: .2 }).to({}, { duration: 1.4 })
+      .to('#hRowResume', { opacity: 0, duration: .15 }).to($('.notch', st), { width: 170, height: 26, duration: .25 })
+    .set('#hCompose', { text: '' }); panel('hP1', 'Slack — #launch');
+  ScrollTrigger.create({ trigger: st, start: 'top bottom', end: 'bottom top', onToggle: s => s.isActive ? tl.play() : tl.pause() });
+})();
+
+/* ---- pinned/scrubbed chapter helper: pins on desktop, plays-on-enter on mobile ---- */
+const mm = gsap.matchMedia();
+function scene(sel, length, build) {
+  const sec = $(sel);
+  mm.add({ desk: '(min-width: 901px) and (prefers-reduced-motion: no-preference)', mob: '(max-width: 900px) and (prefers-reduced-motion: no-preference)' }, ctx => {
+    $$('.caps, .keys', sec).forEach(e => e.innerHTML = '');
+    const tl = ctx.conditions.desk
+      ? gsap.timeline({ scrollTrigger: { trigger: sec, pin: true, start: 'top top', end: '+=' + length, scrub: .8, invalidateOnRefresh: true } })
+      : gsap.timeline({ scrollTrigger: { trigger: sec, start: 'top 55%', toggleActions: 'play none none reverse' } });
+    build(tl, sec);
+  });
+}
+
+/* ---- 2. the trip ---- */
+scene('#trip', 3400, (tl, sec) => {
+  const stepsEl = $$('.step', sec), idea = $('.i1', sec), idea2 = $('.idea2', sec), counter = $('.counter', sec), pill = $('.pill', sec);
+  const centerX = (el) => { const r = el.getBoundingClientRect(), s = sec.getBoundingClientRect(); return r.left - s.left + r.width / 2 - idea.offsetWidth / 2; };
+  const secsAt = [3, 8, 17, 41, 58, 60], c = { s: 0, t: 0 };
+  const paint = () => counter.textContent = `${Math.round(c.s)} steps · ${Math.round(c.t)}s`;
+  tl.from($('.ha', sec), { y: 30, opacity: 0, duration: .5 })
+    .fromTo(idea, { opacity: 0, scale: .6, x: () => centerX(stepsEl[0]) }, { opacity: 1, scale: 1, duration: .4, ease: 'back.out(2)' })
+    .to($('.line', sec), { scaleX: 1, duration: 3.6, ease: 'none' }, '+=.1');
+  stepsEl.forEach((st, i) => {
+    tl.fromTo(st, { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: .35, ease: 'power3.out' }, i === 0 ? '<' : '>+.15')
+      .to(idea, { x: () => centerX(st), scale: 1 - i * .09, opacity: 1 - i * .13, filter: `blur(${i * .9}px)`, duration: .45 }, '<')
+      .to(c, { s: i + 1, t: secsAt[i], duration: .35, ease: 'none', onUpdate: paint }, '<');
+  });
+  tl.set(idea, { text: '…what was it again?' }, '+=.2')
+    .to(idea, { opacity: .25, duration: .3 })
+    .fromTo($('.again', sec), { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .4 })
+    .to({}, { duration: .9 })
+    .to($('.again', sec), { opacity: 0, duration: .25 })
+    // flip: the other way
+    .to([...stepsEl, $('.line', sec)], { opacity: 0, y: 30, stagger: .04, duration: .4 })
+    .to(idea, { opacity: 0, duration: .2 }, '<')
+    .to($('.ha', sec), { opacity: 0, y: -20, duration: .3 }, '<')
+    .fromTo($('.hb', sec), { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: .35 })
+    .set(counter, { text: '0 steps · 0s' }, '<')
+    .fromTo(idea2, { opacity: 0, scale: .6 }, { opacity: 1, scale: 1, duration: .35, ease: 'back.out(2)' })
+    .to(pill, { opacity: 1, duration: .3 }, '<');
+  key(tl, sec, 'R-⌥');
+  tl.to(idea2, { opacity: 0, y: 20, duration: .25 });
+  say(tl, sec, 'let users export reports as CSV', { hold: .3 });
+  hideKeys(tl, sec);
+  tl.fromTo($('.result', sec), { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .35, ease: 'back.out(1.6)' })
+    .set(counter, { text: '1 sentence · 2s', color: '#1d7a3a' }, '<')
+    .to(counter, { scale: 1.12, duration: .15 }, '<').to(counter, { scale: 1, duration: .2 })
+    .to({}, { duration: .6 });
+});
+
+/* ---- 2b. everywhere ---- */
+scene('#everywhere', 3600, (tl, sec) => {
+  const st = $('.stage', sec), names = $$('.applist span', sec), panels = $$('.panel', sec), toast = $('.toast', sec);
+  const beats = [
+    ['Mail', 'New Message', 'fn', "Thursday works, I'll send the final copy tonight.", '✓ typed into Mail'],
+    ['Figma', 'Figma — Pricing', 'R-⌥', 'turn this frame into a React component', '✓ Claude Code session started'],
+    ['Chrome', 'news.ycombinator.com', 'R-⌘ ×2', 'save this — useful for our team plan pricing', '✓ saved, with your reason'],
+    ['Slack', 'Slack — #launch', 'R-⌥', 'go through this thread and turn it into tasks', '✓ 4 tasks created'],
+    ['Finder', 'Downloads', 'R-⌥', 'rename these screenshots by date', '✓ Codex session started'],
+  ];
+  beats.forEach(([app, title, k, line, res], i) => {
+    tl.set(names, { color: (j) => j === i ? '#111113' : '#b3b3b8' });
+    if (i > 0) tl.to(panels, { opacity: 0, duration: .25 }).fromTo(panels[i], { opacity: 0, scale: .98 }, { opacity: 1, scale: 1, duration: .3 }, '<');
+    tl.set($('.appname', sec), { text: app }, '<').set($('.wt', sec), { text: title }, '<');
+    key(tl, st, k); say(tl, st, line, { hold: .3 }); hideKeys(tl, st);
+    if (i === 0) tl.to($('.mailbody', sec), { text: line, duration: .6, ease: 'none' });
+    tl.set(toast, { text: res }).fromTo(toast, { opacity: 0, y: -10 }, { opacity: 1, y: 0, duration: .25, ease: 'back.out(1.8)' })
+      .to(toast, { opacity: 0, duration: .2 }, '+=.7');
+  });
+  tl.set(names, { color: '#111113' });
+});
+
+/* ---- 3. keys ---- */
+scene('#keys', 2200, (tl, sec) => {
+  const keys = $$('.bigkey', sec), ds = $$('.keydesc p', sec);
+  tl.from(keys, { y: 30, opacity: 0, stagger: .1, duration: .4 });
+  keys.forEach((k, i) => {
+    tl.to(keys, { opacity: (j) => j === i ? 1 : .45, duration: .2 })
+      .to(k, { y: 5, boxShadow: '0 1px 0 #d2d2d8', backgroundColor: '#111113', color: '#fff', duration: .25 }, '<')
+      .fromTo(ds[i], { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .3 }, '<')
+      .to({}, { duration: .5 })
+      .to(k, { y: 0, boxShadow: '0 6px 0 #d2d2d8', backgroundColor: '#fff', color: '#aaa', duration: .25 })
+      .to(ds[i], { opacity: 0, y: -14, duration: .25 }, '<');
+  });
+  tl.to(keys, { opacity: 1, duration: .2 });
+});
+
+/* ---- 4. start anything ---- */
+scene('#chStart', 2400, (tl, sec) => {
+  const st = $('.stage', sec), app = $('.appname', sec);
+  steps(tl, sec, 0);
+  tl.to($('.a1', sec), { opacity: 0, scale: .97, duration: .3 }, '+=.3').set(app, { text: 'Chrome' }).to($('.a2', sec), { opacity: 1, duration: .3 }, '<')
+    .to($('.a2', sec), { opacity: 0, scale: .97, duration: .3 }, '+=.3').set(app, { text: 'Numbers' }).to($('.a3', sec), { opacity: 1, duration: .3 }, '<');
+  steps(tl, sec, 1);
+  key(tl, st, 'R-⌥'); say(tl, st, 'write a quick script to parse this csv'); hideKeys(tl, st);
+  steps(tl, sec, 2);
+  tl.fromTo($('.session', sec), { opacity: 0, y: 40, scale: .96 }, { opacity: 1, y: 0, scale: 1, duration: .4, ease: 'power3.out' })
+    .to($$('.session .ln', sec), { opacity: 1, stagger: .25, duration: .2 })
+    .to($('.notch', sec), { width: 260, height: 34, duration: .3 }, '<')
+    .to($('.notch .row', sec), { opacity: 1, duration: .2 });
+});
+
+/* ---- 5. pocket ---- */
+scene('#chPocket', 2600, (tl, sec) => {
+  const st = $('.stage', sec), pocket = $('.pocket', sec), tabs = $$('.tab', sec), auth = $('[data-auth]', sec);
+  steps(tl, sec, 0);
+  tl.to(pocket, { height: 72, width: '72%', duration: .4 })
+    .to($('.tabs', sec), { opacity: 1, duration: .2 })
+    .from(tabs, { y: -10, opacity: 0, stagger: .1, duration: .25 }, '<');
+  steps(tl, sec, 1);
+  const selOn = { borderColor: '#ffffff', backgroundColor: '#232327', duration: .15 }, selOff = { borderColor: 'rgba(0,0,0,0)', backgroundColor: '#18181b', duration: .15 };
+  tl.to(tabs[0], selOn, '+=.2').to(tabs[0], selOff, '+=.3').to(auth, selOn);
+  key(tl, st, 'fn'); say(tl, st, 'add a retry limit to the refresh call'); hideKeys(tl, st);
+  steps(tl, sec, 2);
+  tl.fromTo($('.flybubble', sec), { opacity: 1, y: 0, scale: 1 }, { y: () => -(st.offsetHeight * .72), scale: .5, opacity: 0, duration: .6, ease: 'power2.in' })
+    .to($('.st, .dot.orange', auth), { opacity: 0, duration: .1 })
+    .to(auth, { borderColor: '#30D158', duration: .2 })
+    .to(pocket, { height: '62%', duration: .45, ease: 'power3.inOut' }, '+=.2')
+    .to($('.chat', sec), { opacity: 1, duration: .3 });
+});
+
+/* ---- 6. capture + scratchpad ---- */
+scene('#chCapture', 3600, (tl, sec) => {
+  const st = $('.stage', sec), pad = $('.pill .pad', sec), rows = $$('.scratch .rw', sec);
+  steps(tl, sec, 0);
+  key(tl, st, 'R-⌥');
+  const c = say(tl, st, 'this button is supposed to save. nothing happens —', { hold: .2 });
+  key(tl, st, 'L-⌘ hold');
+  tl.to($('.selbox', sec), { width: '24%', height: '15%', duration: .5, ease: 'power1.inOut' })
+    .to($('.flash', sec), { opacity: .8, duration: .06 }).to($('.flash', sec), { opacity: 0, duration: .25 })
+    .to($('.selbox', sec), { opacity: 0, duration: .2 })
+    .to($('.pill .thumb', sec), { width: 34, duration: .3, ease: 'back.out(2)' }, '<');
+  hideKeys(tl, st);
+  steps(tl, sec, 1);
+  tl.to($('.pill .thumb', sec), { width: 0, duration: .2 }, '+=.4')
+    .to(pad, { backgroundColor: '#00D2E0', color: '#003', duration: .15 }).to(pad, { scale: 1.3, duration: .12 }).to(pad, { scale: 1, duration: .2 })
+    .fromTo($('.scratch', sec), { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: .35 });
+  key(tl, st, 'fn'); say(tl, st, 'no null check here');
+  tl.to(rows[0], { height: 36, paddingTop: 9, paddingBottom: 9, opacity: 1, duration: .3 }).to($('.tx', rows[0]), { text: 'No null check here', duration: .3 }, '+=.3');
+  say(tl, st, "also, where's the retry limit?");
+  tl.to(rows[1], { height: 36, paddingTop: 9, paddingBottom: 9, opacity: 1, duration: .3 });
+  key(tl, st, 'L-⌘ hold');
+  tl.to(rows[2], { height: 36, paddingTop: 9, paddingBottom: 9, opacity: 1, duration: .3 });
+  say(tl, st, 'section 4 contradicts section 2');
+  tl.to(rows[3], { height: 36, paddingTop: 9, paddingBottom: 9, opacity: 1, duration: .3 });
+  hideKeys(tl, st);
+  steps(tl, sec, 2);
+  tl.to($('.ft .new', sec), { scale: .92, duration: .1 }, '+=.3').to($('.ft .new', sec), { scale: 1, duration: .15 })
+    .to(rows, { height: 0, paddingTop: 0, paddingBottom: 0, opacity: 0, stagger: .05, duration: .25 })
+    .to($('.scratch', sec), { x: () => -st.offsetWidth * .3, y: () => -st.offsetHeight * .1, scale: .15, opacity: 0, duration: .5, ease: 'power3.in' })
+    .to($('.notch', sec), { width: 250, height: 34, duration: .3 }).to($('.notch .row', sec), { opacity: 1, duration: .2 });
+});
+
+/* ---- 7. agent ---- */
+scene('#chAgent', 3000, (tl, sec) => {
+  const st = $('.stage', sec);
+  steps(tl, sec, 0);
+  tl.to($('.prog i', sec), { width: '46%', duration: 1, ease: 'none' });
+  key(tl, st, 'R-⌘ ×2'); say(tl, st, 'save this — good onboarding example, for the redesign'); hideKeys(tl, st);
+  tl.fromTo($('.c1', sec), { opacity: 0, y: -14 }, { opacity: 1, y: 0, duration: .35, ease: 'back.out(1.6)' })
+    .to($('.c1 .r', sec), { backgroundColor: '#e2d9ff', duration: .3 })
+    .to($('.later', sec), { opacity: 1, duration: .3 }, '+=.4').set($('.c1', sec), { opacity: 0 })
+    .set($('.p1', sec), { opacity: 0 }).set($('.p2', sec), { opacity: 1 }).set($('.appname', sec), { text: 'Mail' }).set($('.wt', sec), { text: 'Mail — Inbox' })
+    .to($('.later', sec), { opacity: 0, duration: .3 }, '+=.5');
+  steps(tl, sec, 1);
+  key(tl, st, 'R-⌘ ×2'); say(tl, st, 'what was that onboarding video I saved?'); hideKeys(tl, st);
+  tl.fromTo($('.c2', sec), { opacity: 0, y: -14 }, { opacity: 1, y: 0, duration: .35, ease: 'back.out(1.6)' })
+    .to($('.c2 .r', sec), { backgroundColor: '#e2d9ff', duration: .3 });
+  steps(tl, sec, 2);
+  tl.to($('.c2', sec), { opacity: 0, duration: .25 }, '+=.4');
+  key(tl, st, 'R-⌘ ×2'); say(tl, st, 'continue the landing page from Monday'); hideKeys(tl, st);
+  tl.to($('.notch', sec), { width: 290, height: 34, duration: .3 }).to($('.notch .row', sec), { opacity: 1, duration: .2 });
+});
+
+/* ---- 8. meetings ---- */
+scene('#chMeet', 3000, (tl, sec) => {
+  const st = $('.stage', sec), items = $$('.notes .it', sec), mine = $$('.notes .it.me', sec);
+  steps(tl, sec, 0);
+  tl.to($('.call', sec), { opacity: .2, duration: .4 }, '+=.3').to($('.nt', sec), { opacity: 0, y: -10, duration: .3 }, '<')
+    .fromTo($('.notes', sec), { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: .4, ease: 'power3.out' })
+    .to(items, { opacity: 1, stagger: .15, duration: .2 });
+  steps(tl, sec, 1);
+  key(tl, st, 'R-⌘ ×2'); say(tl, st, 'any follow-ups for me from that call?'); hideKeys(tl, st);
+  tl.to(mine, { backgroundColor: '#efe9ff', stagger: .15, duration: .25 });
+  steps(tl, sec, 2);
+  key(tl, st, 'R-⌘ ×2'); say(tl, st, 'start a task for the first one'); hideKeys(tl, st);
+  tl.to($('.a1', sec), { y: () => -st.offsetHeight * .42, scale: .6, opacity: 0, duration: .55, ease: 'power3.in' })
+    .to($('.notch', sec), { width: 260, height: 34, duration: .3 }).to($('.notch .row', sec), { opacity: 1, duration: .2 });
+});
+
+/* ---- 9. dictation: autoplay loop in view ---- */
+(() => {
+  const txs = $$('#dictate .tx'), net = $('#net');
+  const tl = gsap.timeline({ repeat: -1, repeatDelay: 1.2, paused: true });
+  txs.forEach((t, i) => {
+    tl.set(t, { text: '' }).call(() => t.classList.add('caret'));
+    if (i === 1) tl.call(() => { net.classList.add('off'); $('#netTx').textContent = 'offline · on-device'; });
+    tl.to(t, { text: t.dataset.t, duration: t.dataset.t.length * .03, ease: 'none' }).call(() => t.classList.remove('caret'));
+    if (i === 1) tl.call(() => { net.classList.remove('off'); $('#netTx').textContent = 'online · cloud'; }, null, '+=.3');
+  });
+  tl.set(txs, { text: '' }, '+=2');
+  ScrollTrigger.create({ trigger: '#dictate', start: 'top 70%', end: 'bottom top', onToggle: s => s.isActive ? tl.play() : tl.pause() });
+})();
+
+/* ---- 10. layer: 3D separation, scrubbed ---- */
+gsap.timeline({ scrollTrigger: { trigger: '#layer', start: 'top 70%', end: 'center 40%', scrub: .8 } })
+  .fromTo('.layer.ai', { z: 0 }, { z: 70 })
+  .fromTo('.layer.um', { z: 0, opacity: .3 }, { z: 150, opacity: 1 }, '<')
+  .fromTo('.layers', { rotateZ: -20 }, { rotateZ: -38 }, '<');
+
+/* ---- 11/12. pricing + close ---- */
+gsap.from('.price', { scrollTrigger: { trigger: '.pricing', start: 'top 80%' }, y: 40, opacity: 0, stagger: .12, duration: .7, ease: 'power3.out' });
+gsap.from(splitWords($('#closeH')), { scrollTrigger: { trigger: '#close', start: 'top 80%', end: 'center center', scrub: .8 }, y: 120, opacity: 0, stagger: .15 });
+</script>
+</body>
+</html>

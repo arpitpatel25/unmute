@@ -1,0 +1,18 @@
+{
+  "fakeNotch": "200x34",
+  "steps": [
+    { "send": [{ "type": "setState", "state": "idle", "attention": 0, "working": 1 }], "wait": 900, "shot": "01-idle-working1" },
+    { "send": [{ "type": "setState", "state": "active", "attention": 0, "working": 2 }], "wait": 900, "shot": "02-active-working2" },
+    { "send": [{ "type": "setState", "state": "attention", "attention": 1, "working": 1 }], "wait": 900, "shot": "03-attention" },
+    { "send": [{ "type": "pocket", "data": { "mode": "closed", "at": 0, "waiting": 1, "remoteKey": "right-option", "slots": [
+        { "id": "agent", "title": "Unmute Agent", "kind": "agent", "status": "ready", "demanding": false },
+        { "id": "t1", "title": "landing page", "status": "processing", "demanding": false, "backend": "claude", "terminal": false },
+        { "id": "t2", "title": "auth service", "status": "needs-user", "ask": "Should the refresh retry on 401?", "demanding": true, "backend": "codex", "terminal": false },
+        { "id": "t3", "title": "csv parser", "status": "done", "demanding": false, "backend": "claude", "terminal": false } ] } }], "wait": 900, "shot": "04-pocket-closed" },
+    { "send": [{ "type": "pocket", "data": { "mode": "open", "at": 2, "waiting": 1, "remoteKey": "right-option", "slots": [
+        { "id": "agent", "title": "Unmute Agent", "kind": "agent", "status": "ready", "demanding": false },
+        { "id": "t1", "title": "landing page", "status": "processing", "demanding": false, "backend": "claude", "terminal": false },
+        { "id": "t2", "title": "auth service", "status": "needs-user", "ask": "Should the refresh retry on 401?", "demanding": true, "backend": "codex", "terminal": false },
+        { "id": "t3", "title": "csv parser", "status": "done", "demanding": false, "backend": "claude", "terminal": false } ] } }], "wait": 1200, "shot": "05-pocket-open" }
+  ]
+}

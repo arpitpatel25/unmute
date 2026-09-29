@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../ui/wallpaper.css">
+<style>body{margin:0;background:#222;font:12px -apple-system;color:#fff;display:grid;grid-template-columns:repeat(3,480px);gap:8px;padding:8px}
+.s{position:relative;width:480px;height:300px;overflow:hidden}.scr{position:absolute;left:0;top:0;width:1440px;height:900px;transform:scale(.3333);transform-origin:0 0}
+.scr img{position:absolute}.l{position:absolute;left:4px;bottom:3px;background:#0009;padding:1px 5px;border-radius:4px}</style></head><body>
+<script type="module">
+const m = await (await fetch('../assets/ui/manifest.json')).json();
+const shots = [...new Set(Object.keys(m).map(k=>k.split('.')[0]))].sort();
+for (const s of shots) {
+  const d = document.createElement('div'); d.className='s';
+  d.innerHTML = `<div class="scr wallpaper">${['notch','pill'].filter(r=>m[s+'.'+r]).map(r=>{const a=m[s+'.'+r];return `<img src="../assets/ui/${s}.${r}.png" style="left:${a.x}px;top:${a.y}px;width:${a.w}px;height:${a.h}px">`}).join('')}</div><div class="l">${s}</div>`;
+  document.body.append(d);
+}
+document.body.dataset.ready = 1;
+</script></body></html>

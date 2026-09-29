@@ -1,0 +1,397 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "dormant",
+     "attention": 0,
+     "working": 0
+    },
+    {
+     "type": "pill",
+     "state": {
+      "phase": "recording",
+      "kind": "dictation",
+      "level": 0,
+      "elapsed": 3
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pill-fn-rec"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "processing",
+      "kind": "dictation"
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pill-fn-proc"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "output",
+      "kind": "dictation"
+     }
+    }
+   ],
+   "wait": 500,
+   "shot": "pill-fn-out"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "hidden"
+     }
+    },
+    {
+     "type": "pill",
+     "state": {
+      "phase": "recording",
+      "level": 0,
+      "elapsed": 2,
+      "canType": true,
+      "kind": "remote",
+      "agent": "Claude Code CLI",
+      "agentConnected": true,
+      "model": "Opus",
+      "agentOptions": [
+       {
+        "id": "claude",
+        "label": "Claude Code CLI",
+        "available": true,
+        "terminal": false
+       },
+       {
+        "id": "codex",
+        "label": "Codex CLI",
+        "available": true,
+        "terminal": false
+       }
+      ],
+      "modelOptions": [
+       {
+        "id": "opus",
+        "label": "Opus",
+        "detail": ""
+       },
+       {
+        "id": "sonnet",
+        "label": "Sonnet",
+        "detail": ""
+       }
+      ],
+      "modelAxes": []
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pill-ropt-rec"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "processing",
+      "kind": "remote",
+      "agent": "Claude Code CLI",
+      "agentConnected": true,
+      "model": "Opus",
+      "agentOptions": [
+       {
+        "id": "claude",
+        "label": "Claude Code CLI",
+        "available": true,
+        "terminal": false
+       },
+       {
+        "id": "codex",
+        "label": "Codex CLI",
+        "available": true,
+        "terminal": false
+       }
+      ],
+      "modelOptions": [
+       {
+        "id": "opus",
+        "label": "Opus",
+        "detail": ""
+       },
+       {
+        "id": "sonnet",
+        "label": "Sonnet",
+        "detail": ""
+       }
+      ],
+      "modelAxes": []
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pill-ropt-proc"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "hidden"
+     }
+    },
+    {
+     "type": "capturePhase",
+     "phase": "routing"
+    }
+   ],
+   "wait": 900,
+   "shot": "bar-sending"
+  },
+  {
+   "send": [
+    {
+     "type": "capturePhase",
+     "phase": "idle"
+    },
+    {
+     "type": "setState",
+     "state": "active",
+     "attention": 0,
+     "working": 1
+    }
+   ],
+   "wait": 900,
+   "shot": "bar-working1"
+  },
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "active",
+     "attention": 0,
+     "working": 2
+    }
+   ],
+   "wait": 900,
+   "shot": "bar-working2"
+  },
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "active",
+     "attention": 0,
+     "working": 4
+    }
+   ],
+   "wait": 900,
+   "shot": "bar-working4"
+  },
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "dormant",
+     "attention": 0,
+     "working": 0
+    },
+    {
+     "type": "pill",
+     "state": {
+      "phase": "recording",
+      "level": 0,
+      "elapsed": 2,
+      "canType": true,
+      "kind": "remote",
+      "agent": "Unmute Agent",
+      "agentConnected": true,
+      "agentOptions": [],
+      "modelOptions": [],
+      "modelAxes": []
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pill-agent-rec"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "processing",
+      "kind": "remote",
+      "agent": "Unmute Agent",
+      "agentConnected": true,
+      "agentOptions": [],
+      "modelOptions": [],
+      "modelAxes": []
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pill-agent-proc"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "hidden"
+     }
+    },
+    {
+     "type": "setState",
+     "state": "idle",
+     "attention": 0,
+     "working": 0
+    },
+    {
+     "type": "agentActivity",
+     "activity": {
+      "state": "listening",
+      "summary": "",
+      "interactionId": "i1",
+      "agentRunId": "r1",
+      "provider": "claude"
+     }
+    }
+   ],
+   "wait": 600,
+   "shot": "bar-agent-listening"
+  },
+  {
+   "send": [
+    {
+     "type": "agentActivity",
+     "activity": {
+      "state": "searching",
+      "summary": "",
+      "interactionId": "i1",
+      "agentRunId": "r1",
+      "provider": "claude"
+     }
+    }
+   ],
+   "wait": 600,
+   "shot": "bar-agent-searching"
+  },
+  {
+   "send": [
+    {
+     "type": "agentActivity",
+     "activity": {
+      "state": "thinking",
+      "summary": "",
+      "interactionId": "i1",
+      "agentRunId": "r1",
+      "provider": "claude"
+     }
+    }
+   ],
+   "wait": 600,
+   "shot": "bar-agent-thinking"
+  },
+  {
+   "send": [
+    {
+     "type": "agentActivity",
+     "activity": {
+      "state": "complete",
+      "summary": "Saved",
+      "interactionId": "i1",
+      "agentRunId": "r1",
+      "provider": "claude"
+     }
+    }
+   ],
+   "wait": 600,
+   "shot": "bar-agent-done"
+  },
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "idle",
+     "attention": 0,
+     "working": 0
+    },
+    {
+     "type": "pocketLanded",
+     "title": "landing page"
+    }
+   ],
+   "wait": 700,
+   "shot": "bar-inpocket"
+  },
+  {
+   "send": [
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "closed",
+      "at": 0,
+      "waiting": 1,
+      "remoteKey": "fn",
+      "slots": [
+       {
+        "id": "unmute-agent",
+        "title": "Unmute Agent",
+        "kind": "agent",
+        "status": "ready",
+        "demanding": false
+       },
+       {
+        "id": "t-landing",
+        "title": "landing page",
+        "status": "processing",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       },
+       {
+        "id": "t-auth",
+        "title": "auth service",
+        "status": "needs-user",
+        "ask": "Should the refresh retry on a 401?",
+        "demanding": true,
+        "backend": "codex",
+        "terminal": false
+       },
+       {
+        "id": "t-csv",
+        "title": "csv parser",
+        "status": "done",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       }
+      ]
+     }
+    },
+    {
+     "type": "setState",
+     "state": "attention",
+     "attention": 1,
+     "working": 1
+    }
+   ],
+   "wait": 900,
+   "shot": "bar-needsyou"
+  }
+ ]
+}

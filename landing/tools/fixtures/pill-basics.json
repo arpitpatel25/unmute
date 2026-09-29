@@ -1,0 +1,19 @@
+{
+  "fakeNotch": "200x34",
+  "steps": [
+    { "send": [{ "type": "setState", "state": "dormant", "attention": 0, "working": 0 }], "wait": 700, "shot": "00-dormant" },
+    { "send": [{ "type": "pill", "state": { "phase": "recording", "kind": "dictation", "level": 0.2, "elapsed": 3 } }], "wait": 900, "shot": "01-fn-recording" },
+    { "send": [{ "type": "pill", "state": { "phase": "processing", "kind": "dictation" } }], "wait": 900, "shot": "02-processing" },
+    { "send": [{ "type": "pill", "state": { "phase": "output", "kind": "dictation" } }], "wait": 900, "shot": "03-output" },
+    { "send": [{ "type": "pill", "state": { "phase": "recording", "kind": "remote", "level": 0.2, "elapsed": 2, "canType": true,
+        "agent": "Claude Code CLI", "agentConnected": true, "model": "Opus",
+        "agentOptions": [{ "id": "claude", "label": "Claude Code CLI", "available": true, "terminal": false }, { "id": "codex", "label": "Codex CLI", "available": true, "terminal": false }],
+        "modelOptions": [{ "id": "opus", "label": "Opus", "detail": "" }, { "id": "sonnet", "label": "Sonnet", "detail": "" }] } }], "wait": 900, "shot": "04-ropt-recording" },
+    { "send": [{ "type": "pill", "state": { "phase": "recording", "kind": "remote", "level": 0.2, "elapsed": 2, "canType": true,
+        "agent": "Unmute Agent", "agentConnected": true, "agentOptions": [], "modelOptions": [], "modelAxes": [] } }], "wait": 900, "shot": "05-agent-recording" },
+    { "send": [{ "type": "pill", "state": { "phase": "recording", "kind": "dictation", "level": 0.2, "elapsed": 3 } },
+               { "type": "scratchpad", "data": { "enabled": true, "armed": true, "pad": { "id": "p1", "origin": "cursor", "entries": [
+                 { "id": "e1", "type": "segment", "text": "No null check here", "startMs": 0, "endMs": 4000 },
+                 { "id": "e2", "type": "segment", "text": "", "startMs": 4000, "endMs": 4000 } ] } } }], "wait": 1000, "shot": "06-scratchpad" }
+  ]
+}

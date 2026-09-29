@@ -1,0 +1,177 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "t-new",
+      "title": "Pricing landing page",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "modelLabel": "Opus",
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "turnStart",
+        "startedAt": "$NOW-4000"
+       },
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "build a landing page for the pricing launch"
+       }
+      ]
+     }
+    },
+    {
+     "type": "setState",
+     "state": "task",
+     "attention": 0,
+     "working": 1
+    },
+    {
+     "type": "surfaceFill",
+     "fill": 0.45
+    }
+   ],
+   "wait": 1300,
+   "shot": "task-1"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "t-new",
+      "title": "Pricing landing page",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "modelLabel": "Opus",
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "turnStart",
+        "startedAt": "$NOW-4000"
+       },
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "build a landing page for the pricing launch"
+       },
+       {
+        "kind": "fileRead",
+        "path": "docs/pricing-brief.md",
+        "lines": 84
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "task-2"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "t-new",
+      "title": "Pricing landing page",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "modelLabel": "Opus",
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "turnStart",
+        "startedAt": "$NOW-4000"
+       },
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "build a landing page for the pricing launch"
+       },
+       {
+        "kind": "fileRead",
+        "path": "docs/pricing-brief.md",
+        "lines": 84
+       },
+       {
+        "kind": "fileChange",
+        "path": "src/pages/pricing.tsx",
+        "verb": "create",
+        "added": 142,
+        "removed": 0,
+        "status": "done"
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "task-3"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "t-new",
+      "title": "Pricing landing page",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "modelLabel": "Opus",
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "turnStart",
+        "startedAt": "$NOW-4000"
+       },
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "build a landing page for the pricing launch"
+       },
+       {
+        "kind": "fileRead",
+        "path": "docs/pricing-brief.md",
+        "lines": 84
+       },
+       {
+        "kind": "fileChange",
+        "path": "src/pages/pricing.tsx",
+        "verb": "create",
+        "added": 142,
+        "removed": 0,
+        "status": "done"
+       },
+       {
+        "kind": "message",
+        "role": "assistant",
+        "text": "Laying out the hero, the three plans and the FAQ from the brief."
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "task-4"
+  }
+ ]
+}

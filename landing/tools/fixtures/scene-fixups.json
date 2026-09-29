@@ -1,0 +1,170 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "closed",
+      "at": 0,
+      "waiting": 1,
+      "remoteKey": "fn",
+      "slots": [
+       {
+        "id": "unmute-agent",
+        "title": "Unmute Agent",
+        "kind": "agent",
+        "status": "ready",
+        "demanding": false
+       },
+       {
+        "id": "t-landing",
+        "title": "landing page",
+        "status": "processing",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       },
+       {
+        "id": "t-auth",
+        "title": "auth service",
+        "status": "needs-user",
+        "ask": "Should the refresh retry on a 401?",
+        "demanding": true,
+        "backend": "codex",
+        "terminal": false
+       },
+       {
+        "id": "t-csv",
+        "title": "csv parser",
+        "status": "done",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       }
+      ]
+     }
+    },
+    {
+     "type": "setState",
+     "state": "attention",
+     "attention": 1,
+     "working": 1
+    }
+   ],
+   "wait": 1800,
+   "shot": "bar-needsyou"
+  },
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "dormant",
+     "attention": 0,
+     "working": 0
+    },
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "closed",
+      "at": 0,
+      "waiting": 0,
+      "remoteKey": "fn",
+      "slots": []
+     }
+    },
+    {
+     "type": "pill",
+     "state": {
+      "phase": "recording",
+      "level": 0,
+      "elapsed": 2,
+      "canType": true,
+      "kind": "remote",
+      "agent": "Claude Code CLI",
+      "agentConnected": true,
+      "model": "Opus",
+      "agentOptions": [
+       {
+        "id": "claude",
+        "label": "Claude Code CLI",
+        "available": true,
+        "terminal": false
+       },
+       {
+        "id": "codex",
+        "label": "Codex CLI",
+        "available": true,
+        "terminal": false
+       }
+      ],
+      "modelOptions": [
+       {
+        "id": "opus",
+        "label": "Opus",
+        "detail": ""
+       },
+       {
+        "id": "sonnet",
+        "label": "Sonnet",
+        "detail": ""
+       }
+      ],
+      "modelAxes": []
+     }
+    }
+   ],
+   "wait": 1200
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "recording",
+      "level": 0,
+      "elapsed": 3,
+      "canType": true,
+      "captureFlashToken": 7,
+      "kind": "remote",
+      "agent": "Claude Code CLI",
+      "agentConnected": true,
+      "model": "Opus",
+      "agentOptions": [
+       {
+        "id": "claude",
+        "label": "Claude Code CLI",
+        "available": true,
+        "terminal": false
+       },
+       {
+        "id": "codex",
+        "label": "Codex CLI",
+        "available": true,
+        "terminal": false
+       }
+      ],
+      "modelOptions": [
+       {
+        "id": "opus",
+        "label": "Opus",
+        "detail": ""
+       },
+       {
+        "id": "sonnet",
+        "label": "Sonnet",
+        "detail": ""
+       }
+      ],
+      "modelAxes": []
+     }
+    }
+   ],
+   "wait": 45,
+   "shot": "pill-flash"
+  }
+ ]
+}

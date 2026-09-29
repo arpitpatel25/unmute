@@ -1,0 +1,394 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "dormant",
+     "attention": 0,
+     "working": 0
+    },
+    {
+     "type": "pill",
+     "state": {
+      "phase": "recording",
+      "level": 0,
+      "elapsed": 2,
+      "canType": true,
+      "kind": "remote",
+      "agent": "Claude Code CLI",
+      "agentConnected": true,
+      "model": "Opus",
+      "agentOptions": [
+       {
+        "id": "claude",
+        "label": "Claude Code CLI",
+        "available": true,
+        "terminal": false
+       },
+       {
+        "id": "codex",
+        "label": "Codex CLI",
+        "available": true,
+        "terminal": false
+       }
+      ],
+      "modelOptions": [
+       {
+        "id": "opus",
+        "label": "Opus",
+        "detail": ""
+       },
+       {
+        "id": "sonnet",
+        "label": "Sonnet",
+        "detail": ""
+       }
+      ],
+      "modelAxes": []
+     }
+    },
+    {
+     "type": "pill",
+     "state": {
+      "phase": "recording",
+      "level": 0,
+      "elapsed": 3,
+      "canType": true,
+      "captureFlashToken": 1,
+      "kind": "remote",
+      "agent": "Claude Code CLI",
+      "agentConnected": true,
+      "model": "Opus",
+      "agentOptions": [
+       {
+        "id": "claude",
+        "label": "Claude Code CLI",
+        "available": true,
+        "terminal": false
+       },
+       {
+        "id": "codex",
+        "label": "Codex CLI",
+        "available": true,
+        "terminal": false
+       }
+      ],
+      "modelOptions": [
+       {
+        "id": "opus",
+        "label": "Opus",
+        "detail": ""
+       },
+       {
+        "id": "sonnet",
+        "label": "Sonnet",
+        "detail": ""
+       }
+      ],
+      "modelAxes": []
+     }
+    }
+   ],
+   "wait": 70,
+   "shot": "pill-flash"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "hidden"
+     }
+    },
+    {
+     "type": "scratchpad",
+     "data": {
+      "enabled": true,
+      "armed": true
+     }
+    },
+    {
+     "type": "pill",
+     "state": {
+      "phase": "recording",
+      "kind": "dictation",
+      "level": 0,
+      "elapsed": 4
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pill-scratch-rec"
+  },
+  {
+   "send": [
+    {
+     "type": "scratchpad",
+     "data": {
+      "enabled": true,
+      "armed": true,
+      "pad": {
+       "id": "p1",
+       "origin": "task",
+       "entries": [
+        {
+         "id": "e1",
+         "type": "segment",
+         "text": "",
+         "startMs": 0,
+         "endMs": 0
+        }
+       ]
+      },
+      "destinations": {
+       "openTask": {
+        "id": "t-auth",
+        "name": "auth service"
+       }
+      }
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pad-1"
+  },
+  {
+   "send": [
+    {
+     "type": "scratchpad",
+     "data": {
+      "enabled": true,
+      "armed": true,
+      "pad": {
+       "id": "p1",
+       "origin": "task",
+       "entries": [
+        {
+         "id": "e1",
+         "type": "segment",
+         "text": "No null check here before the token is refreshed",
+         "startMs": 0,
+         "endMs": 4200
+        }
+       ]
+      },
+      "destinations": {
+       "openTask": {
+        "id": "t-auth",
+        "name": "auth service"
+       }
+      }
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pad-2"
+  },
+  {
+   "send": [
+    {
+     "type": "scratchpad",
+     "data": {
+      "enabled": true,
+      "armed": true,
+      "pad": {
+       "id": "p1",
+       "origin": "task",
+       "entries": [
+        {
+         "id": "e1",
+         "type": "segment",
+         "text": "No null check here before the token is refreshed",
+         "startMs": 0,
+         "endMs": 4200
+        },
+        {
+         "id": "e2",
+         "type": "segment",
+         "text": "Also, where's the retry limit?",
+         "startMs": 9000,
+         "endMs": 15400
+        }
+       ]
+      },
+      "destinations": {
+       "openTask": {
+        "id": "t-auth",
+        "name": "auth service"
+       }
+      }
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pad-3"
+  },
+  {
+   "send": [
+    {
+     "type": "scratchpad",
+     "data": {
+      "enabled": true,
+      "armed": true,
+      "pad": {
+       "id": "p1",
+       "origin": "task",
+       "entries": [
+        {
+         "id": "e1",
+         "type": "segment",
+         "text": "No null check here before the token is refreshed",
+         "startMs": 0,
+         "endMs": 4200
+        },
+        {
+         "id": "e2",
+         "type": "segment",
+         "text": "Also, where's the retry limit?",
+         "startMs": 9000,
+         "endMs": 15400
+        },
+        {
+         "id": "e3",
+         "type": "insert",
+         "kind": "image",
+         "content": "/Users/you/Library/Caches/unmute/Unmute-2026-09-29-refresh.png"
+        }
+       ]
+      },
+      "destinations": {
+       "openTask": {
+        "id": "t-auth",
+        "name": "auth service"
+       }
+      }
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pad-4"
+  },
+  {
+   "send": [
+    {
+     "type": "scratchpad",
+     "data": {
+      "enabled": true,
+      "armed": true,
+      "pad": {
+       "id": "p1",
+       "origin": "task",
+       "entries": [
+        {
+         "id": "e1",
+         "type": "segment",
+         "text": "No null check here before the token is refreshed",
+         "startMs": 0,
+         "endMs": 4200
+        },
+        {
+         "id": "e2",
+         "type": "segment",
+         "text": "Also, where's the retry limit?",
+         "startMs": 9000,
+         "endMs": 15400
+        },
+        {
+         "id": "e3",
+         "type": "insert",
+         "kind": "image",
+         "content": "/Users/you/Library/Caches/unmute/Unmute-2026-09-29-refresh.png"
+        },
+        {
+         "id": "e4",
+         "type": "segment",
+         "text": "And the error path swallows the 401 instead of surfacing it",
+         "startMs": 31000,
+         "endMs": 37600
+        }
+       ]
+      },
+      "destinations": {
+       "openTask": {
+        "id": "t-auth",
+        "name": "auth service"
+       }
+      }
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pad-5"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "paused",
+      "kind": "dictation"
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pill-paused"
+  },
+  {
+   "send": [
+    {
+     "type": "scratchpad",
+     "data": {
+      "enabled": true,
+      "armed": true,
+      "pad": {
+       "id": "p1",
+       "origin": "task",
+       "entries": [
+        {
+         "id": "e1",
+         "type": "segment",
+         "text": "No null check here before the token is refreshed",
+         "startMs": 0,
+         "endMs": 4200
+        },
+        {
+         "id": "e2",
+         "type": "segment",
+         "text": "Also, where's the retry limit?",
+         "startMs": 9000,
+         "endMs": 15400
+        },
+        {
+         "id": "e3",
+         "type": "insert",
+         "kind": "image",
+         "content": "/Users/you/Library/Caches/unmute/Unmute-2026-09-29-refresh.png"
+        },
+        {
+         "id": "e4",
+         "type": "segment",
+         "text": "And the error path swallows the 401 instead of surfacing it",
+         "startMs": 31000,
+         "endMs": 37600
+        }
+       ]
+      },
+      "destinations": {
+       "openTask": {
+        "id": "t-auth",
+        "name": "auth service"
+       }
+      },
+      "delivering": true
+     }
+    }
+   ],
+   "wait": 900,
+   "shot": "pad-sending"
+  }
+ ]
+}
