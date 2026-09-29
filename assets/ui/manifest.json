@@ -1,0 +1,482 @@
+{
+ "pill-fn-rec.pill": {
+  "x": 653,
+  "y": 761,
+  "w": 134,
+  "h": 36,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-fn-rec.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-fn-proc.pill": {
+  "x": 644,
+  "y": 761,
+  "w": 153,
+  "h": 36,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-fn-proc.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-fn-out.pill": {
+  "x": 702,
+  "y": 761,
+  "w": 36,
+  "h": 36,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-fn-out.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-ropt-rec.pill": {
+  "x": 527,
+  "y": 761,
+  "w": 387,
+  "h": 36,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-ropt-rec.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-ropt-proc.pill": {
+  "x": 533,
+  "y": 761,
+  "w": 374,
+  "h": 36,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-ropt-proc.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-sending.notch": {
+  "x": 526,
+  "y": 0,
+  "w": 388,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-working1.notch": {
+  "x": 504,
+  "y": 0,
+  "w": 432,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-working2.notch": {
+  "x": 502,
+  "y": 0,
+  "w": 436,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-working4.notch": {
+  "x": 502,
+  "y": 0,
+  "w": 436,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-agent-rec.pill": {
+  "x": 574,
+  "y": 761,
+  "w": 292,
+  "h": 36,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-agent-rec.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-agent-proc.pill": {
+  "x": 581,
+  "y": 761,
+  "w": 279,
+  "h": 36,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-agent-proc.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-agent-listening.notch": {
+  "x": 520,
+  "y": 0,
+  "w": 400,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-agent-searching.notch": {
+  "x": 516,
+  "y": 0,
+  "w": 408,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-agent-thinking.notch": {
+  "x": 523,
+  "y": 0,
+  "w": 394,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-agent-done.notch": {
+  "x": 542,
+  "y": 0,
+  "w": 356,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-inpocket.notch": {
+  "x": 520,
+  "y": 0,
+  "w": 400,
+  "h": 34,
+  "run": "scene-core",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-needsyou.notch": {
+  "x": 492,
+  "y": 0,
+  "w": 456,
+  "h": 34,
+  "run": "scene-fixups",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-closed.notch": {
+  "x": 492,
+  "y": 0,
+  "w": 456,
+  "h": 34,
+  "run": "scene-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-open-landing.notch": {
+  "x": 546,
+  "y": 0,
+  "w": 348,
+  "h": 114,
+  "run": "scene-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-open-auth.notch": {
+  "x": 546,
+  "y": 0,
+  "w": 348,
+  "h": 152,
+  "run": "scene-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-open-csv.notch": {
+  "x": 546,
+  "y": 0,
+  "w": 348,
+  "h": 114,
+  "run": "scene-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-aimed.pill": {
+  "x": 582,
+  "y": 761,
+  "w": 276,
+  "h": 36,
+  "run": "scene-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-aimed.notch": {
+  "x": 546,
+  "y": 0,
+  "w": 348,
+  "h": 152,
+  "run": "scene-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-sent.notch": {
+  "x": 546,
+  "y": 0,
+  "w": 348,
+  "h": 114,
+  "run": "scene-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-flash.pill": {
+  "x": 527,
+  "y": 761,
+  "w": 387,
+  "h": 36,
+  "run": "scene-fixups",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-flash.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-fixups",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-scratch-rec.pill": {
+  "x": 631,
+  "y": 761,
+  "w": 178,
+  "h": 36,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-scratch-rec.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-1.pill": {
+  "x": 631,
+  "y": 477,
+  "w": 527,
+  "h": 321,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-1.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-2.pill": {
+  "x": 631,
+  "y": 477,
+  "w": 527,
+  "h": 321,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-2.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-3.pill": {
+  "x": 631,
+  "y": 477,
+  "w": 527,
+  "h": 321,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-3.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-4.pill": {
+  "x": 631,
+  "y": 477,
+  "w": 527,
+  "h": 321,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-4.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-5.pill": {
+  "x": 631,
+  "y": 477,
+  "w": 527,
+  "h": 321,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-5.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-paused.pill": {
+  "x": 649,
+  "y": 477,
+  "w": 490,
+  "h": 321,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-paused.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-sending.pill": {
+  "x": 649,
+  "y": 477,
+  "w": 490,
+  "h": 321,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pad-sending.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-scratch",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "task-1.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-session",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "task-2.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-session",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "task-3.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-session",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "task-4.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-session",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "agent-save-1.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-agent",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "agent-save-2.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-agent",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "agent-ask-1.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-agent",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "agent-ask-2.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-agent",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "agent-meet-1.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-agent",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "agent-meet-2.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-agent",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "agent-meet-3.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-agent",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ }
+}

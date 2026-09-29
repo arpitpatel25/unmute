@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>unmute — for everything</title>
-<meta name="description" content="unmute for everything. Say it, it happens — dictation, real work on your Mac, meetings and memory, all from four keys and your voice." />
-<link rel="icon" type="image/png" href="icon.png" />
+<title>unmute — just unmute for everything</title>
+<meta name="description" content="The best interface for Claude Code and Codex. Talk to them from anywhere on your Mac." />
+<link rel="icon" href="icon.png" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
-<meta property="og:title" content="unmute" />
-<meta property="og:description" content="Say it, it happens. Four keys and your voice." />
+<link rel="canonical" href="https://justunmute.me/" />
+<meta property="og:title" content="unmute — just unmute for everything" />
+<meta property="og:description" content="The best interface for Claude Code and Codex. Talk to them from anywhere on your Mac." />
 <meta property="og:image" content="https://justunmute.me/og.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
@@ -16,184 +17,165 @@
 <meta property="og:type" content="website" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:image" content="https://justunmute.me/og.png" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="docs.css?v=9" />
-<script>(function(){try{var t=localStorage.getItem('theme')||(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="stylesheet" href="ui/wallpaper.css" />
+<link rel="stylesheet" href="site.css" />
+<!-- Every notch and pill surface on this page is a capture of the real unmute-notch
+     helper (unmute-cloud db2a2016), placed at its real window position. See landing/README.md. -->
 </head>
 <body>
-  <main class="page">
 
-    <div class="top">
-      <a class="logo" href="./" aria-label="unmute">
-        <img class="logo-black" src="unmute-wordmark-black.png" alt="unmute" width="108" height="36" /><img class="logo-white" src="unmute-wordmark-white.png" alt="" aria-hidden="true" width="108" height="36" />
-      </a>
-      <nav>
-        <a href="dictation.html">dictation</a>
-        <a href="remote.html">unmute remote</a>
-        <a href="pricing.html">pricing</a>
-        <a href="manifesto.html">manifesto</a>
-        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
-          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-        </button>
-        <a class="nav-cta" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Get unmute</a>
-      </nav>
-    </div>
+<nav class="top">
+  <img src="unmute-wordmark-black.png" alt="unmute" />
+  <div class="links"><a href="#chapters">Features</a><a href="#pricing">Pricing</a><a href="manifesto.html">Manifesto</a><a class="btn sm" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download</a></div>
+</nav>
 
-    <section class="hero">
-      <p class="eyebrow">// voice + agents · macOS</p>
-      <h1>unmute for<br />everything.<span class="cursor">█</span></h1>
-      <p class="hero-sub">Say it and it’s running. Fire off work to Claude Code and Codex without finding a window, naming a session, or typing a prompt — and see which one is waiting on you.</p>
-      <div class="claim">
-        <p class="lead"><b>You already pay for the best models on earth.</b> Claude Code Pro or Max, Codex. unmute doesn’t sell you another one — it’s a thin tool for getting everything you’re owed out of the ones you have.</p>
-        <p class="why">// which is why its meeting notes beat every dedicated notetaker on the market: they’re written by <em>your</em> Claude, on your machine, instead of by whatever model a notes startup could afford to run.</p>
-      </div>
+<!-- 1 · HERO -->
+<section class="hero" id="hero">
+  <p class="eyebrow philo">Have a thought? Say it right where you are.</p>
+  <h1 id="heroH1">Just unmute for everything.</h1>
+  <p class="sub">The best interface for Claude Code and Codex. Talk to them from anywhere on your Mac.</p>
+  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download for Mac</a><a class="btn ghost" href="#trip">Watch it work ↓</a></div>
+  <div class="works">works with <span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span><img src="assets/mark-codex.png" alt="" />Codex</span></div>
+  <div class="stagebox">
+    <div data-stage="hero"></div>
+    <div class="said" data-said="hero"></div>
+    <div class="outcomes"><span>typed</span><span>started</span><span>saved</span><span>picked back up</span></div>
+  </div>
+</section>
 
-      <div class="cta-row">
-        <a class="btn" href="pricing.html">Get unmute</a>
-        <a class="arrow" href="https://cal.com/unmute/15min" data-cal-link="unmute/15min" data-cal-namespace="unmute15" data-cal-config='{"layout":"month_view"}'>book 15 minutes</a>
-      </div>
-      <p class="hero-note">// free offline dictation, no account. nothing to switch to, nothing new to trust.</p>
+<!-- 2 · THE TRIP (the why) -->
+<section class="trip" id="trip">
+  <div class="head"><h2 class="ha">A good idea shouldn't have<br/>to survive the trip.</h2><h2 class="hb">Or just say it where you are.</h2></div>
+  <div class="counter">0 steps · 0s</div>
+  <div class="path">
+    <div class="line"></div>
+    <div class="step"><div class="lab">01 · ⌘ tab</div><div class="t">Leave what you were doing</div><div class="viz"><span class="sq"></span><span class="sq"></span><span class="sq on"></span><span class="sq"></span><span class="sq"></span></div></div>
+    <div class="step"><div class="lab">02 · open</div><div class="t">Go to Claude Code or Codex</div><div class="viz"><img src="assets/mark-claude.png" alt="" style="width:26px;height:26px;border-radius:7px;margin:8px 6px 0 0"/><img src="assets/mark-codex.png" alt="" style="width:26px;height:26px;border-radius:7px;margin-top:8px;opacity:.5"/></div></div>
+    <div class="step"><div class="lab">03 · find it</div><div class="t">Find the right chat, or ⌘N a new one</div><div class="viz">onboarding v2?<br/>pricing fixes??<br/><b style="color:#111">+ New chat ⌘N</b></div></div>
+    <div class="step"><div class="lab">04 · explain</div><div class="t">Type or dictate the whole thing</div><div class="viz">so basically what I want is, like we discussed last week, the…</div></div>
+    <div class="step"><div class="lab">05 · screenshots</div><div class="t">Grab them from other windows, drag them in</div><div class="viz"><span class="box"></span></div></div>
+    <div class="step"><div class="lab">06 · ↵</div><div class="t">Finally, press enter</div><div class="viz" style="display:grid;place-items:center"><span style="font:700 13px var(--mono);padding:5px 14px;border-radius:7px;background:#fff;border:1px solid #d6d6da;box-shadow:0 2px 0 #cfcfd4">return ↵</span></div></div>
+  </div>
+  <div class="again">…and it's the same trip. Every. Single. Time.</div>
+  <div class="idea i1">build a landing page for the pricing launch</div>
+  <div class="tripstage"><div data-stage="trip"></div><div class="said" data-said="trip"></div></div>
+</section>
 
-      <div class="keys">
-        <div class="k"><span class="cap"><kbd>hold</kbd></span><p><b>Talk. It types.</b> Sub-second, every time. Network dies mid-word, it keeps going on-device.</p></div>
-        <div class="k"><span class="cap"><kbd>right option</kbd></span><p><b>Talk. It does it.</b> A real agent session on your Mac. Files, browsers, apps.</p></div>
-        <div class="k"><span class="cap"><kbd>right command</kbd></span><p><b>Talk to unmute itself.</b> Memory, what you said last week, hand work out.</p></div>
-        <div class="k"><span class="cap"><kbd>left control ×2</kbd></span><p><b>Double-tap. It takes notes.</b> Written up by your own CLI. Never a cloud model.</p></div>
-      </div>
-    </section>
+<!-- 2b · EVERYWHERE (the where) -->
+<section class="everywhere" id="everywhere">
+  <h2>Not an AI inside your app.<br/><span>Your AI, across your whole Mac.</span></h2>
+  <div class="applist"><span>Mail</span><span>Figma</span><span>Chrome</span><span>Slack</span><span>Finder</span></div>
+  <div class="stagebox"><div data-stage="everywhere"></div><div class="said" data-said="everywhere"></div></div>
+</section>
 
-    <section>
-      <p class="mark">// the actual bottleneck</p>
-      <h2>Your agents aren’t the slow part. Starting them is.</h2>
-      <p>Claude Code and Codex can already do an enormous amount of work. What they can’t do is start themselves. So the ceiling isn’t the model — it’s how many threads of work one person can open, steer and keep track of before it stops being worth the trouble.</p>
-      <p>That number is small, and it’s small for boring reasons: find the window, start the session, name it, prompt it, wait, switch, lose your place. <b>unmute deletes that entire step.</b> You say the thing; it’s dispatched.</p>
-    </section>
+<!-- 3 · THE KEYS (the how) -->
+<section class="keysec" id="keys">
+  <h2>Four keys. Everything else is your voice.</h2>
+  <div class="keyrow">
+    <div class="bigkey">fn<small>dictate</small></div>
+    <div class="bigkey">⌥ right<small>start a session</small></div>
+    <div class="bigkey">⌘ right ×2<small>unmute agent</small></div>
+    <div class="bigkey">⌘ left<small>screenshot</small></div>
+  </div>
+  <div class="keydesc">
+    <p><b>fn</b> — talk, and it types. Into any app, or into the session you picked in the notch.</p>
+    <p><b>right ⌥</b> — talk, and a Claude Code or Codex session starts. From anywhere.</p>
+    <p><b>right ⌘ twice</b> — talk to unmute itself. Save, find, pick things back up.</p>
+    <p><b>left ⌘</b> — screenshot mid-sentence. The words and the picture arrive together.</p>
+  </div>
+</section>
 
-    <section>
-      <p class="mark">// what changes</p>
-      <ul class="dash">
-        <li><b>Six terminals, none of them labelled.</b> <span class="note">→ one surface that tells you which session is waiting on you, and stays quiet about the rest.</span></li>
-        <li><b>An idea you don’t bother acting on.</b> <span class="note">→ say it in passing; it’s already running.</span></li>
-        <li><b>One task at a time, because that’s all you can hold.</b> <span class="note">→ five in flight, and you’re not the one holding them.</span></li>
-        <li><b>Hands on the keyboard to start anything.</b> <span class="note">→ dispatch with your hands full, or walking away from the desk.</span></li>
-      </ul>
-    </section>
+<div id="chapters"></div>
 
-    <hr />
+<section class="chapter" id="chStart">
+  <div class="copy">
+    <p class="eyebrow"><span class="kcap">right ⌥</span> start anything</p>
+    <h2>The session exists before the thought finishes.</h2>
+    <p>Wherever you are, one key and one sentence. A Claude Code or Codex session starts and drops into the notch — sized as small as you like.</p>
+  </div>
+  <div class="stagebox"><div data-stage="start"></div><div class="said" data-said="start"></div></div>
+</section>
 
-    <section>
-      <p class="mark">// the dispatch key</p>
-      <h2>Dictation types it. Remote does it.</h2>
-      <p>Hold <kbd>right ⌥</kbd>, say the thing, it happens — on your actual Mac. The ones that touch apps and browsers run <b>in the background</b>, so nothing snatches your screen mid-thought.</p>
-      <ul class="dash">
-        <li>“what’s eating my battery — and kill it.”</li>
-        <li>“rename these 40 screenshots by date.”</li>
-        <li>“open Skyscanner, London to Tokyo, next Friday, cheapest.”</li>
-        <li>“total every invoice in my Downloads and put it in a sheet.”</li>
-        <li>“go through my last 50 emails and flag the 3 that actually need me.”</li>
-      </ul>
-      <p class="aside">// none of these are features we built. it’s your agent, finally within reach. the bottleneck was never the model.</p>
-    </section>
+<section class="chapter" id="chPocket">
+  <div class="copy">
+    <p class="eyebrow"><span class="kcap">fn</span> the pocket</p>
+    <h2>Talk to any session without opening it.</h2>
+    <p>Every session sits in the notch. Flip to the one you mean, press the key and say it. It lands there while you stay exactly where you are.</p>
+  </div>
+  <div class="stagebox"><div data-stage="pocket"></div><div class="said" data-said="pocket"></div></div>
+</section>
 
-    <section>
-      <p class="mark">// the key that talks to unmute</p>
-      <h2>Right ⌘ doesn’t talk to a session. It talks to unmute.</h2>
-      <ul class="dash">
-        <li>“what did I say about pricing last week?” <span class="note">— it searches what you actually dictated. Nothing else on your machine can look there.</span></li>
-        <li>“remember I always want X.” <span class="note">— it keeps a memory, and the memory survives.</span></li>
-        <li>“what was I working on yesterday?” <span class="note">— read off disk, not off an index built behind your back.</span></li>
-        <li>“take this and run with it.” <span class="note">— hands the work out as its own task.</span></li>
-      </ul>
-    </section>
+<section class="chapter" id="chCapture">
+  <div class="copy">
+    <p class="eyebrow"><span class="kcap">left ⌘</span> capture · scratchpad</p>
+    <h2>Show it. Think it through. Send it once.</h2>
+    <p>Grab a screenshot in the middle of a sentence. Or arm the scratchpad and pause as long as you like — every thought stacks on the pad, then goes to the task it belongs to.</p>
+  </div>
+  <div class="stagebox"><div data-stage="capture"></div><div class="said" data-said="capture"></div></div>
+</section>
 
-    <section>
-      <p class="mark">// meetings</p>
-      <h2>Double-tap left ⌃. Get notes.</h2>
-      <p>It taps system audio and your mic and writes the thing up. The notes are written by <b>your own connected CLI — never a cloud model.</b> We had one in the fallback path and pulled it before shipping: a third vendor quietly receiving the full text of your meetings isn’t a trade we’ll make on your behalf.</p>
-    </section>
+<section class="chapter" id="chAgent">
+  <div class="copy">
+    <p class="eyebrow"><span class="kcap">right ⌘ ×2</span> unmute agent</p>
+    <h2>Save it with a reason. Ask for it later.</h2>
+    <p>No folders, no app to remember. Say why it matters; weeks later, ask in plain words. Or say "continue the landing page" and it's back in your pocket.</p>
+  </div>
+  <div class="stagebox"><div data-stage="agent"></div><div class="said" data-said="agent"></div></div>
+</section>
 
-    <section>
-      <p class="mark">// and yes, it dictates</p>
-      <h2>Under a second to text. Always.</h2>
-      <p class="dim">Not the reason to buy it — everyone sells dictation. It just happens to be the fastest one on the Mac, and it is the same key you already have your finger on.</p>
-      <p>10 seconds of audio or 10 minutes — same sub-1-second latency, every single time. We’re not going to explain dictation to you. We’re going to out-run everyone who ever sold it to you.</p>
-      <p>And your words don’t die. The instant the network wobbles it falls back <b>on-device, automatically</b> — no toggle, no spinner, no “something went wrong.” <b>Wispr Flow couldn’t keep a sentence alive through a hiccup. So we had to.</b></p>
-      <ul class="dash">
-        <li><b>Raw by default.</b> <span class="note">Most of what you dictate is a prompt. Prompts don’t need commas. No auto-punctuation, no autocorrect editing you into a stranger.</span></li>
-        <li><b>Shape it out loud.</b> <span class="note">Select text, hold <kbd>Caps Lock</kbd>, say “three bullets,” “less corporate.” Two seconds.</span></li>
-        <li><b>The scratchpad.</b> <span class="note">Copy an error, a URL, a screenshot mid-sentence — it’s held and composed into what gets pasted, not eaten by the clipboard.</span></li>
-      </ul>
-    </section>
+<section class="chapter" id="chMeet">
+  <div class="copy">
+    <p class="eyebrow"><span class="kcap">one click</span> meetings</p>
+    <h2>The call ends. The work starts.</h2>
+    <p>The notetaker writes it up with your own Claude or Codex. Then ask what's yours — and hand it straight to a session.</p>
+  </div>
+  <div class="stagebox"><div data-stage="meet"></div><div class="said" data-said="meet"></div></div>
+</section>
 
-    <div class="band">
-      <p class="big">Ten things running. One question: whose move is it.</p>
-      <p>Every session is either <em>our move</em> — it’s working, leave it alone — or <em>your move</em>: blocked, failed, or done and waiting on you. That’s the only thing unmute sorts by. Not newest. Not loudest.</p>
-      <p class="dim">It all renders in <b>the notch</b> — the menubar row and the display cutout, which turns out to be exactly the right amount of screen for this. Attention gets <b>pulled, never grabbed.</b> Nothing modal, nothing steals focus. One calm spoken line when something becomes yours, and then it stands down.</p>
-    </div>
+<section class="plain" id="dictate">
+  <p class="eyebrow">// and yes, it dictates</p>
+  <h2>Under a second to text. Even with the Wi-Fi off.</h2>
+  <p class="lede">Press fn anywhere. The pill listens, a tick says it's done, and the words are already at your cursor. If the network drops, it falls back on-device.</p>
+  <div class="stagebox"><div data-stage="dictate"></div><div class="said" data-said="dictate"></div></div>
+  <div class="facts"><div><b>&lt; 1s</b>speech to text</div><div><b>On-device</b>fallback, automatic</div><div><b>$0</b>offline dictation, no account</div></div>
+</section>
 
-    <hr />
+<section class="layer-wrap" id="layer">
+  <div>
+    <p class="eyebrow">// a layer, not a replacement</p>
+    <h2>We didn't build another AI. We gave yours ears.</h2>
+    <ul>
+      <li><b>Your sessions stay yours.</b> Start one the normal way and it behaves exactly like it always has.</li>
+      <li><b>Runs on your subscription.</b> Claude Code or Codex, the ones you already pay for.</li>
+      <li><b>Nothing to switch.</b> No new app to live in, nothing new to trust.</li>
+    </ul>
+  </div>
+  <div class="stack"><div class="layers">
+    <div class="layer mac1">your Mac</div>
+    <div class="layer ai"><img src="assets/mark-claude.png" alt="" /><img src="assets/mark-codex.png" alt="" />Claude Code · Codex</div>
+    <div class="layer um"><img src="assets/unmark.png" alt="" />unmute</div>
+  </div></div>
+</section>
 
-    <section>
-      <p class="mark">// why you can trust it</p>
-      <h2>unmute is dumb. Deliberately, aggressively dumb.</h2>
-      <ul class="dash">
-        <li><b>We didn’t train a model.</b> <span class="note">The best one already exists, you’re already paying for it, and ours would only get in the way. We gave it ears. That’s the innovation.</span></li>
-        <li><b>Remote is your own session.</b> <span class="note">We used to rewrite it — our scaffolding pasted in as if you’d typed it, our model pinned over your choice. Two people said their terminal was full of our furniture and that Claude Code worked worse under us. Both were right. It’s deleted. We start an ordinary session and watch from outside.</span></li>
-        <li><b>Your files are yours.</b> <span class="note">Agent work runs on your subscription, never ours. Nothing writes into your skills folder without you saying so.</span></li>
-        <li><b>Offline dictation is free forever.</b> <span class="note">No account. Runs on your Mac. Charging for that would be rude.</span></li>
-      </ul>
-      <p class="mark" style="margin-top:26px;">// "won't Anthropic just ship voice mode?"</p>
-      <p>Probably. And it will be voice for Claude. unmute is where <em>your</em> context lives — across every harness, every repo, every session, at the level of the operating system rather than inside one app. A harness can only ever add voice to itself.</p>
-      <p class="dim">Claude Code and Codex today. Every harness we can reach, once the interface itself is proven. Doing it in that order is a choice, not a gap.</p>
-    </section>
+<section class="plain" id="pricing">
+  <p class="eyebrow">// pricing</p>
+  <h2>Simple. Cheaper than one lunch.</h2>
+  <div class="pricing">
+    <div class="price"><div class="n">Offline dictation</div><div class="p">$0</div><div class="d">No account. On your Mac. Forever.</div></div>
+    <div class="price"><div class="n">Dictation</div><div class="p">$5.99<small style="font-size:15px">/mo</small></div><div class="d">Cloud dictation, fastest on the Mac.</div></div>
+    <div class="price hl"><div class="n">unmute</div><div class="p">$8.99<small style="font-size:15px">/mo</small></div><div class="d">Everything: sessions, pocket, agent, scratchpad, meetings.</div></div>
+  </div>
+</section>
 
-    <hr />
+<section class="close" id="close">
+  <h2 id="closeH">Just unmute for everything.</h2>
+  <div style="display:flex;gap:12px;margin-top:40px"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download for Mac</a><a class="btn ghost" href="https://cal.com/unmute/15min">Book 15 minutes</a></div>
+</section>
+<footer><span>© 2026 unmute</span><span>dictation · remote · pricing · manifesto · privacy · terms</span></footer>
 
-    <section>
-      <p class="mark">// price</p>
-      <ul class="dash">
-        <li><b>Offline dictation</b> — $0. <span class="note">No account. Forever.</span></li>
-        <li><b>Dictation</b> (cloud) — <b>$5.99/mo</b></li>
-        <li><b>Unmute</b> (dictation + remote) — <b>$8.99/mo</b> <span class="note">// the whole thing. a rounding error next to your Claude Code bill.</span></li>
-      </ul>
-      <p class="dim">Yearly is cheaper, obviously. Arithmetic still works in 2026. <a class="arrow" href="pricing.html">see pricing</a></p>
-      <p class="aside">// macOS says “damaged”? It’s signed &amp; notarized — that’s a browser quarantine flag. Drag unmute into Applications, then run <code>xattr -dr com.apple.quarantine /Applications/unmute.app</code> once. <a href="pricing.html">more</a></p>
-    </section>
-
-    <section>
-      <p class="mark">// talk to a human — 15 minutes</p>
-      <p>If you live in <b>Claude Code, Codex or Cursor</b>, I’d like 15 minutes. Not a demo, not a pitch — there’s nothing I could sell you on a call that this page hasn’t already tried.</p>
-      <p>I want to hear how you <em>actually</em> work: what you run all day, where it goes slow, and which part you’d hand to your voice if you trusted it enough.</p>
-      <p><a class="arrow" href="https://cal.com/unmute/15min" data-cal-link="unmute/15min" data-cal-namespace="unmute15" data-cal-config='{"layout":"month_view"}'>book 15 minutes</a> &nbsp;<span class="aside">// pick a slot — that’s the entire form. no phone number, no follow-up sequence. if no slot works, <a href="https://x.com/just_unmute">dm me</a>.</span></p>
-    </section>
-
-    <section>
-      <p class="mark">// if you want the argument rather than the product</p>
-      <p>There is a longer case for why a thin interface layer is the whole game right now — eighty years of it, ending at the machine on your desk. It is not a pitch and it is not on this page on purpose.</p>
-      <p><a class="arrow" href="manifesto.html">read the manifesto</a></p>
-    </section>
-
-    <footer>
-      <div class="logo"><img class="logo-black" src="unmute-wordmark-black.png" alt="unmute" width="78" height="26" /><img class="logo-white" src="unmute-wordmark-white.png" alt="" aria-hidden="true" width="78" height="26" /></div>
-      <div class="links">
-        <a href="dictation.html">dictation</a>
-        <a href="remote.html">unmute remote</a>
-        <a href="pricing.html">pricing</a>
-        <a href="manifesto.html">manifesto</a>
-        <a href="https://cal.com/unmute/15min" data-cal-link="unmute/15min" data-cal-namespace="unmute15">book a call</a>
-        <a href="https://github.com/arpitpatel25/unmute-dictation">open source</a>
-        <a href="https://x.com/just_unmute">twitter</a>
-        <a href="terms.html">terms</a>
-        <a href="privacy.html">privacy</a>
-      </div>
-      <div>© 2026 unmute · made for people who talk faster than they type.</div>
-    </footer>
-
-  </main>
-  <script src="theme.js?v=9"></script>
-  <script src="cal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollTrigger.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lenis@1.3.4/dist/lenis.min.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>
