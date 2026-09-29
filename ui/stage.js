@@ -54,7 +54,7 @@ const ready = fetch(new URL('../assets/ui/manifest.json', import.meta.url)).then
   manifest = m
   for (const k of Object.keys(m)) { const i = new Image(); i.src = assetUrl(k) }   // warm the cache
 })
-const assetUrl = (k) => new URL(`../assets/ui/${k}.webp`, import.meta.url).href   // lossless WebP of the captures
+const assetUrl = (k) => new URL(`../assets/ui/${k}.webp`, import.meta.url).href
 
 export class Stage {
   constructor(host, opts = {}) {
@@ -85,7 +85,17 @@ export class Stage {
     const loop = (t) => { this.frame(t / 1000); requestAnimationFrame(loop) }
     requestAnimationFrame(loop)
   }
-  fit() { this.screen.style.transform = `scale(${this.host.clientWidth / SCREEN_W})` }
+  // THE VIEW onto the screen. Desktop sees the whole 1440×900 screen. A phone
+  // gets a 4:5 portrait window that pans and zooms to the active surface —
+  // a whole Mac squeezed into 350px makes a 36pt pill about 9px tall.
+  fit() {
+    this.mobile = matchMedia('(max-width: 700px)').matches
+    this.view = this.mobile ? { w: 640, h: 800 } : { w: SCREEN_W, h: SCREEN_H }
+    this.host.style.aspectRatio = `${this.view.w} / ${this.view.h}`
+    Object.assign(this.screen.style, { width: this.view.w + 'px', height: this.view.h + 'px',
+      transform: `scale(${this.host.clientWidth / this.view.w})` })
+    this.focus()
+  }
   extra() { return this.host.querySelector('.extra') }
   app(name) { this.host.querySelectorAll('.app').forEach((a) => a.classList.toggle('on', a.dataset.app === name)); const t = this.host.querySelector(`.app[data-app="${name}"]`); if (t) this.host.querySelector('.mb-app').textContent = t.dataset.title || name }
 
@@ -111,21 +121,28 @@ export class Stage {
   // proportions are kept (a 36pt pill IS small on a 14" screen); the view
   // moves to it instead. Target follows what is on screen.
   focus() {
-    if (!this.camera) return
+    if (!this.camera || !this.view) return
     const n = this.current.notch || '', p = this.current.pill || ''
+    const M = this.mobile
     let f = null
-    if (/^pocket-/.test(n) && p) f = { x: 720, y: 330, z: 1.15, ay: 0.4 }   // card AND pill both matter
-    else if (/^(pad-|pill-paused)/.test(p)) f = { x: 900, y: 640, z: 1.55, ay: 0.55 }
-    else if (p) f = { x: 720, y: 779, z: 1.9, ay: 0.72 }
-    else if (/^(task-|agent-)/.test(n)) f = { x: 720, y: 0, z: 1.3, ay: 0 }
-    else if (/^pocket-/.test(n)) f = { x: 720, y: 0, z: 1.9, ay: 0 }
-    else if (n) f = { x: 720, y: 0, z: 2.1, ay: 0 }
-    const z = f ? 1 + (f.z - 1) * this.strength : 1
+    if (this.target) f = this.target                                          // a scene named its own subject
+    else if (/^pocket-/.test(n) && p) f = M ? { x: 720, y: 400, z: 0.95, ay: 0.5 } : { x: 720, y: 330, z: 1.15, ay: 0.4 }   // card AND pill both matter
+    else if (/^(pad-|pill-paused)/.test(p)) f = M ? { x: 895, y: 640, z: 1.15, ay: 0.6 } : { x: 900, y: 640, z: 1.55, ay: 0.55 }
+    else if (p) f = M ? { x: 720, y: 779, z: 1.75, ay: 0.72 } : { x: 720, y: 779, z: 1.9, ay: 0.72 }
+    else if (/^(task-|agent-)/.test(n)) f = M ? { x: 720, y: 0, z: 0.96, ay: 0 } : { x: 720, y: 0, z: 1.3, ay: 0 }
+    else if (/^pocket-/.test(n)) f = M ? { x: 720, y: 0, z: 1.7, ay: 0 } : { x: 720, y: 0, z: 1.9, ay: 0 }
+    else if (n) f = M ? { x: 720, y: 0, z: 1.45, ay: 0 } : { x: 720, y: 0, z: 2.1, ay: 0 }
+    if (!f) f = { x: 720, y: 450, z: M ? 0.9 : 1, ay: 0.5 }
+    const { w: VW, h: VH } = this.view
+    const minZ = Math.max(VW / SCREEN_W, VH / SCREEN_H)
+    // Desktop zoom is softened per stage (`zoom` option); a phone needs all of it.
+    const z = Math.max(minZ, M ? f.z : 1 + (f.z - 1) * this.strength)
     const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
-    const tx = f ? clamp(SCREEN_W / 2 - f.x * z, SCREEN_W - SCREEN_W * z, 0) : 0
-    const ty = f ? clamp(SCREEN_H * f.ay - f.y * z, SCREEN_H - SCREEN_H * z, 0) : 0
+    const tx = clamp(VW / 2 - f.x * z, VW - SCREEN_W * z, 0)
+    const ty = clamp(VH * f.ay - f.y * z, VH - SCREEN_H * z, 0)
     this.cam.style.transform = `translate(${tx}px, ${ty}px) scale(${z})`
   }
+
 
   frame(t) {
     if (!this.visible) return
@@ -168,6 +185,7 @@ export function track(stage, keys, hooks = {}) {
     // Rebuild cumulative state up to idx so jumping (scrub/reverse) is exact.
     const s = { notch: null, pill: null, speak: false }
     for (let i = 0; i <= idx; i++) Object.assign(s, keys[i][1])
+    stage.target = s.cam || null
     stage.set('notch', s.notch); stage.set('pill', s.pill); stage.speak(!!s.speak); stage.focus()
     if (s.app) stage.app(s.app)
     hooks.apply?.(s, idx)
