@@ -27,7 +27,7 @@ nav.top .links a{text-decoration:none}
 .stage{position:relative;width:100%;aspect-ratio:1440/900;border-radius:18px;overflow:hidden;
   box-shadow:0 50px 100px -40px rgba(30,30,60,.45),0 0 0 1px rgba(0,0,0,.08)}
 .stage .screen{position:absolute;left:0;top:0;width:1440px;height:900px;transform-origin:0 0;overflow:hidden}
-.stage .cam{position:absolute;inset:0;transform-origin:0 0;transition:transform .8s cubic-bezier(.42,0,.58,1);will-change:transform}
+.stage .cam{position:absolute;left:0;top:0;width:1440px;height:900px;transform-origin:0 0;transition:transform .8s cubic-bezier(.42,0,.58,1);will-change:transform}
 @media (prefers-reduced-motion:reduce){.stage .cam{transition:none}}
 .stage .menubar{position:absolute;inset:0 0 auto 0;height:34px;display:flex;justify-content:space-between;align-items:center;
   padding:0 22px;font:500 13px var(--ui);color:#fff;background:rgba(20,18,40,.18);backdrop-filter:blur(20px);z-index:2}
@@ -184,3 +184,63 @@ footer{padding:30px 4vw 50px;display:flex;justify-content:space-between;font-siz
   .trip .path{flex-wrap:wrap;top:44%}.step{flex:1 1 40%;height:110px}
 }
 @media (prefers-reduced-motion:reduce){ .said .w{animation:none;opacity:1} }
+
+/* ══ PHONES ════════════════════════════════════════════════════════════════
+   The stage becomes a 4:5 window that pans to the active surface (stage.js);
+   everything that was pinned and positioned becomes a plain vertical flow. */
+@media (max-width: 900px) {
+  html, body { overflow-x: clip }
+  nav.top { padding: 12px 18px } nav.top.scrolled { padding: 8px 18px } nav.top img { height: 30px }
+  .stage { border-radius: 14px }
+  .said { flex-wrap: wrap; min-height: 0; margin-top: 12px; padding: 0 6px; font-size: 15px; line-height: 1.35; text-align: left }
+  .said kbd { white-space: nowrap; font-size: 12px; padding: 5px 9px }
+
+  .hero { min-height: 0; padding: 96px 18px 56px }
+  .hero h1 { font-size: clamp(44px, 13vw, 64px) }
+  .hero .sub { font-size: 17px }
+  .hero .ctas { flex-wrap: wrap }
+  .hero .stagebox { width: 100%; margin-top: 36px }
+  .outcomes { gap: 14px; font-size: 12px; flex-wrap: wrap; margin-top: 8px }
+
+  /* the trip: why → a vertical story */
+  .trip { height: auto; overflow: visible; padding: 84px 18px 56px; display: flex; flex-direction: column; text-align: center }
+  .trip .head { display: contents }
+  .trip h2 { font-size: clamp(30px, 8.6vw, 40px) }
+  .trip .ha { order: 1 }
+  .trip .counter { order: 2; position: static; translate: none; align-self: center; margin: 20px 0 18px }
+  .trip .path { order: 3; position: static; translate: none; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100% }
+  .trip .line, .trip .idea { display: none }
+  .step { height: 124px; text-align: left }
+  .trip .again { order: 4; position: static; margin-top: 22px; font-size: 20px }
+  .trip .hb { order: 5; position: static; opacity: 1; margin-top: 56px }
+  .trip .tripstage { order: 6; position: static; translate: none; width: 100%; opacity: 1; margin-top: 22px }
+
+  .everywhere { min-height: 0; padding: 72px 18px 40px }
+  .everywhere h2 { font-size: clamp(30px, 8.6vw, 40px) }
+  .applist { gap: 12px; font-size: 12px; flex-wrap: wrap; justify-content: center }
+  .everywhere .stagebox { width: 100% }
+
+  /* the keys: one card per key, all readable at once */
+  .keysec { height: auto; padding: 72px 18px 32px; gap: 22px }
+  .keysec h2 { font-size: clamp(30px, 8.6vw, 40px) }
+  .keyrow { display: none }
+  .keydesc { height: auto; width: 100%; display: flex; flex-direction: column; gap: 12px; text-align: left }
+  .keydesc p { position: static; opacity: 1; font-size: 18px; padding: 16px 18px; background: #fff; border-radius: 14px; box-shadow: 0 0 0 1px var(--line) }
+
+  .chapter { min-height: 0; padding: 64px 18px 24px; gap: 22px }
+  .chapter .copy h2 { font-size: clamp(30px, 8.6vw, 40px) }
+  .chapter .copy p { font-size: 17px }
+  .chapter .stagebox { max-width: none }
+
+  .plain { padding: 72px 18px }
+  .plain h2 { font-size: clamp(30px, 8.6vw, 40px) }
+  .plain .lede { font-size: 17px }
+  .facts { gap: 22px }
+  .layer-wrap { min-height: 0; padding: 64px 18px; overflow: hidden }
+  .layer-wrap h2 { font-size: clamp(30px, 8.6vw, 40px) }
+  .stack { height: 300px; transform: scale(.72) }
+  .close { min-height: 80vh }
+  .close h2 { font-size: clamp(52px, 15vw, 80px) }
+  .close > div { flex-wrap: wrap; justify-content: center }
+  footer { flex-direction: column; gap: 8px; padding: 24px 18px 40px }
+}

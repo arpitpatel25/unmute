@@ -92,15 +92,25 @@ await ready
   ScrollTrigger.create({ trigger: '#hero', start: 'top bottom', end: 'bottom top', onToggle: (s) => (s.isActive ? loop.play() : loop.pause()) })
 }
 
-// Pinned + scrubbed on desktop; plays on arrival on small screens.
+// Desktop: pinned and scroll-scrubbed. Phones get their own treatment per section.
 const mm = gsap.matchMedia()
+const DESK = '(min-width: 901px) and (prefers-reduced-motion: no-preference)'
+const PHONE = '(max-width: 900px), (prefers-reduced-motion: reduce)'
 function pinned(sel, length, build) {
-  mm.add({ desk: '(min-width: 901px) and (prefers-reduced-motion: no-preference)', mob: '(max-width: 900px), (prefers-reduced-motion: reduce)' }, (ctx) => {
+  mm.add(DESK, () => {
     const sec = $(sel)
-    const tl = ctx.conditions.desk
-      ? gsap.timeline({ scrollTrigger: { trigger: sec, pin: true, start: 'top top', end: '+=' + length, scrub: 0.8, invalidateOnRefresh: true } })
-      : gsap.timeline({ scrollTrigger: { trigger: sec, start: 'top 60%', toggleActions: 'play none none none' } })
+    const tl = gsap.timeline({ scrollTrigger: { trigger: sec, pin: true, start: 'top top', end: '+=' + length, scrub: 0.8, invalidateOnRefresh: true } })
     build(tl, sec)
+  })
+}
+// A stage scene: scrubbed by scroll on desktop, LOOPING while on screen on a
+// phone — pinning a tall section on a small screen fights the thumb.
+function scenePlay(sel, length, fn, loopSeconds) {
+  pinned(sel, length, (tl) => drive(tl, fn, 0, 1))
+  mm.add(PHONE, () => {
+    const loop = gsap.to({}, { duration: loopSeconds, repeat: -1, ease: 'none', paused: true, onUpdate() { fn(this.progress()) } })
+    const st = ScrollTrigger.create({ trigger: sel, start: 'top 80%', end: 'bottom 20%', onToggle: (s) => (s.isActive ? loop.play() : loop.pause()) })
+    return () => { loop.kill(); st.kill() }
   })
 }
 // Drive a track from a span of a timeline: tl.to(proxy) over [at, at+dur].
@@ -147,6 +157,19 @@ const drive = (tl, fn, at, dur) => { const o = { p: 0 }; tl.to(o, { p: 1, durati
       .to(counter, { opacity: 1, duration: 0.2 }, '<')
       .to({}, { duration: 0.6 })
   })
+  mm.add(PHONE, () => {
+    const sec = $('#trip'), steps = $$('.step', sec), counter = $('.counter', sec)
+    const secs = [3, 8, 17, 41, 58, 60], c = { s: 0, t: 0 }
+    const tl = gsap.timeline({ scrollTrigger: { trigger: '#trip .path', start: 'top 75%' } })
+    steps.forEach((st, i) => {
+      tl.fromTo(st, { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.3, ease: 'power3.out' }, i ? '>+.12' : 0)
+        .to(c, { s: i + 1, t: secs[i], duration: 0.3, ease: 'none', onUpdate: () => (counter.textContent = `${Math.round(c.s)} steps · ${Math.round(c.t)}s`) }, '<')
+    })
+    tl.fromTo($('.again', sec), { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.4 })
+    const loop = gsap.to({}, { duration: 12, repeat: -1, ease: 'none', paused: true, onUpdate() { fn(this.progress()) } })
+    const st = ScrollTrigger.create({ trigger: '#trip .tripstage', start: 'top 85%', end: 'bottom 15%', onToggle: (s) => (s.isActive ? loop.play() : loop.pause()) })
+    return () => { loop.kill(); st.kill(); tl.kill() }
+  })
 }
 
 // ── 2b · EVERYWHERE ───────────────────────────────────────────────────────────
@@ -171,7 +194,7 @@ const drive = (tl, fn, at, dur) => { const o = { p: 0 }; tl.to(o, { p: 1, durati
     [0.90, { pill: 'pill-ropt-proc', speak: false }],
     [0.94, { pill: null, notch: 'bar-working4' }],
   ], { zoom: 0.6, apply: (s) => names.forEach((n, j) => n.classList.toggle('on', j === s.i)) })
-  pinned('#everywhere', 3600, (tl) => drive(tl, fn, 0, 1))
+  scenePlay('#everywhere', 3600, fn, 18)
 }
 
 // ── 3 · KEYS ─────────────────────────────────────────────────────────────────
@@ -198,7 +221,7 @@ pinned('#keys', 2200, (tl, sec) => {
     [0.48, { pill: null, notch: 'bar-sending' }],
     [0.54, { notch: 'task-1' }], [0.66, { notch: 'task-2' }], [0.78, { notch: 'task-3' }], [0.88, { notch: 'task-4' }],
   ])
-  pinned('#chStart', 2600, (tl) => drive(tl, fn, 0, 1))
+  scenePlay('#chStart', 2600, fn, 14)
 }
 
 // ── 5 · POCKET ───────────────────────────────────────────────────────────────
@@ -212,7 +235,7 @@ pinned('#keys', 2200, (tl, sec) => {
     [0.70, { pill: null, speak: false, notch: 'pocket-sent' }],
     [0.84, { notch: 'pocket-open-csv' }],
   ])
-  pinned('#chPocket', 2600, (tl) => drive(tl, fn, 0, 1))
+  scenePlay('#chPocket', 2600, fn, 14)
 }
 
 // ── 6 · CAPTURE + SCRATCHPAD ──────────────────────────────────────────────────
@@ -242,7 +265,7 @@ pinned('#keys', 2200, (tl, sec) => {
       gsap.to(b, { opacity: s.box === 1 ? 1 : 0, width: s.box >= 1 ? 250 : 0, height: s.box >= 1 ? 76 : 0, duration: s.box === 1 ? 0.5 : 0.2, ease: 'power1.inOut' })
     },
   })
-  pinned('#chCapture', 4200, (tl) => drive(tl, fn, 0, 1))
+  scenePlay('#chCapture', 4200, fn, 22)
 }
 
 // ── 7 · AGENT ────────────────────────────────────────────────────────────────
@@ -266,7 +289,7 @@ pinned('#keys', 2200, (tl, sec) => {
     html: '<div class="later">Two weeks later</div>',
     apply(s, idx, st) { gsap.to($('.later', st.host), { opacity: s.later ? 1 : 0, duration: 0.3 }) },
   })
-  pinned('#chAgent', 3600, (tl) => drive(tl, fn, 0, 1))
+  scenePlay('#chAgent', 3600, fn, 20)
 }
 
 // ── 8 · MEETINGS ─────────────────────────────────────────────────────────────
@@ -280,10 +303,10 @@ pinned('#keys', 2200, (tl, sec) => {
     <span class="row ok" style="gap:7px"><span style="display:flex;gap:2px;align-items:center"><span style="width:2px;height:7px;border-radius:9px;background:#6fbf9a;opacity:.55"></span><span style="width:2px;height:13px;border-radius:9px;background:#6fbf9a"></span><span style="width:2px;height:9px;border-radius:9px;background:#6fbf9a;opacity:.75"></span></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" style="color:#6fbf9a"><path d="M5 12.5l4.2 4.1L19.5 6.8" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Saved — preparing notes</span>
   </div>`
   const { stage, fn } = scene('meet', apps(['call', LOW], ['inbox', LOW]), [
-    [0.00, { app: 'call', nt: 'rec', say: '', key: '' }],
+    [0.00, { app: 'call', nt: 'rec', say: '', key: '', cam: { x: 150, y: 779, z: 1.7, ay: 0.72 } }],
     [0.16, { nt: 'discard', key: 'click', say: 'the call wraps up — End' }],
     [0.24, { nt: 'done', say: '' , key: ''}],
-    [0.31, { nt: null, app: 'inbox' }],
+    [0.31, { nt: null, app: 'inbox', cam: null }],
     [0.35, { key: 'right ⌘ ×2', say: 'any follow-ups for me from that call?', pill: 'pill-agent-rec', speak: true }],
     [0.46, { pill: 'pill-agent-proc', speak: false }],
     [0.50, { pill: null, notch: 'agent-meet-1' }],
@@ -307,7 +330,7 @@ pinned('#keys', 2200, (tl, sec) => {
     if (!stage.ntLive) return bars.forEach((b) => (b.style.height = '3px'))
     bars.forEach((b, i) => { const v = Math.max(0, Math.sin(t * 6 + i * 1.7) * 0.5 + Math.sin(t * 11 + i) * 0.3) * (0.5 + 0.5 * Math.sin(t * 1.3)); b.style.height = 3 + Math.round(v * 13) + 'px' })
   })
-  pinned('#chMeet', 3400, (tl) => drive(tl, fn, 0, 1))
+  scenePlay('#chMeet', 3400, fn, 20)
 }
 
 // ── 9 · DICTATION — autoplay when in view ────────────────────────────────────
