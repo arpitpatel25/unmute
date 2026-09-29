@@ -70,6 +70,7 @@ export class Stage {
         <div class="slot" data-role="pill"><img alt=""><img alt=""></div>
         <canvas class="live" width="${SCREEN_W * 2}" height="${SCREEN_H * 2}"></canvas>
         <div class="extra"></div>
+        <div class="voice"><div class="bubble"><div class="hd"><span class="you">🎙 you say</span><kbd></kbd></div><q></q></div><div class="result"></div></div>
       </div></div>`
     this.screen = host.querySelector('.screen')
     this.cam = host.querySelector('.cam')
@@ -116,6 +117,63 @@ export class Stage {
     next.classList.add('on')
   }
   speak(on) { this.speaking = on }
+
+  // ── WHAT YOU SAID, AND WHAT IT DID ─────────────────────────────────────────
+  // An annotation, not product UI: a quote bubble grows out of the pill while
+  // you speak (words land in time with the waveform), folds back into the pill
+  // on ✓, and its words fly to where the work happened, which gets a label.
+  pillAnchor() {
+    const p = this.current.pill, m = p && manifest?.[`${p}.pill`]
+    if (!m) return { x: 720, y: 760 }
+    // Cluster assets are bottom-aligned; pad assets carry the pad to the right
+    // of a 178pt cluster, so anchor on the cluster itself.
+    const w = /^(pad-|pill-paused)/.test(p) ? 178 : m.w
+    return { x: m.x + w / 2, y: m.y + m.h - 36 }
+  }
+  voice(key, text, speaking) {
+    const b = this.host.querySelector('.bubble'), q = b.querySelector('q')
+    if (speaking && text) {
+      const sig = key + '|' + text
+      if (b.dataset.sig !== sig) {
+        b.dataset.sig = sig
+        b.querySelector('kbd').textContent = key || ''
+        b.querySelector('kbd').style.display = key ? '' : 'none'
+        const words = text.split(' '), step = Math.min(300, 2300 / words.length)
+        // The quote marks ride INSIDE the first and last word, so a closing ”
+        // can never wrap onto a line of its own.
+        const last = words.length - 1
+        q.innerHTML = words.map((w, i) => `<span class="w" style="animation-delay:${Math.round(i * step)}ms">${i === 0 ? '<i>“</i>' : ''}${w}${i === last ? '<i>”</i>' : ''}</span>`).join(' ')
+      }
+      const a = this.pillAnchor()
+      Object.assign(b.style, { left: a.x + 'px', top: a.y - 16 + 'px', maxWidth: (this.mobile ? 340 : 560) + 'px' })
+      b.classList.remove('sent'); b.classList.add('on')
+      this.lastSaid = text
+    } else if (b.classList.contains('on')) {
+      b.classList.remove('on'); b.classList.add('sent')
+    }
+  }
+  land(label, at, labelAt) {
+    const r = this.host.querySelector('.result')
+    if (!label || !at) { r.classList.remove('on'); return }
+    const [x, y] = at, from = this.pillAnchor()
+    // The words travel from the pill to the place they landed.
+    const f = document.createElement('div')
+    f.className = 'flight'
+    f.textContent = '“' + (this.lastSaid || '') + '”'
+    f.style.left = from.x + 'px'; f.style.top = from.y - 20 + 'px'
+    this.host.querySelector('.voice').append(f)
+    f.animate([{ transform: 'translate(-50%,-50%) scale(1)', opacity: 1 },
+      { transform: `translate(calc(-50% + ${x - from.x}px), calc(-50% + ${y - from.y + 20}px)) scale(.55)`, opacity: 0 }],
+      { duration: 700, easing: 'cubic-bezier(.42,0,.58,1)' }).onfinish = () => f.remove()
+    r.textContent = label
+    const [lx, ly] = labelAt || [x, y < 200 ? y + 24 : y - 64]
+    r.style.left = lx + 'px'
+    r.style.top = ly + 'px'
+    r.classList.remove('on'); void r.offsetWidth
+    setTimeout(() => r.classList.add('on'), 450)
+    clearTimeout(this.resultT)
+    this.resultT = setTimeout(() => r.classList.remove('on'), 3200)
+  }
 
   // THE CAMERA — the production bible's "punch in on the active area". Real
   // proportions are kept (a 36pt pill IS small on a 14" screen); the view
