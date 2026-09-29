@@ -162,8 +162,8 @@ const drive = (tl, fn, at, dur) => { const o = { p: 0 }; tl.to(o, { p: 1, durati
     const secs = [3, 8, 17, 41, 58, 60], c = { s: 0, t: 0 }
     const tl = gsap.timeline({ scrollTrigger: { trigger: '#trip .path', start: 'top 75%' } })
     steps.forEach((st, i) => {
-      tl.fromTo(st, { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.3, ease: 'power3.out' }, i ? '>+.12' : 0)
-        .to(c, { s: i + 1, t: secs[i], duration: 0.3, ease: 'none', onUpdate: () => (counter.textContent = `${Math.round(c.s)} steps · ${Math.round(c.t)}s`) }, '<')
+      tl.fromTo(st, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.18, ease: 'power3.out' }, i ? '>+.04' : 0)
+        .to(c, { s: i + 1, t: secs[i], duration: 0.18, ease: 'none', onUpdate: () => (counter.textContent = `${Math.round(c.s)} steps · ${Math.round(c.t)}s`) }, '<')
     })
     tl.fromTo($('.again', sec), { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.4 })
     const loop = gsap.to({}, { duration: 12, repeat: -1, ease: 'none', paused: true, onUpdate() { fn(this.progress()) } })

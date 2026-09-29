@@ -244,3 +244,23 @@ footer{padding:30px 4vw 50px;display:flex;justify-content:space-between;font-siz
   .close > div { flex-wrap: wrap; justify-content: center }
   footer { flex-direction: column; gap: 8px; padding: 24px 18px 40px }
 }
+
+/* ── PHONES, SIMPLER: one idea per screen, no repeats ──────────────────────
+   The hero demo and the trip already show typing, starting and resuming, so
+   the sections that restate them are desktop-only. */
+@media (max-width: 900px) {
+  .outcomes, .works { display: none }
+  #everywhere, #chStart, #chMeet { display: none }
+  #dictate .stagebox, #dictate .said, #layer .stack { display: none }
+  #layer { display: block }
+
+  /* the trip: six plain lines instead of six illustrated cards */
+  .trip .path { grid-template-columns: 1fr; gap: 0; max-width: 340px; margin: 0 auto; text-align: left }
+  .step { height: auto; padding: 11px 2px; border-radius: 0; box-shadow: none; background: none; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: baseline }
+  .step .viz { display: none !important }   /* step 06 carries an inline display:grid */
+  .step .lab { flex: none; width: 22px; font-size: 12px }
+  .step .lab-rest { display: none }
+  .step .t { margin: 0; font-size: 16px; font-weight: 560 }
+  .trip .counter { margin: 18px 0 10px }
+  .trip .ha br { display: none }
+}
