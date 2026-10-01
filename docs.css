@@ -1,19 +1,15 @@
-/* ───────────────────────────────────────────────────────────
-   unmute — "raw docs" theme
-   Warm paper, black ink, monospace. The logo is the only colour.
-   ─────────────────────────────────────────────────────────── */
+@import url("brand.css");
 
 :root {
-  --paper: #F4EFE3;        /* warm paper */
-  --ink:   #14110D;        /* near-black */
-  --ink-60: rgba(20,17,13,0.62);
-  --ink-40: rgba(20,17,13,0.40);
-  --rule:  rgba(20,17,13,0.16);
-  --mark:  rgba(20,17,13,0.34);   /* // comment colour */
-  --purple: #7C4DEA;              /* brand accent, used sparingly */
+  --paper: var(--bg);
+  --ink-60: #6b6b70;
+  --ink-40: #75757a;
+  --rule: var(--line);
+  --mark: var(--dim);
+  --purple: var(--accent);
 }
 
-/* dark mode — neutral near-black, a hair of grey (no brown/warm tint) */
+/* Optional dark mode uses the same neutral palette and purple accent. */
 html[data-theme="dark"] {
   --paper: #19191B;        /* neutral charcoal */
   --ink:   #ECECEC;        /* neutral off-white */
@@ -32,13 +28,13 @@ body {
   margin: 0;
   background: var(--paper);
   color: var(--ink);
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 15.5px;
-  line-height: 1.72;
+  font-family: var(--ui);
+  font-size: 17px;
+  line-height: 1.65;
   -webkit-font-smoothing: antialiased;
 }
 
-.page { max-width: 720px; margin: 0 auto; padding: 56px 28px 90px; }
+.page { max-width: 800px; margin: 0 auto; padding: 56px 28px 90px; }
 @media (max-width: 620px) { .page { padding: 40px 20px 70px; } }
 
 /* top line: logo + tiny right-aligned nav */
@@ -67,7 +63,7 @@ html[data-theme="dark"] .top .logo:hover .logo-black { display: block; }
 /* the always-present download CTA in the nav */
 .top nav .nav-cta {
   background: var(--ink); color: var(--paper);
-  padding: 6px 14px; border-radius: 7px; font-weight: 700; text-decoration: none;
+  padding: 6px 14px; border-radius: 999px; font-weight: 600; text-decoration: none;
 }
 .top nav .nav-cta:hover { background: var(--ink); color: var(--paper); opacity: 0.85; }
 @media (max-width: 560px) { .top nav { gap: 12px; font-size: 12px; } }
@@ -113,16 +109,16 @@ kbd {
   background: transparent; line-height: 1;
 }
 
-/* links — black, underlined, no colour */
+/* Underlined links remain recognizable within prose. */
 a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 a:hover { background: var(--ink); color: var(--paper); text-decoration: none; }
 a.arrow::after { content: ' →'; }
 
-/* the single allowed button */
+/* Buttons match the landing page. */
 .btn {
   display: inline-block; margin: 6px 0; padding: 11px 20px;
   background: var(--ink); color: var(--paper); text-decoration: none;
-  border-radius: 8px; font-weight: 700; font-size: 14.5px;
+  border-radius: 999px; font-weight: 600; font-size: 14.5px;
 }
 .btn:hover { opacity: 0.85; }
 
@@ -140,11 +136,7 @@ html[data-theme="dark"] footer .logo .logo-black { display: none; }
 html[data-theme="dark"] footer .logo .logo-white { display: block; }
 
 
-/* ═══ added for the rebuild ══════════════════════════════════════
-   Same paper/ink/mono system. New structure only: a hero, a keys
-   grid, pull-quote bands, and the lineage ledger. Purple stays rare
-   — the logo, the live row of the ledger, the cursor, focus rings.
-   ══════════════════════════════════════════════════════════════ */
+/* Feature-page layouts, using the shared site palette. */
 
 h3 { font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 6px; }
 
@@ -156,16 +148,13 @@ a:focus-visible, .btn:focus-visible, .theme-toggle:focus-visible {
 /* ── hero ── */
 .hero { margin: 4px 0 0; }
 .eyebrow { color: var(--mark); font-size: 13px; margin: 0 0 16px; }
-/* Display face for the one headline. Outfit is geometric with circular
-   bowls, which is the same construction as the wordmark sitting above it —
-   so the word "unmute" in the headline rhymes with the logo. Everything
-   else on the page stays mono. */
+/* Display headings use the shared system typeface. */
 .hero h1 {
-  font-family: 'Outfit', ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
+  font-family: var(--ui);
   font-size: clamp(42px, 9vw, 76px); line-height: 0.98;
   letter-spacing: -0.035em; font-weight: 800; margin: 0 0 22px;
 }
-.hero h1 .cursor { font-family: 'JetBrains Mono', monospace; font-size: 0.72em; }
+.hero h1 .cursor { font-family: var(--mono); font-size: 0.72em; }
 .hero-sub { font-size: 17px; line-height: 1.62; color: var(--ink-60); max-width: 33em; margin: 0 0 24px; }
 /* the leverage claim — the one place in the hero that gets the accent rule */
 .claim { border-left: 2px solid var(--purple); padding: 2px 0 2px 16px; margin: 0 0 26px; max-width: 34em; }
@@ -236,3 +225,33 @@ a:focus-visible, .btn:focus-visible, .theme-toggle:focus-visible {
 }
 .mf p { margin: 0 0 14px; }
 .mf p:last-child { margin-bottom: 0; }
+
+/* Navigation and reading surfaces share the landing page's visual language. */
+.top nav a { text-decoration: none; }
+.top nav a:not(.nav-cta):hover { background: transparent; color: var(--ink); }
+.top .logo:hover { background: transparent; }
+.top .logo:hover .logo-black { display: block; }
+.top .logo:hover .logo-white { display: none; }
+html[data-theme="dark"] .top .logo:hover .logo-black { display: none; }
+html[data-theme="dark"] .top .logo:hover .logo-white { display: block; }
+h1,h2,h3 { letter-spacing: -.035em; font-weight: 680; }
+.mark,.eyebrow,.numeral { font-family: var(--mono); }
+a:hover { background: transparent; color: var(--purple); text-decoration: underline; }
+footer .links a:hover { color: var(--ink); }
+.legal h1 { font-size: clamp(38px,6vw,64px); line-height: 1.05; margin-bottom: 14px; }
+.legal h2 { font-size: 24px; margin: 40px 0 12px; }
+.legal h3 { font-size: 19px; margin: 24px 0 10px; }
+.legal p,.legal ul { color: var(--ink-60); margin-bottom: 16px; }
+.legal strong { color: var(--ink); }
+.legal ul { padding-left: 24px; }
+.legal li { margin: 8px 0; }
+.legal a { overflow-wrap: anywhere; }
+.lastupd { font: 13px/1.5 var(--mono); margin-bottom: 32px !important; }
+.tldr { border: 1px solid var(--rule); border-radius: 18px; padding: 24px; margin: 32px 0; }
+.tldr h3 { color: var(--purple); font: 600 13px/1.4 var(--mono); margin: 0 0 14px; }
+.tldr p:last-child { margin-bottom: 0; }
+@media(max-width:620px) {
+  .top { align-items: flex-start; flex-direction: column; gap: 22px; margin-bottom: 40px; }
+  .top nav { justify-content: flex-start; gap: 16px; }
+  .tldr { padding: 20px; }
+}
