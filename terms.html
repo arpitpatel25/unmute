@@ -7,74 +7,28 @@
 <meta name="description" content="Terms of service for unmute dictation." />
 <link rel="icon" type="image/png" href="icon.png" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<style>
-  :root {
-    --ink: #2A1E18;
-    --ink-70: rgba(42,30,24,0.72);
-    --ink-50: rgba(42,30,24,0.50);
-    --ink-15: rgba(42,30,24,0.15);
-    --ink-08: rgba(42,30,24,0.08);
-    --paper: #FDF8F4;
-    --accent: #C44A2E;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: var(--paper); }
-  body {
-    color: var(--ink);
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    line-height: 1.62;
-    min-height: 100vh;
-  }
-  .wrap { max-width: 640px; margin: 0 auto; padding: 0 28px; }
-  nav { padding: 36px 0 0; }
-  nav a.brand {
-    color: var(--ink); text-decoration: none;
-    font-family: 'Instrument Serif', 'Times New Roman', serif;
-    font-size: 22px; letter-spacing: -0.01em;
-  }
-  nav a.brand:hover { color: var(--accent); }
-  main { padding: 60px 0 80px; }
-  h1 {
-    font-family: 'Instrument Serif', 'Times New Roman', serif;
-    font-weight: 400; font-size: clamp(36px, 5vw, 52px);
-    letter-spacing: -0.02em; line-height: 1.05;
-    margin: 0 0 8px;
-  }
-  .lastupd { font-size: 12px; color: var(--ink-50); margin: 0 0 32px; letter-spacing: 0.03em; text-transform: uppercase; }
-  h2 {
-    font-family: 'Instrument Serif', 'Times New Roman', serif;
-    font-weight: 500; font-size: 22px;
-    letter-spacing: -0.01em; line-height: 1.2;
-    margin: 36px 0 12px;
-  }
-  p { font-size: 15.5px; color: var(--ink-70); margin: 0 0 14px; }
-  p strong { color: var(--ink); font-weight: 600; }
-  ul { font-size: 15.5px; color: var(--ink-70); margin: 0 0 14px; padding-left: 20px; }
-  ul li { margin: 4px 0; }
-  a { color: var(--ink); border-bottom: 1px solid var(--ink-15); text-decoration: none; transition: all .15s; }
-  a:hover { border-bottom-color: var(--ink); }
-  footer {
-    border-top: 1px solid var(--ink-08);
-    padding: 30px 0 50px;
-    font-size: 12px; color: var(--ink-50);
-    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
-  }
-  footer .links { display: flex; gap: 18px; }
-  footer a { border: none; color: var(--ink-70); }
-  footer a:hover { color: var(--ink); }
-</style>
+<link rel="stylesheet" href="docs.css?v=10" />
+<script>(function(){try{var t=localStorage.getItem('theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body>
-  <div class="wrap">
-    <nav>
-      <a href="./" class="brand">← unmute</a>
-    </nav>
+  <div class="page">
+    <div class="top">
+      <a class="logo" href="./" aria-label="unmute">
+        <img class="logo-black" src="unmute-wordmark-black.png" alt="unmute" width="108" height="36" /><img class="logo-white" src="unmute-wordmark-white.png" alt="" aria-hidden="true" width="108" height="36" />
+      </a>
+      <nav>
+        <a href="dictation.html">dictation</a>
+        <a href="remote.html">unmute remote</a>
+        <a href="pricing.html">pricing</a>
+        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
+          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        </button>
+        <a class="nav-cta" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Get unmute</a>
+      </nav>
+    </div>
 
-    <main>
+    <main class="legal">
       <h1>Terms of Service</h1>
       <p class="lastupd">Effective: June 2026</p>
 
@@ -174,14 +128,22 @@
     </main>
 
     <footer>
-      <div>© 2026 unmute · MIT</div>
       <div class="links">
         <a href="./">Home</a>
-        <a href="refund.html">Refund</a>
+        <a href="dictation.html">Dictation</a>
+        <a href="remote.html">Remote</a>
+        <a href="pricing.html">Pricing</a>
+        <a href="manifesto.html">Manifesto</a>
         <a href="privacy.html">Privacy</a>
-        <a href="https://github.com/arpitpatel25/unmute-dictation">GitHub</a>
+        <a href="terms.html">Terms</a>
+        <a href="refund.html">Refunds</a>
+        <a href="https://cal.com/unmute/15min">Book a call</a>
+        <a href="https://github.com/arpitpatel25/unmute-dictation">Open source</a>
+        <a href="https://x.com/just_unmute">Twitter</a>
       </div>
+      <div>© 2026 unmute</div>
     </footer>
   </div>
+  <script src="theme.js?v=10"></script>
 </body>
 </html>

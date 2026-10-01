@@ -1,0 +1,10 @@
+/* Shared visual tokens for the landing, feature, and legal pages. */
+:root {
+  --bg: #FAFAF7;
+  --ink: #111113;
+  --dim: #6b6b70;
+  --line: rgba(0,0,0,.08);
+  --accent: #7B5CFF;
+  --ui: -apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+  --mono: ui-monospace,"SF Mono",Menlo,monospace;
+}
