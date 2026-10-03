@@ -35,3 +35,6 @@ footer{background:#fff;border-top:0;padding-top:30px;padding-bottom:30px}
 @media(max-width:600px){nav.top{padding:14px 20px}nav.top img{height:34px}.btn.sm{font-size:11px;padding:10px 12px}.hero{padding:36px 20px 44px}.hero::before{background-size:auto 700px;background-position:38% top}.hero::after{background:linear-gradient(to bottom,#f7faeee6,#f7faeecc 390px,transparent 580px)}.hero h1{font-size:44px;line-height:1.06;letter-spacing:-.03em}.hero .eyebrow{font-size:11px}.hero .sub{font-size:15px;line-height:1.6}.btn{font-size:12px;padding:13px 17px}.hero-demo{margin-top:32px}.hero-demo .stage{border-width:3px;border-radius:13px}.works{font-size:10px;gap:10px}.sec .copy h2{font-size:36px;line-height:1.1}.sec .copy p{font-size:16px}.attention .copy h2{font-size:35px}.close{padding:85px 24px 100px}.close h2{font-size:40px}.close p{font-size:15px}.close::before{background-position:65% bottom}.close::after{background:rgba(255,255,247,.6)}}
 
 @media(prefers-reduced-motion:reduce){nav.top{transition:none}}
+
+/* Blend the closing artwork into the white section above it. */
+.close::before,.close::after{-webkit-mask-image:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.35) 70px,#000 180px);mask-image:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.35) 70px,#000 180px)}
