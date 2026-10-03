@@ -5,7 +5,7 @@ html,body{background:#fff}
 h1,h2{font-family:Lora,Georgia,serif;font-weight:400;letter-spacing:-.025em}
 nav.top{background:#fff;border-bottom:1px solid #e1e8e2;backdrop-filter:none;padding-top:18px;padding-bottom:18px}
 nav.top{transition:background-color .25s ease,backdrop-filter .25s ease,border-color .25s ease}
-nav.top.scrolled{background:rgba(255,255,255,.72);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom-color:rgba(219,230,221,.5)}
+nav.top.scrolled{background:rgba(255,255,255,.38);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom-color:rgba(219,230,221,.5)}
 nav.top img{height:42px}nav.top .links{font-size:14px;gap:30px}
 .btn{font-weight:500;font-size:14px;padding:14px 23px;border-radius:9px;background:#213d32;border-color:#213d32}
 .btn.ghost{background:rgba(255,255,255,.8);border-color:#b9c9bd}.btn.sm{font-size:13px;padding:11px 17px}
