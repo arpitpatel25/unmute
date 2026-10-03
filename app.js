@@ -1,22 +1,22 @@
-import { Stage, track, ready } from './ui/stage.js'
+import { Stage, track, ready } from './ui/stage.js?v=20261003-v17'
 
-gsap.registerPlugin(ScrollTrigger)
 const $ = (s, r = document) => r.querySelector(s)
 const $$ = (s, r = document) => [...r.querySelectorAll(s)]
-const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches
-
-if (!reduce) {
-  const lenis = new Lenis({ lerp: 0.09 })
-  lenis.on('scroll', ScrollTrigger.update)
-  gsap.ticker.add((t) => lenis.raf(t * 1000))
-  gsap.ticker.lagSmoothing(0)
+const motionPreference = matchMedia('(prefers-reduced-motion: reduce)')
+const reduce = motionPreference.matches
+let motionPaused = reduce
+const scenes = []
+function syncMotion() {
+  document.body.classList.toggle('motion-paused', motionPaused)
+  for (const item of scenes) {
+    item.stage.paused = motionPaused
+    if (!motionPaused && item.inView && !document.hidden) item.loop.play()
+    else item.loop.pause()
+  }
+  const button = $('.rot-pause')
+  button.textContent = motionPaused ? 'Play demos' : 'Pause demos'
+  button.setAttribute('aria-label', motionPaused ? 'Play all demos' : 'Pause all demos')
 }
-ScrollTrigger.create({ start: 40, onToggle: (s) => $('nav.top').classList.toggle('scrolled', s.isActive) })
-const splitWords = (el) => { el.innerHTML = el.textContent.split(' ').map((w) => `<span class="w">${w}</span>`).join(' ') ; return $$('.w', el) }
-
-// Where work lands on the 1440×900 screen, for the "what it did" label.
-const NOTCH = [720, 17], SLACK = [720, 661], MAIL = [560, 285], NOTES = [520, 235], TERM = [620, 235]
-const PANEL = [720, 200], PANEL_L = [720, 426], POCKET = [720, 76], POCKET_L = [720, 166], PAD = [987, 600], PAD_L = [987, 452]
 
 // ── The user's own apps: plain stand-ins, never unmute UI ─────────────────────
 const W = (app, title, body, style = '', cls = '') =>
@@ -40,23 +40,55 @@ const APPS = {
 // Where an expanded surface (≤ 648×405 at the top) or the pocket card will
 // appear, windows sit clear of it: the glass in those captures sampled the
 // wallpaper, and must be shown over the wallpaper.
-const LOW = 'top:440px;left:120px;width:1200px;height:400px'
+
 const apps = (...list) => list.map(([k, s]) => APPS[k](s || '')).join('')
 
-// Narration only (what you DO, not what you say): the subtitle under the screen.
-// Speech lives in the bubble on the stage itself.
+const NT_HTML = `<div class="nt rec">
+    <span class="row rec"><span class="wave">${'<div></div>'.repeat(11)}</span></span>
+    <span class="row dis"><span style="width:30px;display:grid;place-items:center;color:rgba(255,255,255,.55)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></span>
+      <span style="display:flex;gap:6px;align-items:center;padding-right:12px"><span style="width:9px;height:9px;border-radius:2px;background:#6fbf9a;box-shadow:0 0 0 1px rgba(255,255,255,.18)"></span>End</span>
+      <span style="width:1px;height:16px;background:rgba(255,255,255,.16)"></span>
+      <span style="display:flex;gap:6px;align-items:center;padding:0 13px 0 12px;color:#c4482e"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Discard</span></span>
+    <span class="row ok" style="gap:7px"><span style="display:flex;gap:2px;align-items:center"><span style="width:2px;height:7px;border-radius:9px;background:#6fbf9a;opacity:.55"></span><span style="width:2px;height:13px;border-radius:9px;background:#6fbf9a"></span><span style="width:2px;height:9px;border-radius:9px;background:#6fbf9a;opacity:.75"></span></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" style="color:#6fbf9a"><path d="M5 12.5l4.2 4.1L19.5 6.8" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Saved — preparing notes</span>
+  </div>`
+
+// The Notetaker pill (NotetakerWidget.tsx, ported as-is): recording → End/Discard → saved.
+function ntApply(s, st) {
+  const el = $('.nt', st.host); if (!el) return
+  el.className = 'nt ' + (s.nt || 'rec')
+  el.style.opacity = s.nt ? 1 : 0
+  st.ntLive = s.nt === 'rec'
+}
+function ntBars(stage) {
+  const bars = $$('.nt .wave div', stage.host)
+  gsap.ticker.add((t) => {
+    if (stage.paused || !stage.visible || !stage.ntLive) return bars.forEach((b) => (b.style.height = '3px'))
+    bars.forEach((b, i) => { const v = Math.max(0, Math.sin(t * 6 + i * 1.7) * 0.5 + Math.sin(t * 11 + i) * 0.3) * (0.5 + 0.5 * Math.sin(t * 1.3)); b.style.height = 3 + Math.round(v * 13) + 'px' })
+  })
+}
+
+// ── Scenes ────────────────────────────────────────────────────────────────────
+// A scene's keys are in SECONDS; the loop length is the last key + a rest.
+// Each section shows ONE idea (one or two beats). The hero is the only
+// multi-beat loop, and its rotating headline follows the beat on screen.
+const NOTCH = [720, 17], SLACK = [720, 661], MAIL = [560, 285], NOTES = [520, 235]
+const PANEL = [720, 200], PANEL_L = [720, 426], POCKET = [720, 58], POCKET_L = [720, 128]
+const NT = { x: 150, y: 779, z: 1.7, ay: 0.72 }
+const PILL_HOME = { x: 720, y: 640, z: 1.35, ay: 0.62 }   // framed on where the pill will appear
+const TOP_HOME = { x: 720, y: 0, z: 1.25, ay: 0 }
+
 function said(el, key, text) {
   if (!el) return
-  if (!key && !text) { el.innerHTML = ''; return }
-  el.innerHTML = `${key ? `<kbd class="on">${key}</kbd>` : ''}<span class="q">${(text || '').split(' ').map((w, i) => `<span class="w" style="animation-delay:${i * 55}ms">${w}</span>`).join(' ')}</span>`
+  el.innerHTML = text ? `${key ? `<kbd>${key}</kbd> ` : ''}${text}` : ''
 }
 function typed(stage, text) { $$('.compose, .typed', stage.host).forEach((e) => { e.textContent = text || '' }) }
 
-// A scene = stage + track + standard hook for captions/typed text/extras.
-function scene(name, appHtml, keys, extra = {}) {
+function scene(name, appHtml, secKeys, opts = {}) {
   const host = $(`[data-stage="${name}"]`)
-  const stage = new Stage(host, { apps: appHtml, zoom: extra.zoom })
-  if (extra.html) stage.extra().innerHTML = extra.html
+  const stage = new Stage(host, { apps: appHtml, zoom: opts.zoom, home: opts.home, desktopView: opts.desktopView, mobileZoom: opts.mobileZoom, camera: false, fullScreen: true })
+  if (opts.html) stage.extra().innerHTML = opts.html
+  const total = opts.length ?? secKeys[secKeys.length - 1][0] + 2.2
+  const keys = secKeys.map(([t, k]) => [t / total, k])
   const sayEl = $(`[data-said="${name}"]`)
   let lastNote = null, lastLand = -1
   const fn = track(stage, keys, {
@@ -68,308 +100,210 @@ function scene(name, appHtml, keys, extra = {}) {
       if (d && idx !== lastLand) stage.land(...d)
       lastLand = d ? idx : (idx < lastLand ? -1 : lastLand)
       typed(stage, s.typed)
-      extra.apply?.(s, idx, stage)
+      opts.apply?.(s, idx, stage)
     },
   })
-  return { stage, fn }
+  // Loops while on screen, pauses off screen. Reduced motion: hold the
+  // scene's clearest frame (opts.still) instead of playing.
+  const loop = gsap.to({}, { duration: total, repeat: -1, ease: 'none', paused: true, onUpdate() { fn(this.progress()) } })
+  const initial = reduce ? (opts.still ?? total * 0.6) / total : 0
+  loop.progress(initial).pause()
+  fn(initial)
+  const item = { stage, loop, fn, total, keys, inView: false }
+  scenes.push(item)
+  new IntersectionObserver(([entry]) => {
+    item.inView = entry.isIntersecting
+    syncMotion()
+  }, { threshold: 0.05 }).observe(host)
+  syncMotion()
+  return item
 }
 
 await ready
+const updateNav = () => $('nav.top').classList.toggle('scrolled', scrollY > 48)
+addEventListener('scroll', updateNav, { passive: true })
+updateNav()
 
-// ── 1 · HERO — loops by time ─────────────────────────────────────────────────
+// ── HERO: a calm overview, with a fixed view of the entire Mac screen. ──────
 {
-  const outs = $$('.outcomes span')
-  const { fn } = scene('hero', apps(['slack'], ['docs'], ['youtube'], ['finder']), [
-    [0.00, { app: 'slack', notch: null, pill: null, key: '', say: '', typed: '', o: -1 }],
-    [0.03, { key: 'fn', say: 'can we push the launch to Thursday?', pill: 'pill-fn-rec', speak: true, o: 0 }],
-    [0.15, { pill: 'pill-fn-proc', speak: false }],
-    [0.18, { pill: 'pill-fn-out', typed: 'can we push the launch to Thursday?', done: ['typed into Slack', SLACK] }],
-    [0.22, { pill: null }],
-    [0.26, { app: 'docs', typed: '', key: 'right ⌥', say: 'build a landing page for the pricing launch', pill: 'pill-ropt-rec', speak: true, o: 1 }],
-    [0.39, { pill: 'pill-ropt-proc', speak: false }],
-    [0.43, { pill: null, notch: 'bar-sending' }],
-    [0.47, { notch: 'bar-working1', done: ['Claude Code session started', NOTCH] }],
-    [0.52, { app: 'youtube', key: 'right ⌘ ×2', say: 'save this — good example of onboarding, for the redesign', pill: 'pill-agent-rec', speak: true, notch: 'bar-agent-listening', o: 2 }],
-    [0.65, { pill: 'pill-agent-proc', speak: false, notch: 'bar-agent-thinking' }],
-    [0.69, { pill: null, notch: 'bar-agent-done', done: ['saved, with your reason', NOTCH] }],
-    [0.76, { app: 'finder', key: 'right ⌘ ×2', say: 'continue the landing page from Monday', pill: 'pill-agent-rec', speak: true, notch: 'bar-agent-listening', o: 3 }],
-    [0.87, { pill: 'pill-agent-proc', speak: false, notch: 'bar-agent-searching' }],
-    [0.91, { pill: null, notch: 'bar-inpocket', done: ['back in your pocket', NOTCH] }],
-  ], { zoom: 0.55, apply: (s) => outs.forEach((o, i) => o.classList.toggle('on', i === s.o)) })
-  gsap.from(splitWords($('#heroH1')), { y: 60, opacity: 0, rotate: 3, stagger: 0.08, duration: 0.9, ease: 'power4.out', delay: 0.1 })
-  gsap.from(['.hero .philo', '.hero .sub', '.hero .ctas', '.works', '.hero .stagebox'], { y: 24, opacity: 0, stagger: 0.1, duration: 0.8, ease: 'power3.out', delay: 0.4 })
-  const loop = gsap.to({}, { duration: 22, repeat: -1, ease: 'none', delay: 1, onUpdate() { fn(this.progress()) } })
-  ScrollTrigger.create({ trigger: '#hero', start: 'top bottom', end: 'bottom top', onToggle: (s) => (s.isActive ? loop.play() : loop.pause()) })
+  const starts = [0, 5.5, 11, 16.5, 21.5, 27, 32.5, 37.5]
+  const examples = [
+    'Start a Claude Code session from the app you’re using.',
+    'Start a Codex session with a spoken instruction.',
+    'Attach a screenshot while you explain the problem.',
+    'Dictate a reply directly into Mail.',
+    'Send a follow-up to an existing agent session.',
+    'Find a session from last week with Unmute Agent.',
+    'Capture a meeting and turn it into notes.',
+    'Dictate directly into Notes.'
+  ]
+  const hero = scene('hero', apps(['slack'], ['docs'], ['code'], ['settings'], ['mail'], ['figma'], ['finder'], ['call'], ['notes']), [
+    [0.0, { app: 'docs', w: 0, key: 'right ⌥', say: 'build a first version of the new onboarding flow', pill: 'pill-ropt-rec', speak: true }],
+    [2.9, { pill: 'pill-ropt-proc', speak: false }],
+    [3.3, { pill: null, notch: 'bar-sending' }],
+    [3.7, { notch: 'bar-working1', done: ['Claude Code session started', NOTCH] }],
+    [5.5, { app: 'code', w: 2 }],
+    [5.7, { key: 'right ⌥', say: 'add tests for the signup form', pill: 'pill-codex-rec', speak: true }],
+    [7.9, { pill: 'pill-codex-proc', speak: false }],
+    [8.3, { pill: null, notch: 'bar-sending' }],
+    [8.7, { notch: 'bar-working2', done: ['Codex session started', NOTCH] }],
+    [11.0, { app: 'settings', w: 3 }],
+    [11.2, { key: 'right ⌥', say: 'fix this — the save button does nothing', pill: 'pill-ropt-rec', speak: true }],
+    [12.9, { pill: 'pill-flash', noteKey: 'left ⌘', note: 'a screenshot, mid-sentence' }],
+    [13.2, { pill: 'pill-ropt-rec' }],
+    [13.9, { pill: 'pill-ropt-proc', speak: false, note: '' }],
+    [14.3, { pill: null, notch: 'bar-sending' }],
+    [14.7, { notch: 'bar-working3', done: ['session started, screenshot attached', NOTCH] }],
+    [16.5, { app: 'mail', w: 4 }],
+    [16.7, { key: 'fn', say: "Thanks Priya — Thursday works. I'll send the final copy tonight.", pill: 'pill-fn-rec', speak: true }],
+    [19.3, { pill: 'pill-fn-proc', speak: false }],
+    [19.7, { pill: 'pill-fn-out', typed: "Thanks Priya — Thursday works. I'll send the final copy tonight.", done: ['typed into Mail', MAIL] }],
+    [20.4, { pill: null }],
+    [21.5, { app: 'figma', w: 5, typed: '', notch: 'pocket-onb-open' }],
+    [22.3, { key: 'fn', say: 'make the signup step shorter', notch: 'pocket-onb-aimed', pill: 'pocket-onb-aimed', speak: true }],
+    [24.4, { pill: null, speak: false, notch: 'pocket-onb-sent', done: ['sent to Onboarding flow', POCKET, POCKET_L] }],
+    [26.0, { notch: 'bar-working3' }],
+    [27.0, { app: 'finder', w: 6 }],
+    [27.2, { key: 'right ⌘ ×2', say: 'find the pricing session from last week', pill: 'pill-agent-rec', speak: true, notch: 'bar-agent-listening' }],
+    [29.5, { pill: 'pill-agent-proc', speak: false, notch: 'bar-agent-searching' }],
+    [30.1, { pill: null, notch: 'bar-inpocket-pricing', done: ['found it, back in your pocket', NOTCH] }],
+    [32.5, { app: 'call', w: 7, notch: 'bar-working3', nt: 'rec', noteKey: '', note: 'the notetaker is listening', cam: NT }],
+    [34.3, { nt: 'discard', noteKey: 'click', note: 'End' }],
+    [35.0, { nt: 'done', noteKey: '', note: '', done: ['notes written by your own Claude', [150, 761], [260, 700]] }],
+    [37.0, { nt: null, cam: null }],
+    [37.5, { app: 'notes', w: 8 }],
+    [37.7, { key: 'fn', say: 'pricing: test annual-first on the team plan', pill: 'pill-fn-rec', speak: true }],
+    [39.9, { pill: 'pill-fn-proc', speak: false }],
+    [40.3, { pill: 'pill-fn-out', typed: 'pricing: test annual-first on the team plan', done: ['typed into Notes', NOTES] }],
+    [41.0, { pill: null }],
+  ], { length: 42.5, still: 1.2, html: NT_HTML, apply(s, idx, st) { const label = $('.hero-example')
+    const example = Math.max(0, (s.w ?? 1) - 1)
+    if (label.dataset.example !== String(example)) {
+      label.dataset.example = example
+      label.textContent = examples[example]
+      clearTimeout(st.resultT); clearTimeout(st.resultRevealT)
+      $('.result', st.host).classList.remove('on')
+    }
+    ntApply(s, st) } })
+  // Each example gets about 6–7 seconds, with time to read the request and result.
+  hero.loop.timeScale(0.8)
+  hero.stage.playbackRate = 0.8
+  ntBars(hero.stage)
+  // Pause and next controls remain available for the product demonstration.
+  const pause = $('.rot-pause'), next = $('.rot-next')
+  pause.onclick = () => { motionPaused = !motionPaused; syncMotion() }
+  next.onclick = () => {
+    const now = hero.loop.progress() * hero.total
+    const t = starts.find((s) => s > now + 0.05) ?? 0
+    hero.loop.progress(t / hero.total); hero.fn(t / hero.total)
+    if (motionPaused) { hero.loop.progress((t + 1) / hero.total); hero.fn((t + 1) / hero.total) }
+    syncMotion()
+  }
+  syncMotion()
 }
 
-// Desktop: pinned and scroll-scrubbed. Phones get their own treatment per section.
-const mm = gsap.matchMedia()
-const DESK = '(min-width: 901px) and (prefers-reduced-motion: no-preference)'
-const PHONE = '(max-width: 900px), (prefers-reduced-motion: reduce)'
-function pinned(sel, length, build) {
-  mm.add(DESK, () => {
-    const sec = $(sel)
-    const tl = gsap.timeline({ scrollTrigger: { trigger: sec, pin: true, start: 'top top', end: '+=' + length, scrub: 0.8, invalidateOnRefresh: true } })
-    build(tl, sec)
-  })
-}
-// A stage scene: scrubbed by scroll on desktop, LOOPING while on screen on a
-// phone — pinning a tall section on a small screen fights the thumb.
-function scenePlay(sel, length, fn, loopSeconds) {
-  pinned(sel, length, (tl) => drive(tl, fn, 0, 1))
-  mm.add(PHONE, () => {
-    const loop = gsap.to({}, { duration: loopSeconds, repeat: -1, ease: 'none', paused: true, onUpdate() { fn(this.progress()) } })
-    const st = ScrollTrigger.create({ trigger: sel, start: 'top 80%', end: 'bottom 20%', onToggle: (s) => (s.isActive ? loop.play() : loop.pause()) })
-    return () => { loop.kill(); st.kill() }
-  })
-}
-// Drive a track from a span of a timeline: tl.to(proxy) over [at, at+dur].
-const drive = (tl, fn, at, dur) => { const o = { p: 0 }; tl.to(o, { p: 1, duration: dur, ease: 'none', onUpdate: () => fn(o.p) }, at) }
-
-// ── 2 · THE TRIP ──────────────────────────────────────────────────────────────
+// ── WHY: the ceremony fades out; one spoken sentence replaces it ─────────────
 {
-  const { fn } = scene('trip', apps(['docs', LOW]), [
-    [0.00, { app: 'docs' }],
-    [0.05, { key: 'right ⌥', say: 'build a landing page for the pricing launch', pill: 'pill-ropt-rec', speak: true }],
-    [0.30, { pill: 'pill-ropt-proc', speak: false }],
-    [0.38, { pill: null, notch: 'bar-sending' }],
-    [0.46, { notch: 'task-1', done: ['Claude Code session started', PANEL, PANEL_L] }],
-    [0.62, { notch: 'task-2' }],
-    [0.76, { notch: 'task-3' }],
-    [0.88, { notch: 'task-4' }],
-  ])
-  pinned('#trip', 3800, (tl, sec) => {
-    const steps = $$('.step', sec), idea = $('.i1', sec), counter = $('.counter', sec)
-    const cx = (el) => { const r = el.getBoundingClientRect(), s = sec.getBoundingClientRect(); return r.left - s.left + r.width / 2 - idea.offsetWidth / 2 }
-    const secs = [3, 8, 17, 41, 58, 60], c = { s: 0, t: 0 }
-    const paint = () => (counter.textContent = `${Math.round(c.s)} steps · ${Math.round(c.t)}s`)
-    tl.from($('.ha', sec), { y: 30, opacity: 0, duration: 0.5 })
-      .fromTo(idea, { opacity: 0, scale: 0.6, x: () => cx(steps[0]) }, { opacity: 1, scale: 1, duration: 0.4, ease: 'back.out(2)' })
-      .to($('.line', sec), { scaleX: 1, duration: 3.6, ease: 'none' }, '+=.1')
-    steps.forEach((st, i) => {
-      tl.fromTo(st, { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.35, ease: 'power3.out' }, i === 0 ? '<' : '>+.15')
-        .to(idea, { x: () => cx(st), scale: 1 - i * 0.09, opacity: 1 - i * 0.13, filter: `blur(${i * 0.9}px)`, duration: 0.45 }, '<')
-        .to(c, { s: i + 1, t: secs[i], duration: 0.35, ease: 'none', onUpdate: paint }, '<')
-    })
-    tl.set(idea, { textContent: '…what was it again?' }, '+=.2')
-      .to(idea, { opacity: 0.25, duration: 0.3 })
-      .fromTo($('.again', sec), { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.4 })
-      .to({}, { duration: 0.9 })
-      .to($('.again', sec), { opacity: 0, duration: 0.25 })
-      .to([...steps, $('.line', sec)], { opacity: 0, y: 30, stagger: 0.04, duration: 0.4 })
-      .to(idea, { opacity: 0, duration: 0.2 }, '<')
-      .to($('.ha', sec), { opacity: 0, y: -20, duration: 0.3 }, '<')
-      .fromTo($('.hb', sec), { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.35 })
-      .to(counter, { opacity: 0, duration: 0.2 }, '<')
-      .fromTo($('.tripstage', sec), { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.4 })
-    drive(tl, fn, '>', 3.2)
-    tl.set(counter, { textContent: '1 sentence · 2s', color: '#1d7a3a', top: 'calc(11vh + 96px)' }, '-=.4')
-      .to(counter, { opacity: 1, duration: 0.2 }, '<')
-      .to({}, { duration: 0.6 })
-  })
-  mm.add(PHONE, () => {
-    const sec = $('#trip'), steps = $$('.step', sec), counter = $('.counter', sec)
-    const secs = [3, 8, 17, 41, 58, 60], c = { s: 0, t: 0 }
-    const tl = gsap.timeline({ scrollTrigger: { trigger: '#trip .path', start: 'top 75%' } })
-    steps.forEach((st, i) => {
-      tl.fromTo(st, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.18, ease: 'power3.out' }, i ? '>+.04' : 0)
-        .to(c, { s: i + 1, t: secs[i], duration: 0.18, ease: 'none', onUpdate: () => (counter.textContent = `${Math.round(c.s)} steps · ${Math.round(c.t)}s`) }, '<')
-    })
-    tl.fromTo($('.again', sec), { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.4 })
-    const loop = gsap.to({}, { duration: 12, repeat: -1, ease: 'none', paused: true, onUpdate() { fn(this.progress()) } })
-    const st = ScrollTrigger.create({ trigger: '#trip .tripstage', start: 'top 85%', end: 'bottom 15%', onToggle: (s) => (s.isActive ? loop.play() : loop.pause()) })
-    return () => { loop.kill(); st.kill(); tl.kill() }
-  })
+  const ceremonyObserver = new IntersectionObserver(([entry]) => {
+    if (!entry.isIntersecting) return
+    if (!reduce) setTimeout(() => $('.ceremony').classList.add('faded'), 900)
+    ceremonyObserver.disconnect()
+  }, { threshold: 0.3 })
+  ceremonyObserver.observe($('.ceremony'))
+  scene('why', apps(['docs']), [
+    [0.0, { app: 'docs' }],
+    [0.6, { key: 'right ⌥', say: 'build a first version of the new onboarding flow', pill: 'pill-ropt-rec', speak: true }],
+    [3.3, { pill: 'pill-ropt-proc', speak: false }],
+    [3.7, { pill: null, notch: 'bar-sending' }],
+    [4.2, { notch: 'onb-1', done: ['Claude Code session started', PANEL, PANEL_L] }],
+    [6.0, { notch: 'onb-2' }],
+    [7.4, { notch: 'onb-3' }],
+  ], { home: PILL_HOME, still: 5 })
 }
 
-// ── 2b · EVERYWHERE ───────────────────────────────────────────────────────────
-{
-  const names = $$('.applist span')
-  const { fn } = scene('everywhere', apps(['mail'], ['figma'], ['hn'], ['slackThread'], ['finder']), [
-    [0.00, { app: 'mail', i: 0 }],
-    [0.02, { key: 'fn', say: "Thursday works, I'll send the final copy tonight.", pill: 'pill-fn-rec', speak: true }],
-    [0.12, { pill: 'pill-fn-proc', speak: false }],
-    [0.15, { pill: 'pill-fn-out', typed: "Thursday works, I'll send the final copy tonight.", done: ['typed into Mail', MAIL] }],
-    [0.19, { pill: null, app: 'figma', i: 1, key: 'right ⌥', say: 'turn this frame into a React component', typed: '' }],
-    [0.21, { pill: 'pill-ropt-rec', speak: true }],
-    [0.31, { pill: 'pill-ropt-proc', speak: false }],
-    [0.34, { pill: null, notch: 'bar-working1', done: ['Claude Code session started', NOTCH] }],
-    [0.40, { app: 'hn', i: 2, key: 'right ⌘ ×2', say: 'save this — useful for our team plan pricing', pill: 'pill-agent-rec', speak: true, notch: 'bar-agent-listening' }],
-    [0.50, { pill: 'pill-agent-proc', speak: false, notch: 'bar-agent-thinking' }],
-    [0.54, { pill: null, notch: 'bar-agent-done', done: ['saved, with your reason', NOTCH] }],
-    [0.60, { app: 'slackThread', i: 3, key: 'right ⌥', say: 'go through this thread and turn it into tasks', pill: 'pill-ropt-rec', speak: true, notch: 'bar-working1' }],
-    [0.70, { pill: 'pill-ropt-proc', speak: false }],
-    [0.74, { pill: null, notch: 'bar-working4', done: ['tasks started from the thread', NOTCH] }],
-    [0.80, { app: 'finder', i: 4, key: 'right ⌥', say: 'rename these screenshots by date', pill: 'pill-ropt-rec', speak: true }],
-    [0.90, { pill: 'pill-ropt-proc', speak: false }],
-    [0.94, { pill: null, notch: 'bar-working4', done: ['session started', NOTCH] }],
-  ], { zoom: 0.6, apply: (s) => names.forEach((n, j) => n.classList.toggle('on', j === s.i)) })
-  scenePlay('#everywhere', 3600, fn, 18)
-}
+// ── START OR CONTINUE: a new session, then a follow-up without opening it ────
+scene('start', apps(['hn'], ['figma']), [
+  [0.0, { app: 'hn' }],
+  [0.5, { key: 'right ⌥', say: 'build a first version of the new onboarding flow', pill: 'pill-ropt-rec', speak: true }],
+  [3.2, { pill: 'pill-ropt-proc', speak: false }],
+  [3.6, { pill: null, notch: 'bar-sending' }],
+  [4.0, { notch: 'onb-1', done: ['new agent session started', PANEL, PANEL_L] }],
+  [5.6, { notch: 'onb-3' }],
+  [7.6, { notch: 'bar-working1', app: 'figma', noteKey: '', note: 'later, in another app' }],
+  [8.8, { notch: 'pocket-onb-open', note: 'flip to the session in the notch' }],
+  [9.8, { key: 'fn', say: 'make the signup step shorter', notch: 'pocket-onb-aimed', pill: 'pocket-onb-aimed', speak: true, note: '' }],
+  [12.0, { pill: null, speak: false, notch: 'pocket-onb-sent', done: ['follow-up sent, nothing opened', POCKET, POCKET_L] }],
+], { home: PILL_HOME, still: 4.6 })
 
-// ── 3 · KEYS ─────────────────────────────────────────────────────────────────
-pinned('#keys', 2200, (tl, sec) => {
-  const keys = $$('.bigkey', sec), ds = $$('.keydesc p', sec)
-  tl.from(keys, { y: 30, opacity: 0, stagger: 0.1, duration: 0.4 })
-  keys.forEach((k, i) => {
-    tl.to(keys, { opacity: (j) => (j === i ? 1 : 0.45), duration: 0.2 })
-      .to(k, { y: 5, boxShadow: '0 1px 0 #d2d2d8', backgroundColor: '#111113', color: '#fff', duration: 0.25 }, '<')
-      .fromTo(ds[i], { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.3 }, '<')
-      .to({}, { duration: 0.5 })
-      .to(k, { y: 0, boxShadow: '0 6px 0 #d2d2d8', backgroundColor: '#fff', color: '#aaa', duration: 0.25 })
-      .to(ds[i], { opacity: 0, y: -14, duration: 0.25 }, '<')
-  })
-  tl.to(keys, { opacity: 1, duration: 0.2 })
+// ── CAPTURE CONTEXT: words and a screenshot arrive together ──────────────────
+scene('capture', apps(['settings', 'top:120px']), [
+  [0.0, { app: 'settings', box: 0 }],
+  [0.5, { key: 'right ⌥', say: "fix this error — here's what I was trying to do", pill: 'pill-ropt-rec', speak: true }],
+  [2.0, { noteKey: 'left ⌘ (hold)', note: 'drag a box around it', box: 1 }],
+  [3.1, { pill: 'pill-flash', box: 2 }],
+  [3.4, { pill: 'pill-ropt-rec', noteKey: '', note: 'the screenshot rides along with your words' }],
+  [4.6, { pill: 'pill-ropt-proc', speak: false }],
+  [5.0, { pill: null, notch: 'bar-sending', note: '' }],
+  [5.4, { notch: 'bar-working1', done: ['session started, screenshot attached', NOTCH] }],
+], {
+  home: { x: 640, y: 560, z: 1.25, ay: 0.55 }, still: 3.2,
+  html: '<div class="selbox" style="left:312px;top:392px;width:0;height:0"></div>',
+  apply(s, idx, st) {
+    const b = $('.selbox', st.host)
+    gsap.to(b, { opacity: s.box === 1 ? 1 : 0, width: s.box >= 1 ? 250 : 0, height: s.box >= 1 ? 76 : 0, duration: s.box === 1 ? 0.5 : 0.2, ease: 'power1.inOut' })
+  },
 })
 
-// ── 4 · START ANYTHING ───────────────────────────────────────────────────────
+// ── UNMUTE AGENT: find past work from what you remember ──────────────────────
+scene('agent', apps(['inbox', 'top:440px;left:120px;width:1200px;height:400px']), [
+  [0.0, { app: 'inbox' }],
+  [0.5, { key: 'right ⌘ ×2', say: 'pick up the onboarding work from yesterday. use what we decided in the meeting', pill: 'pill-agent-rec', speak: true }],
+  [3.6, { pill: 'pill-agent-proc', speak: false }],
+  [4.0, { pill: null, notch: 'agent-recall-1' }],
+  [5.4, { notch: 'agent-recall-2', done: ['found the session and the meeting notes', PANEL, PANEL_L] }],
+  [9.0, { notch: 'bar-inpocket-onb', done: ['back in your pocket, ready to continue', NOTCH] }],
+], { home: PILL_HOME, still: 6.5 })
+
+// ── THE TASK COMES TO YOU: the notch opens by itself; answer by voice ────────
+scene('attention', apps(['figma', 'top:440px;left:120px;width:1200px;height:400px']), [
+  [0.0, { app: 'figma', notch: 'bar-working1', noteKey: '', note: "you're in Figma; the session runs" }],
+  [1.8, { notch: 'onb-ask', note: 'it needs you — the notch opens on its own' }],
+  [3.6, { key: 'right ⌥', say: 'move it after the first project', notch: 'onb-ask-aimed', pill: 'onb-ask-aimed', speak: true, note: '' }],
+  [5.8, { pill: null, speak: false, notch: 'onb-continue', done: ['answered — the agent carries on', PANEL, PANEL_L] }],
+  [8.4, { notch: 'bar-working1', note: 'and you carry on too' }],
+], { home: TOP_HOME, still: 2.6 })
+
+// ── MEETING NOTES: notes, then the decisions go where they belong ────────────
 {
-  const { fn } = scene('start', apps(['finder', LOW], ['hn', LOW], ['docs', LOW]), [
-    [0.00, { app: 'finder' }], [0.10, { app: 'hn' }], [0.20, { app: 'docs' }],
-    [0.26, { key: 'right ⌥', say: 'build a landing page for the pricing launch', pill: 'pill-ropt-rec', speak: true }],
-    [0.42, { pill: 'pill-ropt-proc', speak: false }],
-    [0.48, { pill: null, notch: 'bar-sending' }],
-    [0.54, { notch: 'task-1', done: ['Claude Code session started', PANEL, PANEL_L] }], [0.66, { notch: 'task-2' }], [0.78, { notch: 'task-3' }], [0.88, { notch: 'task-4' }],
-  ])
-  scenePlay('#chStart', 2600, fn, 14)
+  const m = scene('meet', apps(['call', 'top:440px;left:120px;width:1200px;height:400px'], ['inbox', 'top:440px;left:120px;width:1200px;height:400px']), [
+    [0.0, { app: 'call', nt: 'rec', noteKey: '', note: 'the notetaker is listening', cam: NT }],
+    [1.8, { nt: 'discard', noteKey: 'click', note: 'End' }],
+    [2.5, { nt: 'done', noteKey: '', note: '', done: ['notes written by your own Claude', [150, 761], [260, 700]] }],
+    [4.3, { nt: null, cam: null, app: 'inbox' }],
+    [4.6, { key: 'right ⌘ ×2', say: 'take the decisions from that call into the onboarding session', pill: 'pill-agent-rec', speak: true }],
+    [7.4, { pill: 'pill-agent-proc', speak: false }],
+    [7.8, { pill: null, notch: 'agent-meetonb-2', done: ['decisions added to Onboarding flow', PANEL, PANEL_L] }],
+  ], { html: NT_HTML, home: PILL_HOME, still: 8.6, apply: (s, idx, st) => ntApply(s, st) })
+  ntBars(m.stage)
 }
 
-// ── 5 · POCKET ───────────────────────────────────────────────────────────────
-{
-  const { fn } = scene('pocket', apps(['code', 'top:200px']), [
-    [0.00, { app: 'code', notch: 'bar-working1' }],
-    [0.10, { notch: 'pocket-closed' }],
-    [0.22, { notch: 'pocket-open-landing' }],
-    [0.34, { notch: 'pocket-open-auth' }],
-    [0.46, { key: 'fn', say: 'no — retry once, then surface the error', notch: 'pocket-aimed', pill: 'pocket-aimed', speak: true }],
-    [0.70, { pill: null, speak: false, notch: 'pocket-sent', done: ['sent to auth service', POCKET, POCKET_L] }],
-    [0.84, { notch: 'pocket-open-csv' }],
-  ])
-  scenePlay('#chPocket', 2600, fn, 14)
-}
+// ── DICTATION ────────────────────────────────────────────────────────────────
+scene('dictate', apps(['slack']), [
+  [0.0, { app: 'slack', typed: '' }],
+  [0.5, { key: 'fn', say: "I've reviewed the plan. Let's start with the simpler onboarding flow.", pill: 'pill-fn-rec', speak: true }],
+  [3.4, { pill: 'pill-fn-proc', speak: false }],
+  [3.8, { pill: 'pill-fn-out', typed: "I've reviewed the plan. Let's start with the simpler onboarding flow.", done: ['your words, at your cursor', SLACK] }],
+  [4.6, { pill: null }],
+], { home: PILL_HOME, still: 4.2 })
 
-// ── 6 · CAPTURE + SCRATCHPAD ──────────────────────────────────────────────────
-{
-  const { stage, fn } = scene('capture', apps(['settings', 'top:120px']), [
-    [0.00, { app: 'settings' }],
-    [0.04, { key: 'right ⌥', say: 'this button is supposed to save. nothing happens —', pill: 'pill-ropt-rec', speak: true, box: 0 }],
-    [0.13, { noteKey: 'left ⌘ (hold)', note: 'drag a box around the button', box: 1 }],
-    [0.19, { pill: 'pill-flash', box: 2 }],
-    [0.21, { pill: 'pill-ropt-rec', say: '— see the greyed-out state.', noteKey: '', note: 'the screenshot rides along with the words' }],
-    [0.28, { pill: 'pill-ropt-proc', speak: false }],
-    [0.31, { pill: null, notch: 'bar-working1', note: '', done: ['session started, screenshot attached', NOTCH] }],
-    [0.37, { notch: null, pill: 'pill-scratch-rec', noteKey: '', note: 'scratchpad armed — the pencil turns teal', key: 'fn', say: 'no null check here before the token is refreshed', speak: true }],
-    [0.43, { pill: 'pad-1' }],
-    [0.49, { pill: 'pad-2', speak: false, note: 'keep reading…', done: ['held on the scratchpad', PAD, PAD_L] }],
-    [0.55, { key: 'fn', say: "also, where's the retry limit?", speak: true, note: '' }],
-    [0.61, { pill: 'pad-3', speak: false, done: ['added to the pad', PAD, PAD_L] }],
-    [0.66, { pill: 'pad-4', noteKey: 'left ⌘ ×2', note: 'a screenshot joins the pad' }],
-    [0.71, { key: 'fn', say: 'and the error path swallows the 401', speak: true, noteKey: '', note: '' }],
-    [0.76, { pill: 'pad-5', speak: false, done: ['added to the pad', PAD, PAD_L] }],
-    [0.81, { pill: 'pill-paused', note: 'pause as long as you want' }],
-    [0.87, { pill: 'pad-sending', note: 'send it once — Add to auth service' }],
-    [0.93, { pill: null, notch: 'bar-sending', note: '' }],
-    [0.97, { notch: 'bar-working1', done: ['the whole pad added to auth service', NOTCH] }],
-  ], {
-    html: '<div class="selbox" style="left:312px;top:392px;width:0;height:0"></div>',
-    apply(s, idx, st) {
-      const b = $('.selbox', st.host)
-      gsap.to(b, { opacity: s.box === 1 ? 1 : 0, width: s.box >= 1 ? 250 : 0, height: s.box >= 1 ? 76 : 0, duration: s.box === 1 ? 0.5 : 0.2, ease: 'power1.inOut' })
-    },
-  })
-  scenePlay('#chCapture', 4200, fn, 22)
-}
+// Pause every demo together, including when a section re-enters the viewport.
+document.addEventListener('visibilitychange', syncMotion)
+motionPreference.addEventListener('change', (event) => { motionPaused = event.matches; syncMotion() })
+syncMotion()
 
-// ── 7 · AGENT ────────────────────────────────────────────────────────────────
-{
-  const { fn } = scene('agent', apps(['youtube', LOW], ['inbox', LOW], ['finder', LOW]), [
-    [0.00, { app: 'youtube' }],
-    [0.05, { key: 'right ⌘ ×2', say: 'save this — good example of onboarding, for the redesign', pill: 'pill-agent-rec', speak: true }],
-    [0.17, { pill: 'pill-agent-proc', speak: false }],
-    [0.21, { pill: null, notch: 'agent-save-1' }],
-    [0.27, { notch: 'agent-save-2', done: ['saved, with your reason', PANEL, PANEL_L] }],
-    [0.36, { notch: null, later: true }],
-    [0.43, { later: false, app: 'inbox' }],
-    [0.46, { key: 'right ⌘ ×2', say: 'what was that onboarding video I saved?', pill: 'pill-agent-rec', speak: true }],
-    [0.56, { pill: 'pill-agent-proc', speak: false }],
-    [0.60, { pill: null, notch: 'agent-ask-1' }],
-    [0.66, { notch: 'agent-ask-2', done: ['found it: the link and your reason', PANEL, PANEL_L] }],
-    [0.76, { notch: null, app: 'finder', key: 'right ⌘ ×2', say: 'continue the landing page from Monday', pill: 'pill-agent-rec', speak: true }],
-    [0.86, { pill: 'pill-agent-proc', speak: false, notch: 'bar-agent-searching' }],
-    [0.91, { pill: null, notch: 'bar-inpocket', done: ['back in your pocket', NOTCH] }],
-  ], {
-    html: '<div class="later">Two weeks later</div>',
-    apply(s, idx, st) { gsap.to($('.later', st.host), { opacity: s.later ? 1 : 0, duration: 0.3 }) },
-  })
-  scenePlay('#chAgent', 3600, fn, 20)
-}
-
-// ── 8 · MEETINGS ─────────────────────────────────────────────────────────────
-{
-  const nt = `<div class="nt rec">
-    <span class="row rec"><span class="wave">${'<div></div>'.repeat(11)}</span></span>
-    <span class="row dis"><span style="width:30px;display:grid;place-items:center;color:rgba(255,255,255,.55)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></span>
-      <span style="display:flex;gap:6px;align-items:center;padding-right:12px"><span style="width:9px;height:9px;border-radius:2px;background:#6fbf9a;box-shadow:0 0 0 1px rgba(255,255,255,.18)"></span>End</span>
-      <span style="width:1px;height:16px;background:rgba(255,255,255,.16)"></span>
-      <span style="display:flex;gap:6px;align-items:center;padding:0 13px 0 12px;color:#c4482e"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Discard</span></span>
-    <span class="row ok" style="gap:7px"><span style="display:flex;gap:2px;align-items:center"><span style="width:2px;height:7px;border-radius:9px;background:#6fbf9a;opacity:.55"></span><span style="width:2px;height:13px;border-radius:9px;background:#6fbf9a"></span><span style="width:2px;height:9px;border-radius:9px;background:#6fbf9a;opacity:.75"></span></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" style="color:#6fbf9a"><path d="M5 12.5l4.2 4.1L19.5 6.8" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Saved — preparing notes</span>
-  </div>`
-  const { stage, fn } = scene('meet', apps(['call', LOW], ['inbox', LOW]), [
-    [0.00, { app: 'call', nt: 'rec', note: 'the notetaker is listening', cam: { x: 150, y: 779, z: 1.7, ay: 0.72 } }],
-    [0.16, { nt: 'discard', noteKey: 'click', note: 'the call wraps up — End' }],
-    [0.24, { nt: 'done', noteKey: '', note: '', done: ['notes written by your own Claude', [150, 761], [260, 700]] }],
-    [0.31, { nt: null, app: 'inbox', cam: null }],
-    [0.35, { key: 'right ⌘ ×2', say: 'any follow-ups for me from that call?', pill: 'pill-agent-rec', speak: true }],
-    [0.46, { pill: 'pill-agent-proc', speak: false }],
-    [0.50, { pill: null, notch: 'agent-meet-1' }],
-    [0.58, { notch: 'agent-meet-2', done: ['your two follow-ups', PANEL, PANEL_L] }],
-    [0.70, { key: 'right ⌘ ×2', say: 'start a task for the first one', pill: 'pill-agent-rec', speak: true }],
-    [0.79, { pill: 'pill-agent-proc', speak: false }],
-    [0.83, { pill: null, notch: 'agent-meet-3', done: ['task started with the call notes', PANEL, PANEL_L] }],
-    [0.93, { notch: 'bar-working1' }],
-  ], {
-    html: nt,
-    apply(s, idx, st) {
-      const el = $('.nt', st.host)
-      el.className = 'nt ' + (s.nt || 'rec')
-      el.style.opacity = s.nt ? 1 : 0
-      st.ntLive = s.nt === 'rec'
-    },
-  })
-  // The widget's bars: same instrument as the dictation pill (NotetakerWidget.tsx).
-  const bars = $$('.nt .wave div', stage.host)
-  gsap.ticker.add((t) => {
-    if (!stage.ntLive) return bars.forEach((b) => (b.style.height = '3px'))
-    bars.forEach((b, i) => { const v = Math.max(0, Math.sin(t * 6 + i * 1.7) * 0.5 + Math.sin(t * 11 + i) * 0.3) * (0.5 + 0.5 * Math.sin(t * 1.3)); b.style.height = 3 + Math.round(v * 13) + 'px' })
-  })
-  scenePlay('#chMeet', 3400, fn, 20)
-}
-
-// ── 9 · DICTATION — autoplay when in view ────────────────────────────────────
-{
-  const { fn } = scene('dictate', apps(['mail'], ['notes'], ['terminal']), [
-    [0.00, { app: 'mail', typed: '' }],
-    [0.04, { key: 'fn', say: "Hey Priya, Thursday works. I'll send the final copy tonight.", pill: 'pill-fn-rec', speak: true }],
-    [0.22, { pill: 'pill-fn-proc', speak: false }],
-    [0.26, { pill: 'pill-fn-out', typed: "Hey Priya, Thursday works. I'll send the final copy tonight.", done: ['typed into Mail', MAIL] }],
-    [0.31, { pill: null, app: 'notes', typed: '' }],
-    [0.35, { say: 'pricing: test annual-first on the team plan', pill: 'pill-fn-rec', speak: true }],
-    [0.53, { pill: 'pill-fn-proc', speak: false }],
-    [0.57, { pill: 'pill-fn-out', typed: 'pricing: test annual-first on the team plan', done: ['typed into Notes', NOTES] }],
-    [0.62, { pill: null, app: 'terminal', typed: '' }],
-    [0.66, { say: 'refactor the auth middleware and keep the public API the same', pill: 'pill-fn-rec', speak: true }],
-    [0.84, { pill: 'pill-fn-proc', speak: false }],
-    [0.88, { pill: 'pill-fn-out', typed: 'refactor the auth middleware and keep the public API the same', done: ['typed into Terminal', TERM] }],
-    [0.94, { pill: null }],
-  ])
-  const loop = gsap.to({}, { duration: 16, repeat: -1, ease: 'none', paused: true, onUpdate() { fn(this.progress()) } })
-  ScrollTrigger.create({ trigger: '#dictate', start: 'top 75%', end: 'bottom top', onToggle: (s) => (s.isActive ? loop.play() : loop.pause()) })
-}
-
-// ── 10–12 ────────────────────────────────────────────────────────────────────
-gsap.timeline({ scrollTrigger: { trigger: '#layer', start: 'top 70%', end: 'center 40%', scrub: 0.8 } })
-  .fromTo('.layer.ai', { z: 0 }, { z: 70 })
-  .fromTo('.layer.um', { z: 0, opacity: 0.3 }, { z: 150, opacity: 1 }, '<')
-  .fromTo('.layers', { rotateZ: -20 }, { rotateZ: -38 }, '<')
-gsap.from('.price', { scrollTrigger: { trigger: '.pricing', start: 'top 80%' }, y: 40, opacity: 0, stagger: 0.12, duration: 0.7, ease: 'power3.out' })
-gsap.from(splitWords($('#closeH')), { scrollTrigger: { trigger: '#close', start: 'top 80%', end: 'center center', scrub: 0.8 }, y: 120, opacity: 0, stagger: 0.15 })
+// Stage dimensions become known after the manifest loads. Restore a requested
+// section anchor after that layout, so deep links land on the correct section.
+requestAnimationFrame(() => {
+  const target = location.hash && document.getElementById(location.hash.slice(1))
+  if (target) target.scrollIntoView({ behavior: 'instant', block: 'start' })
+})

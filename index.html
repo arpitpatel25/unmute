@@ -3,193 +3,151 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>unmute — just unmute for everything</title>
-<meta name="description" content="The best interface for Claude Code and Codex. Talk to them from anywhere on your Mac." />
+<title>Unmute — a voice interface for Claude Code and Codex</title>
+<meta name="description" content="Speak from any app on your Mac to start or continue a Claude Code or Codex session. Capture context as you talk. When a session needs you, the notch opens wherever you are." />
 <link rel="icon" href="icon.png" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
 <link rel="canonical" href="https://justunmute.me/" />
-<meta property="og:title" content="unmute — just unmute for everything" />
-<meta property="og:description" content="The best interface for Claude Code and Codex. Talk to them from anywhere on your Mac." />
+<meta property="og:title" content="Unmute — put your agents to work from anywhere" />
+<meta property="og:description" content="Start and continue Claude Code or Codex sessions by voice, from anywhere on your Mac. When a session needs you, the notch opens wherever you are." />
 <meta property="og:image" content="https://justunmute.me/og.png" />
-<meta property="og:image:width" content="1200" />
-<meta property="og:image:height" content="630" />
-<meta property="og:url" content="https://justunmute.me/" />
 <meta property="og:type" content="website" />
+<meta property="og:url" content="https://justunmute.me/" />
+<meta name="twitter:site" content="@just_unmute" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:image" content="https://justunmute.me/og.png" />
-<link rel="stylesheet" href="ui/wallpaper.css" />
-<link rel="stylesheet" href="site.css" />
+<link rel="stylesheet" href="ui/wallpaper.css?v=20261003-sage" />
+<link rel="stylesheet" href="v3.css?v=20261003-v6" />
+<link rel="stylesheet" href="heritage.css?v=2" />
+<link rel="preload" href="assets/fonts/Lora.ttf" as="font" type="font/ttf" crossorigin />
+<link rel="preload" href="assets/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin />
 <!-- Every notch and pill surface on this page is a capture of the real unmute-notch
-     helper (unmute-cloud db2a2016), placed at its real window position. See landing/README.md. -->
+     helper (unmute-cloud), placed at its real window position. See landing/README.md. -->
 </head>
 <body>
 
 <nav class="top">
-  <img src="unmute-wordmark-black.png" alt="unmute" />
-  <div class="links"><a href="#chapters">Features</a><a href="#pricing">Pricing</a><a href="manifesto.html">Manifesto</a><a class="btn sm" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download</a></div>
+  <a href="#top" aria-label="Unmute home"><img src="unmute-wordmark-black.png" alt="unmute" /></a>
+  <div class="links">
+    <a href="#why">Why Unmute</a><a href="#start">How it works</a><a href="pricing.html">Pricing</a>
+    <a class="btn sm" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download for Mac</a>
+  </div>
 </nav>
 
-<!-- 1 · HERO -->
-<section class="hero" id="hero">
-  <p class="eyebrow philo">Have a thought? Say it right where you are.</p>
-  <h1 id="heroH1">Just unmute for everything.</h1>
-  <p class="sub">The best interface for Claude Code and Codex. Talk to them from anywhere on your Mac.</p>
-  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download for Mac</a><a class="btn ghost" href="#trip">Watch it work ↓</a></div>
-  <div class="works">works with <span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span><img src="assets/mark-codex.png" alt="" />Codex</span></div>
-  <div class="stagebox">
+<main id="top">
+
+<!-- HERO — concrete first: what it is, then the demo. Text never animates in. -->
+<section class="hero">
+  <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
+  <h1>Put your agents to work.<br />From anywhere.</h1>
+  <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app.<br class="desktop-break" /> Bring the context along. Keep going while your agent works.</p>
+  <div class="ctas">
+    <a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="16" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a>
+    <a class="btn ghost" href="#start">See how it works</a>
+  </div>
+  <div class="works">Works with <span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span><img src="assets/mark-codex.png" alt="" />Codex</span></div>
+  <div class="hero-demo">
     <div data-stage="hero"></div>
     <div class="said" data-said="hero"></div>
-    <div class="outcomes"><span>typed</span><span>started</span><span>saved</span><span>picked back up</span></div>
+    <div class="demo-toolbar"><p><span class="hero-example">Start an agent session from the app you’re using.</span></p><div class="rot-controls"><button type="button" class="rot-pause" aria-label="Pause all demos">Pause demos</button><button type="button" class="rot-next" aria-label="Next example">Next example</button></div></div>
   </div>
+  <ul class="caps"><li>Start a session</li><li>Bring context</li><li>Keep working</li><li>Answer when needed</li></ul>
 </section>
 
-<!-- 2 · THE TRIP (the why) -->
-<section class="trip" id="trip">
-  <div class="head"><h2 class="ha">A good idea shouldn't have <br/>to survive the trip.</h2><h2 class="hb">Or just say it where you are.</h2></div>
-  <div class="counter">0 steps · 0s</div>
-  <div class="path">
-    <div class="line"></div>
-    <div class="step"><div class="lab"><span>01</span><span class="lab-rest"> · ⌘ tab</span></div><div class="t">Leave what you were doing</div><div class="viz"><span class="sq"></span><span class="sq"></span><span class="sq on"></span><span class="sq"></span><span class="sq"></span></div></div>
-    <div class="step"><div class="lab"><span>02</span><span class="lab-rest"> · open</span></div><div class="t">Go to Claude Code or Codex</div><div class="viz"><img src="assets/mark-claude.png" alt="" style="width:26px;height:26px;border-radius:7px;margin:8px 6px 0 0"/><img src="assets/mark-codex.png" alt="" style="width:26px;height:26px;border-radius:7px;margin-top:8px;opacity:.5"/></div></div>
-    <div class="step"><div class="lab"><span>03</span><span class="lab-rest"> · find it</span></div><div class="t">Find the right chat, or ⌘N a new one</div><div class="viz">onboarding v2?<br/>pricing fixes??<br/><b style="color:#111">+ New chat ⌘N</b></div></div>
-    <div class="step"><div class="lab"><span>04</span><span class="lab-rest"> · explain</span></div><div class="t">Type or dictate the whole thing</div><div class="viz">so basically what I want is, like we discussed last week, the…</div></div>
-    <div class="step"><div class="lab"><span>05</span><span class="lab-rest"> · screenshots</span></div><div class="t">Grab them from other windows, drag them in</div><div class="viz"><span class="box"></span></div></div>
-    <div class="step"><div class="lab"><span>06</span><span class="lab-rest"> · ↵</span></div><div class="t">Finally, press enter</div><div class="viz" style="display:grid;place-items:center"><span style="font:700 13px var(--mono);padding:5px 14px;border-radius:7px;background:#fff;border:1px solid #d6d6da;box-shadow:0 2px 0 #cfcfd4">return ↵</span></div></div>
-  </div>
-  <div class="again">…and it's the same trip. Every. Single. Time.</div>
-  <div class="idea i1">build a landing page for the pricing launch</div>
-  <div class="tripstage"><div data-stage="trip"></div><div class="said" data-said="trip"></div></div>
-</section>
-
-<!-- 2b · EVERYWHERE (the where) -->
-<section class="everywhere" id="everywhere">
-  <h2>Not an AI inside your app.<br/><span>Your AI, across your whole Mac.</span></h2>
-  <div class="applist"><span>Mail</span><span>Figma</span><span>Chrome</span><span>Slack</span><span>Finder</span></div>
-  <div class="stagebox"><div data-stage="everywhere"></div><div class="said" data-said="everywhere"></div></div>
-</section>
-
-<!-- 3 · THE KEYS (the how) -->
-<section class="keysec" id="keys">
-  <h2>Four keys. Everything else is your voice.</h2>
-  <div class="keyrow">
-    <div class="bigkey">fn<small>dictate</small></div>
-    <div class="bigkey">⌥ right<small>start a session</small></div>
-    <div class="bigkey">⌘ right ×2<small>unmute agent</small></div>
-    <div class="bigkey">⌘ left<small>screenshot</small></div>
-  </div>
-  <div class="keydesc">
-    <p><b>fn</b> — talk, and it types. Into any app, or into the session you picked in the notch.</p>
-    <p><b>right ⌥</b> — talk, and a Claude Code or Codex session starts. From anywhere.</p>
-    <p><b>right ⌘ twice</b> — talk to unmute itself. Save, find, pick things back up.</p>
-    <p><b>left ⌘</b> — screenshot mid-sentence. The words and the picture arrive together.</p>
-  </div>
-</section>
-
-<div id="chapters"></div>
-
-<section class="chapter" id="chStart">
+<!-- WHY — the only philosophy section before the close. -->
+<section class="sec why" id="why">
   <div class="copy">
-    <p class="eyebrow"><span class="kcap">right ⌥</span> start anything</p>
-    <h2>The session exists before the thought finishes.</h2>
-    <p>Wherever you are, one key and one sentence. A Claude Code or Codex session starts and drops into the notch — sized as small as you like.</p>
+    <h2>What changes when asking becomes effortless?</h2>
+    <p>Every time you reach for your machine, there's a little ceremony. Open an app. Find a conversation. Put the thought back together. Sometimes, you decide it can wait.</p>
+    <p>Make reaching out as easy as thinking out loud, and more of those thoughts get a chance to become something.</p>
+    <ol class="ceremony">
+      <li><b>Open the right app</b><span>One more switch</span></li>
+      <li><b>Find the conversation</b><span>Where was it?</span></li>
+      <li><b>Gather the context</b><span>Copy. Paste. Explain.</span></li>
+      <li><b>Decide to do it later</b><span>Thought lost</span></li>
+    </ol>
   </div>
-  <div class="stagebox"><div data-stage="start"></div><div class="said" data-said="start"></div></div>
+  <div class="demo">
+    <p class="demo-kicker">Or just say it, right here.</p>
+    <div data-stage="why"></div>
+    <div class="said" data-said="why"></div>
+  </div>
 </section>
 
-<section class="chapter" id="chPocket">
+<section class="sec" id="start">
   <div class="copy">
-    <p class="eyebrow"><span class="kcap">fn</span> the pocket</p>
-    <h2>Talk to any session without opening it.</h2>
-    <p>Every session sits in the notch. Flip to the one you mean, press the key and say it. It lands there while you stay exactly where you are.</p>
+    <p class="eyebrow">Start and continue agent sessions</p>
+    <h2>Start a session. Or pick one back up.</h2>
+    <p>Press a key and speak to start a new agent session or send an instruction to an existing one. Ask a question, delegate a task, or give a follow-up — all from the app you're already using.</p>
+
   </div>
-  <div class="stagebox"><div data-stage="pocket"></div><div class="said" data-said="pocket"></div></div>
+  <div class="demo"><div data-stage="start"></div><div class="said" data-said="start"></div></div>
 </section>
 
-<section class="chapter" id="chCapture">
+<section class="sec flip" id="capture">
   <div class="copy">
-    <p class="eyebrow"><span class="kcap">left ⌘</span> capture · scratchpad</p>
-    <h2>Show it. Think it through. Send it once.</h2>
-    <p>Grab a screenshot in the middle of a sentence. Or arm the scratchpad and pause as long as you like — every thought stacks on the pad, then goes to the task it belongs to.</p>
+    <p class="eyebrow">Capture context</p>
+    <h2>Your thought comes with context. Bring it along.</h2>
+    <p>The page you're reading. The error you're seeing. The design you want changed. Capture a link, text, or screenshot as you speak, and send it straight into your agent session.</p>
   </div>
-  <div class="stagebox"><div data-stage="capture"></div><div class="said" data-said="capture"></div></div>
+  <div class="demo"><div data-stage="capture"></div><div class="said" data-said="capture"></div></div>
 </section>
 
-<section class="chapter" id="chAgent">
+<section class="sec" id="agent">
   <div class="copy">
-    <p class="eyebrow"><span class="kcap">right ⌘ ×2</span> unmute agent</p>
-    <h2>Save it with a reason. Ask for it later.</h2>
-    <p>No folders, no app to remember. Say why it matters; weeks later, ask in plain words. Or say "continue the landing page" and it's back in your pocket.</p>
+    <p class="eyebrow">Unmute Agent</p>
+    <h2>Find the session. Remember the work.</h2>
+    <p>Tell Unmute Agent what you want to return to. It finds the relevant agent session and brings back its context, including related conversations and meeting notes. Pick up the work without remembering where you left it.</p>
+    <p class="aside">You remember the work. Unmute helps find where you left it.</p>
   </div>
-  <div class="stagebox"><div data-stage="agent"></div><div class="said" data-said="agent"></div></div>
+  <div class="demo"><div data-stage="agent"></div><div class="said" data-said="agent"></div></div>
 </section>
 
-<section class="chapter" id="chMeet">
+<section class="sec attention" id="attention">
   <div class="copy">
-    <p class="eyebrow"><span class="kcap">one click</span> meetings</p>
-    <h2>The call ends. The work starts.</h2>
-    <p>The notetaker writes it up with your own Claude or Codex. Then ask what's yours — and hand it straight to a session.</p>
+    <p class="eyebrow">When a session needs you</p>
+    <h2>The task comes to you.<br />You don't go to the task.</h2>
+    <p>When an agent session needs your attention, the notch opens wherever you are on your Mac. Answer its question, review what it needs, or give the next instruction right there. Then carry on while the agent continues.</p>
   </div>
-  <div class="stagebox"><div data-stage="meet"></div><div class="said" data-said="meet"></div></div>
+  <div class="demo"><div data-stage="attention"></div><div class="said" data-said="attention"></div></div>
 </section>
 
-<section class="plain" id="dictate">
-  <p class="eyebrow">// and yes, it dictates</p>
-  <h2>Under a second to text. Even with the Wi-Fi off.</h2>
-  <p class="lede">Press fn anywhere. The pill listens, a tick says it's done, and the words are already at your cursor. If the network drops, it falls back on-device.</p>
-  <div class="stagebox"><div data-stage="dictate"></div><div class="said" data-said="dictate"></div></div>
-  <div class="facts"><div><b>&lt; 1s</b>speech to text</div><div><b>On-device</b>fallback, automatic</div><div><b>$0</b>offline dictation, no account</div></div>
-</section>
-
-<section class="layer-wrap" id="layer">
-  <div>
-    <p class="eyebrow">// a layer, not a replacement</p>
-    <h2>We didn't build another AI. We gave yours ears.</h2>
-    <ul>
-      <li><b>Your sessions stay yours.</b> Start one the normal way and it behaves exactly like it always has.</li>
-      <li><b>Runs on your subscription.</b> Claude Code or Codex, the ones you already pay for.</li>
-      <li><b>Nothing to switch.</b> No new app to live in, nothing new to trust.</li>
-    </ul>
+<section class="sec" id="meetings">
+  <div class="copy">
+    <p class="eyebrow">Meeting notes</p>
+    <h2>Leave the meeting with more than notes.</h2>
+    <p>Capture a meeting and generate notes with your connected agent. Review what was decided, then start or continue an agent session with the meeting context already attached.</p>
   </div>
-  <div class="stack"><div class="layers">
-    <div class="layer mac1">your Mac</div>
-    <div class="layer ai"><img src="assets/mark-claude.png" alt="" /><img src="assets/mark-codex.png" alt="" />Claude Code · Codex</div>
-    <div class="layer um"><img src="assets/unmark.png" alt="" />unmute</div>
-  </div></div>
+  <div class="demo"><div data-stage="meet"></div><div class="said" data-said="meet"></div></div>
 </section>
 
-<section class="plain" id="pricing">
-  <p class="eyebrow">// pricing</p>
-  <h2>Simple. Cheaper than one lunch.</h2>
-  <div class="pricing">
-    <div class="price"><div class="n">Free · on-device dictation</div><div class="p">$0</div><div class="d">No account. On your Mac. Forever.</div></div>
-    <div class="price hl"><div class="n">unmute</div><div class="p">$7.99<small style="font-size:15px">/mo</small></div><div class="d">Cloud dictation + Remote / Orchestrate.<br />$79/year · ~2 months free.</div></div>
+<section class="sec flip" id="dictation">
+  <div class="copy">
+    <p class="eyebrow">Dictation</p>
+    <h2>Write by voice wherever you already write.</h2>
+    <p>Messages, documents, notes, and prompts. Press a key, speak, and keep going.</p>
+    <p class="aside">Free on-device dictation, no account needed.</p>
   </div>
+  <div class="demo"><div data-stage="dictate"></div><div class="said" data-said="dictate"></div></div>
 </section>
 
-<section class="close" id="close">
-  <h2 id="closeH">Just unmute for everything.</h2>
-  <div style="display:flex;gap:12px;margin-top:40px"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download for Mac</a><a class="btn ghost" href="https://cal.com/unmute/15min">Book 15 minutes</a></div>
+<section class="close" id="agents">
+  <h2>A shorter distance between<br class="desktop-break" /> thinking and doing.</h2>
+  <p>When reaching your agents takes less effort, you can ask more often, express more of the thought, and keep work moving.</p>
+  <div class="marks"><span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span><img src="assets/mark-codex.png" alt="" />Codex</span></div>
+  <p class="accounts">Your agents. Your accounts. Your subscriptions.</p>
+  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Download for Mac</a></div>
+  <p class="tag">Make delegating as easy as thinking out loud.</p>
 </section>
-    <footer>
-      <div class="links">
-        <a href="./">Home</a>
-        <a href="dictation.html">Dictation</a>
-        <a href="remote.html">Remote</a>
-        <a href="pricing.html">Pricing</a>
-        <a href="manifesto.html">Manifesto</a>
-        <a href="privacy.html">Privacy</a>
-        <a href="terms.html">Terms</a>
-        <a href="refund.html">Refunds</a>
-        <a href="https://cal.com/unmute/15min">Book a call</a>
-        <a href="https://github.com/arpitpatel25/unmute-dictation">Open source</a>
-        <a href="https://x.com/just_unmute">Twitter</a>
-      </div>
-      <div>© 2026 unmute</div>
-    </footer>
+
+</main>
+
+<footer>
+  <span>© 2026 unmute</span>
+  <span class="flinks"><a href="dictation.html">Dictation</a><a href="pricing.html">Pricing</a><a href="manifesto.html">Manifesto</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
+</footer>
 
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollTrigger.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/lenis@1.3.4/dist/lenis.min.js"></script>
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=20261003-v19"></script>
 </body>
 </html>

@@ -478,5 +478,173 @@
   "h": 405,
   "run": "scene-agent",
   "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-codex-rec.pill": {
+  "x": 567,
+  "y": 761,
+  "w": 306,
+  "h": 36,
+  "run": "scene-v2-pills",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-codex-rec.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-v2-pills",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-codex-proc.pill": {
+  "x": 573,
+  "y": 761,
+  "w": 294,
+  "h": 36,
+  "run": "scene-v2-pills",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pill-codex-proc.notch": {
+  "x": 621,
+  "y": 0,
+  "w": 198,
+  "h": 34,
+  "run": "scene-v2-pills",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-inpocket-onb.notch": {
+  "x": 520,
+  "y": 0,
+  "w": 419,
+  "h": 34,
+  "run": "scene-v2-pills",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-inpocket-pricing.notch": {
+  "x": 520,
+  "y": 0,
+  "w": 398,
+  "h": 34,
+  "run": "scene-v2-pricing-landed",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-onb-open.notch": {
+  "x": 546,
+  "y": 0,
+  "w": 348,
+  "h": 114,
+  "run": "scene-v2-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-onb-aimed.pill": {
+  "x": 542,
+  "y": 761,
+  "w": 356,
+  "h": 36,
+  "run": "scene-v2-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-onb-aimed.notch": {
+  "x": 546,
+  "y": 0,
+  "w": 348,
+  "h": 114,
+  "run": "scene-v2-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "pocket-onb-sent.notch": {
+  "x": 546,
+  "y": 0,
+  "w": 348,
+  "h": 114,
+  "run": "scene-v2-pocket",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "onb-1.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-v2-session",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "onb-2.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-v2-session",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "onb-3.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-v2-session",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "onb-ask.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-v2-attention",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "onb-ask-aimed.pill": {
+  "x": 542,
+  "y": 761,
+  "w": 356,
+  "h": 36,
+  "run": "scene-v2-attention",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "onb-ask-aimed.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-v2-attention",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "onb-continue.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-v2-attention",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "agent-recall-1.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-v2-agent",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "agent-recall-2.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-v2-agent",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "agent-meetonb-2.notch": {
+  "x": 396,
+  "y": 0,
+  "w": 648,
+  "h": 405,
+  "run": "scene-v2-agent",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
+ },
+ "bar-working3.notch": {
+  "x": 502,
+  "y": 0,
+  "w": 436,
+  "h": 34,
+  "run": "scene-v2-bars",
+  "source": "unmute-notch @ unmute-cloud db2a2016"
  }
 }

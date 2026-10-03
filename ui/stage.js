@@ -41,8 +41,14 @@ function liveFor(name, a) {
     case 'pill-scratch-rec.pill': return { ...PILL, ...capsule(a.w, a.h, plain, false) }
     case 'pill-ropt-rec.pill': case 'pill-agent-rec.pill': case 'pill-flash.pill':
       return { ...PILL, ...capsule(a.w, a.h, withType) }
-    case 'pocket-aimed.pill': return { ...PILL, ...capsule(a.w, a.h, plain) }
+    case 'pocket-aimed.pill': case 'pocket-onb-aimed.pill': case 'onb-ask-aimed.pill':
+      return { ...PILL, ...capsule(a.w, a.h, plain) }
+    case 'pill-codex-rec.pill': return { ...PILL, ...capsule(a.w, a.h, withType) }
     case 'pocket-aimed.notch': return { ...AIMED, x: 286, cy: 123 }
+    case 'pocket-onb-aimed.notch': return { ...AIMED, x: 286, cy: 84.75 }
+    // The task panel's footer carries the full-size AimedChip: 9 × 2.5pt bars,
+    // 2pt apart, 11pt tall — measured from the capture.
+    case 'onb-ask-aimed.notch': return { count: 9, w: 2.5, gap: 2, h: 11, x: 313, cy: 372.75 }
     default:
       if (/^pad-\d\.pill$/.test(name)) return { ...PILL, x: 38, cy: a.h - 18 }
       return null
@@ -75,7 +81,11 @@ export class Stage {
     this.screen = host.querySelector('.screen')
     this.cam = host.querySelector('.cam')
     this.camera = opts.camera !== false
+    this.fullScreen = opts.fullScreen ?? false
     this.strength = opts.zoom ?? 1
+    this.home = opts.home || null
+    this.desktopView = opts.desktopView || { w: SCREEN_W, h: SCREEN_H }
+    this.mobileZoom = opts.mobileZoom ?? 1
     this.canvas = host.querySelector('.live')
     this.ctx = this.canvas.getContext('2d')
     this.current = { notch: null, pill: null }
@@ -91,7 +101,8 @@ export class Stage {
   // a whole Mac squeezed into 350px makes a 36pt pill about 9px tall.
   fit() {
     this.mobile = matchMedia('(max-width: 700px)').matches
-    this.view = this.mobile ? { w: 640, h: 800 } : { w: SCREEN_W, h: SCREEN_H }
+    this.host.querySelector('.bubble').style.maxWidth = (this.mobile ? 340 : 560) + 'px'
+    this.view = this.fullScreen ? { w: SCREEN_W, h: SCREEN_H } : this.mobile ? { w: 640, h: 800 } : this.desktopView
     this.host.style.aspectRatio = `${this.view.w} / ${this.view.h}`
     Object.assign(this.screen.style, { width: this.view.w + 'px', height: this.view.h + 'px',
       transform: `scale(${this.host.clientWidth / this.view.w})` })
@@ -138,7 +149,7 @@ export class Stage {
         b.dataset.sig = sig
         b.querySelector('kbd').textContent = key || ''
         b.querySelector('kbd').style.display = key ? '' : 'none'
-        const words = text.split(' '), step = Math.min(300, 2300 / words.length)
+        const words = text.split(' '), step = Math.min(300, 2300 / words.length) / (this.playbackRate || 1)
         // The quote marks ride INSIDE the first and last word, so a closing ”
         // can never wrap onto a line of its own.
         const last = words.length - 1
@@ -170,7 +181,8 @@ export class Stage {
     r.style.left = lx + 'px'
     r.style.top = ly + 'px'
     r.classList.remove('on'); void r.offsetWidth
-    setTimeout(() => r.classList.add('on'), 450)
+    clearTimeout(this.resultRevealT)
+    this.resultRevealT = setTimeout(() => r.classList.add('on'), 450)
     clearTimeout(this.resultT)
     this.resultT = setTimeout(() => r.classList.remove('on'), 3200)
   }
@@ -185,16 +197,19 @@ export class Stage {
     let f = null
     if (this.target) f = this.target                                          // a scene named its own subject
     else if (/^pocket-/.test(n) && p) f = M ? { x: 720, y: 400, z: 0.95, ay: 0.5 } : { x: 720, y: 330, z: 1.15, ay: 0.4 }   // card AND pill both matter
+    else if (/^(task-|agent-|onb-)/.test(n) && p) f = M ? { x: 720, y: 400, z: 0.96, ay: 0.5 } : { x: 720, y: 400, z: 1.1, ay: 0.5 }
     else if (/^(pad-|pill-paused)/.test(p)) f = M ? { x: 895, y: 640, z: 1.15, ay: 0.6 } : { x: 900, y: 640, z: 1.55, ay: 0.55 }
     else if (p) f = M ? { x: 720, y: 779, z: 1.75, ay: 0.72 } : { x: 720, y: 779, z: 1.9, ay: 0.72 }
-    else if (/^(task-|agent-)/.test(n)) f = M ? { x: 720, y: 0, z: 0.96, ay: 0 } : { x: 720, y: 0, z: 1.3, ay: 0 }
+    else if (/^(task-|agent-|onb-)/.test(n)) f = M ? { x: 720, y: 0, z: 0.96, ay: 0 } : { x: 720, y: 0, z: 1.3, ay: 0 }
     else if (/^pocket-/.test(n)) f = M ? { x: 720, y: 0, z: 1.7, ay: 0 } : { x: 720, y: 0, z: 1.9, ay: 0 }
     else if (n) f = M ? { x: 720, y: 0, z: 1.45, ay: 0 } : { x: 720, y: 0, z: 2.1, ay: 0 }
-    if (!f) f = { x: 720, y: 450, z: M ? 0.9 : 1, ay: 0.5 }
+    // Idle framing: the scene's own HOME shot if it has one (framed on where
+    // the action will happen), else the whole screen.
+    if (!f) f = this.home || { x: 720, y: 450, z: M ? 0.9 : 1, ay: 0.5 }
     const { w: VW, h: VH } = this.view
     const minZ = Math.max(VW / SCREEN_W, VH / SCREEN_H)
     // Desktop zoom is softened per stage (`zoom` option); a phone needs all of it.
-    const z = Math.max(minZ, M ? f.z : 1 + (f.z - 1) * this.strength)
+    const z = Math.max(minZ, M ? f.z * this.mobileZoom : 1 + (f.z - 1) * this.strength)
     const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
     const tx = clamp(VW / 2 - f.x * z, VW - SCREEN_W * z, 0)
     const ty = clamp(VH * f.ay - f.y * z, VH - SCREEN_H * z, 0)
@@ -203,7 +218,7 @@ export class Stage {
 
 
   frame(t) {
-    if (!this.visible) return
+    if (!this.visible || this.paused) return
     // A SPEAKING VOICE for the meter: syllable-rate bursts under a slow phrase
     // envelope, fed through the app's own gate/attack/release.
     const raw = this.speaking
