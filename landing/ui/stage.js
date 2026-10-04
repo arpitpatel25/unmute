@@ -58,9 +58,9 @@ function liveFor(name, a) {
 let manifest = null
 const ready = fetch(new URL('../assets/ui/manifest.json', import.meta.url)).then((r) => r.json()).then((m) => {
   manifest = m
-  const jobs = []
-  for (const k of Object.keys(m)) { if (PATCH[k]) jobs.push(clean(k)); else { const i = new Image(); i.src = rawUrl(k) } }   // warm the cache
-  return Promise.all(jobs)
+  // Warm the cache. Cleaning runs in the background so the demos never wait
+  // on it; a panel already on screen swaps to its clean copy when it's ready.
+  for (const k of Object.keys(m)) { if (PATCH[k]) clean(k); else { const i = new Image(); i.src = rawUrl(k) } }
 })
 const rawUrl = (k) => new URL(`../assets/ui/${k}.png`, import.meta.url).href
 
@@ -92,7 +92,11 @@ function clean(k) {
       grad.addColorStop(1, `rgba(${b[0]},${b[1]},${b[2]},${b[3] / 255})`)
       g.fillStyle = grad; g.fillRect(x0, y, x1 - x0, 1)
     }
-    c.toBlob((blob) => { cleaned[k] = URL.createObjectURL(blob); done() })
+    c.toBlob((blob) => {
+      cleaned[k] = URL.createObjectURL(blob)
+      document.querySelectorAll(`.stage .slot img[data-key="${k}"]`).forEach((el) => { el.src = cleaned[k] })
+      done()
+    })
   }
   img.src = rawUrl(k)
   })

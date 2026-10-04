@@ -11,7 +11,7 @@
 //      to read, because a whole 14" screen in 1000px makes the pill ~10px tall
 //   3. the subtitle under the screen carries the key you pressed and your words,
 //      then what happened (✓). It never covers the product.
-import { Stage, ready } from './stage.js?v=20261004-morph1'
+import { Stage, ready } from './stage.js?v=20261004-morph2'
 export { ready }
 
 const SCREEN_W = 1440, SCREEN_H = 900
