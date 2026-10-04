@@ -1,11 +1,16 @@
-// THE STAGE — a 1440×900 Mac screen holding the app's REAL surfaces.
+// THE STAGE — a Mac screen holding the app's REAL surfaces.
 //
 // Every notch/pill image is a capture of unmute-notch (unmute-cloud db2a2016)
 // placed at the exact window position the helper used (assets/ui/manifest.json).
 // The only thing drawn here is what MOVES: the waveform bars, from the app's own
 // math (LevelMeterSupport/LevelMeter.swift + DotWave.swift), laid exactly over
 // the resting dots in the capture — which are those same bars at floor height.
-const SCREEN_W = 1440, SCREEN_H = 900
+// The screen is drawn at real size, 1120×700pt, so the notch and pill read
+// as they do on a laptop without a camera move. The captures were placed on a
+// 1440×900 screen; on load they're moved to the same spot on this one: the
+// notch stays centred at the top, the pill keeps its distance from the bottom.
+const SCREEN_W = 1120, SCREEN_H = 700
+const CAPTURED_W = 1440, CAPTURED_H = 900
 
 // ── LevelMeter.swift + DotWave.swift, ported line for line ────────────────────
 const LevelMeter = {
@@ -58,6 +63,10 @@ function liveFor(name, a) {
 let manifest = null
 const ready = fetch(new URL('../assets/ui/manifest.json', import.meta.url)).then((r) => r.json()).then((m) => {
   manifest = m
+  for (const [k, v] of Object.entries(m)) {
+    v.x -= (CAPTURED_W - SCREEN_W) / 2
+    if (k.endsWith('.pill')) v.y -= CAPTURED_H - SCREEN_H
+  }
 })
 const rawUrl = (k) => new URL(`../assets/ui/${k}.webp`, import.meta.url).href
 
@@ -72,7 +81,27 @@ const PATCH = {
 for (const k of ['onb-1', 'onb-2', 'onb-3', 'onb-continue', 'agent-recall-1', 'agent-recall-2', 'agent-meetonb-2',
   'task-1', 'task-2', 'task-3', 'task-4', 'agent-save-1', 'agent-save-2', 'agent-ask-1', 'agent-ask-2', 'agent-meet-1', 'agent-meet-2', 'agent-meet-3'])
   PATCH[k + '.notch'] ??= CHIP
+// GLASS: the helper's panels and pocket cards are translucent glass, but a
+// screenshot bakes whatever was behind them in as solid colour. Give it back:
+// the dark panel tone becomes a partly transparent tint (GLASS_TINT), while
+// anything brighter than the tone — text, chips, icons — stays solid. The page
+// then blurs what's really behind the panel (.slot .pane.glass in mac.css).
+// The notch bar and the pill are solid black in the app, so they stay opaque.
+const GLASS_TINT = 0.7
+const isGlass = (k) => k.endsWith('.notch') && manifest?.[k]?.h > 60
 const cleaned = {}
+const OUTLINE = {}
+// Where a surface sits on screen. A glass panel's box is its outline (so a
+// rounded box can clip the blur behind it); its capture sits inside, offset.
+function placed(k) {
+  const m = manifest[k], o = isGlass(k) && OUTLINE[k]
+  return o ? { x: m.x + o.l, y: m.y, w: m.w - o.l - o.r, h: m.h - o.b, ox: o.l } : { x: m.x, y: m.y, w: m.w, h: m.h, ox: 0 }
+}
+function placePane(pane, k) {
+  const r = placed(k), m = manifest[k]
+  Object.assign(pane.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' })
+  Object.assign(pane.querySelector('img').style, { left: -r.ox + 'px', width: m.w + 'px', height: m.h + 'px' })
+}
 function clean(k) {
   return new Promise((done) => {
   const img = new Image()
@@ -80,18 +109,45 @@ function clean(k) {
   img.onload = () => {
     const c = document.createElement('canvas'); c.width = img.width; c.height = img.height
     const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0)
-    const [x0, y0, x1, y1] = PATCH[k]
-    const px = (x, y) => g.getImageData(x, y, 1, 1).data
-    for (let y = y0; y < y1; y++) {
-      const a = px(x0 - 2, y), b = px(x1 + 2, y)
-      const grad = g.createLinearGradient(x0, 0, x1, 0)
-      grad.addColorStop(0, `rgba(${a[0]},${a[1]},${a[2]},${a[3] / 255})`)
-      grad.addColorStop(1, `rgba(${b[0]},${b[1]},${b[2]},${b[3] / 255})`)
-      g.fillStyle = grad; g.fillRect(x0, y, x1 - x0, 1)
+    if (PATCH[k]) {
+      const [x0, y0, x1, y1] = PATCH[k]
+      const px = (x, y) => g.getImageData(x, y, 1, 1).data
+      for (let y = y0; y < y1; y++) {
+        const a = px(x0 - 2, y), b = px(x1 + 2, y)
+        const grad = g.createLinearGradient(x0, 0, x1, 0)
+        grad.addColorStop(0, `rgba(${a[0]},${a[1]},${a[2]},${a[3] / 255})`)
+        grad.addColorStop(1, `rgba(${b[0]},${b[1]},${b[2]},${b[3] / 255})`)
+        g.fillStyle = grad; g.fillRect(x0, y, x1 - x0, 1)
+      }
+    }
+    if (isGlass(k)) {
+      const d = g.getImageData(0, 0, c.width, c.height), p = d.data
+      // The panel's outline inside its capture, in points: the blur behind it
+      // is clipped to this (Chrome doesn't clip backdrop blur to a mask).
+      const A = (x, y) => p[(y * c.width + x) * 4 + 3], mid = c.height >> 1, cx = c.width >> 1
+      let l = 0, r = c.width - 1, btm = c.height - 1
+      while (l < cx && A(l, mid) < 250) l++
+      while (r > cx && A(r, mid) < 250) r--
+      while (btm > mid && A(cx, btm) < 250) btm--
+      OUTLINE[k] = { l: l / 2, r: (c.width - 1 - r) / 2, b: (c.height - 1 - btm) / 2 }
+      document.querySelectorAll(`.stage .slot .pane[data-key="${k}"]`).forEach((el) => placePane(el, k))
+      for (let i = 0; i < p.length; i += 4) {
+        const L = 0.2126 * p[i] + 0.7152 * p[i + 1] + 0.0722 * p[i + 2]
+        const t = Math.min(1, Math.max(0, (L - 62) / 58)), lift = t * t * (3 - 2 * t)
+        p[i + 3] = Math.round(p[i + 3] * (GLASS_TINT + (1 - GLASS_TINT) * lift))
+        // The helper's glass is neutral black; the purple is the capture's
+        // backdrop. Turn blue-purple tones grey, keep real colour (green
+        // "Working", orange "Needs you", the red mic) as it is.
+        if (p[i + 2] >= p[i] && p[i + 2] >= p[i + 1]) {
+          const grey = L * 0.55, k = 1 - lift
+          p[i] += (grey - p[i]) * k; p[i + 1] += (grey - p[i + 1]) * k; p[i + 2] += (grey - p[i + 2]) * k
+        }
+      }
+      g.putImageData(d, 0, 0)
     }
     c.toBlob((blob) => {
       cleaned[k] = URL.createObjectURL(blob)
-      document.querySelectorAll(`.stage .slot img[data-key="${k}"]`).forEach((el) => { el.src = cleaned[k] })
+      document.querySelectorAll(`.stage .slot .pane[data-key="${k}"] img`).forEach((el) => { el.src = cleaned[k] })
       done()
     })
   }
@@ -108,9 +164,16 @@ function preload(keys) {
   for (const k of keys) {
     if (fetched.has(k) || !manifest?.[k]) continue
     fetched.add(k)
-    if (PATCH[k]) clean(k); else { const i = new Image(); i.src = rawUrl(k) }
+    if (PATCH[k] || isGlass(k)) clean(k); else { const i = new Image(); i.src = rawUrl(k) }
   }
 }
+
+// Menu bar glyphs, drawn rather than shipped as images.
+const APPLE = `<svg class="mb-apple" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17.3 12.6c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3 2.4 1.2-.1 1.7-.8 3.1-.8 1.5 0 1.9.8 3.2.8 1.3 0 2.1-1.2 2.9-2.4.9-1.3 1.3-2.6 1.3-2.7-.1 0-2.5-1-2.4-4ZM14.9 5.5c.7-.8 1.1-1.9 1-3-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.8-1 2.9 1 .1 2.1-.5 2.8-1.4Z"/></svg>`
+const STATUS = `<svg viewBox="0 0 28 14" class="mb-ico" aria-hidden="true"><rect x="1" y="2" width="22" height="10" rx="3" fill="none" stroke="currentColor" stroke-opacity=".55"/><rect x="3" y="4" width="15" height="6" rx="1.5" fill="currentColor"/><rect x="24.5" y="5.5" width="1.6" height="3" rx=".8" fill="currentColor" fill-opacity=".55"/></svg>`
+  + `<svg viewBox="0 0 18 14" class="mb-ico" aria-hidden="true"><path d="M9 12.6 6.6 10a3.4 3.4 0 0 1 4.8 0L9 12.6Zm-4.3-4.5-1.5-1.6a8.2 8.2 0 0 1 11.6 0l-1.5 1.6a6 6 0 0 0-8.6 0ZM1.5 4.8 0 3.2a12.8 12.8 0 0 1 18 0l-1.5 1.6a10.6 10.6 0 0 0-15 0Z" fill="currentColor"/></svg>`
+  + `<svg viewBox="0 0 16 14" class="mb-ico" aria-hidden="true"><circle cx="6.5" cy="6" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10 9.5 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`
+  + `<svg viewBox="0 0 16 14" class="mb-ico" aria-hidden="true"><rect x="1" y="1.5" width="14" height="4.5" rx="2.25" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="12.6" cy="3.75" r="1.4" fill="currentColor"/><rect x="1" y="8" width="14" height="4.5" rx="2.25" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="3.4" cy="10.25" r="1.4" fill="currentColor"/></svg>`
 
 export class Stage {
   constructor(host, opts = {}) {
@@ -119,11 +182,11 @@ export class Stage {
     host.classList.add('stage')
     host.innerHTML = `
       <div class="screen"><div class="cam wallpaper">
-        <div class="menubar"><span class="mb-left"><b class="mb-app">Finder</b><span>File</span><span>Edit</span><span>View</span><span>Window</span></span><span class="mb-right">Tue 9:41</span></div>
+        <div class="menubar"><span class="mb-left">${APPLE}<b class="mb-app">Finder</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span></span><span class="mb-right">${STATUS}<span>Tue Oct 14</span><span>9:41 AM</span></span></div>
         <div class="apps">${apps}</div>
         <div class="hw-notch"></div>
-        <div class="slot" data-role="notch"><div class="shell"></div><img alt=""><img alt=""></div>
-        <div class="slot" data-role="pill"><div class="shell"></div><img alt=""><img alt=""></div>
+        <div class="slot" data-role="notch"><div class="shell"></div><div class="pane"><img alt=""></div><div class="pane"><img alt=""></div></div>
+        <div class="slot" data-role="pill"><div class="shell"></div><div class="pane"><img alt=""></div><div class="pane"><img alt=""></div></div>
         <canvas class="live" width="${SCREEN_W * 2}" height="${SCREEN_H * 2}"></canvas>
         <div class="extra"></div>
         <div class="voice"><div class="bubble"><div class="hd"><span class="you">🎙 you say</span><kbd></kbd></div><q></q></div><div class="result"></div></div>
@@ -171,28 +234,30 @@ export class Stage {
     const prevKey = this.current[role] && `${this.current[role]}.${role}`
     this.current[role] = name
     const slot = this.host.querySelector(`.slot[data-role="${role}"]`)
-    const [a, b] = slot.querySelectorAll('img')
+    const [a, b] = slot.querySelectorAll('.pane')
     const [live, next] = a.classList.contains('on') ? [a, b] : [b, a]
     const key = name && `${name}.${role}`
-    const to = key && manifest?.[key]
-    const from = (prevKey && manifest?.[prevKey]) || null
+    const to = key && manifest?.[key] ? placed(key) : null
+    const from = live.querySelector('img').getAttribute('src') && prevKey && manifest?.[prevKey] ? placed(prevKey) : null
     for (const el of [a, b, slot.querySelector('.shell')]) el.getAnimations().forEach((x) => x.cancel())
     live.classList.remove('on')
+    const img = next.querySelector('img')
     if (to) {
-      Object.assign(next.style, { left: to.x + 'px', top: to.y + 'px', width: to.w + 'px', height: to.h + 'px' })
-      next.src = assetUrl(key)
       next.dataset.key = key
+      next.classList.toggle('glass', isGlass(key))
+      placePane(next, key)
+      img.src = assetUrl(key)
       next.classList.add('on')
-    } else { next.removeAttribute('src'); next.classList.remove('on') }
+    } else { img.removeAttribute('src'); next.classList.remove('on'); delete next.dataset.key }
     if (this.instant) return
-    this.morph(role, slot, live, to ? next : null, from && live.getAttribute('src') ? from : null, to)
+    this.morph(role, slot, live, to ? next : null, from, to)
   }
 
   // Where a surface grows from, or shrinks back into, when there's no other
   // surface: the hardware notch for the notch, a dot at the pill's centre.
   rest(role, near) {
-    if (role === 'notch') return { x: 620, y: 0, w: 200, h: 34 }
-    const r = near || { x: 702, y: 761, w: 36, h: 36 }
+    if (role === 'notch') return { x: SCREEN_W / 2 - 100, y: 0, w: 200, h: 34 }
+    const r = near || { x: SCREEN_W / 2 - 18, y: SCREEN_H - 139, w: 36, h: 36 }
     return { x: r.x + r.w / 2 - 18, y: r.y + r.h - 36, w: 36, h: 36 }
   }
   morph(role, slot, out, inn, from, to) {
@@ -211,7 +276,8 @@ export class Stage {
     const dur = grow ? 560 : 420
     // A spring with a little give on the way out; a firm ease on the way back in.
     const easing = grow ? 'cubic-bezier(.32,1.14,.5,1)' : 'cubic-bezier(.5,0,.2,1)'
-    const tint = role === 'notch' && b.h > 60 ? '#211c38' : '#000'
+    const tint = role === 'notch' && b.h > 60 ? 'rgba(18,18,20,.74)' : '#000'
+    shell.classList.toggle('glass', role === 'notch' && b.h > 60)
     shell.animate([box(a), box(b)], { duration: dur, easing, fill: 'forwards' })
     shell.animate([{ opacity: 1, background: '#000' }, { opacity: 1, background: tint, offset: 0.8 }, { opacity: 0, background: tint }],
       { duration: dur + 180, fill: 'forwards' })
@@ -231,7 +297,7 @@ export class Stage {
   // on ✓, and its words fly to where the work happened, which gets a label.
   pillAnchor() {
     const p = this.current.pill, m = p && manifest?.[`${p}.pill`]
-    if (!m) return { x: 720, y: 760 }
+    if (!m) return { x: SCREEN_W / 2, y: SCREEN_H - 140 }
     // Cluster assets are bottom-aligned; pad assets carry the pad to the right
     // of a 178pt cluster, so anchor on the cluster itself.
     const w = /^(pad-|pill-paused)/.test(p) ? 178 : m.w
@@ -325,7 +391,7 @@ export class Stage {
     const c = this.ctx
     c.setTransform(2, 0, 0, 2, 0, 0)
     c.clearRect(0, 0, SCREEN_W, SCREEN_H)
-    for (const img of this.host.querySelectorAll('.slot img.on')) {
+    for (const img of this.host.querySelectorAll('.slot .pane.on')) {
       const key = img.dataset.key, m = manifest?.[key]
       const L = m && liveFor(key, m)
       if (!L || amp <= 0) continue

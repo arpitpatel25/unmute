@@ -1,40 +1,48 @@
-import { Film, SHOT, ready } from './ui/film.js?v=20261004-morph3'
+import { Film, SHOT, ready } from './ui/film.js?v=20261004-ctl3'
 
 const $ = (s, r = document) => r.querySelector(s)
 const $$ = (s, r = document) => [...r.querySelectorAll(s)]
 const motionPreference = matchMedia('(prefers-reduced-motion: reduce)')
 const reduce = motionPreference.matches
-let motionPaused = reduce
 const films = []
+// Each demo plays when it's on screen, unless its viewer paused it. Reduced
+// motion starts every demo paused on its clearest frame; Play still works.
 function syncMotion() {
-  document.body.classList.toggle('motion-paused', motionPaused)
   for (const item of films) {
-    item.film.stage.paused = motionPaused
-    if (!motionPaused && item.inView && !document.hidden) item.film.tl.play()
-    else item.film.tl.pause()
+    const run = !item.userPaused && item.inView && !document.hidden
+    item.film.stage.paused = !run
+    if (run) item.film.tl.play(); else item.film.tl.pause()
+    item.sub?.classList.toggle('paused', !!item.userPaused)
+    if (item.toggle) {
+      item.toggle.innerHTML = item.userPaused ? `${ICON.play}<span>Play</span>` : `${ICON.pause}<span>Pause</span>`
+      item.toggle.setAttribute('aria-label', item.userPaused ? 'Play this demo' : 'Pause this demo')
+    }
   }
-  const button = $('.rot-pause')
-  if (!button) return
-  button.textContent = motionPaused ? 'Play demos' : 'Pause demos'
-  button.setAttribute('aria-label', motionPaused ? 'Play all demos' : 'Pause all demos')
+}
+const ICON = {
+  play: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.8v8.4L10 6 3 1.8Z" fill="currentColor"/></svg>',
+  pause: '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="2" width="2.4" height="8" rx=".6" fill="currentColor"/><rect x="7.1" y="2" width="2.4" height="8" rx=".6" fill="currentColor"/></svg>',
+  replay: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.2 6a3.8 3.8 0 1 0 1.1-2.7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2.1 1.6v2.6h2.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 }
 
 // ── The user's own apps: plain stand-ins, never unmute UI ─────────────────────
 // Each one shows the reason you're about to speak: the request comes from what's
 // on screen, so a visitor can follow the thought without reading the copy.
 const W = (app, title, body, style = '', cls = '') =>
-  `<div class="app ${cls}" data-app="${app}" data-title="${title.split(' — ')[0]}" style="${style}"><div class="bar"><i></i><i></i><i></i><span>${title}</span></div>${body}</div>`
-const msg = (who, text, av = '') => `<div class="msg"><div class="av ${av}">${who[0]}</div><div><b>${who}</b><br/>${text}</div></div>`
+  `<div class="app ${cls}" data-app="${app}" data-title="${title.split(' — ')[0]}" style="${style}"><div class="bar"><i></i><i></i><i></i><span>${title}</span></div><div class="win">${body}</div></div>`
+const msg = (who, text, av = '', when = '') => `<div class="msg"><div class="av ${av}">${who[0]}</div><div><b>${who}</b><small>${when}</small><br/>${text}</div></div>`
 const APPS = {
-  slack: (s) => W('slack', 'Slack — #launch', `<div class="body">${msg('Priya', 'Can we get a first version of the <mark>new onboarding flow</mark> by Friday? Designs are in Figma.', 'p')}${msg('Sam', '+1, the current one loses half our signups 😬')}</div><div class="compose" data-ph="Message #launch"></div>`, s),
-  figma: (s) => W('figma', 'Figma — Onboarding', `<div class="canvas"><div class="frame"><small>1</small><b>Welcome</b><i></i><i></i></div><div class="frame"><small>2</small><b>Set up your team</b><i></i><i></i></div><div class="frame"><small>3</small><b>Your first project</b><i></i><i></i></div></div>`, s),
-  docs: (s) => W('docs', 'Docs — Pricing launch brief', `<div class="body"><b style="font-size:26px">Pricing launch — brief</b><p class="doc-line">Launch the new team plan on the 14th.</p><p class="doc-line"><mark>Still needed: a landing page for the launch.</mark></p><div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div></div>`, s),
-  settings: (s) => W('settings', 'Chrome — localhost:3000/settings', `<div class="body"><b style="font-size:24px">Profile settings</b><div class="field"><span>Name</span><div>Arpit Patel</div></div><div class="field"><span>Email</span><div>arpit@acme.dev</div></div><div class="savebtn">Save changes</div><div class="toast">Nothing happened. Changes not saved.</div></div>`, s),
-  mail: (s) => W('mail', 'Mail — Re: launch date', `<div class="body"><div style="color:#888">To: Priya &nbsp;·&nbsp; Re: launch date</div><div class="typed" style="margin-top:22px"></div><div class="quote">Priya: Does Thursday still work for the launch?</div></div>`, s),
-  inbox: (s) => W('inbox', 'Mail — Inbox', `<div class="body">${msg('Priya', 'Morning! Where did we land on onboarding yesterday? Can we keep going today?', 'p')}<div class="skel" style="width:80%;margin-top:24px"></div><div class="skel" style="width:64%"></div></div>`, s),
+  slack: (s) => W('slack', 'Slack — #launch', `<div class="slack"><aside><b>Acme</b><p># general</p><p class="on"># launch</p><p># design</p><p># eng</p><p>● Priya</p><p>● Sam</p></aside><main><header># launch</header>${msg('Priya', 'Can we get a first version of the <mark>new onboarding flow</mark> by Friday? Designs are in Figma.', 'p', '9:32 AM')}${msg('Sam', '+1, the current one loses half our signups 😬', '', '9:35 AM')}<div class="compose" data-ph="Message #launch"></div></main></div>`, s),
+  figma: (s) => W('figma', 'Figma — Onboarding', `<div class="figma"><div class="tools"><i></i><i></i><i></i><span>Onboarding / v3</span></div><div class="body"><aside>Layers<p>Welcome</p><p class="on">Set up your team</p><p>Your first project</p></aside><div class="canvas"><div class="frame"><small>1</small><b>Welcome</b><i></i><i></i></div><div class="frame"><small>2</small><b>Set up your team</b><i></i><i></i></div><div class="frame"><small>3</small><b>Your first project</b><i></i><i></i></div></div></div></div>`, s),
+  docs: (s) => W('docs', 'Docs — Pricing launch brief', `<div class="doc"><div class="page"><b>Pricing launch — brief</b><p class="doc-line">Launch the new team plan on the 14th.</p><p class="doc-line"><mark>Still needed: a landing page for the launch.</mark></p><div class="skel" style="width:80%;margin-top:18px"></div><div class="skel" style="width:60%"></div></div></div>`, s),
+  settings: (s) => W('settings', 'Chrome — Profile settings', `<div class="chrome"><div class="url"><span>localhost:3000/settings</span></div><div class="page"><b>Profile settings</b><div class="field"><span>Name</span><div>Arpit Patel</div></div><div class="field"><span>Email</span><div>arpit@acme.dev</div></div><div class="savebtn">Save changes</div><div class="toast">Nothing happened. Changes not saved.</div></div></div>`, s),
+  mail: (s) => W('mail', 'Mail — Re: launch date', `<div class="mail"><aside><p class="on">Inbox</p><p>VIP</p><p>Drafts</p><p>Sent</p></aside><main><div class="hdr">To: Priya &nbsp;·&nbsp; Re: launch date</div><div class="typed"></div><div class="quote">Priya: Does Thursday still work for the launch?</div></main></div>`, s),
+  inbox: (s) => W('inbox', 'Mail — Inbox', `<div class="mail"><aside><p class="on">Inbox</p><p>VIP</p><p>Drafts</p><p>Sent</p></aside><main><div class="row on"><b>Priya</b><span>Morning! Where did we land on onboarding yesterday? Can we keep going today?</span></div><div class="row"><b>Sam</b><span>QA notes for the pricing page</span></div><div class="row"><b>Stripe</b><span>Your payout is on its way</span></div></main></div>`, s),
   call: (s) => W('call', 'Meet — Product sync', `<div class="grid"><div>AP</div><div>SM</div><div>PR</div><div>JL</div></div>`, s, 'dark'),
 }
-const apps = (...list) => list.map(([k, s]) => APPS[k](s || '')).join('')
+// A window further back on every screen, for depth.
+const BACK = W('back', 'Notes — Ideas', `<div class="notes"><b>Ideas</b><div class="skel" style="width:85%"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:78%"></div><div class="skel" style="width:52%"></div></div>`, '', 'back')
+const apps = (...list) => BACK + list.map(([k, s]) => APPS[k](s || '')).join('')
 
 const NT_HTML = `<div class="nt rec">
     <span class="row rec"><span class="wave">${'<div></div>'.repeat(11)}</span></span>
@@ -61,23 +69,43 @@ function ntBars(stage) {
 }
 
 // Framings specific to one demo.
-const NT_SHOT = { x: 380, y: 560, z: 1.4, ay: 0.5 }
-const WINDOW_LOW = { x: 600, y: 800, z: 1.45, ay: 0.93, nz: 1.15 }     // a window's lower half plus the pill
-const MAIL_TOP = { x: 560, y: 260, z: 1.3, ay: 0.4 }
+const NT_SHOT = { x: 300, y: 420, z: 1.4, ay: 0.5 }
+const WINDOW_LOW = { x: 470, y: 610, z: 1.5, ay: 0.93 }     // a window's lower half plus the pill
+const MAIL_TOP = { x: 470, y: 230, z: 1.4, ay: 0.4 }
 
 // Build one demo. `still` is the shot shown, unmoving, under reduced motion.
 function film(name, appHtml, shots, opts = {}) {
-  const host = $(`[data-stage="${name}"]`)
-  const f = new Film(host, { apps: appHtml, html: opts.html, sub: $(`[data-said="${name}"]`), shots })
+  const host = $(`[data-stage="${name}"]`), sub = $(`[data-said="${name}"]`)
+  const f = new Film(host, { apps: appHtml, html: opts.html, sub, shots })
   if (opts.nt) { f.on((i, s) => ntApply(s, f.stage)); ntApply(f.shots[0], f.stage); ntBars(f.stage) }
-  const item = { film: f, inView: false }
+  const item = { film: f, sub, inView: false, userPaused: reduce, left: true, ticks: [] }
   films.push(item)
   if (reduce) f.seek(opts.still ?? 0)
+
+  // Controls under every demo: replay from the start, pause or play, and a
+  // thin line showing how far through it is.
+  const ctl = document.createElement('div')
+  ctl.className = 'film-ctl'
+  ctl.innerHTML = `<button type="button" class="replay" aria-label="Replay this demo">${ICON.replay}<span>Replay</span></button><button type="button" class="toggle"></button><span class="track" aria-hidden="true"><i></i></span>`
+  sub.after(ctl)
+  item.toggle = $('.toggle', ctl)
+  const fill = $('.track i', ctl)
+  $('.replay', ctl).onclick = () => { f.seek(0); item.userPaused = false; item.left = false; syncMotion() }
+  item.toggle.onclick = () => { item.userPaused = !item.userPaused; syncMotion() }
+  const tick = () => { fill.style.transform = `scaleX(${f.tl.time() / f.total})`; for (const t of item.ticks) t() }
+  f.tl.eventCallback('onUpdate', tick)
+  f.on(tick)
+  tick()
+
+  // Start the moment a demo is properly in view, from its beginning if it had
+  // scrolled away, so nobody lands in the middle of a story.
   new IntersectionObserver(([entry]) => {
-    item.inView = entry.isIntersecting
+    item.inView = entry.intersectionRatio >= 0.3
+    if (entry.intersectionRatio === 0) item.left = true
+    if (item.inView && item.left && !item.userPaused) { f.seek(0); item.left = false }
     syncMotion()
-  }, { threshold: 0.25 }).observe(host)
-  return f
+  }, { threshold: [0, 0.3] }).observe(host)
+  return item
 }
 
 await ready
@@ -90,7 +118,7 @@ updateNav()
 // 2. it works in the notch while you move on to Figma
 // 3. it needs a decision → the notch opens where you are → you answer out loud
 {
-  const hero = film('hero', apps(['slack'], ['figma']), [
+  const heroItem = film('hero', apps(['slack'], ['figma']), [
     { t: 0, chapter: 0, app: 'slack', cam: SHOT.wide, line: 'Priya needs the onboarding flow by Friday.' },
     { t: 2.2, key: 'hold right ⌥', say: 'build a first version of the new onboarding flow', sayDur: 2.4, pill: 'pill-ropt-rec', speak: true, cam: SHOT.pill },
     { t: 5.2, key: 'hold right ⌥', say: 'build a first version of the new onboarding flow', pill: 'pill-ropt-proc' },
@@ -103,15 +131,18 @@ updateNav()
     { t: 20.4, notch: 'onb-continue', pill: null, done: 'Answered by voice. Claude carries on.' },
     { t: 23.6, notch: 'bar-working1', cam: SHOT.wide, line: 'You never left Figma.', end: 26.5 },
   ], { still: 4 })
+  const hero = heroItem.film
 
   window.__heroStage = hero.stage   // for tools/morph-frames.mjs
 
   // Chapter buttons: each one shows where the loop is, and jumps there.
   const chapters = $$('.chapters button')
-  const starts = [0, 9.8, 14.4], ends = [9.8, 14.4, hero.total]
+  const starts = [0, 1, 2].map((c) => hero.shots.find((s) => s.chapter === c).t)
+  const ends = [starts[1], starts[2], hero.total]
   chapters.forEach((b, i) => {
     b.onclick = () => {
       hero.seek(hero.shots.findIndex((s) => s.t === starts[i]))
+      heroItem.userPaused = false; heroItem.left = false
       syncMotion()
     }
   })
@@ -123,10 +154,8 @@ updateNav()
       b.classList.toggle('on', t >= starts[i] && t < ends[i])
     })
   }
-  hero.tl.eventCallback('onUpdate', paint)
-  hero.on(paint)
+  heroItem.ticks.push(paint)
   paint()
-  $('.rot-pause').onclick = () => { motionPaused = !motionPaused; syncMotion() }
 }
 
 // ── WHY: the thought you'd have put off, said on the spot ────────────────────
@@ -152,9 +181,9 @@ film('start', apps(['figma']), [
 {
   const box = (st, on) => {
     const b = $('.selbox', st.host), btn = $('.app[data-app="settings"] .savebtn', st.host)
-    const win = btn.closest('.app')
-    const x = win.offsetLeft + btn.offsetLeft - 14, y = win.offsetTop + btn.offsetTop - 12
-    const w = btn.offsetWidth + 340, h = btn.offsetHeight + 28
+    const cam = $('.cam', st.host).getBoundingClientRect(), r = btn.getBoundingClientRect(), k = cam.width / 1120
+    const x = (r.left - cam.left) / k - 10, y = (r.top - cam.top) / k - 10
+    const w = r.width / k + 300, h = r.height / k + 20
     gsap.set(b, { left: x, top: y })
     gsap.to(b, { width: on ? w : 0, height: on ? h : 0, opacity: on === 1 ? 1 : 0, duration: on === 1 ? 0.7 : 0.25, ease: 'power2.inOut' })
   }
@@ -214,9 +243,9 @@ film('meet', apps(['call'], ['inbox']), [
   ], { still: 3 })
 }
 
-// Pause every demo together, including when a section re-enters the viewport.
+// A hidden tab pauses everything; reduced motion pauses every demo.
 document.addEventListener('visibilitychange', syncMotion)
-motionPreference.addEventListener('change', (event) => { motionPaused = event.matches; syncMotion() })
+motionPreference.addEventListener('change', (event) => { if (event.matches) for (const item of films) item.userPaused = true; syncMotion() })
 syncMotion()
 
 // Stage dimensions become known after the manifest loads. Restore a requested
