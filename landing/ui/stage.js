@@ -58,9 +58,6 @@ function liveFor(name, a) {
 let manifest = null
 const ready = fetch(new URL('../assets/ui/manifest.json', import.meta.url)).then((r) => r.json()).then((m) => {
   manifest = m
-  // Warm the cache. Cleaning runs in the background so the demos never wait
-  // on it; a panel already on screen swaps to its clean copy when it's ready.
-  for (const k of Object.keys(m)) { if (PATCH[k]) clean(k); else { const i = new Image(); i.src = rawUrl(k) } }
 })
 const rawUrl = (k) => new URL(`../assets/ui/${k}.png`, import.meta.url).href
 
@@ -102,6 +99,18 @@ function clean(k) {
   })
 }
 const assetUrl = (k) => cleaned[k] || rawUrl(k)
+
+// Fetch only what the demos use, in the order they ask for it (the hero is
+// built first, so its captures come first). Cleaning runs in the background so
+// a demo never waits on it; a panel already on screen swaps to its clean copy.
+const fetched = new Set()
+function preload(keys) {
+  for (const k of keys) {
+    if (fetched.has(k) || !manifest?.[k]) continue
+    fetched.add(k)
+    if (PATCH[k]) clean(k); else { const i = new Image(); i.src = rawUrl(k) }
+  }
+}
 
 export class Stage {
   constructor(host, opts = {}) {
@@ -351,4 +360,4 @@ export function track(stage, keys, hooks = {}) {
     hooks.apply?.(s, idx)
   }
 }
-export { ready }
+export { ready, preload }

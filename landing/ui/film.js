@@ -11,7 +11,7 @@
 //      to read, because a whole 14" screen in 1000px makes the pill ~10px tall
 //   3. the subtitle under the screen carries the key you pressed and your words,
 //      then what happened (✓). It never covers the product.
-import { Stage, ready } from './stage.js?v=20261004-morph2'
+import { Stage, ready, preload } from './stage.js?v=20261004-morph3'
 export { ready }
 
 const SCREEN_W = 1440, SCREEN_H = 900
@@ -45,6 +45,7 @@ export class Film {
       return { ...carry, ...s }
     })
     shots = this.shots
+    preload(shots.flatMap((s) => [s.notch && `${s.notch}.notch`, s.pill && `${s.pill}.pill`]).filter(Boolean))
     this.listeners = []
     this.state = {}
     this.tl = gsap.timeline({ paused: true, repeat: -1 })
