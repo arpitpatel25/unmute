@@ -8,9 +8,9 @@ LANDING=${0:A:h:h}
 MAIN=${MAIN:-/Users/zodpatel/tools/unmute/unmute}
 [[ -z "$(git -C $MAIN status --porcelain)" ]] || { echo "main checkout is dirty — aborting"; exit 1; }
 
-cp $LANDING/index.html $LANDING/site.css $LANDING/v3.css $LANDING/heritage.css $LANDING/film.css $LANDING/app.js $MAIN/
+cp $LANDING/index.html $LANDING/site.css $LANDING/v3.css $LANDING/heritage.css $LANDING/film.css $LANDING/mac.css $LANDING/app.js $MAIN/
 rm -rf $MAIN/ui $MAIN/assets && cp -R $LANDING/ui $MAIN/ui
-mkdir -p $MAIN/assets/ui && cp -R $LANDING/assets/background-concepts $MAIN/assets/background-concepts && cp -R $LANDING/assets/fonts $MAIN/assets/fonts && cp $LANDING/assets/*.png $MAIN/assets/ && cp $LANDING/assets/ui/manifest.json $MAIN/assets/ui/
+mkdir -p $MAIN/assets/ui && cp -R $LANDING/assets/background-concepts $MAIN/assets/background-concepts && cp -R $LANDING/assets/fonts $MAIN/assets/fonts && cp $LANDING/assets/*.png $LANDING/assets/*.svg $MAIN/assets/ && cp $LANDING/assets/ui/manifest.json $MAIN/assets/ui/
 for f in $LANDING/assets/ui/*.png; do cwebp -quiet -lossless -z 9 $f -o $MAIN/assets/ui/${${f:t}%.png}.webp; done
 
 python3 - "$MAIN" <<'EOF'

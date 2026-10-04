@@ -11,31 +11,33 @@
 //      to read, because a whole 14" screen in 1000px makes the pill ~10px tall
 //   3. the subtitle under the screen carries the key you pressed and your words,
 //      then what happened (✓). It never covers the product.
-import { Stage, ready, preload } from './stage.js?v=20261004-glass1'
+import { Stage, ready, preload } from './stage.js?v=20261004-mac3'
 export { ready }
 
-const SCREEN_W = 1440, SCREEN_H = 900
+const SCREEN_W = 1120, SCREEN_H = 700
 
 // Named framings, in screen points. z is the zoom; ay is where y sits in the
-// view; nz overrides how much further a small stage pushes in.
+// view. A big stage shows the whole screen at real size and never zooms; only
+// a small one (a side-by-side section, a phone) pushes in on these.
 export const SHOT = {
-  wide: { x: 720, y: 450, z: 1, ay: 0.5 },
-  pill: { x: 720, y: 800, z: 1.45, ay: 0.93, nz: 1.15 },     // the pill, with the window you're speaking from
-  pillClose: { x: 720, y: 779, z: 2.1, ay: 0.7 },
-  bar: { x: 720, y: 0, z: 2.1, ay: 0 },            // the notch bar (34pt tall)
-  pocket: { x: 720, y: 0, z: 2.2, ay: 0 },       // the pocket card (348×114)
-  panel: { x: 720, y: 0, z: 1.55, ay: 0 },       // an expanded session (648×405)
-  top: { x: 720, y: 0, z: 1.25, ay: 0 },         // panel plus the window below it
+  wide: { x: 560, y: 350, z: 1, ay: 0.5 },
+  pill: { x: 560, y: 610, z: 1.5, ay: 0.93 },     // the pill, with the window you're speaking from
+  bar: { x: 560, y: 0, z: 2.4, ay: 0 },           // the notch bar (34pt tall)
+  pocket: { x: 560, y: 0, z: 2.4, ay: 0 },        // the pocket card (348×114)
+  panel: { x: 560, y: 0, z: 1.65, ay: 0 },        // an expanded session (648×405)
 }
 
 export class Film {
-  constructor(host, { apps = '', html = '', sub, shots, narrowZoom = 1.35 }) {
+  constructor(host, { apps = '', html = '', sub, shots }) {
+    // The device: the stage is the screen; a bezel wraps it.
+    const mac = document.createElement('div')
+    mac.className = 'mac'
+    host.before(mac); mac.append(host)
     this.stage = new Stage(host, { apps, camera: false, fullScreen: true })
     if (html) this.stage.extra().innerHTML = html
     this.cam = host.querySelector('.cam')
     this.cam.style.transition = 'none'
     this.sub = sub
-    this.narrowZoom = narrowZoom
     // Shots are written as changes; what's on screen (app, surfaces, camera,
     // chapter) carries forward, while words and actions belong to one shot.
     const KEEP = ['app', 'notch', 'pill', 'cam', 'chapter', 'nt', 'typed']
@@ -89,10 +91,8 @@ export class Film {
   // Ease the camera to a framing; clamp so the view never leaves the screen.
   frame(f, dur) {
     const host = this.stage.host
-    // A small screen (a side-by-side section, a phone) pushes in further, so
-    // the product stays readable at any size.
     const narrow = host.clientWidth < 800
-    const z = Math.max(1, f.z * (narrow && f.z > 1 ? f.nz ?? this.narrowZoom : 1))
+    const z = narrow ? Math.max(1, f.z) : 1
     const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
     const x = clamp(SCREEN_W / 2 - f.x * z, SCREEN_W - SCREEN_W * z, 0)
     const y = clamp(SCREEN_H * f.ay - f.y * z, SCREEN_H - SCREEN_H * z, 0)

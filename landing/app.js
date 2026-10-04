@@ -1,4 +1,4 @@
-import { Film, SHOT, ready } from './ui/film.js?v=20261004-glass1'
+import { Film, SHOT, ready } from './ui/film.js?v=20261004-mac3'
 
 const $ = (s, r = document) => r.querySelector(s)
 const $$ = (s, r = document) => [...r.querySelectorAll(s)]
@@ -23,18 +23,20 @@ function syncMotion() {
 // Each one shows the reason you're about to speak: the request comes from what's
 // on screen, so a visitor can follow the thought without reading the copy.
 const W = (app, title, body, style = '', cls = '') =>
-  `<div class="app ${cls}" data-app="${app}" data-title="${title.split(' — ')[0]}" style="${style}"><div class="bar"><i></i><i></i><i></i><span>${title}</span></div>${body}</div>`
-const msg = (who, text, av = '') => `<div class="msg"><div class="av ${av}">${who[0]}</div><div><b>${who}</b><br/>${text}</div></div>`
+  `<div class="app ${cls}" data-app="${app}" data-title="${title.split(' — ')[0]}" style="${style}"><div class="bar"><i></i><i></i><i></i><span>${title}</span></div><div class="win">${body}</div></div>`
+const msg = (who, text, av = '', when = '') => `<div class="msg"><div class="av ${av}">${who[0]}</div><div><b>${who}</b><small>${when}</small><br/>${text}</div></div>`
 const APPS = {
-  slack: (s) => W('slack', 'Slack — #launch', `<div class="body">${msg('Priya', 'Can we get a first version of the <mark>new onboarding flow</mark> by Friday? Designs are in Figma.', 'p')}${msg('Sam', '+1, the current one loses half our signups 😬')}</div><div class="compose" data-ph="Message #launch"></div>`, s),
-  figma: (s) => W('figma', 'Figma — Onboarding', `<div class="canvas"><div class="frame"><small>1</small><b>Welcome</b><i></i><i></i></div><div class="frame"><small>2</small><b>Set up your team</b><i></i><i></i></div><div class="frame"><small>3</small><b>Your first project</b><i></i><i></i></div></div>`, s),
-  docs: (s) => W('docs', 'Docs — Pricing launch brief', `<div class="body"><b style="font-size:26px">Pricing launch — brief</b><p class="doc-line">Launch the new team plan on the 14th.</p><p class="doc-line"><mark>Still needed: a landing page for the launch.</mark></p><div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div></div>`, s),
-  settings: (s) => W('settings', 'Chrome — localhost:3000/settings', `<div class="body"><b style="font-size:24px">Profile settings</b><div class="field"><span>Name</span><div>Arpit Patel</div></div><div class="field"><span>Email</span><div>arpit@acme.dev</div></div><div class="savebtn">Save changes</div><div class="toast">Nothing happened. Changes not saved.</div></div>`, s),
-  mail: (s) => W('mail', 'Mail — Re: launch date', `<div class="body"><div style="color:#888">To: Priya &nbsp;·&nbsp; Re: launch date</div><div class="typed" style="margin-top:22px"></div><div class="quote">Priya: Does Thursday still work for the launch?</div></div>`, s),
-  inbox: (s) => W('inbox', 'Mail — Inbox', `<div class="body">${msg('Priya', 'Morning! Where did we land on onboarding yesterday? Can we keep going today?', 'p')}<div class="skel" style="width:80%;margin-top:24px"></div><div class="skel" style="width:64%"></div></div>`, s),
+  slack: (s) => W('slack', 'Slack — #launch', `<div class="slack"><aside><b>Acme</b><p># general</p><p class="on"># launch</p><p># design</p><p># eng</p><p>● Priya</p><p>● Sam</p></aside><main><header># launch</header>${msg('Priya', 'Can we get a first version of the <mark>new onboarding flow</mark> by Friday? Designs are in Figma.', 'p', '9:32 AM')}${msg('Sam', '+1, the current one loses half our signups 😬', '', '9:35 AM')}<div class="compose" data-ph="Message #launch"></div></main></div>`, s),
+  figma: (s) => W('figma', 'Figma — Onboarding', `<div class="figma"><div class="tools"><i></i><i></i><i></i><span>Onboarding / v3</span></div><div class="body"><aside>Layers<p>Welcome</p><p class="on">Set up your team</p><p>Your first project</p></aside><div class="canvas"><div class="frame"><small>1</small><b>Welcome</b><i></i><i></i></div><div class="frame"><small>2</small><b>Set up your team</b><i></i><i></i></div><div class="frame"><small>3</small><b>Your first project</b><i></i><i></i></div></div></div></div>`, s),
+  docs: (s) => W('docs', 'Docs — Pricing launch brief', `<div class="doc"><div class="page"><b>Pricing launch — brief</b><p class="doc-line">Launch the new team plan on the 14th.</p><p class="doc-line"><mark>Still needed: a landing page for the launch.</mark></p><div class="skel" style="width:80%;margin-top:18px"></div><div class="skel" style="width:60%"></div></div></div>`, s),
+  settings: (s) => W('settings', 'Chrome — Profile settings', `<div class="chrome"><div class="url"><span>localhost:3000/settings</span></div><div class="page"><b>Profile settings</b><div class="field"><span>Name</span><div>Arpit Patel</div></div><div class="field"><span>Email</span><div>arpit@acme.dev</div></div><div class="savebtn">Save changes</div><div class="toast">Nothing happened. Changes not saved.</div></div></div>`, s),
+  mail: (s) => W('mail', 'Mail — Re: launch date', `<div class="mail"><aside><p class="on">Inbox</p><p>VIP</p><p>Drafts</p><p>Sent</p></aside><main><div class="hdr">To: Priya &nbsp;·&nbsp; Re: launch date</div><div class="typed"></div><div class="quote">Priya: Does Thursday still work for the launch?</div></main></div>`, s),
+  inbox: (s) => W('inbox', 'Mail — Inbox', `<div class="mail"><aside><p class="on">Inbox</p><p>VIP</p><p>Drafts</p><p>Sent</p></aside><main><div class="row on"><b>Priya</b><span>Morning! Where did we land on onboarding yesterday? Can we keep going today?</span></div><div class="row"><b>Sam</b><span>QA notes for the pricing page</span></div><div class="row"><b>Stripe</b><span>Your payout is on its way</span></div></main></div>`, s),
   call: (s) => W('call', 'Meet — Product sync', `<div class="grid"><div>AP</div><div>SM</div><div>PR</div><div>JL</div></div>`, s, 'dark'),
 }
-const apps = (...list) => list.map(([k, s]) => APPS[k](s || '')).join('')
+// A window further back on every screen, for depth.
+const BACK = W('back', 'Notes — Ideas', `<div class="notes"><b>Ideas</b><div class="skel" style="width:85%"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:78%"></div><div class="skel" style="width:52%"></div></div>`, '', 'back')
+const apps = (...list) => BACK + list.map(([k, s]) => APPS[k](s || '')).join('')
 
 const NT_HTML = `<div class="nt rec">
     <span class="row rec"><span class="wave">${'<div></div>'.repeat(11)}</span></span>
@@ -61,9 +63,9 @@ function ntBars(stage) {
 }
 
 // Framings specific to one demo.
-const NT_SHOT = { x: 380, y: 560, z: 1.4, ay: 0.5 }
-const WINDOW_LOW = { x: 600, y: 800, z: 1.45, ay: 0.93, nz: 1.15 }     // a window's lower half plus the pill
-const MAIL_TOP = { x: 560, y: 260, z: 1.3, ay: 0.4 }
+const NT_SHOT = { x: 300, y: 420, z: 1.4, ay: 0.5 }
+const WINDOW_LOW = { x: 470, y: 610, z: 1.5, ay: 0.93 }     // a window's lower half plus the pill
+const MAIL_TOP = { x: 470, y: 230, z: 1.4, ay: 0.4 }
 
 // Build one demo. `still` is the shot shown, unmoving, under reduced motion.
 function film(name, appHtml, shots, opts = {}) {
@@ -152,9 +154,9 @@ film('start', apps(['figma']), [
 {
   const box = (st, on) => {
     const b = $('.selbox', st.host), btn = $('.app[data-app="settings"] .savebtn', st.host)
-    const win = btn.closest('.app')
-    const x = win.offsetLeft + btn.offsetLeft - 14, y = win.offsetTop + btn.offsetTop - 12
-    const w = btn.offsetWidth + 340, h = btn.offsetHeight + 28
+    const cam = $('.cam', st.host).getBoundingClientRect(), r = btn.getBoundingClientRect(), k = cam.width / 1120
+    const x = (r.left - cam.left) / k - 10, y = (r.top - cam.top) / k - 10
+    const w = r.width / k + 300, h = r.height / k + 20
     gsap.set(b, { left: x, top: y })
     gsap.to(b, { width: on ? w : 0, height: on ? h : 0, opacity: on === 1 ? 1 : 0, duration: on === 1 ? 0.7 : 0.25, ease: 'power2.inOut' })
   }

@@ -1,0 +1,127 @@
+/* THE MAC — the device every demo plays on. Loaded after film.css.
+   Proportions follow a real MacBook Pro: a near-black bezel with a slim even
+   border, rounded top corners, and the hardware notch in the top edge. The
+   screen is 1120×700pt at real size, so nothing needs a zoom to be read. */
+
+/* The device. Its lower edge dissolves into the page instead of ending in a
+   hard line, which keeps the eye on the screen. */
+.mac{position:relative;padding:1.15% 1.15% 0;background:#0b0b0c;border-radius:20px 20px 0 0;
+  box-shadow:0 30px 80px -24px rgba(12,24,18,.55),inset 0 .5px 0 rgba(255,255,255,.12),inset 0 0 0 1px rgba(255,255,255,.04);
+  -webkit-mask-image:linear-gradient(#000 84%,transparent 99%);mask-image:linear-gradient(#000 84%,transparent 99%)}
+.sec .mac{border-radius:14px 14px 0 0}
+.mac .stage,.hero-demo .mac .stage{aspect-ratio:1120/700;border:0;border-radius:8px 8px 0 0;box-shadow:none;background:#000}
+.stage .screen,.stage .cam,.stage .voice,.stage canvas.live{width:1120px;height:700px}
+
+/* Wallpaper: drawn for Unmute (assets/wallpaper-flow.svg). */
+.stage .cam.wallpaper{background:#173f3b url('assets/wallpaper-flow.svg') center / cover no-repeat}
+
+/* Menu bar: transparent over the wallpaper, as in current macOS. Its height
+   is the notch's, so the notch sits flush in it. */
+.stage .menubar{height:34px;padding:0 16px 0 18px;background:linear-gradient(rgba(0,0,0,.16),rgba(0,0,0,.04));backdrop-filter:none;
+  font:400 13px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",var(--ui);color:#fff;text-shadow:0 0 6px rgba(0,0,0,.25);letter-spacing:0}
+.stage .menubar .mb-left{gap:19px;align-items:center}
+.stage .menubar .mb-left > span{opacity:.92}
+.stage .menubar b{font-weight:700}
+.stage .menubar .mb-apple{width:15px;height:15px;margin:-2px 3px 0 0}
+.stage .menubar .mb-right{display:flex;gap:15px;align-items:center;opacity:.95}
+.stage .menubar .mb-ico{height:13px;width:auto}
+.stage .hw-notch{left:460px;background:#000}
+
+/* The notetaker sits on the pill's baseline, 139pt above the bottom edge. */
+.stage .nt{top:561px}
+
+/* ── Windows: dark-mode macOS, translucent over the wallpaper ─────────────── */
+.stage .app{left:130px;top:150px;width:860px;height:390px;border-radius:11px;background:rgba(30,30,32,.86);color:#e9e9ea;
+  -webkit-backdrop-filter:blur(24px) saturate(1.4);backdrop-filter:blur(24px) saturate(1.4);
+  box-shadow:0 22px 48px rgba(0,0,0,.42),0 0 0 .5px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.09);
+  font:400 14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",var(--ui);text-align:left}
+.stage .app .bar{position:relative;height:30px;gap:8px;padding:0 12px;background:rgba(255,255,255,.035);border-bottom:1px solid rgba(0,0,0,.45);color:rgba(255,255,255,.62);font-size:12.5px;font-weight:600}
+.stage .app .bar i{width:12px;height:12px;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.25)}
+.stage .app .bar span{position:absolute;left:0;right:0;text-align:center;margin:0;pointer-events:none}
+.stage .app .win{position:absolute;inset:30px 0 0 0;overflow:hidden}
+.stage .app.dark{background:rgba(24,24,27,.9)}
+
+/* A window further back, for depth. It never takes focus. */
+.stage .app.back{left:640px;top:70px;width:420px;height:290px;visibility:visible;opacity:.62;transform:none;filter:saturate(.8);z-index:0}
+.stage .app.back .notes{padding:16px 20px}
+.stage .app.back .notes b{display:block;font-size:15px;margin-bottom:12px}
+
+.stage .app mark{background:rgba(255,204,0,.22);color:#ffe7a0;border-radius:4px;padding:0 3px}
+.stage .app .skel{height:9px;border-radius:5px;background:rgba(255,255,255,.08);margin:11px 0}
+.stage .app .msg{display:flex;gap:11px;margin:12px 0;font-size:14px;line-height:1.45}
+.stage .app .msg .av{width:32px;height:32px;border-radius:7px;display:grid;place-items:center;font-weight:700;color:#fff;background:#5d6b80;flex:none}
+.stage .app .msg .av.p{background:#d9774a}
+.stage .app .msg b{font-size:14px;font-weight:700}
+.stage .app .msg small{color:rgba(255,255,255,.4);font-size:11.5px;margin-left:6px}
+
+/* Slack */
+.slack{display:flex;height:100%}
+.slack aside{width:178px;background:#2b0f2e;padding:12px 10px;color:rgba(255,255,255,.7);font-size:13.5px;flex:none}
+.slack aside b{display:block;color:#fff;font-size:15px;padding:0 8px 12px}
+.slack aside p{padding:4px 8px;border-radius:6px;margin:1px 0}
+.slack aside p.on{background:#1164a3;color:#fff;font-weight:600}
+.slack main{position:relative;flex:1;background:#1a1d21;padding:0 18px}
+.slack main header{height:40px;display:flex;align-items:center;font-weight:700;border-bottom:1px solid rgba(255,255,255,.08);margin:0 -18px 6px;padding:0 18px}
+.stage .slack .compose{left:16px;right:16px;bottom:14px;min-height:42px;padding:11px 13px;font-size:14px;border:1px solid rgba(255,255,255,.18);border-radius:9px;color:#fff}
+.stage .slack .compose:empty::before{color:rgba(255,255,255,.35)}
+
+/* Figma */
+.figma{display:flex;flex-direction:column;height:100%}
+.figma .tools{height:36px;display:flex;align-items:center;gap:10px;padding:0 12px;background:#2c2c2c;border-bottom:1px solid #1e1e1e;font-size:12.5px;color:rgba(255,255,255,.8)}
+.figma .tools i{width:18px;height:18px;border-radius:4px;background:rgba(255,255,255,.12)}
+.figma .tools i:first-child{background:#0d99ff}
+.figma .tools span{margin:0 auto}
+.figma .body{display:flex;flex:1;min-height:0}
+.figma aside{width:150px;background:#2c2c2c;border-right:1px solid #1e1e1e;padding:10px 8px;font-size:12px;color:rgba(255,255,255,.55);flex:none}
+.figma aside p{padding:4px 8px;border-radius:4px;color:rgba(255,255,255,.85)}
+.figma aside p.on{background:rgba(13,153,255,.25)}
+.stage .figma .canvas{position:relative;inset:auto;flex:1;background:#1e1e1e;display:flex;gap:18px;align-items:center;justify-content:center}
+.stage .figma .frame{width:150px;height:220px;background:#fff;color:#1e1e1e;border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:9px;font-size:13px;box-shadow:none}
+.stage .figma .frame:nth-child(2){outline:2px solid #0d99ff;outline-offset:3px}
+.stage .figma .frame small{color:#0d99ff;font-weight:700}
+.stage .figma .frame i{display:block;height:8px;border-radius:4px;background:#eceef2}
+.stage .figma .frame i:last-child{margin-top:auto;height:26px;border-radius:7px;background:#e3e1ff}
+
+/* Docs, and a web page in Chrome: light pages inside dark window chrome. */
+.doc{height:100%;background:#202124;display:flex;justify-content:center;padding-top:16px}
+.doc .page{width:560px;background:#fff;color:#222;padding:26px 34px;border-radius:2px 2px 0 0}
+.doc .page b{font-size:22px}
+.doc .page .doc-line{font-size:15px;margin-top:14px;color:#333}
+.stage .doc mark{background:#fff0a8;color:#222}
+.stage .doc .skel{background:#eceef2}
+.chrome{height:100%;display:flex;flex-direction:column}
+.chrome .url{height:34px;display:flex;align-items:center;padding:0 12px;background:#35363a;font-size:12.5px;color:rgba(255,255,255,.75)}
+.chrome .url span{flex:1;background:#202124;border-radius:14px;padding:5px 12px}
+.chrome .page{flex:1;background:#fff;color:#222;padding:22px 30px}
+.chrome .page b{font-size:20px}
+.stage .app .field{display:flex;gap:16px;align-items:center;margin-top:16px;font-size:14px}
+.stage .app .field span{width:56px;color:#888}.stage .app .field div{flex:1;max-width:340px;border:1px solid #ddd;border-radius:8px;padding:8px 12px}
+.stage .app .savebtn{display:inline-block;margin:18px 0 0 72px;padding:9px 18px;border-radius:8px;background:#1f2937;color:#fff;font-weight:600;font-size:14px}
+.stage .app .toast{display:inline-block;margin-left:14px;color:#c2410c;font-size:13.5px;font-weight:500}
+
+/* Mail */
+.mail{display:flex;height:100%}
+.mail aside{width:160px;background:rgba(255,255,255,.03);border-right:1px solid rgba(0,0,0,.4);padding:12px 10px;font-size:13px;color:rgba(255,255,255,.7);flex:none}
+.mail aside p{padding:4px 8px;border-radius:6px}
+.mail aside p.on{background:rgba(255,255,255,.1);color:#fff}
+.mail main{flex:1;padding:16px 22px;position:relative}
+.mail .hdr{color:rgba(255,255,255,.5);font-size:13px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.08)}
+.stage .mail .typed{font-size:16px;line-height:1.5;min-height:26px;margin-top:16px;color:#fff}
+.mail .quote{margin-top:26px;padding-left:12px;border-left:3px solid rgba(255,255,255,.18);color:rgba(255,255,255,.45);font-size:13.5px}
+.mail .row{padding:10px 12px;border-radius:8px;margin-bottom:4px}
+.mail .row.on{background:#0a64d8}
+.mail .row b{display:block;font-size:13.5px}
+.mail .row span{color:rgba(255,255,255,.65);font-size:13px}
+.mail .row.on span{color:rgba(255,255,255,.9)}
+
+/* Meet */
+.stage .app .grid{inset:0;background:#141416;gap:8px;padding:8px}
+.stage .app .grid div{border-radius:10px;background:#26272c;font-size:26px}
+
+/* The region-screenshot selection, as macOS draws it. */
+.stage .selbox{border:1.5px solid rgba(255,255,255,.95);background:rgba(255,255,255,.12);box-shadow:0 0 0 1px rgba(0,0,0,.35),0 0 0 9999px rgba(0,0,0,.18);border-radius:2px}
+
+@media(max-width:700px){.mac{border-radius:12px 12px 0 0}}
+/* Small devices fade over a shorter edge, so a pushed-in shot keeps its content. */
+.sec .mac,.attention .mac{-webkit-mask-image:linear-gradient(#000 92%,transparent 100%);mask-image:linear-gradient(#000 92%,transparent 100%)}
+@media(max-width:700px){.hero-demo .mac{-webkit-mask-image:linear-gradient(#000 92%,transparent 100%);mask-image:linear-gradient(#000 92%,transparent 100%)}}

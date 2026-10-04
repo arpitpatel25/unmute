@@ -11,8 +11,8 @@ const run = async (opts) => {
 }
 const state = (p, sel = 'hero') => p.evaluate((n) => {
   const h = document.querySelector(`[data-stage="${n}"]`)
-  return { sub: document.querySelector(`[data-said="${n}"]`).textContent, notch: h.querySelector('.slot[data-role="notch"] img.on')?.dataset.key || null,
-    pill: h.querySelector('.slot[data-role="pill"] img.on')?.dataset.key || null, on: [...document.querySelectorAll('.chapters button')].findIndex((x) => x.classList.contains('on')) }
+  return { sub: document.querySelector(`[data-said="${n}"]`).textContent, notch: h.querySelector('.slot[data-role="notch"] .pane.on')?.dataset.key || null,
+    pill: h.querySelector('.slot[data-role="pill"] .pane.on')?.dataset.key || null, on: [...document.querySelectorAll('.chapters button')].findIndex((x) => x.classList.contains('on')) }
 }, sel)
 let p = await run()
 await p.click('.chapters li:nth-child(3) button'); await p.waitForTimeout(400)

@@ -30,45 +30,21 @@ body.motion-paused .film-sub .w,body.motion-paused .film-sub > span{animation:no
 .hero-demo .film-sub{min-height:70px}
 .hero-demo .demo-toolbar{justify-content:flex-end;padding-top:4px}
 
-/* The selection box for a region screenshot: visible over a white window. */
-.stage .selbox{border:2.5px dashed #6a5cff;background:rgba(106,92,255,.08);box-shadow:none;width:0;height:0}
-
-/* App stand-ins with a reason to speak. */
-.app mark{background:#fff2b8;color:inherit;border-radius:4px;padding:0 3px}
-.app .msg{font-size:18px;line-height:1.45}
-.app .msg .av{display:grid;place-items:center;font-weight:700;color:#fff;background:#7c8a9e}
-.app .msg .av.p{background:#e0895a}
-.app .doc-line{font-size:19px;margin-top:22px;color:#333}
-.app .field{display:flex;gap:18px;align-items:center;margin-top:22px;font-size:17px}
-.app .field span{width:70px;color:#888}.app .field div{flex:1;max-width:420px;border:1px solid #ddd;border-radius:9px;padding:11px 14px}
-.app .savebtn{background:#1f2937;color:#fff;margin-left:88px}
-.app .toast{display:inline-block;margin-left:18px;color:#c2410c;font-size:16px;font-weight:500}
-.app .quote{margin-top:40px;padding-left:14px;border-left:3px solid #ddd;color:#999;font-size:16px}
-.app .typed{font-size:21px;line-height:1.5;min-height:32px}
-.app .canvas{position:absolute;inset:44px 0 0 0;background:#e9e9ec;display:flex;gap:26px;align-items:center;justify-content:center}
-.app .frame{width:210px;height:330px;background:#fff;border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:12px;box-shadow:0 1px 0 #d8d8dc;font-size:17px}
-.app .frame:nth-child(2){outline:3px solid #a259ff;outline-offset:4px}
-.app .frame small{color:#a259ff;font-weight:700}
-.app .frame i{display:block;height:12px;border-radius:6px;background:#eceef2}
-.app .frame i:last-child{margin-top:auto;height:36px;border-radius:9px;background:#e7e2ff}
 
 @media(max-width:700px){
   .chapters{gap:8px}.chapters button{flex-direction:column;align-items:flex-start;gap:6px;font-size:12px;padding:8px 0 10px}
   .chapters button b{width:20px;height:20px;font-size:11px}
   .film-sub{font-size:15px;min-height:62px}
 }
-.stage .app{text-align:left}
 .demo-toolbar .rot-pause{font:500 12px var(--ui);background:none;border:0;padding:4px 0;color:var(--dim);cursor:pointer}
 .demo-toolbar .rot-pause:hover{color:var(--ink);text-decoration:underline}
-/* Windows sit low and short: what prompted you stays in frame with the pill,
-   and the notch area above stays clear for the panel. */
-.stage .app{top:280px;height:450px}
-.app .frame{height:300px}
 /* The notch and pill shells: the shape that moves before the content does. */
 .stage .slot .shell{position:absolute;z-index:4;opacity:0;pointer-events:none;background:#000}
 .stage .slot[data-role="pill"] .shell{z-index:5}
-.stage .slot img,.stage .slot img.on{transition:none}
-.stage .slot img.on{opacity:1}
-/* Glass panels: blur what's really behind them, inside the capture's outline. */
-.stage .slot img.glass,.stage .slot .shell.glass{-webkit-backdrop-filter:blur(26px) saturate(1.5) brightness(.72);backdrop-filter:blur(26px) saturate(1.5) brightness(.72)}
-.stage .slot img.glass{-webkit-mask-size:100% 100%;mask-size:100% 100%;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat}
+.stage .slot .pane{position:absolute;opacity:0;z-index:4;pointer-events:none;overflow:hidden}
+.stage .slot[data-role="pill"] .pane{z-index:5}
+.stage .slot .pane.on{opacity:1}
+.stage .slot .pane img{position:absolute;top:0;display:block;opacity:1;transition:none}
+/* Glass panels: a rounded pane blurs what's really behind it. */
+.stage .slot .pane.glass{border-radius:0 0 24px 24px;-webkit-backdrop-filter:blur(26px) saturate(1.5) brightness(.72);backdrop-filter:blur(26px) saturate(1.5) brightness(.72)}
+.stage .slot .shell.glass{-webkit-backdrop-filter:blur(26px) saturate(1.5) brightness(.72);backdrop-filter:blur(26px) saturate(1.5) brightness(.72)}
