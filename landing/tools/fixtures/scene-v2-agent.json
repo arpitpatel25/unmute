@@ -1,0 +1,105 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "unmute-agent",
+      "title": "Unmute Agent",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "pick up the onboarding work from yesterday. use what we decided in the meeting"
+       }
+      ]
+     }
+    },
+    {
+     "type": "setState",
+     "state": "task",
+     "attention": 0,
+     "working": 0
+    },
+    {
+     "type": "surfaceFill",
+     "fill": 0.45
+    }
+   ],
+   "wait": 1300,
+   "shot": "agent-recall-1"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "unmute-agent",
+      "title": "Unmute Agent",
+      "status": "ready",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "pick up the onboarding work from yesterday. use what we decided in the meeting"
+       },
+       {
+        "kind": "message",
+        "role": "assistant",
+        "text": "Found **Onboarding flow** from yesterday and the decisions from **Product sync**.\n\nResuming it with those notes attached."
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "agent-recall-2"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "unmute-agent",
+      "title": "Unmute Agent",
+      "status": "ready",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "take the decisions from that call into the onboarding session"
+       },
+       {
+        "kind": "message",
+        "role": "assistant",
+        "text": "Added the **Product sync** decisions to **Onboarding flow**:\n\n1. Shorten the first-run experience\n2. Team setup comes after the first project"
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1300,
+   "shot": "agent-meetonb-2"
+  }
+ ]
+}

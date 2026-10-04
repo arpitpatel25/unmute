@@ -1,0 +1,133 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "t-onb",
+      "title": "Onboarding flow",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "modelLabel": "Opus",
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "turnStart",
+        "startedAt": "$NOW-6000"
+       },
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "build a first version of the new onboarding flow"
+       }
+      ]
+     }
+    },
+    {
+     "type": "setState",
+     "state": "task",
+     "attention": 0,
+     "working": 1
+    },
+    {
+     "type": "surfaceFill",
+     "fill": 0.45
+    }
+   ],
+   "wait": 1300,
+   "shot": "onb-1"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "t-onb",
+      "title": "Onboarding flow",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "modelLabel": "Opus",
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "turnStart",
+        "startedAt": "$NOW-6000"
+       },
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "build a first version of the new onboarding flow"
+       },
+       {
+        "kind": "fileRead",
+        "path": "src/onboarding/steps.ts",
+        "lines": 212
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "onb-2"
+  },
+  {
+   "send": [
+    {
+     "type": "showTask",
+     "task": {
+      "id": "t-onb",
+      "title": "Onboarding flow",
+      "status": "processing",
+      "kind": "session",
+      "alive": true,
+      "backend": "claude",
+      "terminal": false,
+      "modelLabel": "Opus",
+      "canCompose": true,
+      "blocks": [
+       {
+        "kind": "turnStart",
+        "startedAt": "$NOW-6000"
+       },
+       {
+        "kind": "message",
+        "role": "user",
+        "text": "build a first version of the new onboarding flow"
+       },
+       {
+        "kind": "fileRead",
+        "path": "src/onboarding/steps.ts",
+        "lines": 212
+       },
+       {
+        "kind": "fileChange",
+        "path": "src/onboarding/Welcome.tsx",
+        "verb": "create",
+        "added": 96,
+        "removed": 0,
+        "status": "done"
+       },
+       {
+        "kind": "message",
+        "role": "assistant",
+        "text": "Drafting a three-step flow: account, first project, invite your team."
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "onb-3"
+  }
+ ]
+}

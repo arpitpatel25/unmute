@@ -145,3 +145,61 @@ scene('fixups', [
   { send: [state('dormant'), pocket('closed', 0, [], 0), roptRec], wait: 1200 },
   { send: [pill({ phase: 'recording', level: 0, elapsed: 3, canType: true, captureFlashToken: 7, ...orchestrator })], wait: 45, shot: 'pill-flash' },
 ])
+
+// ── v2: one consistent story — the "onboarding flow" agent session ───────────
+const codexAgents = [{ id: 'codex', label: 'Codex CLI', available: true, terminal: false }, ...agents.filter((a) => a.id !== 'codex')]
+const codexLane = { kind: 'remote', agent: 'Codex CLI', agentConnected: true, agentOptions: codexAgents, modelOptions: [], modelAxes: [] }
+const onbSlots = [
+  { id: 'unmute-agent', title: 'Unmute Agent', kind: 'agent', status: 'ready', demanding: false },
+  { id: 't-onb', title: 'Onboarding flow', status: 'processing', demanding: false, backend: 'claude', terminal: false },
+  { id: 't-pricing', title: 'Pricing page', status: 'done', demanding: false, backend: 'codex', terminal: false },
+]
+const onbPocket = (mode, at, s = onbSlots, waiting = 0) => ({ type: 'pocket', data: { mode, at, waiting, remoteKey: 'fn', slots: s } })
+const onb = (blocks, extra = {}) => ({ type: 'showTask', task: { id: 't-onb', title: 'Onboarding flow', status: 'processing',
+  kind: 'session', alive: true, backend: 'claude', terminal: false, modelLabel: 'Opus', canCompose: true, blocks, ...extra } })
+const O0 = { kind: 'turnStart', startedAt: '$NOW-6000' }
+const ou1 = { kind: 'message', role: 'user', text: 'build a first version of the new onboarding flow' }
+// free_text, not choice: at 45% a three-choice card is clipped by the composer;
+// the free-text ask is one line, and the answer is spoken anyway.
+const ask = { text: 'Should I keep the optional team setup step, or move it later?', kind: 'free_text', irreversible: false }
+
+scene('v2-pills', [
+  shot('pill-codex-rec', [state('dormant'), pill({ phase: 'recording', level: 0, elapsed: 2, canType: true, ...codexLane })]),
+  shot('pill-codex-proc', [pill({ phase: 'processing', ...codexLane })]),
+  shot('bar-inpocket-onb', [hide, state('idle'), { type: 'pocketLanded', title: 'Onboarding flow' }], 700),
+])
+scene('v2-pricing-landed', [
+  shot('bar-inpocket-pricing', [state('idle'), { type: 'pocketLanded', title: 'Pricing page' }], 700),
+])
+scene('v2-pocket', [
+  shot('pocket-onb-open', [state('idle', 1), onbPocket('closed', 1), onbPocket('open', 1)], 1200),
+  shot('pocket-onb-aimed', [phase('listening'),
+    pill({ phase: 'recording', level: 0, elapsed: 2, taskId: 't-onb', kind: 'remote', agent: 'Claude Code CLI', agentConnected: true, model: 'Opus',
+      agentOptions: agents, modelOptions: [], modelAxes: [] })], 1100),
+  shot('pocket-onb-sent', [hide, phase('routing')], 1100),
+])
+scene('v2-session', [
+  shot('onb-1', [onb([O0, ou1]), state('task', 1), { type: 'surfaceFill', fill: 0.45 }], 1300),
+  shot('onb-2', [onb([O0, ou1, { kind: 'fileRead', path: 'src/onboarding/steps.ts', lines: 212 }])], 1100),
+  shot('onb-3', [onb([O0, ou1, { kind: 'fileRead', path: 'src/onboarding/steps.ts', lines: 212 },
+    { kind: 'fileChange', path: 'src/onboarding/Welcome.tsx', verb: 'create', added: 96, removed: 0, status: 'done' },
+    { kind: 'message', role: 'assistant', text: 'Drafting a three-step flow: account, first project, invite your team.' }])], 1100),
+])
+const asked = [O0, ou1, { kind: 'fileChange', path: 'src/onboarding/Welcome.tsx', verb: 'create', added: 96, removed: 0, status: 'done' },
+  { kind: 'message', role: 'assistant', text: 'The flow works end to end. One decision before I wire the last step.' }]
+scene('v2-attention', [
+  shot('onb-ask', [onb(asked, { status: 'needs-user', question: ask, activity: ask.text }), state('task', 0, 1), { type: 'surfaceFill', fill: 0.45 }], 1400),
+  shot('onb-ask-aimed', [phase('listening'), pill({ phase: 'recording', level: 0, elapsed: 2, taskId: 't-onb', kind: 'remote', agent: 'Claude Code CLI',
+    agentConnected: true, model: 'Opus', agentOptions: agents, modelOptions: [], modelAxes: [] })], 1100),
+  shot('onb-continue', [hide, phase('idle'), onb([...asked, { kind: 'message', role: 'user', text: 'move it after the first project' },
+    { kind: 'turnStart', startedAt: '$NOW-2000' }, { kind: 'message', role: 'assistant', text: 'Moving team setup after the first project.' }])], 1300),
+])
+scene('v2-agent', [
+  shot('agent-recall-1', [agentTask([say('user', 'pick up the onboarding work from yesterday. use what we decided in the meeting')], 'processing'),
+    state('task'), { type: 'surfaceFill', fill: 0.45 }], 1300),
+  shot('agent-recall-2', [agentTask([say('user', 'pick up the onboarding work from yesterday. use what we decided in the meeting'),
+    say('assistant', 'Found **Onboarding flow** from yesterday and the decisions from **Product sync**.\n\nResuming it with those notes attached.')])], 1100),
+  shot('agent-meetonb-2', [agentTask([say('user', 'take the decisions from that call into the onboarding session'),
+    say('assistant', 'Added the **Product sync** decisions to **Onboarding flow**:\n\n1. Shorten the first-run experience\n2. Team setup comes after the first project')])], 1300),
+])
+scene('v2-bars', [ shot('bar-working3', [state('active', 3)]) ])

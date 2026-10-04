@@ -17,6 +17,24 @@
    "barW": 1.5
   }
  },
+ "agent-meetonb-2.notch": {
+  "wave": {
+   "x": 504,
+   "cy": 102.75,
+   "count": 7,
+   "pitch": 3.75,
+   "barW": 2.5
+  }
+ },
+ "agent-recall-2.notch": {
+  "wave": {
+   "x": 427.5,
+   "cy": 181.25,
+   "count": 7,
+   "pitch": 3.75,
+   "barW": 2.5
+  }
+ },
  "agent-save-1.notch": {
   "wave": {
    "x": 295,
@@ -60,6 +78,24 @@
    "d": 7
   }
  },
+ "bar-inpocket-onb.notch": {
+  "wave": {
+   "x": 315.5,
+   "cy": 18.25,
+   "count": 7,
+   "pitch": 3.5,
+   "barW": 5.5
+  }
+ },
+ "bar-inpocket-pricing.notch": {
+  "wave": {
+   "x": 57.5,
+   "cy": 19.5,
+   "count": 7,
+   "pitch": 3.3333333333333335,
+   "barW": 7
+  }
+ },
  "bar-inpocket.notch": {
   "wave": {
    "x": 57.5,
@@ -76,6 +112,69 @@
    "count": 7,
    "pitch": 3.3333333333333335,
    "barW": 4.5
+  }
+ },
+ "onb-1.notch": {
+  "wave": {
+   "x": 346.5,
+   "cy": 125.75,
+   "count": 7,
+   "pitch": 3.75,
+   "barW": 2.5
+  }
+ },
+ "onb-2.notch": {
+  "wave": {
+   "x": 346.5,
+   "cy": 125.75,
+   "count": 7,
+   "pitch": 3.75,
+   "barW": 2.5
+  }
+ },
+ "onb-3.notch": {
+  "wave": {
+   "x": 259,
+   "cy": 239,
+   "count": 7,
+   "pitch": 3.9166666666666665,
+   "barW": 1
+  }
+ },
+ "onb-ask-aimed.notch": {
+  "wave": {
+   "x": 346.5,
+   "cy": 102.75,
+   "count": 7,
+   "pitch": 3.75,
+   "barW": 2.5
+  }
+ },
+ "onb-ask-aimed.pill": {
+  "wave": {
+   "x": 47.5,
+   "cy": 19.75,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 5.5
+  }
+ },
+ "onb-ask.notch": {
+  "wave": {
+   "x": 346.5,
+   "cy": 102.75,
+   "count": 7,
+   "pitch": 3.75,
+   "barW": 2.5
+  }
+ },
+ "onb-continue.notch": {
+  "wave": {
+   "x": 302,
+   "cy": 115,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 1
   }
  },
  "pad-1.pill": {
@@ -150,6 +249,15 @@
    "barW": 4
   }
  },
+ "pill-codex-rec.pill": {
+  "wave": {
+   "x": 179,
+   "cy": 18.25,
+   "count": 11,
+   "pitch": 5.5,
+   "barW": 1.5
+  }
+ },
  "pill-flash.pill": {
   "wave": {
    "x": 47,
@@ -220,6 +328,24 @@
    "count": 11,
    "pitch": 5.5,
    "barW": 1.5
+  }
+ },
+ "pocket-onb-aimed.notch": {
+  "wave": {
+   "x": 286,
+   "cy": 84.75,
+   "count": 7,
+   "pitch": 3.5,
+   "barW": 1.5
+  }
+ },
+ "pocket-onb-aimed.pill": {
+  "wave": {
+   "x": 47.5,
+   "cy": 19.75,
+   "count": 7,
+   "pitch": 3.6666666666666665,
+   "barW": 5.5
   }
  },
  "task-1.notch": {

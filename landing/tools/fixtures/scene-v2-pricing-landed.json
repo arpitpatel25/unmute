@@ -1,0 +1,23 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "idle",
+     "attention": 0,
+     "working": 0
+    },
+    {
+     "type": "pocketLanded",
+     "title": "Pricing page"
+    }
+   ],
+   "wait": 700,
+   "shot": "bar-inpocket-pricing"
+  }
+ ]
+}

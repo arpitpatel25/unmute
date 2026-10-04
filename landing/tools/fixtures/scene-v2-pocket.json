@@ -1,0 +1,142 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "idle",
+     "attention": 0,
+     "working": 1
+    },
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "closed",
+      "at": 1,
+      "waiting": 0,
+      "remoteKey": "fn",
+      "slots": [
+       {
+        "id": "unmute-agent",
+        "title": "Unmute Agent",
+        "kind": "agent",
+        "status": "ready",
+        "demanding": false
+       },
+       {
+        "id": "t-onb",
+        "title": "Onboarding flow",
+        "status": "processing",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       },
+       {
+        "id": "t-pricing",
+        "title": "Pricing page",
+        "status": "done",
+        "demanding": false,
+        "backend": "codex",
+        "terminal": false
+       }
+      ]
+     }
+    },
+    {
+     "type": "pocket",
+     "data": {
+      "mode": "open",
+      "at": 1,
+      "waiting": 0,
+      "remoteKey": "fn",
+      "slots": [
+       {
+        "id": "unmute-agent",
+        "title": "Unmute Agent",
+        "kind": "agent",
+        "status": "ready",
+        "demanding": false
+       },
+       {
+        "id": "t-onb",
+        "title": "Onboarding flow",
+        "status": "processing",
+        "demanding": false,
+        "backend": "claude",
+        "terminal": false
+       },
+       {
+        "id": "t-pricing",
+        "title": "Pricing page",
+        "status": "done",
+        "demanding": false,
+        "backend": "codex",
+        "terminal": false
+       }
+      ]
+     }
+    }
+   ],
+   "wait": 1200,
+   "shot": "pocket-onb-open"
+  },
+  {
+   "send": [
+    {
+     "type": "capturePhase",
+     "phase": "listening"
+    },
+    {
+     "type": "pill",
+     "state": {
+      "phase": "recording",
+      "level": 0,
+      "elapsed": 2,
+      "taskId": "t-onb",
+      "kind": "remote",
+      "agent": "Claude Code CLI",
+      "agentConnected": true,
+      "model": "Opus",
+      "agentOptions": [
+       {
+        "id": "claude",
+        "label": "Claude Code CLI",
+        "available": true,
+        "terminal": false
+       },
+       {
+        "id": "codex",
+        "label": "Codex CLI",
+        "available": true,
+        "terminal": false
+       }
+      ],
+      "modelOptions": [],
+      "modelAxes": []
+     }
+    }
+   ],
+   "wait": 1100,
+   "shot": "pocket-onb-aimed"
+  },
+  {
+   "send": [
+    {
+     "type": "pill",
+     "state": {
+      "phase": "hidden"
+     }
+    },
+    {
+     "type": "capturePhase",
+     "phase": "routing"
+    }
+   ],
+   "wait": 1100,
+   "shot": "pocket-onb-sent"
+  }
+ ]
+}

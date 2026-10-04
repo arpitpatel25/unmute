@@ -1,0 +1,19 @@
+{
+ "fakeNotch": "200x34",
+ "region": true,
+ "fill": 0.45,
+ "steps": [
+  {
+   "send": [
+    {
+     "type": "setState",
+     "state": "active",
+     "attention": 0,
+     "working": 3
+    }
+   ],
+   "wait": 900,
+   "shot": "bar-working3"
+  }
+ ]
+}

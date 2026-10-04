@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Unmute — a voice interface for Claude Code and Codex</title>
+<title>Unmute — background concept comparison</title>
 <meta name="description" content="Speak from any app on your Mac to start or continue a Claude Code or Codex session. Capture context as you talk. When a session needs you, the notch opens wherever you are." />
 <link rel="icon" href="../icon.png" />
 <link rel="canonical" href="https://justunmute.me/" />
@@ -14,14 +14,14 @@
 <meta property="og:url" content="https://justunmute.me/" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:image" content="https://justunmute.me/og.png" />
-<link rel="stylesheet" href="ui/wallpaper.css?v=20261003-sage" />
-<link rel="stylesheet" href="v3.css?v=20261003-v6" />
-<link rel="stylesheet" href="heritage.css?v=4" />
-<link rel="stylesheet" href="film.css?v=20261004-morph1" />
-<link rel="preload" href="assets/fonts/Lora.ttf" as="font" type="font/ttf" crossorigin />
-<link rel="preload" href="assets/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin />
+<link rel="stylesheet" href="ui/wallpaper.css" />
+<link rel="stylesheet" href="v3.css?v=20261003-v5" />
 <!-- Every notch and pill surface on this page is a capture of the real unmute-notch
      helper (unmute-cloud), placed at its real window position. See landing/README.md. -->
+<style>
+html,body{background:#fff}nav.top{background:rgba(255,255,255,.3);backdrop-filter:none}.hero{position:relative;isolation:isolate}.hero::before{content:"";position:absolute;top:-90px;left:50%;transform:translateX(-50%);width:100vw;height:calc(100% + 90px);z-index:-1;background:var(--concept-art) top center / 100% auto no-repeat;pointer-events:none}.concept-picker{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:100;display:flex;gap:5px;align-items:center;background:#fff;border:1px solid #ddd;border-radius:13px;padding:7px;box-shadow:0 6px 28px #0002;font:12px "DM Sans",sans-serif}.concept-picker a{text-decoration:none;padding:8px 10px;border-radius:7px;white-space:nowrap}.concept-picker a[aria-current="page"]{background:#171b19;color:#fff}.concept-picker a:hover{background:#e5eae4}.concept-picker a[aria-current="page"]:hover{background:#171b19}.concept-picker span{color:#687269;padding:0 8px}
+@media(max-width:600px){.concept-picker{bottom:8px;width:calc(100% - 20px);flex-wrap:wrap;justify-content:center}.concept-picker span{display:none}.concept-picker a{padding:7px;font-size:11px}.hero::before{background-size:auto 650px;background-position:top center}.hero .eyebrow{color:#536256}}
+</style>
 </head>
 <body>
 
@@ -46,15 +46,11 @@
   </div>
   <div class="works">Works with <span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span><img src="assets/mark-codex.png" alt="" />Codex</span></div>
   <div class="hero-demo">
-    <ol class="chapters" aria-label="Demo chapters">
-      <li><button type="button"><b>1</b>Say it, from any app</button></li>
-      <li><button type="button"><b>2</b>It runs in Claude Code</button></li>
-      <li><button type="button"><b>3</b>It comes back when it needs you</button></li>
-    </ol>
     <div data-stage="hero"></div>
-    <p class="film-sub" data-said="hero" aria-live="off"></p>
-    <div class="demo-toolbar"><button type="button" class="rot-pause" aria-label="Pause all demos">Pause demos</button></div>
+    <div class="said" data-said="hero"></div>
+    <div class="demo-toolbar"><p><span class="hero-example">Start an agent session from the app you’re using.</span></p><div class="rot-controls"><button type="button" class="rot-pause" aria-label="Pause all demos">Pause demos</button><button type="button" class="rot-next" aria-label="Next example">Next example</button></div></div>
   </div>
+  <ul class="caps"><li>Start a session</li><li>Bring context</li><li>Keep working</li><li>Answer when needed</li></ul>
 </section>
 
 <!-- WHY — the only philosophy section before the close. -->
@@ -73,7 +69,7 @@
   <div class="demo">
     <p class="demo-kicker">Or just say it, right here.</p>
     <div data-stage="why"></div>
-    <p class="film-sub" data-said="why"></p>
+    <div class="said" data-said="why"></div>
   </div>
 </section>
 
@@ -84,7 +80,7 @@
     <p>Press a key and speak to start a new agent session or send an instruction to an existing one. Ask a question, delegate a task, or give a follow-up — all from the app you're already using.</p>
 
   </div>
-  <div class="demo"><div data-stage="start"></div><p class="film-sub" data-said="start"></p></div>
+  <div class="demo"><div data-stage="start"></div><div class="said" data-said="start"></div></div>
 </section>
 
 <section class="sec flip" id="capture">
@@ -93,7 +89,7 @@
     <h2>Your thought comes with context. Bring it along.</h2>
     <p>The page you're reading. The error you're seeing. The design you want changed. Capture a link, text, or screenshot as you speak, and send it straight into your agent session.</p>
   </div>
-  <div class="demo"><div data-stage="capture"></div><p class="film-sub" data-said="capture"></p></div>
+  <div class="demo"><div data-stage="capture"></div><div class="said" data-said="capture"></div></div>
 </section>
 
 <section class="sec" id="agent">
@@ -103,7 +99,7 @@
     <p>Tell Unmute Agent what you want to return to. It finds the relevant agent session and brings back its context, including related conversations and meeting notes. Pick up the work without remembering where you left it.</p>
     <p class="aside">You remember the work. Unmute helps find where you left it.</p>
   </div>
-  <div class="demo"><div data-stage="agent"></div><p class="film-sub" data-said="agent"></p></div>
+  <div class="demo"><div data-stage="agent"></div><div class="said" data-said="agent"></div></div>
 </section>
 
 <section class="sec attention" id="attention">
@@ -112,7 +108,7 @@
     <h2>The task comes to you.<br />You don't go to the task.</h2>
     <p>When an agent session needs your attention, the notch opens wherever you are on your Mac. Answer its question, review what it needs, or give the next instruction right there. Then carry on while the agent continues.</p>
   </div>
-  <div class="demo"><div data-stage="attention"></div><p class="film-sub" data-said="attention"></p></div>
+  <div class="demo"><div data-stage="attention"></div><div class="said" data-said="attention"></div></div>
 </section>
 
 <section class="sec" id="meetings">
@@ -121,7 +117,7 @@
     <h2>Leave the meeting with more than notes.</h2>
     <p>Capture a meeting and generate notes with your connected agent. Review what was decided, then start or continue an agent session with the meeting context already attached.</p>
   </div>
-  <div class="demo"><div data-stage="meet"></div><p class="film-sub" data-said="meet"></p></div>
+  <div class="demo"><div data-stage="meet"></div><div class="said" data-said="meet"></div></div>
 </section>
 
 <section class="sec flip" id="dictation">
@@ -131,15 +127,20 @@
     <p>Messages, documents, notes, and prompts. Press a key, speak, and keep going.</p>
     <p class="aside">Free on-device dictation, no account needed.</p>
   </div>
-  <div class="demo"><div data-stage="dictate"></div><p class="film-sub" data-said="dictate"></p></div>
+  <div class="demo"><div data-stage="dictate"></div><div class="said" data-said="dictate"></div></div>
 </section>
 
-<section class="close" id="agents">
-  <h2>A shorter distance between<br class="desktop-break" /> thinking and doing.</h2>
-  <p>When reaching your agents takes less effort, you can ask more often, express more of the thought, and keep work moving.</p>
+<section class="sec center" id="agents">
+  <h2>A new way to reach your existing agents.</h2>
+  <p>Your connected Claude Code or Codex runs the session. Unmute gives you a way to start it, add context, send follow-ups, and return to it from anywhere on your Mac.</p>
   <div class="marks"><span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span><img src="assets/mark-codex.png" alt="" />Codex</span></div>
-  <p class="accounts">Your agents. Your accounts. Your subscriptions.</p>
-  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Download for Mac</a></div>
+  <p class="aside">Your accounts. Your subscriptions. Within reach.</p>
+</section>
+
+<section class="close">
+  <h2>A shorter distance between thinking and doing.</h2>
+  <p>When reaching your agents takes less effort, you can ask more often, express more of the thought, and keep work moving. That's why we built Unmute.</p>
+  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download for Mac</a></div>
   <p class="tag">Make delegating as easy as thinking out loud.</p>
 </section>
 
@@ -147,10 +148,17 @@
 
 <footer>
   <span>© 2026 unmute</span>
-  <span class="flinks"><a href="../dictation.html">Dictation</a><a href="../pricing.html">Pricing</a><a href="../manifesto.html">Manifesto</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
+  <span class="flinks"><a href="../dictation.html">Dictation</a><a href="../pricing.html">Pricing</a><a href="../manifesto.html">Manifesto</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a></span>
 </footer>
 
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
-<script type="module" src="app.js?v=20261004-morph1"></script>
+<script type="module" src="app.js?v=20261003-v18"></script>
+<aside class="concept-picker" aria-label="Background concepts"><span>Compare backgrounds</span><a href="?concept=signal" data-concept="signal">Signal landscape</a><a href="?concept=macintosh" data-concept="macintosh">Macintosh</a><a href="?concept=reach" data-concept="reach">Reaching hands</a><a href="?concept=pixel" data-concept="pixel">Pixel art</a></aside>
+<script>
+const backgrounds={signal:'03-signal-landscape.png',macintosh:'02-macintosh.png',reach:'01-reaching.png',pixel:'04-pixel-interface.png'};
+const selected=new URLSearchParams(location.search).get('concept');const concept=Object.hasOwn(backgrounds,selected)?selected:'signal';
+document.documentElement.style.setProperty('--concept-art',`url("assets/background-concepts/${backgrounds[concept]}")`);
+document.querySelector(`[data-concept="${concept}"]`).setAttribute('aria-current','page');
+</script>
 </body>
 </html>
