@@ -11,7 +11,7 @@
 //      to read, because a whole 14" screen in 1000px makes the pill ~10px tall
 //   3. the subtitle under the screen carries the key you pressed and your words,
 //      then what happened (✓). It never covers the product.
-import { Stage, ready, preload } from './stage.js?v=20261004-nozoom1'
+import { Stage, ready, preload } from './stage.js?v=20261004-ctl1'
 export { ready }
 
 const SCREEN_W = 1120, SCREEN_H = 700
@@ -46,6 +46,13 @@ export class Film {
       for (const k of KEEP) if (k in s) carry[k] = s[k]
       return { ...carry, ...s }
     })
+    // No dead air at the start: the first action lands within a second of the
+    // demo coming into view; everything after it moves up to match.
+    const LEAD = 0.6
+    if (this.shots.length > 1 && this.shots[1].t > LEAD) {
+      const cut = this.shots[1].t - LEAD
+      this.shots = this.shots.map((s, i) => i === 0 ? s : { ...s, t: s.t - cut, ...(s.end != null && { end: s.end - cut }) })
+    }
     shots = this.shots
     preload(shots.flatMap((s) => [s.notch && `${s.notch}.notch`, s.pill && `${s.pill}.pill`]).filter(Boolean))
     this.listeners = []
@@ -110,7 +117,7 @@ export class Film {
     if (el.dataset.sig === sig) return
     el.dataset.sig = sig
     const kind = s.say ? 'say' : s.done ? 'done' : s.line ? 'line' : 'none'
-    el.className = 'film-sub ' + kind
+    el.className = 'film-sub ' + kind + (el.classList.contains('paused') ? ' paused' : '')
     if (kind === 'none') { el.innerHTML = ''; return }
     if (kind === 'say') {
       const words = s.say.split(' ')

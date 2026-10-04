@@ -25,7 +25,7 @@
 .film-sub > span:not(.ok){animation:film-in .45s ease-out both}
 @keyframes film-word{to{opacity:1;transform:none}}
 @keyframes film-in{from{opacity:0;transform:translateY(4px)}}
-body.motion-paused .film-sub .w,body.motion-paused .film-sub > span{animation:none;opacity:1;transform:none}
+.film-sub.paused .w,.film-sub.paused > span{animation:none;opacity:1;transform:none}
 .sec .film-sub{font-size:16px;min-height:56px;max-width:600px}
 .hero-demo .film-sub{min-height:70px}
 .hero-demo .demo-toolbar{justify-content:flex-end;padding-top:4px}
@@ -48,3 +48,13 @@ body.motion-paused .film-sub .w,body.motion-paused .film-sub > span{animation:no
 /* Glass panels: a rounded pane blurs what's really behind it. */
 .stage .slot .pane.glass{border-radius:0 0 24px 24px;-webkit-backdrop-filter:blur(26px) saturate(1.1) brightness(.72);backdrop-filter:blur(26px) saturate(1.1) brightness(.72)}
 .stage .slot .shell.glass{-webkit-backdrop-filter:blur(26px) saturate(1.1) brightness(.72);backdrop-filter:blur(26px) saturate(1.1) brightness(.72)}
+
+/* Controls under every demo: replay, pause/play, and how far through it is. */
+.film-ctl{display:flex;align-items:center;justify-content:center;gap:6px;margin:6px auto 0;max-width:420px}
+.film-ctl button{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid #d5ddd6;border-radius:999px;background:#fff;
+  font:500 12.5px var(--ui);color:var(--ink);cursor:pointer;transition:background .15s,border-color .15s}
+.film-ctl button:hover{background:#eef3ee;border-color:#b9c9bd}
+.film-ctl button svg{width:12px;height:12px;flex:none}
+.film-ctl .track{flex:1;max-width:160px;height:3px;margin-left:8px;border-radius:2px;background:#dfe6e0;overflow:hidden}
+.film-ctl .track i{display:block;height:100%;background:var(--accent);transform-origin:0 50%;transform:scaleX(0)}
+.attention .film-ctl button{background:#f7faf6}

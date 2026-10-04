@@ -1,22 +1,28 @@
-import { Film, SHOT, ready } from './ui/film.js?v=20261004-nozoom1'
+import { Film, SHOT, ready } from './ui/film.js?v=20261004-ctl3'
 
 const $ = (s, r = document) => r.querySelector(s)
 const $$ = (s, r = document) => [...r.querySelectorAll(s)]
 const motionPreference = matchMedia('(prefers-reduced-motion: reduce)')
 const reduce = motionPreference.matches
-let motionPaused = reduce
 const films = []
+// Each demo plays when it's on screen, unless its viewer paused it. Reduced
+// motion starts every demo paused on its clearest frame; Play still works.
 function syncMotion() {
-  document.body.classList.toggle('motion-paused', motionPaused)
   for (const item of films) {
-    item.film.stage.paused = motionPaused
-    if (!motionPaused && item.inView && !document.hidden) item.film.tl.play()
-    else item.film.tl.pause()
+    const run = !item.userPaused && item.inView && !document.hidden
+    item.film.stage.paused = !run
+    if (run) item.film.tl.play(); else item.film.tl.pause()
+    item.sub?.classList.toggle('paused', !!item.userPaused)
+    if (item.toggle) {
+      item.toggle.innerHTML = item.userPaused ? `${ICON.play}<span>Play</span>` : `${ICON.pause}<span>Pause</span>`
+      item.toggle.setAttribute('aria-label', item.userPaused ? 'Play this demo' : 'Pause this demo')
+    }
   }
-  const button = $('.rot-pause')
-  if (!button) return
-  button.textContent = motionPaused ? 'Play demos' : 'Pause demos'
-  button.setAttribute('aria-label', motionPaused ? 'Play all demos' : 'Pause all demos')
+}
+const ICON = {
+  play: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.8v8.4L10 6 3 1.8Z" fill="currentColor"/></svg>',
+  pause: '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="2" width="2.4" height="8" rx=".6" fill="currentColor"/><rect x="7.1" y="2" width="2.4" height="8" rx=".6" fill="currentColor"/></svg>',
+  replay: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.2 6a3.8 3.8 0 1 0 1.1-2.7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2.1 1.6v2.6h2.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 }
 
 // ── The user's own apps: plain stand-ins, never unmute UI ─────────────────────
@@ -69,17 +75,37 @@ const MAIL_TOP = { x: 470, y: 230, z: 1.4, ay: 0.4 }
 
 // Build one demo. `still` is the shot shown, unmoving, under reduced motion.
 function film(name, appHtml, shots, opts = {}) {
-  const host = $(`[data-stage="${name}"]`)
-  const f = new Film(host, { apps: appHtml, html: opts.html, sub: $(`[data-said="${name}"]`), shots })
+  const host = $(`[data-stage="${name}"]`), sub = $(`[data-said="${name}"]`)
+  const f = new Film(host, { apps: appHtml, html: opts.html, sub, shots })
   if (opts.nt) { f.on((i, s) => ntApply(s, f.stage)); ntApply(f.shots[0], f.stage); ntBars(f.stage) }
-  const item = { film: f, inView: false }
+  const item = { film: f, sub, inView: false, userPaused: reduce, left: true, ticks: [] }
   films.push(item)
   if (reduce) f.seek(opts.still ?? 0)
+
+  // Controls under every demo: replay from the start, pause or play, and a
+  // thin line showing how far through it is.
+  const ctl = document.createElement('div')
+  ctl.className = 'film-ctl'
+  ctl.innerHTML = `<button type="button" class="replay" aria-label="Replay this demo">${ICON.replay}<span>Replay</span></button><button type="button" class="toggle"></button><span class="track" aria-hidden="true"><i></i></span>`
+  sub.after(ctl)
+  item.toggle = $('.toggle', ctl)
+  const fill = $('.track i', ctl)
+  $('.replay', ctl).onclick = () => { f.seek(0); item.userPaused = false; item.left = false; syncMotion() }
+  item.toggle.onclick = () => { item.userPaused = !item.userPaused; syncMotion() }
+  const tick = () => { fill.style.transform = `scaleX(${f.tl.time() / f.total})`; for (const t of item.ticks) t() }
+  f.tl.eventCallback('onUpdate', tick)
+  f.on(tick)
+  tick()
+
+  // Start the moment a demo is properly in view, from its beginning if it had
+  // scrolled away, so nobody lands in the middle of a story.
   new IntersectionObserver(([entry]) => {
-    item.inView = entry.isIntersecting
+    item.inView = entry.intersectionRatio >= 0.3
+    if (entry.intersectionRatio === 0) item.left = true
+    if (item.inView && item.left && !item.userPaused) { f.seek(0); item.left = false }
     syncMotion()
-  }, { threshold: 0.25 }).observe(host)
-  return f
+  }, { threshold: [0, 0.3] }).observe(host)
+  return item
 }
 
 await ready
@@ -92,7 +118,7 @@ updateNav()
 // 2. it works in the notch while you move on to Figma
 // 3. it needs a decision → the notch opens where you are → you answer out loud
 {
-  const hero = film('hero', apps(['slack'], ['figma']), [
+  const heroItem = film('hero', apps(['slack'], ['figma']), [
     { t: 0, chapter: 0, app: 'slack', cam: SHOT.wide, line: 'Priya needs the onboarding flow by Friday.' },
     { t: 2.2, key: 'hold right ⌥', say: 'build a first version of the new onboarding flow', sayDur: 2.4, pill: 'pill-ropt-rec', speak: true, cam: SHOT.pill },
     { t: 5.2, key: 'hold right ⌥', say: 'build a first version of the new onboarding flow', pill: 'pill-ropt-proc' },
@@ -105,15 +131,18 @@ updateNav()
     { t: 20.4, notch: 'onb-continue', pill: null, done: 'Answered by voice. Claude carries on.' },
     { t: 23.6, notch: 'bar-working1', cam: SHOT.wide, line: 'You never left Figma.', end: 26.5 },
   ], { still: 4 })
+  const hero = heroItem.film
 
   window.__heroStage = hero.stage   // for tools/morph-frames.mjs
 
   // Chapter buttons: each one shows where the loop is, and jumps there.
   const chapters = $$('.chapters button')
-  const starts = [0, 9.8, 14.4], ends = [9.8, 14.4, hero.total]
+  const starts = [0, 1, 2].map((c) => hero.shots.find((s) => s.chapter === c).t)
+  const ends = [starts[1], starts[2], hero.total]
   chapters.forEach((b, i) => {
     b.onclick = () => {
       hero.seek(hero.shots.findIndex((s) => s.t === starts[i]))
+      heroItem.userPaused = false; heroItem.left = false
       syncMotion()
     }
   })
@@ -125,10 +154,8 @@ updateNav()
       b.classList.toggle('on', t >= starts[i] && t < ends[i])
     })
   }
-  hero.tl.eventCallback('onUpdate', paint)
-  hero.on(paint)
+  heroItem.ticks.push(paint)
   paint()
-  $('.rot-pause').onclick = () => { motionPaused = !motionPaused; syncMotion() }
 }
 
 // ── WHY: the thought you'd have put off, said on the spot ────────────────────
@@ -216,9 +243,9 @@ film('meet', apps(['call'], ['inbox']), [
   ], { still: 3 })
 }
 
-// Pause every demo together, including when a section re-enters the viewport.
+// A hidden tab pauses everything; reduced motion pauses every demo.
 document.addEventListener('visibilitychange', syncMotion)
-motionPreference.addEventListener('change', (event) => { motionPaused = event.matches; syncMotion() })
+motionPreference.addEventListener('change', (event) => { if (event.matches) for (const item of films) item.userPaused = true; syncMotion() })
 syncMotion()
 
 // Stage dimensions become known after the manifest loads. Restore a requested
