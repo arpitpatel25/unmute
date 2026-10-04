@@ -11,7 +11,7 @@
 //      to read, because a whole 14" screen in 1000px makes the pill ~10px tall
 //   3. the subtitle under the screen carries the key you pressed and your words,
 //      then what happened (✓). It never covers the product.
-import { Stage, ready, preload } from './stage.js?v=20261004-mac3'
+import { Stage, ready, preload } from './stage.js?v=20261004-black1'
 export { ready }
 
 const SCREEN_W = 1120, SCREEN_H = 700

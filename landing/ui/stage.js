@@ -135,6 +135,13 @@ function clean(k) {
         const L = 0.2126 * p[i] + 0.7152 * p[i + 1] + 0.0722 * p[i + 2]
         const t = Math.min(1, Math.max(0, (L - 62) / 58)), lift = t * t * (3 - 2 * t)
         p[i + 3] = Math.round(p[i + 3] * (GLASS_TINT + (1 - GLASS_TINT) * lift))
+        // The helper's glass is neutral black; the purple is the capture's
+        // backdrop. Turn blue-purple tones grey, keep real colour (green
+        // "Working", orange "Needs you", the red mic) as it is.
+        if (p[i + 2] >= p[i] && p[i + 2] >= p[i + 1]) {
+          const grey = L * 0.55, k = 1 - lift
+          p[i] += (grey - p[i]) * k; p[i + 1] += (grey - p[i + 1]) * k; p[i + 2] += (grey - p[i + 2]) * k
+        }
       }
       g.putImageData(d, 0, 0)
     }
@@ -269,7 +276,7 @@ export class Stage {
     const dur = grow ? 560 : 420
     // A spring with a little give on the way out; a firm ease on the way back in.
     const easing = grow ? 'cubic-bezier(.32,1.14,.5,1)' : 'cubic-bezier(.5,0,.2,1)'
-    const tint = role === 'notch' && b.h > 60 ? 'rgba(33,28,56,.72)' : '#000'
+    const tint = role === 'notch' && b.h > 60 ? 'rgba(18,18,20,.74)' : '#000'
     shell.classList.toggle('glass', role === 'notch' && b.h > 60)
     shell.animate([box(a), box(b)], { duration: dur, easing, fill: 'forwards' })
     shell.animate([{ opacity: 1, background: '#000' }, { opacity: 1, background: tint, offset: 0.8 }, { opacity: 0, background: tint }],

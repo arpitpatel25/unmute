@@ -46,5 +46,5 @@ body.motion-paused .film-sub .w,body.motion-paused .film-sub > span{animation:no
 .stage .slot .pane.on{opacity:1}
 .stage .slot .pane img{position:absolute;top:0;display:block;opacity:1;transition:none}
 /* Glass panels: a rounded pane blurs what's really behind it. */
-.stage .slot .pane.glass{border-radius:0 0 24px 24px;-webkit-backdrop-filter:blur(26px) saturate(1.5) brightness(.72);backdrop-filter:blur(26px) saturate(1.5) brightness(.72)}
-.stage .slot .shell.glass{-webkit-backdrop-filter:blur(26px) saturate(1.5) brightness(.72);backdrop-filter:blur(26px) saturate(1.5) brightness(.72)}
+.stage .slot .pane.glass{border-radius:0 0 24px 24px;-webkit-backdrop-filter:blur(26px) saturate(1.1) brightness(.72);backdrop-filter:blur(26px) saturate(1.1) brightness(.72)}
+.stage .slot .shell.glass{-webkit-backdrop-filter:blur(26px) saturate(1.1) brightness(.72);backdrop-filter:blur(26px) saturate(1.1) brightness(.72)}
