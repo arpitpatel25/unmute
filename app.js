@@ -1,46 +1,39 @@
-import { Stage, track, ready } from './ui/stage.js?v=20261003-v17'
+import { Film, SHOT, ready } from './ui/film.js?v=20261004-morph1'
 
 const $ = (s, r = document) => r.querySelector(s)
 const $$ = (s, r = document) => [...r.querySelectorAll(s)]
 const motionPreference = matchMedia('(prefers-reduced-motion: reduce)')
 const reduce = motionPreference.matches
 let motionPaused = reduce
-const scenes = []
+const films = []
 function syncMotion() {
   document.body.classList.toggle('motion-paused', motionPaused)
-  for (const item of scenes) {
-    item.stage.paused = motionPaused
-    if (!motionPaused && item.inView && !document.hidden) item.loop.play()
-    else item.loop.pause()
+  for (const item of films) {
+    item.film.stage.paused = motionPaused
+    if (!motionPaused && item.inView && !document.hidden) item.film.tl.play()
+    else item.film.tl.pause()
   }
   const button = $('.rot-pause')
+  if (!button) return
   button.textContent = motionPaused ? 'Play demos' : 'Pause demos'
   button.setAttribute('aria-label', motionPaused ? 'Play all demos' : 'Pause all demos')
 }
 
 // ── The user's own apps: plain stand-ins, never unmute UI ─────────────────────
+// Each one shows the reason you're about to speak: the request comes from what's
+// on screen, so a visitor can follow the thought without reading the copy.
 const W = (app, title, body, style = '', cls = '') =>
   `<div class="app ${cls}" data-app="${app}" data-title="${title.split(' — ')[0]}" style="${style}"><div class="bar"><i></i><i></i><i></i><span>${title}</span></div>${body}</div>`
+const msg = (who, text, av = '') => `<div class="msg"><div class="av ${av}">${who[0]}</div><div><b>${who}</b><br/>${text}</div></div>`
 const APPS = {
-  slack: (s) => W('slack', 'Slack — #launch', `<div class="body"><div class="msg"><div class="av p"></div><div><b>Priya</b><br/>Design's done. Are we still good for Tuesday?</div></div><div class="msg"><div class="av"></div><div><b>Sam</b><br/>QA found two blockers 😬</div></div></div><div class="compose" data-ph="Message #launch"></div>`, s),
-  slackThread: (s) => W('slackThread', 'Slack — #launch', `<div class="body"><div class="msg"><div class="av p"></div><div><b>Priya</b><br/>Can you go through this thread and turn it into tasks? Need owners by Friday.</div></div><div class="msg"><div class="av"></div><div><b>Sam</b><br/>+1, eight messages of chaos above 😅</div></div></div>`, s),
-  docs: (s) => W('docs', 'Docs — Pricing launch brief', `<div class="body"><b style="font-size:26px">Pricing launch — brief</b><div class="skel" style="width:92%;margin-top:26px"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:86%"></div><div class="skel" style="width:60%"></div><div class="skel" style="width:74%"></div></div>`, s),
-  youtube: (s) => W('youtube', 'YouTube — Onboarding teardown', `<div class="video"><div class="play">▶</div><div class="ttl">Onboarding teardown</div><div class="prog"><i></i></div></div>`, s),
-  finder: (s) => W('finder', 'Finder — Downloads', `<div class="files">${[12, 14, 2, 21, 7, 18, 11, 25].map((d) => `<div><i></i><span>Screenshot 2026-09-${String(d).padStart(2, '0')}…</span></div>`).join('')}</div>`, s),
-  mail: (s) => W('mail', 'Mail — Re: launch date', `<div class="body"><div style="color:#888">To: Priya &nbsp;·&nbsp; Re: launch date</div><div class="typed" style="margin-top:22px"></div></div>`, s),
-  figma: (s) => W('figma', 'Figma — Pricing', `<div style="position:absolute;inset:44px 0 0 0;background:#e9e9ec;display:grid;place-items:center"><div style="width:44%;height:58%;background:#fff;border:3px solid #a259ff;border-radius:8px;padding:22px;font-size:20px"><b>Team</b><br/>$8.99/mo<br/><br/>▢ ▢ ▢</div></div>`, s),
-  hn: (s) => W('hn', 'Chrome — news.ycombinator.com', `<div class="body"><b style="font-size:24px">Show HN: how we price team plans</b><div class="skel" style="width:90%;margin-top:24px"></div><div class="skel" style="width:76%"></div><div class="skel" style="width:84%"></div><div class="skel" style="width:58%"></div></div>`, s),
-  code: (s) => W('code', 'Code — auth/refresh.ts', `<div class="body code"><span style="color:#8250df">export async function</span> refreshToken(t) {<br/>&nbsp;&nbsp;<span style="color:#8250df">const</span> res = <span style="color:#8250df">await</span> api.post(<span style="color:#0a7c3e">'/refresh'</span>, t)<br/>&nbsp;&nbsp;<span style="color:#8250df">return</span> res.token<br/>}</div>`, s),
-  settings: (s) => W('settings', 'Chrome — acme.app/settings', `<div class="body"><b style="font-size:24px">Profile settings</b><div class="skel" style="width:60%;margin-top:24px"></div><div class="skel" style="width:45%"></div><div class="savebtn">Save changes</div></div>`, s),
-  call: (s) => W('call', 'Meet — Onboarding redesign', `<div class="grid"><div>AP</div><div>SM</div><div>PR</div><div>JL</div></div>`, s, 'dark'),
-  inbox: (s) => W('inbox', 'Mail — Inbox', `<div class="body"><b>Inbox</b><div class="skel" style="width:88%;margin-top:22px"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:52%"></div></div>`, s),
-  notes: (s) => W('notes', 'Notes', `<div class="body"><div class="typed"></div></div>`, s),
-  terminal: (s) => W('terminal', 'Terminal — zsh', `<div class="body code">~/acme % <span class="typed"></span></div>`, s, 'dark'),
+  slack: (s) => W('slack', 'Slack — #launch', `<div class="body">${msg('Priya', 'Can we get a first version of the <mark>new onboarding flow</mark> by Friday? Designs are in Figma.', 'p')}${msg('Sam', '+1, the current one loses half our signups 😬')}</div><div class="compose" data-ph="Message #launch"></div>`, s),
+  figma: (s) => W('figma', 'Figma — Onboarding', `<div class="canvas"><div class="frame"><small>1</small><b>Welcome</b><i></i><i></i></div><div class="frame"><small>2</small><b>Set up your team</b><i></i><i></i></div><div class="frame"><small>3</small><b>Your first project</b><i></i><i></i></div></div>`, s),
+  docs: (s) => W('docs', 'Docs — Pricing launch brief', `<div class="body"><b style="font-size:26px">Pricing launch — brief</b><p class="doc-line">Launch the new team plan on the 14th.</p><p class="doc-line"><mark>Still needed: a landing page for the launch.</mark></p><div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div></div>`, s),
+  settings: (s) => W('settings', 'Chrome — localhost:3000/settings', `<div class="body"><b style="font-size:24px">Profile settings</b><div class="field"><span>Name</span><div>Arpit Patel</div></div><div class="field"><span>Email</span><div>arpit@acme.dev</div></div><div class="savebtn">Save changes</div><div class="toast">Nothing happened. Changes not saved.</div></div>`, s),
+  mail: (s) => W('mail', 'Mail — Re: launch date', `<div class="body"><div style="color:#888">To: Priya &nbsp;·&nbsp; Re: launch date</div><div class="typed" style="margin-top:22px"></div><div class="quote">Priya: Does Thursday still work for the launch?</div></div>`, s),
+  inbox: (s) => W('inbox', 'Mail — Inbox', `<div class="body">${msg('Priya', 'Morning! Where did we land on onboarding yesterday? Can we keep going today?', 'p')}<div class="skel" style="width:80%;margin-top:24px"></div><div class="skel" style="width:64%"></div></div>`, s),
+  call: (s) => W('call', 'Meet — Product sync', `<div class="grid"><div>AP</div><div>SM</div><div>PR</div><div>JL</div></div>`, s, 'dark'),
 }
-// Where an expanded surface (≤ 648×405 at the top) or the pocket card will
-// appear, windows sit clear of it: the glass in those captures sampled the
-// wallpaper, and must be shown over the wallpaper.
-
 const apps = (...list) => list.map(([k, s]) => APPS[k](s || '')).join('')
 
 const NT_HTML = `<div class="nt rec">
@@ -67,56 +60,24 @@ function ntBars(stage) {
   })
 }
 
-// ── Scenes ────────────────────────────────────────────────────────────────────
-// A scene's keys are in SECONDS; the loop length is the last key + a rest.
-// Each section shows ONE idea (one or two beats). The hero is the only
-// multi-beat loop, and its rotating headline follows the beat on screen.
-const NOTCH = [720, 17], SLACK = [720, 661], MAIL = [560, 285], NOTES = [520, 235]
-const PANEL = [720, 200], PANEL_L = [720, 426], POCKET = [720, 58], POCKET_L = [720, 128]
-const NT = { x: 150, y: 779, z: 1.7, ay: 0.72 }
-const PILL_HOME = { x: 720, y: 640, z: 1.35, ay: 0.62 }   // framed on where the pill will appear
-const TOP_HOME = { x: 720, y: 0, z: 1.25, ay: 0 }
+// Framings specific to one demo.
+const NT_SHOT = { x: 380, y: 560, z: 1.4, ay: 0.5 }
+const WINDOW_LOW = { x: 600, y: 800, z: 1.45, ay: 0.93, nz: 1.15 }     // a window's lower half plus the pill
+const MAIL_TOP = { x: 560, y: 260, z: 1.3, ay: 0.4 }
 
-function said(el, key, text) {
-  if (!el) return
-  el.innerHTML = text ? `${key ? `<kbd>${key}</kbd> ` : ''}${text}` : ''
-}
-function typed(stage, text) { $$('.compose, .typed', stage.host).forEach((e) => { e.textContent = text || '' }) }
-
-function scene(name, appHtml, secKeys, opts = {}) {
+// Build one demo. `still` is the shot shown, unmoving, under reduced motion.
+function film(name, appHtml, shots, opts = {}) {
   const host = $(`[data-stage="${name}"]`)
-  const stage = new Stage(host, { apps: appHtml, zoom: opts.zoom, home: opts.home, desktopView: opts.desktopView, mobileZoom: opts.mobileZoom, camera: false, fullScreen: true })
-  if (opts.html) stage.extra().innerHTML = opts.html
-  const total = opts.length ?? secKeys[secKeys.length - 1][0] + 2.2
-  const keys = secKeys.map(([t, k]) => [t / total, k])
-  const sayEl = $(`[data-said="${name}"]`)
-  let lastNote = null, lastLand = -1
-  const fn = track(stage, keys, {
-    apply(s, idx) {
-      stage.voice(s.key, s.say, !!s.speak)
-      const note = `${s.noteKey || ''}|${s.note || ''}`
-      if (note !== lastNote) { said(sayEl, s.noteKey, s.note); lastNote = note }
-      const d = keys[idx]?.[1].done
-      if (d && idx !== lastLand) stage.land(...d)
-      lastLand = d ? idx : (idx < lastLand ? -1 : lastLand)
-      typed(stage, s.typed)
-      opts.apply?.(s, idx, stage)
-    },
-  })
-  // Loops while on screen, pauses off screen. Reduced motion: hold the
-  // scene's clearest frame (opts.still) instead of playing.
-  const loop = gsap.to({}, { duration: total, repeat: -1, ease: 'none', paused: true, onUpdate() { fn(this.progress()) } })
-  const initial = reduce ? (opts.still ?? total * 0.6) / total : 0
-  loop.progress(initial).pause()
-  fn(initial)
-  const item = { stage, loop, fn, total, keys, inView: false }
-  scenes.push(item)
+  const f = new Film(host, { apps: appHtml, html: opts.html, sub: $(`[data-said="${name}"]`), shots })
+  if (opts.nt) { f.on((i, s) => ntApply(s, f.stage)); ntApply(f.shots[0], f.stage); ntBars(f.stage) }
+  const item = { film: f, inView: false }
+  films.push(item)
+  if (reduce) f.seek(opts.still ?? 0)
   new IntersectionObserver(([entry]) => {
     item.inView = entry.isIntersecting
     syncMotion()
-  }, { threshold: 0.05 }).observe(host)
-  syncMotion()
-  return item
+  }, { threshold: 0.25 }).observe(host)
+  return f
 }
 
 await ready
@@ -124,177 +85,134 @@ const updateNav = () => $('nav.top').classList.toggle('scrolled', scrollY > 48)
 addEventListener('scroll', updateNav, { passive: true })
 updateNav()
 
-// ── HERO: a calm overview, with a fixed view of the entire Mac screen. ──────
+// ── HERO: the whole loop, once, in three chapters ────────────────────────────
+// 1. a request arrives in Slack → you say it → a Claude Code session starts
+// 2. it works in the notch while you move on to Figma
+// 3. it needs a decision → the notch opens where you are → you answer out loud
 {
-  const starts = [0, 5.5, 11, 16.5, 21.5, 27, 32.5, 37.5]
-  const examples = [
-    'Start a Claude Code session from the app you’re using.',
-    'Start a Codex session with a spoken instruction.',
-    'Attach a screenshot while you explain the problem.',
-    'Dictate a reply directly into Mail.',
-    'Send a follow-up to an existing agent session.',
-    'Find a session from last week with Unmute Agent.',
-    'Capture a meeting and turn it into notes.',
-    'Dictate directly into Notes.'
-  ]
-  const hero = scene('hero', apps(['slack'], ['docs'], ['code'], ['settings'], ['mail'], ['figma'], ['finder'], ['call'], ['notes']), [
-    [0.0, { app: 'docs', w: 0, key: 'right ⌥', say: 'build a first version of the new onboarding flow', pill: 'pill-ropt-rec', speak: true }],
-    [2.9, { pill: 'pill-ropt-proc', speak: false }],
-    [3.3, { pill: null, notch: 'bar-sending' }],
-    [3.7, { notch: 'bar-working1', done: ['Claude Code session started', NOTCH] }],
-    [5.5, { app: 'code', w: 2 }],
-    [5.7, { key: 'right ⌥', say: 'add tests for the signup form', pill: 'pill-codex-rec', speak: true }],
-    [7.9, { pill: 'pill-codex-proc', speak: false }],
-    [8.3, { pill: null, notch: 'bar-sending' }],
-    [8.7, { notch: 'bar-working2', done: ['Codex session started', NOTCH] }],
-    [11.0, { app: 'settings', w: 3 }],
-    [11.2, { key: 'right ⌥', say: 'fix this — the save button does nothing', pill: 'pill-ropt-rec', speak: true }],
-    [12.9, { pill: 'pill-flash', noteKey: 'left ⌘', note: 'a screenshot, mid-sentence' }],
-    [13.2, { pill: 'pill-ropt-rec' }],
-    [13.9, { pill: 'pill-ropt-proc', speak: false, note: '' }],
-    [14.3, { pill: null, notch: 'bar-sending' }],
-    [14.7, { notch: 'bar-working3', done: ['session started, screenshot attached', NOTCH] }],
-    [16.5, { app: 'mail', w: 4 }],
-    [16.7, { key: 'fn', say: "Thanks Priya — Thursday works. I'll send the final copy tonight.", pill: 'pill-fn-rec', speak: true }],
-    [19.3, { pill: 'pill-fn-proc', speak: false }],
-    [19.7, { pill: 'pill-fn-out', typed: "Thanks Priya — Thursday works. I'll send the final copy tonight.", done: ['typed into Mail', MAIL] }],
-    [20.4, { pill: null }],
-    [21.5, { app: 'figma', w: 5, typed: '', notch: 'pocket-onb-open' }],
-    [22.3, { key: 'fn', say: 'make the signup step shorter', notch: 'pocket-onb-aimed', pill: 'pocket-onb-aimed', speak: true }],
-    [24.4, { pill: null, speak: false, notch: 'pocket-onb-sent', done: ['sent to Onboarding flow', POCKET, POCKET_L] }],
-    [26.0, { notch: 'bar-working3' }],
-    [27.0, { app: 'finder', w: 6 }],
-    [27.2, { key: 'right ⌘ ×2', say: 'find the pricing session from last week', pill: 'pill-agent-rec', speak: true, notch: 'bar-agent-listening' }],
-    [29.5, { pill: 'pill-agent-proc', speak: false, notch: 'bar-agent-searching' }],
-    [30.1, { pill: null, notch: 'bar-inpocket-pricing', done: ['found it, back in your pocket', NOTCH] }],
-    [32.5, { app: 'call', w: 7, notch: 'bar-working3', nt: 'rec', noteKey: '', note: 'the notetaker is listening', cam: NT }],
-    [34.3, { nt: 'discard', noteKey: 'click', note: 'End' }],
-    [35.0, { nt: 'done', noteKey: '', note: '', done: ['notes written by your own Claude', [150, 761], [260, 700]] }],
-    [37.0, { nt: null, cam: null }],
-    [37.5, { app: 'notes', w: 8 }],
-    [37.7, { key: 'fn', say: 'pricing: test annual-first on the team plan', pill: 'pill-fn-rec', speak: true }],
-    [39.9, { pill: 'pill-fn-proc', speak: false }],
-    [40.3, { pill: 'pill-fn-out', typed: 'pricing: test annual-first on the team plan', done: ['typed into Notes', NOTES] }],
-    [41.0, { pill: null }],
-  ], { length: 42.5, still: 1.2, html: NT_HTML, apply(s, idx, st) { const label = $('.hero-example')
-    const example = Math.max(0, (s.w ?? 1) - 1)
-    if (label.dataset.example !== String(example)) {
-      label.dataset.example = example
-      label.textContent = examples[example]
-      clearTimeout(st.resultT); clearTimeout(st.resultRevealT)
-      $('.result', st.host).classList.remove('on')
+  const hero = film('hero', apps(['slack'], ['figma']), [
+    { t: 0, chapter: 0, app: 'slack', cam: SHOT.wide, line: 'Priya needs the onboarding flow by Friday.' },
+    { t: 2.2, key: 'hold right ⌥', say: 'build a first version of the new onboarding flow', sayDur: 2.4, pill: 'pill-ropt-rec', speak: true, cam: SHOT.pill },
+    { t: 5.2, key: 'hold right ⌥', say: 'build a first version of the new onboarding flow', pill: 'pill-ropt-proc' },
+    { t: 5.7, pill: null, notch: 'bar-sending', cam: SHOT.bar, line: 'Sending it to Claude Code…' },
+    { t: 6.6, notch: 'onb-1', cam: SHOT.panel, done: 'A new Claude Code session, with your words as the prompt.' },
+    { t: 9.8, chapter: 1, notch: 'bar-working1', cam: SHOT.bar, line: 'It works in the notch.' },
+    { t: 11.6, app: 'figma', cam: SHOT.wide, line: 'You move on to the designs.' },
+    { t: 14.4, chapter: 2, notch: 'onb-ask', cam: SHOT.panel, line: 'It needs a decision, so the notch opens. Right where you are.' },
+    { t: 18.0, key: 'hold right ⌥', say: 'move it after the first project', sayDur: 1.6, notch: 'onb-ask-aimed', pill: 'onb-ask-aimed', speak: true },
+    { t: 20.4, notch: 'onb-continue', pill: null, done: 'Answered by voice. Claude carries on.' },
+    { t: 23.6, notch: 'bar-working1', cam: SHOT.wide, line: 'You never left Figma.', end: 26.5 },
+  ], { still: 4 })
+
+  window.__heroStage = hero.stage   // for tools/morph-frames.mjs
+
+  // Chapter buttons: each one shows where the loop is, and jumps there.
+  const chapters = $$('.chapters button')
+  const starts = [0, 9.8, 14.4], ends = [9.8, 14.4, hero.total]
+  chapters.forEach((b, i) => {
+    b.onclick = () => {
+      hero.seek(hero.shots.findIndex((s) => s.t === starts[i]))
+      syncMotion()
     }
-    ntApply(s, st) } })
-  // Each example gets about 6–7 seconds, with time to read the request and result.
-  hero.loop.timeScale(0.8)
-  hero.stage.playbackRate = 0.8
-  ntBars(hero.stage)
-  // Pause and next controls remain available for the product demonstration.
-  const pause = $('.rot-pause'), next = $('.rot-next')
-  pause.onclick = () => { motionPaused = !motionPaused; syncMotion() }
-  next.onclick = () => {
-    const now = hero.loop.progress() * hero.total
-    const t = starts.find((s) => s > now + 0.05) ?? 0
-    hero.loop.progress(t / hero.total); hero.fn(t / hero.total)
-    if (motionPaused) { hero.loop.progress((t + 1) / hero.total); hero.fn((t + 1) / hero.total) }
-    syncMotion()
+  })
+  const paint = () => {
+    const t = hero.tl.time()
+    chapters.forEach((b, i) => {
+      const p = Math.min(1, Math.max(0, (t - starts[i]) / (ends[i] - starts[i])))
+      b.style.setProperty('--p', t >= ends[i] ? 1 : p)
+      b.classList.toggle('on', t >= starts[i] && t < ends[i])
+    })
   }
-  syncMotion()
+  hero.tl.eventCallback('onUpdate', paint)
+  hero.on(paint)
+  paint()
+  $('.rot-pause').onclick = () => { motionPaused = !motionPaused; syncMotion() }
 }
 
-// ── WHY: the ceremony fades out; one spoken sentence replaces it ─────────────
-{
-  const ceremonyObserver = new IntersectionObserver(([entry]) => {
-    if (!entry.isIntersecting) return
-    if (!reduce) setTimeout(() => $('.ceremony').classList.add('faded'), 900)
-    ceremonyObserver.disconnect()
-  }, { threshold: 0.3 })
-  ceremonyObserver.observe($('.ceremony'))
-  scene('why', apps(['docs']), [
-    [0.0, { app: 'docs' }],
-    [0.6, { key: 'right ⌥', say: 'build a first version of the new onboarding flow', pill: 'pill-ropt-rec', speak: true }],
-    [3.3, { pill: 'pill-ropt-proc', speak: false }],
-    [3.7, { pill: null, notch: 'bar-sending' }],
-    [4.2, { notch: 'onb-1', done: ['Claude Code session started', PANEL, PANEL_L] }],
-    [6.0, { notch: 'onb-2' }],
-    [7.4, { notch: 'onb-3' }],
-  ], { home: PILL_HOME, still: 5 })
-}
+// ── WHY: the thought you'd have put off, said on the spot ────────────────────
+film('why', apps(['docs']), [
+  { t: 0, app: 'docs', cam: SHOT.wide, line: 'Reading the launch brief. Something’s missing.' },
+  { t: 2.0, key: 'hold right ⌥', say: 'build a landing page for the pricing launch', sayDur: 2.2, pill: 'pill-ropt-rec', speak: true, cam: SHOT.pill },
+  { t: 4.8, key: 'hold right ⌥', say: 'build a landing page for the pricing launch', pill: 'pill-ropt-proc' },
+  { t: 5.3, pill: null, notch: 'bar-sending', cam: SHOT.bar, line: 'Sending it to Claude Code…' },
+  { t: 6.2, notch: 'task-2', cam: SHOT.panel, done: 'Started. You’re still reading the brief.' },
+  { t: 9.6, notch: 'bar-working1', cam: SHOT.wide, line: '', end: 11.5 },
+], { still: 4 })
 
-// ── START OR CONTINUE: a new session, then a follow-up without opening it ────
-scene('start', apps(['hn'], ['figma']), [
-  [0.0, { app: 'hn' }],
-  [0.5, { key: 'right ⌥', say: 'build a first version of the new onboarding flow', pill: 'pill-ropt-rec', speak: true }],
-  [3.2, { pill: 'pill-ropt-proc', speak: false }],
-  [3.6, { pill: null, notch: 'bar-sending' }],
-  [4.0, { notch: 'onb-1', done: ['new agent session started', PANEL, PANEL_L] }],
-  [5.6, { notch: 'onb-3' }],
-  [7.6, { notch: 'bar-working1', app: 'figma', noteKey: '', note: 'later, in another app' }],
-  [8.8, { notch: 'pocket-onb-open', note: 'flip to the session in the notch' }],
-  [9.8, { key: 'fn', say: 'make the signup step shorter', notch: 'pocket-onb-aimed', pill: 'pocket-onb-aimed', speak: true, note: '' }],
-  [12.0, { pill: null, speak: false, notch: 'pocket-onb-sent', done: ['follow-up sent, nothing opened', POCKET, POCKET_L] }],
-], { home: PILL_HOME, still: 4.6 })
+// ── START OR CONTINUE: talk to a running session without opening it ─────────
+film('start', apps(['figma']), [
+  { t: 0, app: 'figma', notch: 'bar-working3', cam: SHOT.wide, line: 'Three sessions are running. You’re looking at the designs.' },
+  { t: 2.2, notch: 'pocket-onb-open', cam: SHOT.pocket, line: 'Your sessions live in the notch. Flip to Onboarding flow.' },
+  { t: 4.4, key: 'hold fn', say: 'make the signup step shorter', sayDur: 1.5, notch: 'pocket-onb-aimed', pill: 'pocket-onb-aimed', speak: true },
+  { t: 6.6, notch: 'pocket-onb-sent', pill: null, done: 'Follow-up sent. Nothing opened.' },
+  { t: 9.0, notch: 'bar-working3', cam: SHOT.wide, line: '', end: 10.5 },
+], { still: 3 })
 
 // ── CAPTURE CONTEXT: words and a screenshot arrive together ──────────────────
-scene('capture', apps(['settings', 'top:120px']), [
-  [0.0, { app: 'settings', box: 0 }],
-  [0.5, { key: 'right ⌥', say: "fix this error — here's what I was trying to do", pill: 'pill-ropt-rec', speak: true }],
-  [2.0, { noteKey: 'left ⌘ (hold)', note: 'drag a box around it', box: 1 }],
-  [3.1, { pill: 'pill-flash', box: 2 }],
-  [3.4, { pill: 'pill-ropt-rec', noteKey: '', note: 'the screenshot rides along with your words' }],
-  [4.6, { pill: 'pill-ropt-proc', speak: false }],
-  [5.0, { pill: null, notch: 'bar-sending', note: '' }],
-  [5.4, { notch: 'bar-working1', done: ['session started, screenshot attached', NOTCH] }],
-], {
-  home: { x: 640, y: 560, z: 1.25, ay: 0.55 }, still: 3.2,
-  html: '<div class="selbox" style="left:312px;top:392px;width:0;height:0"></div>',
-  apply(s, idx, st) {
-    const b = $('.selbox', st.host)
-    gsap.to(b, { opacity: s.box === 1 ? 1 : 0, width: s.box >= 1 ? 250 : 0, height: s.box >= 1 ? 76 : 0, duration: s.box === 1 ? 0.5 : 0.2, ease: 'power1.inOut' })
-  },
-})
-
-// ── UNMUTE AGENT: find past work from what you remember ──────────────────────
-scene('agent', apps(['inbox', 'top:440px;left:120px;width:1200px;height:400px']), [
-  [0.0, { app: 'inbox' }],
-  [0.5, { key: 'right ⌘ ×2', say: 'pick up the onboarding work from yesterday. use what we decided in the meeting', pill: 'pill-agent-rec', speak: true }],
-  [3.6, { pill: 'pill-agent-proc', speak: false }],
-  [4.0, { pill: null, notch: 'agent-recall-1' }],
-  [5.4, { notch: 'agent-recall-2', done: ['found the session and the meeting notes', PANEL, PANEL_L] }],
-  [9.0, { notch: 'bar-inpocket-onb', done: ['back in your pocket, ready to continue', NOTCH] }],
-], { home: PILL_HOME, still: 6.5 })
-
-// ── THE TASK COMES TO YOU: the notch opens by itself; answer by voice ────────
-scene('attention', apps(['figma', 'top:440px;left:120px;width:1200px;height:400px']), [
-  [0.0, { app: 'figma', notch: 'bar-working1', noteKey: '', note: "you're in Figma; the session runs" }],
-  [1.8, { notch: 'onb-ask', note: 'it needs you — the notch opens on its own' }],
-  [3.6, { key: 'right ⌥', say: 'move it after the first project', notch: 'onb-ask-aimed', pill: 'onb-ask-aimed', speak: true, note: '' }],
-  [5.8, { pill: null, speak: false, notch: 'onb-continue', done: ['answered — the agent carries on', PANEL, PANEL_L] }],
-  [8.4, { notch: 'bar-working1', note: 'and you carry on too' }],
-], { home: TOP_HOME, still: 2.6 })
-
-// ── MEETING NOTES: notes, then the decisions go where they belong ────────────
 {
-  const m = scene('meet', apps(['call', 'top:440px;left:120px;width:1200px;height:400px'], ['inbox', 'top:440px;left:120px;width:1200px;height:400px']), [
-    [0.0, { app: 'call', nt: 'rec', noteKey: '', note: 'the notetaker is listening', cam: NT }],
-    [1.8, { nt: 'discard', noteKey: 'click', note: 'End' }],
-    [2.5, { nt: 'done', noteKey: '', note: '', done: ['notes written by your own Claude', [150, 761], [260, 700]] }],
-    [4.3, { nt: null, cam: null, app: 'inbox' }],
-    [4.6, { key: 'right ⌘ ×2', say: 'take the decisions from that call into the onboarding session', pill: 'pill-agent-rec', speak: true }],
-    [7.4, { pill: 'pill-agent-proc', speak: false }],
-    [7.8, { pill: null, notch: 'agent-meetonb-2', done: ['decisions added to Onboarding flow', PANEL, PANEL_L] }],
-  ], { html: NT_HTML, home: PILL_HOME, still: 8.6, apply: (s, idx, st) => ntApply(s, st) })
-  ntBars(m.stage)
+  const box = (st, on) => {
+    const b = $('.selbox', st.host), btn = $('.app[data-app="settings"] .savebtn', st.host)
+    const win = btn.closest('.app')
+    const x = win.offsetLeft + btn.offsetLeft - 14, y = win.offsetTop + btn.offsetTop - 12
+    const w = btn.offsetWidth + 340, h = btn.offsetHeight + 28
+    gsap.set(b, { left: x, top: y })
+    gsap.to(b, { width: on ? w : 0, height: on ? h : 0, opacity: on === 1 ? 1 : 0, duration: on === 1 ? 0.7 : 0.25, ease: 'power2.inOut' })
+  }
+  film('capture', apps(['settings']), [
+    { t: 0, app: 'settings', cam: SHOT.wide, line: 'You click Save. Nothing happens.', do: (st) => box(st, 0) },
+    { t: 2.0, key: 'hold right ⌥', say: 'fix this, the save button does nothing', sayDur: 1.8, pill: 'pill-ropt-rec', speak: true, cam: WINDOW_LOW },
+    { t: 4.2, key: 'hold left ⌘ + drag', line: 'Still talking, drag over the problem.', pill: 'pill-ropt-rec', speak: true, do: (st) => box(st, 1) },
+    { t: 5.6, pill: 'pill-flash', speak: true, done: 'Screenshot added to what you’re saying.', do: (st) => box(st, 2) },
+    { t: 6.6, pill: 'pill-ropt-proc', speak: false, done: 'Screenshot added to what you’re saying.' },
+    { t: 7.1, pill: null, notch: 'bar-sending', cam: SHOT.bar, line: 'Sending your words and the screenshot…' },
+    { t: 8.0, notch: 'bar-working1', done: 'Claude Code has both. You never opened a terminal.' },
+    { t: 10.2, cam: SHOT.wide, line: '', end: 11.5 },
+  ], { html: '<div class="selbox"></div>', still: 3 })
 }
 
+// ── UNMUTE AGENT: find past work from what you remember ──────────────────────
+film('agent', apps(['inbox']), [
+  { t: 0, app: 'inbox', cam: SHOT.wide, line: 'Back to yesterday’s work. Which session was it?' },
+  { t: 2.0, key: 'right ⌘ ×2', say: 'pick up the onboarding work from yesterday. use what we decided in the meeting', sayDur: 3, pill: 'pill-agent-rec', notch: 'bar-agent-listening', speak: true, cam: SHOT.pill },
+  { t: 5.6, key: 'right ⌘ ×2', say: 'pick up the onboarding work from yesterday. use what we decided in the meeting', pill: 'pill-agent-proc', notch: 'bar-agent-searching', cam: SHOT.bar },
+  { t: 6.6, pill: null, notch: 'agent-recall-1', cam: SHOT.panel, line: 'Unmute Agent looks through your sessions and meeting notes…' },
+  { t: 8.2, notch: 'agent-recall-2', done: 'Found the session and the meeting it needs.' },
+  { t: 11.6, notch: 'bar-inpocket-onb', cam: SHOT.bar, done: 'Back in your notch, ready to continue.' },
+  { t: 13.6, cam: SHOT.wide, line: '', end: 15 },
+], { still: 4 })
+
+// ── THE TASK COMES TO YOU: the notch opens by itself; answer by voice ────────
+film('attention', apps(['figma']), [
+  { t: 0, app: 'figma', notch: 'bar-working1', cam: SHOT.wide, line: 'You’re in Figma. Claude Code is building the onboarding flow.' },
+  { t: 2.4, notch: 'onb-ask', cam: SHOT.panel, line: 'It needs a decision. The notch opens on its own.' },
+  { t: 5.8, key: 'hold right ⌥', say: 'move it after the first project', sayDur: 1.6, notch: 'onb-ask-aimed', pill: 'onb-ask-aimed', speak: true },
+  { t: 8.2, notch: 'onb-continue', pill: null, done: 'Answered without leaving Figma.' },
+  { t: 11.2, notch: 'bar-working1', cam: SHOT.wide, line: 'It carries on. So do you.', end: 13.5 },
+], { still: 1 })
+
+// ── MEETING NOTES: notes, then the decisions go where they belong ────────────
+film('meet', apps(['call'], ['inbox']), [
+  { t: 0, app: 'call', nt: 'rec', cam: NT_SHOT, line: 'In a call. One click and the notetaker listens.' },
+  { t: 2.6, nt: 'discard', line: 'Call’s over. Click End.' },
+  { t: 3.6, nt: 'done', done: 'Notes written by your own Claude.' },
+  { t: 5.8, nt: null, app: 'inbox', cam: SHOT.wide, line: '' },
+  { t: 6.4, key: 'right ⌘ ×2', say: 'take the decisions from that call into the onboarding session', sayDur: 2.6, pill: 'pill-agent-rec', speak: true, cam: SHOT.pill },
+  { t: 9.4, key: 'right ⌘ ×2', say: 'take the decisions from that call into the onboarding session', pill: 'pill-agent-proc' },
+  { t: 9.9, pill: null, notch: 'agent-meetonb-2', cam: SHOT.panel, done: 'The decisions are in the Onboarding flow session.', end: 14 },
+], { html: NT_HTML, nt: true, still: 6 })
+
 // ── DICTATION ────────────────────────────────────────────────────────────────
-scene('dictate', apps(['slack']), [
-  [0.0, { app: 'slack', typed: '' }],
-  [0.5, { key: 'fn', say: "I've reviewed the plan. Let's start with the simpler onboarding flow.", pill: 'pill-fn-rec', speak: true }],
-  [3.4, { pill: 'pill-fn-proc', speak: false }],
-  [3.8, { pill: 'pill-fn-out', typed: "I've reviewed the plan. Let's start with the simpler onboarding flow.", done: ['your words, at your cursor', SLACK] }],
-  [4.6, { pill: null }],
-], { home: PILL_HOME, still: 4.2 })
+{
+  const reply = "Thanks Priya, Thursday works. I'll send the final copy tonight."
+  film('dictate', apps(['mail']), [
+    { t: 0, app: 'mail', typed: '', cam: SHOT.wide, line: 'Replying to Priya. Cursor in the message.' },
+    { t: 1.6, key: 'hold fn', say: reply, sayDur: 2.6, pill: 'pill-fn-rec', speak: true, cam: SHOT.pill },
+    { t: 4.6, key: 'hold fn', say: reply, pill: 'pill-fn-proc' },
+    { t: 5.0, pill: 'pill-fn-out', typed: reply, cam: MAIL_TOP, done: 'Typed where your cursor was.' },
+    { t: 6.0, pill: null },
+    { t: 8.2, cam: SHOT.wide, line: '', end: 9.5 },
+  ], { still: 3 })
+}
 
 // Pause every demo together, including when a section re-enters the viewport.
 document.addEventListener('visibilitychange', syncMotion)
