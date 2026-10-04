@@ -11,14 +11,14 @@
 //      to read, because a whole 14" screen in 1000px makes the pill ~10px tall
 //   3. the subtitle under the screen carries the key you pressed and your words,
 //      then what happened (✓). It never covers the product.
-import { Stage, ready, preload } from './stage.js?v=20261004-black1'
+import { Stage, ready, preload } from './stage.js?v=20261004-nozoom1'
 export { ready }
 
 const SCREEN_W = 1120, SCREEN_H = 700
 
 // Named framings, in screen points. z is the zoom; ay is where y sits in the
-// view. A big stage shows the whole screen at real size and never zooms; only
-// a small one (a side-by-side section, a phone) pushes in on these.
+// view. Demos never zoom (the whole Mac is always in view); the framings stay
+// as names for what each shot is about.
 export const SHOT = {
   wide: { x: 560, y: 350, z: 1, ay: 0.5 },
   pill: { x: 560, y: 610, z: 1.5, ay: 0.93 },     // the pill, with the window you're speaking from
@@ -91,8 +91,8 @@ export class Film {
   // Ease the camera to a framing; clamp so the view never leaves the screen.
   frame(f, dur) {
     const host = this.stage.host
-    const narrow = host.clientWidth < 800
-    const z = narrow ? Math.max(1, f.z) : 1
+    // Every demo shows the whole Mac, at every size: no push-ins.
+    const z = 1
     const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
     const x = clamp(SCREEN_W / 2 - f.x * z, SCREEN_W - SCREEN_W * z, 0)
     const y = clamp(SCREEN_H * f.ay - f.y * z, SCREEN_H - SCREEN_H * z, 0)
