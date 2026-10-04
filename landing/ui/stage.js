@@ -72,6 +72,14 @@ const PATCH = {
 for (const k of ['onb-1', 'onb-2', 'onb-3', 'onb-continue', 'agent-recall-1', 'agent-recall-2', 'agent-meetonb-2',
   'task-1', 'task-2', 'task-3', 'task-4', 'agent-save-1', 'agent-save-2', 'agent-ask-1', 'agent-ask-2', 'agent-meet-1', 'agent-meet-2', 'agent-meet-3'])
   PATCH[k + '.notch'] ??= CHIP
+// GLASS: the helper's panels and pocket cards are translucent glass, but a
+// screenshot bakes whatever was behind them in as solid colour. Give it back:
+// the dark panel tone becomes a partly transparent tint (GLASS_TINT), while
+// anything brighter than the tone — text, chips, icons — stays solid. The page
+// then blurs what's really behind the panel (.slot img.glass in film.css).
+// The notch bar and the pill are solid black in the app, so they stay opaque.
+const GLASS_TINT = 0.7
+const isGlass = (k) => k.endsWith('.notch') && manifest?.[k]?.h > 60
 const cleaned = {}
 function clean(k) {
   return new Promise((done) => {
@@ -80,14 +88,25 @@ function clean(k) {
   img.onload = () => {
     const c = document.createElement('canvas'); c.width = img.width; c.height = img.height
     const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0)
-    const [x0, y0, x1, y1] = PATCH[k]
-    const px = (x, y) => g.getImageData(x, y, 1, 1).data
-    for (let y = y0; y < y1; y++) {
-      const a = px(x0 - 2, y), b = px(x1 + 2, y)
-      const grad = g.createLinearGradient(x0, 0, x1, 0)
-      grad.addColorStop(0, `rgba(${a[0]},${a[1]},${a[2]},${a[3] / 255})`)
-      grad.addColorStop(1, `rgba(${b[0]},${b[1]},${b[2]},${b[3] / 255})`)
-      g.fillStyle = grad; g.fillRect(x0, y, x1 - x0, 1)
+    if (PATCH[k]) {
+      const [x0, y0, x1, y1] = PATCH[k]
+      const px = (x, y) => g.getImageData(x, y, 1, 1).data
+      for (let y = y0; y < y1; y++) {
+        const a = px(x0 - 2, y), b = px(x1 + 2, y)
+        const grad = g.createLinearGradient(x0, 0, x1, 0)
+        grad.addColorStop(0, `rgba(${a[0]},${a[1]},${a[2]},${a[3] / 255})`)
+        grad.addColorStop(1, `rgba(${b[0]},${b[1]},${b[2]},${b[3] / 255})`)
+        g.fillStyle = grad; g.fillRect(x0, y, x1 - x0, 1)
+      }
+    }
+    if (isGlass(k)) {
+      const d = g.getImageData(0, 0, c.width, c.height), p = d.data
+      for (let i = 0; i < p.length; i += 4) {
+        const L = 0.2126 * p[i] + 0.7152 * p[i + 1] + 0.0722 * p[i + 2]
+        const t = Math.min(1, Math.max(0, (L - 62) / 58)), lift = t * t * (3 - 2 * t)
+        p[i + 3] = Math.round(p[i + 3] * (GLASS_TINT + (1 - GLASS_TINT) * lift))
+      }
+      g.putImageData(d, 0, 0)
     }
     c.toBlob((blob) => {
       cleaned[k] = URL.createObjectURL(blob)
@@ -108,7 +127,7 @@ function preload(keys) {
   for (const k of keys) {
     if (fetched.has(k) || !manifest?.[k]) continue
     fetched.add(k)
-    if (PATCH[k]) clean(k); else { const i = new Image(); i.src = rawUrl(k) }
+    if (PATCH[k] || isGlass(k)) clean(k); else { const i = new Image(); i.src = rawUrl(k) }
   }
 }
 
@@ -182,6 +201,11 @@ export class Stage {
       Object.assign(next.style, { left: to.x + 'px', top: to.y + 'px', width: to.w + 'px', height: to.h + 'px' })
       next.src = assetUrl(key)
       next.dataset.key = key
+      // Glass: the capture's own outline masks the blur, so the transparent
+      // ears and corners stay clear.
+      const glass = isGlass(key), mask = glass ? `url("${rawUrl(key)}")` : ''
+      next.classList.toggle('glass', glass)
+      next.style.maskImage = mask; next.style.webkitMaskImage = mask
       next.classList.add('on')
     } else { next.removeAttribute('src'); next.classList.remove('on') }
     if (this.instant) return
@@ -211,7 +235,8 @@ export class Stage {
     const dur = grow ? 560 : 420
     // A spring with a little give on the way out; a firm ease on the way back in.
     const easing = grow ? 'cubic-bezier(.32,1.14,.5,1)' : 'cubic-bezier(.5,0,.2,1)'
-    const tint = role === 'notch' && b.h > 60 ? '#211c38' : '#000'
+    const tint = role === 'notch' && b.h > 60 ? 'rgba(33,28,56,.72)' : '#000'
+    shell.classList.toggle('glass', role === 'notch' && b.h > 60)
     shell.animate([box(a), box(b)], { duration: dur, easing, fill: 'forwards' })
     shell.animate([{ opacity: 1, background: '#000' }, { opacity: 1, background: tint, offset: 0.8 }, { opacity: 0, background: tint }],
       { duration: dur + 180, fill: 'forwards' })

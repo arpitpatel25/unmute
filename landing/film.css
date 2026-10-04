@@ -69,3 +69,6 @@ body.motion-paused .film-sub .w,body.motion-paused .film-sub > span{animation:no
 .stage .slot[data-role="pill"] .shell{z-index:5}
 .stage .slot img,.stage .slot img.on{transition:none}
 .stage .slot img.on{opacity:1}
+/* Glass panels: blur what's really behind them, inside the capture's outline. */
+.stage .slot img.glass,.stage .slot .shell.glass{-webkit-backdrop-filter:blur(26px) saturate(1.5) brightness(.72);backdrop-filter:blur(26px) saturate(1.5) brightness(.72)}
+.stage .slot img.glass{-webkit-mask-size:100% 100%;mask-size:100% 100%;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat}
