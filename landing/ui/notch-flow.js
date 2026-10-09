@@ -13,7 +13,7 @@
   const NS = 'http://www.w3.org/2000/svg'
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches
   const SPEED = 44 // px per second
-  const H = 420, RUN = 232, AGENTS_Y = 70
+  const H = 640
 
   const PHRASES = [
     ['um so can you build a first version of the uh new onboarding flow', 'Build a first version of the new onboarding flow.'],
@@ -30,20 +30,25 @@
   const probe = document.createElementNS(NS, 'path'); svg.querySelector('defs').append(probe)
   let unit = 1, pos = 260
 
+  // Laid out around the hero's own words: the spiral beside the headline,
+  // the run below the buttons, into the badge where "Works with" sat.
+  const hero = svg.parentElement
   function layout() {
     const W = innerWidth, c = W / 2
+    const top = (el) => el.getBoundingClientRect().top - hero.getBoundingClientRect().top
+    const h1 = hero.querySelector('h1'), ctas = hero.querySelector('.ctas')
+    const dy = top(h1) + h1.offsetHeight / 2 - 200
+    const RUN = Math.round(top(ctas) + ctas.offsetHeight + 46)
     svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
-    svg.style.top = document.querySelector('nav.top').offsetHeight + 'px'
-    // IN: a circle, a smaller turn inside it, then the run to the notch and
-    // straight up into its floor, to the bar's middle.
+    const y = (v) => v + dy
     // Raw speech: a circle, a turn inside it, then a run toward the middle.
-    const inD = `M -40 110 C 60 92, 150 88, 210 90 C 290 92, 316 150, 314 205 C 312 270, 250 310, 190 308 `
-      + `C 120 306, 86 250, 92 200 C 98 150, 150 128, 200 134 C 250 140, 262 190, 240 222 `
-      + `C 220 252, 236 ${RUN}, 330 ${RUN} L ${c - 330} ${RUN}`
-    // Transcribed: the same line carries on as a ribbon and rises into the
-    // agents' badge, centred above the headline.
-    const outD = ` L ${c - 140} ${RUN} C ${c - 60} ${RUN}, ${c} ${RUN - 40}, ${c} ${RUN - 110} L ${c} ${AGENTS_Y}`
-    svg.querySelector('.nf-agents').setAttribute('transform', `translate(${c} ${AGENTS_Y})`)
+    const inD = `M -40 ${y(110)} C 60 ${y(92)}, 150 ${y(88)}, 210 ${y(90)} C 290 ${y(92)}, 316 ${y(150)}, 314 ${y(205)} `
+      + `C 312 ${y(270)}, 250 ${y(310)}, 190 ${y(308)} C 120 ${y(306)}, 86 ${y(250)}, 92 ${y(200)} `
+      + `C 98 ${y(150)}, 150 ${y(128)}, 200 ${y(134)} C 250 ${y(140)}, 262 ${y(190)}, 240 ${y(222)} `
+      + `C 220 ${y(252)}, 250 ${RUN}, 360 ${RUN} L ${c - 360} ${RUN}`
+    // Transcribed: the line carries on as a ribbon, into the agents' badge.
+    const outD = ` L ${c - 40} ${RUN}`
+    svg.querySelector('.nf-agents').setAttribute('transform', `translate(${c} ${RUN})`)
     const d = inD + outD
     for (const p of [path, mRaw, mClean]) p.setAttribute('d', d)
     probe.setAttribute('d', inD)

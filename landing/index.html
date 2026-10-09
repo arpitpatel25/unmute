@@ -21,7 +21,7 @@
 <link rel="stylesheet" href="heritage.css?v=20261009-fast1" />
 <link rel="stylesheet" href="film.css?v=20261009-fast1" />
 <link rel="stylesheet" href="mac.css?v=20261009-fast1" />
-<link rel="stylesheet" href="notch-hero.css?v=20261009-agents2" />
+<link rel="stylesheet" href="notch-hero.css?v=20261009-bg1" />
 <link rel="preload" href="assets/fonts/Lora.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
 <!-- The demos' code and data, fetched in parallel instead of one after another. -->
@@ -35,14 +35,27 @@
      helper (unmute-cloud), placed at its real window position. See landing/README.md. -->
 </head>
 <body>
-<!-- Words through the notch (ui/notch-flow.js). -->
-<svg class="notch-flow" height="420" aria-hidden="true">
+
+<nav class="top">
+  <a href="#top" aria-label="Unmute home"><img src="../unmute-wordmark-black.png" alt="unmute" /></a>
+  <div class="links">
+    <a href="#why">Why Unmute</a><a href="#start">How it works</a><a href="../pricing.html">Pricing</a>
+    <a class="btn sm" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download for Mac</a>
+  </div>
+</nav>
+
+<main id="top">
+
+<!-- HERO — concrete first: what it is, then the demo. Text never animates in. -->
+<section class="hero">
+  <!-- What you say, flowing into your agents (ui/notch-flow.js). -->
+<svg class="notch-flow" height="640" aria-hidden="true">
   <defs>
     <path id="nf-path"/>
     <linearGradient id="nf-edge" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".05" stop-color="#fff"/><stop offset=".95" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
-    <mask id="nf-m-edge" maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="420"><rect width="100%" height="420" fill="url(#nf-edge)"/></mask>
-    <mask id="nf-m-raw" maskUnits="userSpaceOnUse" x="-100" y="-100" width="4000" height="700"><path fill="none" stroke="#fff" stroke-width="44"/></mask>
-    <mask id="nf-m-clean" maskUnits="userSpaceOnUse" x="-100" y="-100" width="4000" height="700"><path fill="none" stroke="#fff" stroke-width="44"/></mask>
+    <mask id="nf-m-edge" maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="640"><rect width="100%" height="640" fill="url(#nf-edge)"/></mask>
+    <mask id="nf-m-raw" maskUnits="userSpaceOnUse" x="-100" y="-100" width="4000" height="900"><path fill="none" stroke="#fff" stroke-width="44"/></mask>
+    <mask id="nf-m-clean" maskUnits="userSpaceOnUse" x="-100" y="-100" width="4000" height="900"><path fill="none" stroke="#fff" stroke-width="44"/></mask>
   </defs>
   <g mask="url(#nf-m-edge)">
     <g mask="url(#nf-m-raw)"><text class="nf-raw" dy="5"><textPath href="#nf-path"></textPath></text></g>
@@ -57,19 +70,6 @@
     <image href="assets/mark-codex.png" x="12" y="-14" width="28" height="28"/>
   </g>
 </svg>
-
-<nav class="top">
-  <a href="#top" aria-label="Unmute home"><img src="../unmute-wordmark-black.png" alt="unmute" /></a>
-  <div class="links">
-    <a href="#why">Why Unmute</a><a href="#start">How it works</a><a href="../pricing.html">Pricing</a>
-    <a class="btn sm" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download for Mac</a>
-  </div>
-</nav>
-
-<main id="top">
-
-<!-- HERO — concrete first: what it is, then the demo. Text never animates in. -->
-<section class="hero">
   <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
   <h1>Talk to your agents.<br />From anywhere.</h1>
   <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app.<br class="desktop-break" /> Bring the context along. Keep going while your agent works.</p>
@@ -182,7 +182,7 @@
   <span class="flinks"><a href="../dictation.html">Dictation</a><a href="../pricing.html">Pricing</a><a href="../manifesto.html">Manifesto</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
 </footer>
 
-<script src="ui/notch-flow.js?v=20261009-agents1" defer></script>
+<script src="ui/notch-flow.js?v=20261009-bg2" defer></script>
 <script src="ui/vendor/gsap.min.js"></script>
 <script type="module" src="app.js?v=20261009-fast1"></script>
 </body>

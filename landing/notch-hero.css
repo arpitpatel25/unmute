@@ -1,5 +1,7 @@
 /* HERO FLOW — what you say, flowing into your agents (ui/notch-flow.js). */
-.notch-flow{position:absolute;z-index:39;left:0;width:100%;height:420px;pointer-events:none;opacity:0;transition:opacity .6s ease}
+.hero{position:relative;isolation:isolate}
+.hero > :not(.notch-flow){position:relative;z-index:1}
+.notch-flow{position:absolute;z-index:0;top:0;left:50%;transform:translateX(-50%);width:100vw;height:640px;pointer-events:none;opacity:0;transition:opacity .6s ease}
 .notch-flow.ready{opacity:1}
 /* Raw speech: light, lowercase, the way it was said. */
 .notch-flow .nf-raw{font:400 16px Inter,system-ui,sans-serif;fill:#a3a3a3}
@@ -11,6 +13,8 @@
 .notch-flow .nf-agents{filter:drop-shadow(0 10px 22px rgba(0,0,0,.12))}
 .notch-flow .nf-ring{fill:none;stroke:#0a0a0a;stroke-opacity:.18;transform-box:fill-box;transform-origin:center;animation:nf-ring 2.4s cubic-bezier(.2,.6,.3,1) infinite}
 @keyframes nf-ring{from{transform:scale(1.2);stroke-opacity:.2}to{transform:scale(2.3);stroke-opacity:0}}
-@media(min-width:1000px){.hero{padding-top:290px}}
+/* The badge carries the two marks, so the "Works with" line steps aside,
+   and the demo starts a little lower to leave the ribbon its room. */
+@media(min-width:1000px){.hero .works{visibility:hidden}.hero-demo{margin-top:64px}}
 @media(max-width:999px){.notch-flow{display:none}}
 @media(prefers-reduced-motion:reduce){.notch-flow .nf-ring{animation:none;stroke-opacity:0}}
