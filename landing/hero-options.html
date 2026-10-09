@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Unmute — hero options</title>
+<style>
+@font-face{font-family:Lora;src:url('assets/fonts/Lora.woff2') format('woff2');font-weight:400 700}
+@font-face{font-family:Inter;src:url('assets/fonts/Inter.woff2') format('woff2');font-weight:100 900}
+:root{--ink:#0a0a0a;--dim:#4a4a4a;--faint:#8a8a8a;--line:#e6e6e6;--ui:Inter,system-ui,sans-serif;--mono:ui-monospace,"SF Mono",Menlo,monospace}
+*{box-sizing:border-box}body{margin:0;font-family:var(--ui);color:var(--ink);background:#fff;-webkit-font-smoothing:antialiased}
+p{margin:0}h1{margin:0;font-family:Lora,Georgia,serif;font-weight:400;letter-spacing:-.025em;font-size:clamp(44px,5.4vw,78px);line-height:1.04}
+.picker{position:sticky;top:0;z-index:20;display:flex;gap:8px;justify-content:center;padding:12px;background:rgba(255,255,255,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);font-size:13px}
+.picker a{padding:7px 12px;border:1px solid var(--line);border-radius:999px;text-decoration:none;color:var(--ink)}
+.picker a:hover{background:#f4f4f4}
+.opt{position:relative;border-bottom:1px solid var(--line);overflow:hidden}
+.tag{position:absolute;top:72px;left:24px;z-index:5;font-size:12px;color:var(--dim);background:#f4f4f4;border-radius:999px;padding:6px 12px}
+.tag b{color:var(--ink)}
+.hero{position:relative;max-width:1180px;margin:auto;padding:96px 24px 80px;text-align:center;display:flex;flex-direction:column;align-items:center}
+.eyebrow{font-size:14px;color:var(--dim);font-weight:500}
+.hero h1{margin-top:22px}
+.sub{max-width:620px;margin-top:22px;font-size:18px;line-height:1.55;color:var(--dim)}
+.ctas{display:flex;gap:10px;justify-content:center;margin-top:28px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 22px;border-radius:9px;background:var(--ink);color:#fff;font:500 14px var(--ui);text-decoration:none;border:1px solid var(--ink)}
+.btn.ghost{background:#fff;color:var(--ink);border-color:#d4d4d4}
+.mark{width:20px;height:20px;object-fit:contain;flex:none}
+.note{max-width:720px;margin:0 auto;padding:0 24px 40px;text-align:center;font-size:14px;line-height:1.6;color:var(--dim)}
+
+/* ── A · Live transcript ─────────────────────────────────────────────────── */
+.a-line{margin-top:34px;display:flex;align-items:center;gap:12px;min-height:56px}
+.a-box{display:flex;align-items:center;gap:12px;padding:12px 18px 12px 14px;border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:0 10px 30px -18px rgba(0,0,0,.25);font-size:17px;max-width:640px;text-align:left;transition:transform .5s cubic-bezier(.6,0,.3,1),opacity .4s}
+.a-mic{width:10px;height:10px;border-radius:50%;background:#e5484d;flex:none;box-shadow:0 0 0 0 rgba(229,72,77,.5);animation:a-pulse 1.3s infinite}
+.a-box.clean .a-mic{background:var(--ink);animation:none}
+@keyframes a-pulse{70%{box-shadow:0 0 0 8px rgba(229,72,77,0)}}
+.a-words .w{display:inline-block;color:var(--faint);opacity:0;transform:translateY(4px);transition:opacity .25s,transform .25s,color .4s,max-width .45s,margin .45s;max-width:300px;white-space:pre}
+.a-words .w.in{opacity:1;transform:none}
+.a-box.clean .w{color:var(--ink)}
+.a-box.clean .w.f{max-width:0;opacity:0;margin:0}
+.a-arrow{color:var(--faint);opacity:0;transition:opacity .3s}
+.a-agent{display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:12px;background:var(--ink);color:#fff;font-size:14px;font-weight:500;opacity:0;transform:translateX(-8px);transition:opacity .35s,transform .35s;white-space:nowrap}
+.a-agent .mark{width:18px;height:18px;background:#fff;border-radius:5px;padding:2px}
+.a-line.sent .a-arrow,.a-line.sent .a-agent{opacity:1;transform:none}
+
+/* ── B · Two doors ───────────────────────────────────────────────────────── */
+.b-stage{position:relative;margin-top:40px;width:min(760px,100%);height:270px}
+.b-mic{position:absolute;left:50%;top:0;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:9px 16px;border-radius:999px;background:var(--ink);color:#fff;font-size:14px;max-width:560px;white-space:nowrap;overflow:hidden;transition:opacity .3s}
+.b-wave{display:flex;gap:2px;align-items:center;height:16px}.b-wave i{width:2.5px;border-radius:2px;background:#fff;height:4px}
+.b-said{color:#fff;opacity:.92}
+.b-cards{position:absolute;left:0;right:0;bottom:0;display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.b-card{text-align:left;border:1px solid var(--line);border-radius:16px;padding:14px 16px;background:#fff;height:178px;overflow:hidden;box-shadow:0 14px 34px -24px rgba(0,0,0,.35);transition:border-color .3s,box-shadow .3s}
+.b-card.hot{border-color:var(--ink);box-shadow:0 18px 40px -22px rgba(0,0,0,.45)}
+.b-head{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
+.b-head small{margin-left:auto;font-weight:500;color:#1a7f37;font-size:12px}
+.b-log{margin-top:10px;display:flex;flex-direction:column;gap:7px;font-size:13.5px}
+.b-log p{padding:7px 10px;border-radius:9px;background:#f4f4f4;color:var(--dim);animation:b-in .4s ease both}
+.b-log p.you{align-self:flex-end;background:var(--ink);color:#fff}
+@keyframes b-in{from{opacity:0;transform:translateY(8px)}}
+.b-fly{position:absolute;z-index:2;padding:7px 12px;border-radius:9px;background:var(--ink);color:#fff;font-size:13.5px;white-space:nowrap;pointer-events:none;transition:left .7s cubic-bezier(.6,0,.3,1),top .7s cubic-bezier(.6,0,.3,1),transform .7s,opacity .3s}
+
+/* ── C · The headline answers ───────────────────────────────────────────── */
+.c-h1{position:relative}
+.c-who{display:inline-flex;align-items:center;gap:.18em;position:relative;transition:opacity .35s,transform .35s}
+.c-who img{width:.72em;height:.72em;object-fit:contain}
+.c-who.out{opacity:0;transform:translateY(.15em)}
+.c-cloud{position:absolute;inset:0;pointer-events:none}
+.c-cloud span{position:absolute;font:400 15px var(--ui);color:#a3a3a3;white-space:nowrap;transition:left 2.6s cubic-bezier(.5,0,.2,1),top 2.6s cubic-bezier(.5,0,.2,1),opacity 2.6s,transform 2.6s}
+
+/* ── D · Converging lines ───────────────────────────────────────────────── */
+.d-rail{position:relative;margin-top:40px;width:100vw;height:96px;display:flex;align-items:center;justify-content:center}
+.d-track{position:absolute;top:50%;height:28px;margin-top:-14px;overflow:hidden;display:flex;align-items:center}
+.d-track.l{left:0;right:calc(50% + 86px);-webkit-mask-image:linear-gradient(90deg,transparent,#000 22%);mask-image:linear-gradient(90deg,transparent,#000 22%)}
+.d-track.r{right:0;left:calc(50% + 86px);-webkit-mask-image:linear-gradient(270deg,transparent,#000 22%);mask-image:linear-gradient(270deg,transparent,#000 22%)}
+.d-belt{display:flex;gap:28px;white-space:nowrap;font-size:16px;will-change:transform}
+.d-belt span{color:#9a9a9a}
+.d-belt span b{font-weight:500;color:var(--ink)}
+.d-hub{position:relative;z-index:2;display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:999px;background:var(--ink);color:#fff;font-size:14px;font-weight:500;box-shadow:0 12px 30px -14px rgba(0,0,0,.5)}
+.d-hub .mark{background:#fff;border-radius:6px;padding:2px;width:22px;height:22px}
+
+/* ── E · The notch ──────────────────────────────────────────────────────── */
+.e-top{position:relative;height:150px;width:100%;display:flex;justify-content:center}
+.e-island{position:absolute;top:0;left:50%;transform:translateX(-50%);background:#000;color:#fff;border-radius:0 0 18px 18px;width:230px;height:38px;overflow:hidden;transition:width .55s cubic-bezier(.3,1.25,.5,1),height .55s cubic-bezier(.3,1.25,.5,1),border-radius .55s;box-shadow:0 18px 40px -20px rgba(0,0,0,.6)}
+.e-island.open{width:560px;height:118px;border-radius:0 0 26px 26px}
+.e-bar{position:absolute;top:0;left:0;right:0;height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:13px}
+.e-bar b{font-weight:800;letter-spacing:-.02em}
+.e-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#30d158;margin-right:6px}
+.e-body{position:absolute;top:44px;left:22px;right:22px;text-align:left;opacity:0;transition:opacity .3s .15s}
+.e-island.open .e-body{opacity:1}
+.e-said{font-size:16px;line-height:1.35;min-height:44px}
+.e-said .w{opacity:0;transition:opacity .2s}.e-said .w.in{opacity:1}
+.e-foot{margin-top:6px;display:flex;align-items:center;gap:8px;font-size:12.5px;color:rgba(255,255,255,.6)}
+.e-wave{display:flex;gap:2px;align-items:center;height:14px}.e-wave i{width:2.5px;border-radius:2px;background:#fff;height:3px}
+.e-sent{display:flex;align-items:center;gap:7px;color:#fff}
+.e-sent .mark{width:16px;height:16px;background:#fff;border-radius:4px;padding:1.5px}
+@media(max-width:700px){.e-island.open{width:92vw}.d-track.l{right:calc(50% + 70px)}.d-track.r{left:calc(50% + 70px)}}
+</style>
+</head>
+<body>
+<nav class="picker"><a href="#A">A · Live transcript</a><a href="#B">B · Two doors</a><a href="#C">C · The headline answers</a><a href="#D">D · Converging lines</a><a href="#E">E · The notch</a></nav>
+
+<!-- A -->
+<section class="opt" id="A">
+  <span class="tag"><b>A</b> · Live transcript</span>
+  <div class="hero">
+    <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
+    <h1>Talk to your agents.<br />From anywhere.</h1>
+    <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app. Bring the context along. Keep going while your agent works.</p>
+    <div class="a-line"><div class="a-box"><span class="a-mic"></span><span class="a-words"></span></div><span class="a-arrow">→</span><span class="a-agent"><img class="mark" alt="" /><span></span></span></div>
+    <div class="ctas"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#">See how it works</a></div>
+  </div>
+  <p class="note">One line under the headline does the whole story: your words appear as you say them, the ums and the "can you"s fall away, and the clean request is handed to Claude Code or Codex, right beside it.</p>
+</section>
+
+<!-- B -->
+<section class="opt" id="B">
+  <span class="tag"><b>B</b> · Two doors</span>
+  <div class="hero">
+    <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
+    <h1>Talk to your agents.<br />From anywhere.</h1>
+    <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app.</p>
+    <div class="b-stage">
+      <div class="b-mic"><span class="b-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="b-said"></span></div>
+      <div class="b-cards">
+        <div class="b-card" data-agent="claude"><div class="b-head"><img class="mark" src="assets/mark-claude.png" alt="" />Claude Code<small>● Working</small></div><div class="b-log"></div></div>
+        <div class="b-card" data-agent="codex"><div class="b-head"><img class="mark" src="assets/mark-codex.png" alt="" />Codex<small>● Working</small></div><div class="b-log"></div></div>
+      </div>
+    </div>
+    <div class="ctas"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#">See how it works</a></div>
+  </div>
+  <p class="note">Your two agents sit right under the headline as live session cards. What you say drops into one of them as a new message, and it answers. Concrete: you see that Unmute talks to the agents you already use.</p>
+</section>
+
+<!-- C -->
+<section class="opt" id="C">
+  <span class="tag"><b>C</b> · The headline answers</span>
+  <div class="hero">
+    <div class="c-cloud"></div>
+    <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
+    <h1 class="c-h1">Talk to <span class="c-who"><img src="assets/mark-claude.png" alt="" /><span>Claude Code.</span></span><br />From anywhere.</h1>
+    <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app. Bring the context along. Keep going while your agent works.</p>
+    <div class="ctas"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#">See how it works</a></div>
+  </div>
+  <p class="note">The agent is in the headline itself, switching between Claude Code and Codex. Faint spoken requests drift in from around the page and are drawn into its name. Quiet, no extra UI.</p>
+</section>
+
+<!-- D -->
+<section class="opt" id="D">
+  <span class="tag"><b>D</b> · Converging lines</span>
+  <div class="hero">
+    <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
+    <h1>Talk to your agents.<br />From anywhere.</h1>
+    <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app. Bring the context along. Keep going while your agent works.</p>
+    <div class="d-rail">
+      <div class="d-track l"><div class="d-belt"></div></div>
+      <div class="d-hub"><img class="mark" src="assets/mark-claude.png" alt="" /><img class="mark" src="assets/mark-codex.png" alt="" />Your agent</div>
+      <div class="d-track r"><div class="d-belt"></div></div>
+    </div>
+    <div class="ctas"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#">See how it works</a></div>
+  </div>
+  <p class="note">Two straight lines of requests run in from both edges and disappear into one agent badge in the middle. The filler words stay grey; the request itself reads in black. Calm and readable, nothing like a loop.</p>
+</section>
+
+<!-- E -->
+<section class="opt" id="E">
+  <span class="tag"><b>E</b> · The notch</span>
+  <div class="hero" style="padding-top:0">
+    <div class="e-top">
+      <div class="e-island">
+        <div class="e-bar"><b>un</b><span class="e-state"><span class="e-dot"></span>Working 1</span></div>
+        <div class="e-body"><p class="e-said"></p><div class="e-foot"><span class="e-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="e-hint">hold right ⌥ and speak</span></div></div>
+      </div>
+    </div>
+    <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
+    <h1>Talk to your agents.<br />From anywhere.</h1>
+    <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app. Bring the context along. Keep going while your agent works.</p>
+    <div class="ctas"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#">See how it works</a></div>
+  </div>
+  <p class="note">The page's own top edge becomes the notch. It opens, your words appear in it as you speak, and it closes into "Sent to Claude Code" or "Sent to Codex". The product itself is the motion.</p>
+</section>
+
+<script>
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const MARK = { claude: 'assets/mark-claude.png', codex: 'assets/mark-codex.png' }
+const NAME = { claude: 'Claude Code', codex: 'Codex' }
+const REQ = [
+  { raw: 'um so can you fix the save button on settings it does nothing', clean: 'Fix the save button on settings. It does nothing.', agent: 'claude', reply: 'Found it: the handler never awaits save(). Fixing.' },
+  { raw: 'uh add tests for the signup form', clean: 'Add tests for the signup form.', agent: 'codex', reply: 'Writing 6 tests for signup.test.ts.' },
+  { raw: 'ok can you build a first version of the new onboarding flow', clean: 'Build a first version of the new onboarding flow.', agent: 'claude', reply: 'Starting with the three steps from Figma.' },
+  { raw: 'so like refactor the auth middleware', clean: 'Refactor the auth middleware.', agent: 'codex', reply: 'Splitting it into verify and refresh.' },
+]
+const FILLER = new Set(['um', 'uh', 'so', 'ok', 'like', 'can', 'you'])
+// Animate any waveform that's marked live.
+const waves = () => document.querySelectorAll('.b-wave.live i, .e-wave.live i')
+;(function tick(t) {
+  waves().forEach((b, i) => { b.style.height = 3 + Math.abs(Math.sin(t / 160 + i * .8) * Math.sin(t / 430 + i * .3)) * 13 + 'px' })
+  requestAnimationFrame(tick)
+})(0)
+
+// A ─ the transcript line
+;(async () => {
+  const line = document.querySelector('.a-line'), box = line.querySelector('.a-box'), words = line.querySelector('.a-words')
+  const agent = line.querySelector('.a-agent')
+  for (let k = 0; ; k = (k + 1) % REQ.length) {
+    const r = REQ[k]
+    box.classList.remove('clean'); line.classList.remove('sent'); box.style.opacity = 1; box.style.transform = ''
+    const raw = r.raw.split(' ')
+    let firstReal = raw.findIndex((w) => !FILLER.has(w))
+    words.innerHTML = raw.map((w, i) => `<span class="w${FILLER.has(w) && i < firstReal + 1 && i !== firstReal ? ' f' : ''}">${w} </span>`).join('')
+    const spans = [...words.children]
+    for (const s of spans) { s.classList.add('in'); await sleep(170) }
+    await sleep(500)
+    // Clean up: fillers go, capital and full stop arrive.
+    const real = spans[firstReal]; real.textContent = real.textContent[0].toUpperCase() + real.textContent.slice(1)
+    const last = spans[spans.length - 1]; last.textContent = last.textContent.trim() + '.'
+    box.classList.add('clean')
+    await sleep(900)
+    agent.querySelector('img').src = MARK[r.agent]; agent.querySelector('span').textContent = 'Sent to ' + NAME[r.agent]
+    line.classList.add('sent')
+    await sleep(2200)
+    box.style.opacity = 0; line.classList.remove('sent')
+    await sleep(500)
+  }
+})()
+
+// B ─ two doors
+;(async () => {
+  const stage = document.querySelector('.b-stage'), mic = stage.querySelector('.b-mic'), said = stage.querySelector('.b-said')
+  const wave = stage.querySelector('.b-wave')
+  const cards = { claude: stage.querySelector('[data-agent="claude"]'), codex: stage.querySelector('[data-agent="codex"]') }
+  for (let k = 0; ; k = (k + 1) % REQ.length) {
+    const r = REQ[k]
+    mic.style.opacity = 1; wave.classList.add('live'); said.textContent = ''
+    for (const w of r.clean.split(' ')) { said.textContent += (said.textContent ? ' ' : '') + w; await sleep(150) }
+    await sleep(400); wave.classList.remove('live')
+    // The message flies from the mic into its agent's card.
+    const card = cards[r.agent], log = card.querySelector('.b-log')
+    const sr = stage.getBoundingClientRect(), mr = mic.getBoundingClientRect(), cr = log.getBoundingClientRect()
+    const fly = document.createElement('div'); fly.className = 'b-fly'; fly.textContent = r.clean
+    fly.style.left = mr.left - sr.left + 'px'; fly.style.top = mr.top - sr.top + 'px'
+    stage.append(fly); mic.style.opacity = 0
+    await sleep(30)
+    fly.style.left = cr.right - sr.left - Math.min(fly.offsetWidth, cr.width) + 'px'; fly.style.top = cr.top - sr.top + 'px'; fly.style.transform = 'scale(.92)'
+    await sleep(720); fly.remove()
+    card.classList.add('hot')
+    while (log.children.length > 1) log.firstElementChild.remove()
+    const you = document.createElement('p'); you.className = 'you'; you.textContent = r.clean; log.append(you)
+    await sleep(900)
+    const rep = document.createElement('p'); rep.textContent = r.reply; log.append(rep)
+    await sleep(1600); card.classList.remove('hot')
+  }
+})()
+
+// C ─ the headline answers
+;(async () => {
+  const hero = document.querySelector('#C .hero'), cloud = hero.querySelector('.c-cloud'), who = hero.querySelector('.c-who')
+  const phrases = REQ.map((r) => r.clean).concat(['Pick up the pricing work from yesterday.', 'Why is the checkout test flaky?', 'Move it after the first project.'])
+  let agent = 'claude'
+  const spawn = () => {
+    const hr = hero.getBoundingClientRect(), wr = who.getBoundingClientRect()
+    const s = document.createElement('span'); s.textContent = phrases[Math.floor(Math.random() * phrases.length)]
+    const side = Math.random() < .5 ? -1 : 1
+    s.style.left = (side < 0 ? Math.random() * .18 : .82 + Math.random() * .1) * hr.width + 'px'
+    s.style.top = (.15 + Math.random() * .75) * hr.height + 'px'
+    s.style.opacity = 0; cloud.append(s)
+    requestAnimationFrame(() => { s.style.opacity = .9; requestAnimationFrame(() => {
+      setTimeout(() => { s.style.left = wr.left - hr.left + wr.width / 2 - s.offsetWidth / 2 + 'px'; s.style.top = wr.top - hr.top + wr.height / 2 - 8 + 'px'; s.style.opacity = 0; s.style.transform = 'scale(.3)' }, 900)
+    }) })
+    setTimeout(() => s.remove(), 4200)
+  }
+  setInterval(spawn, 650)
+  for (;;) {
+    await sleep(3600)
+    who.classList.add('out'); await sleep(360)
+    agent = agent === 'claude' ? 'codex' : 'claude'
+    who.querySelector('img').src = MARK[agent]; who.querySelector('span').textContent = NAME[agent] + '.'
+    who.classList.remove('out')
+  }
+})()
+
+// D ─ converging lines
+;(() => {
+  const rail = document.querySelector('.d-rail')
+  const make = (belt, list) => {
+    const html = list.map((r) => `<span>${r.raw.split(' ').map((w) => FILLER.has(w) ? w : `<b>${w}</b>`).join(' ')}</span>`).join('')
+    belt.innerHTML = html + html + html
+  }
+  const [lb, rb] = rail.querySelectorAll('.d-belt')
+  make(lb, REQ); make(rb, [...REQ].reverse())
+  let x = 0
+  ;(function run(t) {
+    x += .55
+    const lw = lb.scrollWidth / 3, rw = rb.scrollWidth / 3
+    // Left belt moves right, toward the hub; right belt moves left.
+    lb.style.transform = `translateX(${x % lw}px)`; lb.parentElement.style.justifyContent = 'flex-end'
+    rb.style.transform = `translateX(${-(x % rw)}px)`
+    requestAnimationFrame(run)
+  })()
+})()
+
+// E ─ the notch
+;(async () => {
+  const island = document.querySelector('.e-island'), said = island.querySelector('.e-said'), state = island.querySelector('.e-state')
+  const wave = island.querySelector('.e-wave'), hint = island.querySelector('.e-hint')
+  for (let k = 0; ; k = (k + 1) % REQ.length) {
+    const r = REQ[k]
+    await sleep(1400)
+    island.classList.add('open'); said.innerHTML = r.clean.split(' ').map((w) => `<span class="w">${w} </span>`).join('')
+    wave.classList.add('live'); hint.textContent = r.agent === 'claude' ? 'hold right ⌥ · Claude Code' : 'hold right ⌥ · Codex'
+    await sleep(500)
+    for (const s of said.children) { s.classList.add('in'); await sleep(140) }
+    await sleep(500); wave.classList.remove('live')
+    hint.innerHTML = `<span class="e-sent"><img class="mark" src="${MARK[r.agent]}" alt="" />Sent to ${NAME[r.agent]}</span>`
+    await sleep(1300)
+    island.classList.remove('open')
+    state.innerHTML = `<span class="e-dot"></span>Working ${k % 2 ? 2 : 1}`
+  }
+})()
+</script>
+</body>
+</html>
