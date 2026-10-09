@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Unmute — hero options, round 2</title>
+<style>
+@font-face{font-family:Lora;src:url('assets/fonts/Lora.woff2') format('woff2');font-weight:400 700}
+@font-face{font-family:Inter;src:url('assets/fonts/Inter.woff2') format('woff2');font-weight:100 900}
+:root{--ink:#0a0a0a;--dim:#4a4a4a;--faint:#8a8a8a;--line:#e6e6e6;--ui:Inter,system-ui,sans-serif}
+*{box-sizing:border-box}body{margin:0;font-family:var(--ui);color:var(--ink);background:#fff;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+p{margin:0}
+.picker{position:sticky;top:0;z-index:20;display:flex;gap:8px;justify-content:center;padding:12px;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);font-size:13px}
+.picker a{padding:7px 12px;border:1px solid var(--line);border-radius:999px;text-decoration:none;color:var(--ink)}
+.opt{position:relative;border-bottom:1px solid var(--line);overflow:hidden;min-height:100vh}
+.tag{position:absolute;top:18px;left:24px;z-index:5;font-size:12px;color:var(--dim);background:#f4f4f4;border-radius:999px;padding:6px 12px}
+.tag b{color:var(--ink)}
+.hero{position:relative;max-width:1180px;margin:auto;padding:110px 24px 60px;text-align:center;display:flex;flex-direction:column;align-items:center}
+.hero > *{position:relative;z-index:1}
+.eyebrow{font-size:14px;color:var(--dim);font-weight:500}
+h1{margin:22px 0 0;font-family:Lora,Georgia,serif;font-weight:400;letter-spacing:-.025em;font-size:clamp(44px,5.4vw,78px);line-height:1.04}
+.sub{max-width:620px;margin-top:22px;font-size:18px;line-height:1.55;color:var(--dim)}
+.ctas{display:flex;gap:10px;justify-content:center;margin-top:28px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 22px;border-radius:9px;background:var(--ink);color:#fff;font:500 14px var(--ui);text-decoration:none;border:1px solid var(--ink)}
+.btn.ghost{background:#fff;color:var(--ink);border-color:#d4d4d4}
+.note{max-width:720px;margin:0 auto;padding:10px 24px 48px;text-align:center;font-size:14px;line-height:1.6;color:var(--dim);position:relative;z-index:1}
+.mark{width:22px;height:22px;object-fit:contain}
+
+/* Text on a line: raw speech → the clean request. */
+svg.flow{position:absolute;left:0;top:0;width:100%;pointer-events:none;overflow:visible}
+.raw{font:400 19px var(--ui);fill:#a3a3a3}
+.clean{font:500 19px var(--ui);fill:var(--ink)}
+.agents rect{fill:#fff;stroke:#e2e2e2}
+.agents{filter:drop-shadow(0 10px 22px rgba(0,0,0,.12))}
+
+/* A */
+#A .flow{z-index:0}
+#A .hero{padding-bottom:210px}
+/* B: huge and faint, behind everything; ink only near the agents. */
+#B .raw{font:400 30px var(--ui);fill:#ececec}
+#B .clean{font:500 20px var(--ui);fill:var(--ink)}
+#B .hero{padding-bottom:200px}
+/* C */
+.c-line{margin-top:34px;display:flex;align-items:center;gap:12px;min-height:56px}
+.c-box{display:flex;align-items:center;gap:12px;padding:12px 18px 12px 14px;border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:0 10px 30px -18px rgba(0,0,0,.25);font-size:17px;max-width:640px;text-align:left;transition:opacity .4s}
+.c-mic{width:10px;height:10px;border-radius:50%;background:#e5484d;flex:none;animation:c-pulse 1.3s infinite}
+.c-box.clean .c-mic{background:var(--ink);animation:none}
+@keyframes c-pulse{0%{box-shadow:0 0 0 0 rgba(229,72,77,.5)}70%{box-shadow:0 0 0 8px rgba(229,72,77,0)}}
+.c-words .w{display:inline-block;color:var(--faint);opacity:0;transform:translateY(4px);transition:opacity .25s,transform .25s,color .4s,max-width .45s,margin .45s;max-width:300px;white-space:pre}
+.c-words .w.in{opacity:1;transform:none}
+.c-box.clean .w{color:var(--ink)}
+.c-box.clean .w.f{max-width:0;opacity:0;margin:0}
+.c-arrow{color:var(--faint);opacity:0;transition:opacity .3s}
+.c-agent{display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:12px;background:var(--ink);color:#fff;font-size:14px;font-weight:500;opacity:0;transform:translateX(-8px);transition:opacity .35s,transform .35s;white-space:nowrap}
+.c-agent .mark{width:18px;height:18px;background:#fff;border-radius:5px;padding:2px}
+.c-line.sent .c-arrow,.c-line.sent .c-agent{opacity:1;transform:none}
+</style>
+</head>
+<body>
+<nav class="picker"><a href="#A">A · One wide wave</a><a href="#B">B · Background texture</a><a href="#C">C · Live transcript</a></nav>
+
+<section class="opt" id="A">
+  <span class="tag"><b>A</b> · One wide wave</span>
+  <svg class="flow" aria-hidden="true"><defs></defs><g class="lines"></g>
+    <g class="agents"><rect x="-58" y="-28" width="116" height="56" rx="28"/><image href="assets/mark-claude.png" x="-40" y="-14" width="28" height="28"/><image href="assets/mark-codex.png" x="12" y="-14" width="28" height="28"/></g></svg>
+  <div class="hero">
+    <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
+    <h1>Talk to your agents.<br />From anywhere.</h1>
+    <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app. Bring the context along. Keep going while your agent works.</p>
+    <div class="ctas"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#">See how it works</a></div>
+  </div>
+  <p class="note">One gentle wave across the full width, under the buttons. It reads left to right like normal text: what you said, in grey, then the clean request, in ink, running into Claude Code and Codex. Balanced, legible, and the change happens in plain view.</p>
+</section>
+
+<section class="opt" id="B">
+  <span class="tag"><b>B</b> · Background texture</span>
+  <svg class="flow" aria-hidden="true"><defs></defs><g class="lines"></g>
+    <g class="agents"><rect x="-58" y="-28" width="116" height="56" rx="28"/><image href="assets/mark-claude.png" x="-40" y="-14" width="28" height="28"/><image href="assets/mark-codex.png" x="12" y="-14" width="28" height="28"/></g></svg>
+  <div class="hero">
+    <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
+    <h1>Talk to your agents.<br />From anywhere.</h1>
+    <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app. Bring the context along. Keep going while your agent works.</p>
+    <div class="ctas"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#">See how it works</a></div>
+  </div>
+  <p class="note">Big, very faint speech sweeps across the whole hero, behind the headline, like a texture. It only turns into readable ink as it comes back under the buttons and reaches Claude Code and Codex. The most atmospheric, closest in feel to Wispr Flow.</p>
+</section>
+
+<section class="opt" id="C">
+  <span class="tag"><b>C</b> · Live transcript</span>
+  <div class="hero">
+    <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
+    <h1>Talk to your agents.<br />From anywhere.</h1>
+    <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app. Bring the context along. Keep going while your agent works.</p>
+    <div class="c-line"><div class="c-box"><span class="c-mic"></span><span class="c-words"></span></div><span class="c-arrow">→</span><span class="c-agent"><img class="mark" alt="" /><span></span></span></div>
+    <div class="ctas"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#">See how it works</a></div>
+  </div>
+  <p class="note">No background motion. One line under the headline: a sentence appears as it's spoken, the ums fall away, it gets a capital and a full stop, and it's sent to Claude Code or Codex. The calmest and the most literal.</p>
+</section>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg'
+const SAID = [
+  ['um so can you build a first version of the uh new onboarding flow', 'Build a first version of the new onboarding flow.'],
+  ['and uh add tests for the signup form', 'Add tests for the signup form.'],
+  ['fix the save button it like does nothing on settings', 'Fix the Save button on Settings. It does nothing.'],
+  ['so like refactor the auth middleware', 'Refactor the auth middleware.'],
+  ['can you pick up the pricing work from yesterday', 'Pick up the pricing work from yesterday.'],
+  ['why is the checkout test flaky like again', 'Why is the checkout test flaky again?'],
+]
+const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.append(e); return e }
+
+// A line of words on a path: raw speech, then the clean request from
+// `switchAt` (length along the path) onward, faded along the line over FADE.
+function flowLine(svg, { d, switchAt, fade = 70, gap = 48 }) {
+  const defs = svg.querySelector('defs'), layer = svg.querySelector('.lines')
+  const id = 'p' + Math.random().toString(36).slice(2)
+  const path = el('path', { id, d }, defs), total = path.getTotalLength()
+  const mask = (suffix) => el('mask', { id: id + suffix, maskUnits: 'userSpaceOnUse', x: -200, y: -200, width: 6000, height: 3000 }, defs)
+  const dash = (m, a, b, o) => el('use', { href: '#' + id, fill: 'none', stroke: '#fff', 'stroke-width': 60, 'stroke-opacity': o, 'stroke-dasharray': `0 ${a} ${b - a} ${total * 3}` }, m)
+  const mr = mask('r'), mc = mask('c'), N = 12, st = fade / N
+  dash(mr, 0, switchAt - fade, 1)
+  for (let k = 0; k < N; k++) dash(mr, switchAt - fade + k * st, switchAt - fade + (k + 1) * st + .5, 1 - (k + .5) / N)
+  for (let k = 0; k < N; k++) dash(mc, switchAt + k * st, switchAt + (k + 1) * st + .5, (k + .5) / N)
+  dash(mc, switchAt + fade, total, 1)
+  const g = el('g', {}, layer)
+  const tr = el('textPath', { href: '#' + id }, el('text', { class: 'raw', dy: 6, mask: `url(#${id}r)` }, g))
+  const tc = el('textPath', { href: '#' + id }, el('text', { class: 'clean', dy: 6, mask: `url(#${id}c)` }, g))
+  const measure = (tp, s) => { tp.textContent = s; return tp.getComputedTextLength() }
+  const seg = SAID.map(([r, c]) => ({ r, c, rw: measure(tr, r), cw: measure(tc, c) }))
+  for (const s of seg) s.w = Math.max(s.rw, s.cw) + gap
+  const unit = seg.reduce((a, s) => a + s.w, 0), reps = Math.ceil(total / unit) + 2
+  for (const [tp, key, wk] of [[tr, 'r', 'rw'], [tc, 'c', 'cw']]) {
+    tp.textContent = ''; let start = 0, prev = 0
+    for (let k = 0; k < reps; k++) for (const s of seg) { const t = el('tspan', { dx: start - prev }, tp); t.textContent = s[key]; prev = start + s[wk]; start += s.w }
+  }
+  return (pos) => { const o = (pos % unit) - unit; tr.setAttribute('startOffset', o); tc.setAttribute('startOffset', o) }
+}
+
+function scene(section, build) {
+  const svg = section.querySelector('svg.flow'), hero = section.querySelector('.hero')
+  let place = null, pos = 200, last = performance.now()
+  const layout = () => {
+    svg.querySelector('defs').textContent = ''; svg.querySelector('.lines').textContent = ''
+    const W = section.clientWidth, H = section.clientHeight
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.style.height = H + 'px'
+    const rel = (e) => { const r = e.getBoundingClientRect(), s = section.getBoundingClientRect(); return { top: r.top - s.top, bottom: r.bottom - s.top, left: r.left - s.left, right: r.right - s.left } }
+    const { d, switchAt, badge, fade } = build(W, H, rel, hero)
+    svg.querySelector('.agents').setAttribute('transform', `translate(${badge[0]} ${badge[1]})`)
+    place = flowLine(svg, { d, switchAt, fade }); place(pos)
+  }
+  document.fonts.ready.then(layout); addEventListener('resize', layout)
+  ;(function tick(now) { pos += 42 * Math.min(.05, (now - last) / 1000); last = now; place && place(pos); requestAnimationFrame(tick) })(last)
+}
+
+// A: a wave across the full width under the buttons, ending in the agents.
+scene(document.getElementById('A'), (W, H, rel, hero) => {
+  const y = rel(hero.querySelector('.ctas')).bottom + 110, bx = Math.round(W * 0.8)
+  const d = `M -60 ${y - 10} C ${W * .14} ${y - 70}, ${W * .26} ${y + 60}, ${W * .42} ${y + 8} S ${W * .64} ${y - 40}, ${bx - 64} ${y}`
+  const probe = el('path', { d }); const s = document.createElementNS(NS, 'svg'); s.append(probe); document.body.append(s)
+  const total = probe.getTotalLength(); s.remove()
+  return { d, switchAt: total * 0.52, badge: [bx, y], fade: 90 }
+})
+
+// B: one big sweep behind the hero, always moving left to right (so the
+// words stay upright), down past the buttons into the agents.
+scene(document.getElementById('B'), (W, H, rel, hero) => {
+  const top = rel(hero.querySelector('h1')).top, by = rel(hero.querySelector('.ctas')).bottom + 90, bx = Math.round(W * 0.78)
+  const d = `M -80 ${top + 30} C ${W * .28} ${top - 70}, ${W * .5} ${top + 60}, ${W * .58} ${top + 200} `
+    + `C ${W * .63} ${top + 300}, ${W * .6} ${by}, ${bx - 260} ${by} L ${bx - 64} ${by}`
+  const probe = el('path', { d }); const s = document.createElementNS(NS, 'svg'); s.append(probe); document.body.append(s)
+  const total = probe.getTotalLength(); s.remove()
+  return { d, switchAt: total - 260, badge: [bx, by], fade: 90 }
+})
+
+// C: the transcript line.
+;(async () => {
+  const MARK = { claude: 'assets/mark-claude.png', codex: 'assets/mark-codex.png' }, NAME = { claude: 'Claude Code', codex: 'Codex' }
+  const REQ = [
+    { raw: 'um so can you fix the save button on settings it does nothing', agent: 'claude' },
+    { raw: 'uh add tests for the signup form', agent: 'codex' },
+    { raw: 'ok can you build a first version of the new onboarding flow', agent: 'claude' },
+    { raw: 'so like refactor the auth middleware', agent: 'codex' },
+  ]
+  const FILLER = new Set(['um', 'uh', 'so', 'ok', 'like', 'can', 'you'])
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const line = document.querySelector('.c-line'), box = line.querySelector('.c-box'), words = line.querySelector('.c-words'), agent = line.querySelector('.c-agent')
+  for (let k = 0; ; k = (k + 1) % REQ.length) {
+    const r = REQ[k], raw = r.raw.split(' '), first = raw.findIndex((w) => !FILLER.has(w))
+    box.classList.remove('clean'); line.classList.remove('sent'); box.style.opacity = 1
+    words.innerHTML = raw.map((w, i) => `<span class="w${i < first ? ' f' : ''}">${w} </span>`).join('')
+    const spans = [...words.children]
+    for (const s of spans) { s.classList.add('in'); await sleep(170) }
+    await sleep(500)
+    const real = spans[first]; real.textContent = real.textContent[0].toUpperCase() + real.textContent.slice(1)
+    const last = spans[spans.length - 1]; last.textContent = last.textContent.trim() + '.'
+    box.classList.add('clean'); await sleep(900)
+    agent.querySelector('img').src = MARK[r.agent]; agent.querySelector('span').textContent = 'Sent to ' + NAME[r.agent]
+    line.classList.add('sent'); await sleep(2200)
+    box.style.opacity = 0; line.classList.remove('sent'); await sleep(500)
+  }
+})()
+</script>
+</body>
+</html>
