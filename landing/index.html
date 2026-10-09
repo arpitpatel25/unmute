@@ -21,7 +21,7 @@
 <link rel="stylesheet" href="heritage.css?v=20261009-fast1" />
 <link rel="stylesheet" href="film.css?v=20261009-fast1" />
 <link rel="stylesheet" href="mac.css?v=20261009-fast1" />
-<link rel="stylesheet" href="flow.css?v=20261009-strip2" />
+<link rel="stylesheet" href="notch-hero.css?v=20261009-notch3" />
 <link rel="preload" href="assets/fonts/Lora.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
 <!-- The demos' code and data, fetched in parallel instead of one after another. -->
@@ -35,6 +35,16 @@
      helper (unmute-cloud), placed at its real window position. See landing/README.md. -->
 </head>
 <body>
+<!-- The live notch: Unmute's notch as the app draws it (ui/hero-notch.js). -->
+<div class="live-notch" aria-hidden="true">
+  <svg viewBox="-560 0 1120 260" width="1120" height="260"><path fill="#000" stroke="rgba(255,255,255,.06)" stroke-width=".5"/></svg>
+  <div class="ln-bar" hidden></div>
+  <div class="ln-panel" hidden>
+    <div class="ln-head"></div>
+    <div class="ln-body"><p class="ln-ask"></p><p class="ln-said"></p><p class="ln-work">Working…</p></div>
+    <div class="ln-composer"><span class="ln-chip"><svg viewBox="0 0 12 12" aria-hidden="true"><rect x="4.2" y="1.2" width="3.6" height="6" rx="1.8" fill="currentColor"/><path d="M2.6 5.6a3.4 3.4 0 0 0 6.8 0M6 9v1.8" stroke="currentColor" stroke-width="1.1" fill="none" stroke-linecap="round"/></svg><span class="ln-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></span><span class="ln-ph">Reply…</span><span class="ln-model">Opus</span><span class="ln-send"></span></div>
+  </div>
+</div>
 
 <nav class="top">
   <a href="#top" aria-label="Unmute home"><img src="../unmute-wordmark-black.png" alt="unmute" /></a>
@@ -48,40 +58,6 @@
 
 <!-- HERO — concrete first: what it is, then the demo. Text never animates in. -->
 <section class="hero">
-  <!-- What you say, transcribed, handed to your agent (ui/hero-flow.js). -->
-  <svg class="hero-flow" viewBox="0 0 1440 600" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
-    <defs>
-      <!-- The strip in two parts: raw speech, then the ribbon. JS joins them. -->
-      <path id="hf-raw" d="M -40 96 C 150 40, 352 74, 348 206 C 344 330, 150 336, 136 238 C 124 150, 240 124, 290 196 C 330 256, 286 330, 262 380 C 244 420, 238 470, 290 512"/>
-      <path id="hf-ribbon" d="M 290 512 C 420 572, 760 566, 1000 540 C 1120 527, 1190 500, 1236 476"/>
-      <path id="hf-path"/>
-      <linearGradient id="hf-edge" x1="0" x2="1">
-        <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".06" stop-color="#fff"/><stop offset="1" stop-color="#fff"/>
-      </linearGradient>
-      <mask id="hf-mask-raw" maskUnits="userSpaceOnUse" x="-100" y="-100" width="1640" height="800">
-        <path d="" fill="none" stroke="#fff" stroke-width="60"/>
-      </mask>
-      <mask id="hf-mask-clean" maskUnits="userSpaceOnUse" x="-100" y="-100" width="1640" height="800">
-        <path d="" fill="none" stroke="#fff" stroke-width="60"/>
-      </mask>
-      <mask id="hf-mask-edge" maskUnits="userSpaceOnUse" x="0" y="0" width="1440" height="600"><rect width="1440" height="600" fill="url(#hf-edge)"/></mask>
-    </defs>
-    <g mask="url(#hf-mask-edge)">
-      <g mask="url(#hf-mask-raw)"><text class="hf-raw"><textPath href="#hf-path"></textPath></text></g>
-      <use class="hf-ribbon" href="#hf-path"/>
-      <g mask="url(#hf-mask-clean)"><text class="hf-clean" dy="5"><textPath href="#hf-path"></textPath></text></g>
-    </g>
-    <!-- The Unmute pill: where speech becomes text. -->
-    <g class="hf-pill"><rect x="-44" y="-21" width="88" height="42" rx="21"/><rect class="bar" x="-31.0" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="-25.4" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="-19.8" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="-14.2" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="-8.6" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="-3.0" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="2.6" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="8.2" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="13.8" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="19.4" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="25.0" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="30.6" y="-3" width="2.6" height="6" rx="1.3"/></g>
-    <!-- Where it goes. -->
-    <g class="hf-agents" transform="translate(1236 476)">
-      <rect x="0" y="-27" width="190" height="54" rx="27"/>
-      <image href="assets/mark-claude.png" x="18" y="-12" width="24" height="24"/>
-      <image href="assets/mark-codex.png" x="48" y="-12" width="24" height="24"/>
-      <text x="84" y="-2" class="hf-agents-name">Claude Code</text>
-      <text x="84" y="13" class="hf-agents-sub">or Codex</text>
-    </g>
-  </svg>
   <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
   <h1>Talk to your agents.<br />From anywhere.</h1>
   <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app.<br class="desktop-break" /> Bring the context along. Keep going while your agent works.</p>
@@ -194,7 +170,7 @@
   <span class="flinks"><a href="../dictation.html">Dictation</a><a href="../pricing.html">Pricing</a><a href="../manifesto.html">Manifesto</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
 </footer>
 
-<script src="ui/hero-flow.js?v=20261009-strip1" defer></script>
+<script src="ui/hero-notch.js?v=20261009-notch3" defer></script>
 <script src="ui/vendor/gsap.min.js"></script>
 <script type="module" src="app.js?v=20261009-fast1"></script>
 </body>
