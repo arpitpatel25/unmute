@@ -18,11 +18,18 @@
 <meta name="twitter:image" content="https://justunmute.me/og.png" />
 <link rel="stylesheet" href="ui/wallpaper.css?v=20261003-sage" />
 <link rel="stylesheet" href="v3.css?v=20261003-v6" />
-<link rel="stylesheet" href="heritage.css?v=4" />
-<link rel="stylesheet" href="film.css?v=20261004-ctl2" />
-<link rel="stylesheet" href="mac.css?v=20261004-mac3" />
-<link rel="preload" href="assets/fonts/Lora.ttf" as="font" type="font/ttf" crossorigin />
-<link rel="preload" href="assets/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin />
+<link rel="stylesheet" href="heritage.css?v=20261009-fast1" />
+<link rel="stylesheet" href="film.css?v=20261009-fast1" />
+<link rel="stylesheet" href="mac.css?v=20261009-fast1" />
+<link rel="preload" href="assets/fonts/Lora.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
+<!-- The demos' code and data, fetched in parallel instead of one after another. -->
+<link rel="modulepreload" href="app.js?v=20261009-fast1" />
+<link rel="modulepreload" href="ui/film.js?v=20261009-fast1" />
+<link rel="modulepreload" href="ui/stage.js?v=20261009-fast1" />
+<link rel="preload" href="assets/ui/manifest.json" as="fetch" crossorigin />
+<link rel="preload" href="ui/vendor/gsap.min.js" as="script" />
+<link rel="preload" href="assets/wallpaper-flow.svg?v=2" as="image" />
 <!-- Every notch and pill surface on this page is a capture of the real unmute-notch
      helper (unmute-cloud), placed at its real window position. See landing/README.md. -->
 </head>
@@ -54,7 +61,7 @@
       <li><button type="button"><b>2</b>It runs in Claude Code</button></li>
       <li><button type="button"><b>3</b>It comes back when it needs you</button></li>
     </ol>
-    <div data-stage="hero"></div>
+    <div class="mac"><div data-stage="hero"></div></div>
     <p class="film-sub" data-said="hero" aria-live="off"></p>
   </div>
 </section>
@@ -74,7 +81,7 @@
   </div>
   <div class="demo">
     <p class="demo-kicker">Or just say it, right here.</p>
-    <div data-stage="why"></div>
+    <div class="mac"><div data-stage="why"></div></div>
     <p class="film-sub" data-said="why"></p>
   </div>
 </section>
@@ -86,7 +93,7 @@
     <p>Press a key and speak to start a new agent session or send an instruction to an existing one. Ask a question, delegate a task, or give a follow-up — all from the app you're already using.</p>
 
   </div>
-  <div class="demo"><div data-stage="start"></div><p class="film-sub" data-said="start"></p></div>
+  <div class="demo"><div class="mac"><div data-stage="start"></div></div><p class="film-sub" data-said="start"></p></div>
 </section>
 
 <section class="sec flip" id="capture">
@@ -95,7 +102,7 @@
     <h2>Your thought comes with context. Bring it along.</h2>
     <p>The page you're reading. The error you're seeing. The design you want changed. Capture a link, text, or screenshot as you speak, and send it straight into your agent session.</p>
   </div>
-  <div class="demo"><div data-stage="capture"></div><p class="film-sub" data-said="capture"></p></div>
+  <div class="demo"><div class="mac"><div data-stage="capture"></div></div><p class="film-sub" data-said="capture"></p></div>
 </section>
 
 <section class="sec" id="agent">
@@ -105,7 +112,7 @@
     <p>Tell Unmute Agent what you want to return to. It finds the relevant agent session and brings back its context, including related conversations and meeting notes. Pick up the work without remembering where you left it.</p>
     <p class="aside">You remember the work. Unmute helps find where you left it.</p>
   </div>
-  <div class="demo"><div data-stage="agent"></div><p class="film-sub" data-said="agent"></p></div>
+  <div class="demo"><div class="mac"><div data-stage="agent"></div></div><p class="film-sub" data-said="agent"></p></div>
 </section>
 
 <section class="sec attention" id="attention">
@@ -114,7 +121,7 @@
     <h2>The task comes to you.<br />You don't go to the task.</h2>
     <p>When an agent session needs your attention, the notch opens wherever you are on your Mac. Answer its question, review what it needs, or give the next instruction right there. Then carry on while the agent continues.</p>
   </div>
-  <div class="demo"><div data-stage="attention"></div><p class="film-sub" data-said="attention"></p></div>
+  <div class="demo"><div class="mac"><div data-stage="attention"></div></div><p class="film-sub" data-said="attention"></p></div>
 </section>
 
 <section class="sec" id="meetings">
@@ -123,7 +130,7 @@
     <h2>Leave the meeting with more than notes.</h2>
     <p>Capture a meeting and generate notes with your connected agent. Review what was decided, then start or continue an agent session with the meeting context already attached.</p>
   </div>
-  <div class="demo"><div data-stage="meet"></div><p class="film-sub" data-said="meet"></p></div>
+  <div class="demo"><div class="mac"><div data-stage="meet"></div></div><p class="film-sub" data-said="meet"></p></div>
 </section>
 
 <section class="sec flip" id="dictation">
@@ -133,7 +140,7 @@
     <p>Messages, documents, notes, and prompts. Press a key, speak, and keep going.</p>
     <p class="aside">Free on-device dictation, no account needed.</p>
   </div>
-  <div class="demo"><div data-stage="dictate"></div><p class="film-sub" data-said="dictate"></p></div>
+  <div class="demo"><div class="mac"><div data-stage="dictate"></div></div><p class="film-sub" data-said="dictate"></p></div>
 </section>
 
 <section class="close" id="agents">
@@ -152,7 +159,7 @@
   <span class="flinks"><a href="../dictation.html">Dictation</a><a href="../pricing.html">Pricing</a><a href="../manifesto.html">Manifesto</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
 </footer>
 
-<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
-<script type="module" src="app.js?v=20261004-ctl3"></script>
+<script src="ui/vendor/gsap.min.js"></script>
+<script type="module" src="app.js?v=20261009-fast1"></script>
 </body>
 </html>

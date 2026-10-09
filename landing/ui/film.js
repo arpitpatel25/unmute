@@ -11,7 +11,7 @@
 //      to read, because a whole 14" screen in 1000px makes the pill ~10px tall
 //   3. the subtitle under the screen carries the key you pressed and your words,
 //      then what happened (✓). It never covers the product.
-import { Stage, ready, preload } from './stage.js?v=20261004-ctl1'
+import { Stage, ready, preload } from './stage.js?v=20261009-fast1'
 export { ready }
 
 const SCREEN_W = 1120, SCREEN_H = 700
@@ -29,10 +29,13 @@ export const SHOT = {
 
 export class Film {
   constructor(host, { apps = '', html = '', sub, shots }) {
-    // The device: the stage is the screen; a bezel wraps it.
-    const mac = document.createElement('div')
-    mac.className = 'mac'
-    host.before(mac); mac.append(host)
+    // The device: the stage is the screen; a bezel wraps it. The page ships
+    // the bezel in its HTML so the frame is there before any script runs.
+    if (!host.parentElement.classList.contains('mac')) {
+      const mac = document.createElement('div')
+      mac.className = 'mac'
+      host.before(mac); mac.append(host)
+    }
     this.stage = new Stage(host, { apps, camera: false, fullScreen: true })
     if (html) this.stage.extra().innerHTML = html
     this.cam = host.querySelector('.cam')
@@ -54,7 +57,15 @@ export class Film {
       this.shots = this.shots.map((s, i) => i === 0 ? s : { ...s, t: s.t - cut, ...(s.end != null && { end: s.end - cut }) })
     }
     shots = this.shots
-    preload(shots.flatMap((s) => [s.notch && `${s.notch}.notch`, s.pill && `${s.pill}.pill`]).filter(Boolean))
+    // Fetch this demo's captures: the first one on the page at once, the rest
+    // as they come within a screen or so of view, so they don't compete with
+    // what's visible.
+    const keys = shots.flatMap((s) => [s.notch && `${s.notch}.notch`, s.pill && `${s.pill}.pill`]).filter(Boolean)
+    if (!Film.started) { Film.started = true; preload(keys) }
+    else {
+      const near = new IntersectionObserver(([e]) => { if (e.isIntersecting) { preload(keys); near.disconnect() } }, { rootMargin: '1200px 0px' })
+      near.observe(host)
+    }
     this.listeners = []
     this.state = {}
     this.tl = gsap.timeline({ paused: true, repeat: -1 })

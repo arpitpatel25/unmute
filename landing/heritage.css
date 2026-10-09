@@ -1,40 +1,33 @@
-@font-face{font-family:Lora;src:url('assets/fonts/Lora.ttf') format('truetype');font-weight:400 700;font-style:normal;font-display:swap}
-@font-face{font-family:Inter;src:url('assets/fonts/Inter.ttf') format('truetype');font-weight:100 900;font-style:normal;font-display:swap}
-:root{--bg:#fff;--ink:#182c27;--dim:#455b53;--faint:#61746b;--line:#e1e8e2;--accent:#286553;--ui:Inter,system-ui,sans-serif}
+/* Fonts are subset to Latin and served as WOFF2 (Inter ~100 KB, Lora ~35 KB). */
+@font-face{font-family:Lora;src:url('assets/fonts/Lora.woff2') format('woff2');font-weight:400 700;font-style:normal;font-display:swap}
+@font-face{font-family:Inter;src:url('assets/fonts/Inter.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:swap}
+/* Black and white: neutral greys only, no tinted greens. */
+:root{--bg:#fff;--ink:#0a0a0a;--dim:#4a4a4a;--faint:#6b6b6b;--line:#e6e6e6;--accent:#0a0a0a;--ui:Inter,system-ui,sans-serif}
 html,body{background:#fff}
 h1,h2{font-family:Lora,Georgia,serif;font-weight:400;letter-spacing:-.025em}
-nav.top{background:#fff;border-bottom:1px solid #e1e8e2;backdrop-filter:none;padding-top:18px;padding-bottom:18px}
+nav.top{background:#fff;border-bottom:1px solid var(--line);backdrop-filter:none;padding-top:18px;padding-bottom:18px}
 nav.top{transition:background-color .25s ease,backdrop-filter .25s ease,border-color .25s ease}
-nav.top.scrolled{background:rgba(255,255,255,.38);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom-color:rgba(219,230,221,.5)}
+nav.top.scrolled{background:rgba(255,255,255,.72);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom-color:rgba(0,0,0,.08)}
 nav.top img{height:42px}nav.top .links{font-size:14px;gap:30px}
-.btn{font-weight:500;font-size:14px;padding:14px 23px;border-radius:9px;background:#213d32;border-color:#213d32}
-.btn.ghost{background:rgba(255,255,255,.8);border-color:#b9c9bd}.btn.sm{font-size:13px;padding:11px 17px}
-.hero{position:relative;isolation:isolate;padding:60px 24px 72px;max-width:1280px}
-.hero::before{content:"";position:absolute;z-index:-2;top:0;left:50%;transform:translateX(-50%);width:100vw;height:100%;background:url('assets/background-concepts/04-pixel-interface.png') center top / max(1440px,100vw) auto no-repeat;pointer-events:none}
-.hero::after{content:"";position:absolute;z-index:-1;inset:0;pointer-events:none;background:radial-gradient(ellipse 47% 29% at 50% 21%,rgba(249,250,239,.96) 0%,rgba(249,250,239,.82) 60%,rgba(249,250,239,0) 100%)}
-.hero .eyebrow{font-size:14px;color:#3e594d;font-weight:500}
+.btn{font-weight:500;font-size:14px;padding:14px 23px;border-radius:9px;background:#0a0a0a;border-color:#0a0a0a}
+.btn:hover{background:#2a2a2a}
+.btn.ghost{background:#fff;color:#0a0a0a;border-color:#d4d4d4}.btn.ghost:hover{background:#f4f4f4}.btn.sm{font-size:13px;padding:11px 17px}
+.hero{position:relative;padding:60px 24px 72px;max-width:1280px}
+.hero .eyebrow{font-size:14px;color:var(--dim);font-weight:500}
 .hero h1{font-size:clamp(48px,5.55vw,80px);font-weight:400;line-height:1.04;letter-spacing:-.025em;margin-top:24px}
-.hero .sub{font-size:18px;line-height:1.55;max-width:620px;margin-top:26px;color:#354d41;text-wrap:pretty}
-.hero .ctas{margin-top:28px}.works{font-size:12px;margin-top:20px;color:#435c4f}.works span{color:#354d41}
+.hero .sub{font-size:18px;line-height:1.55;max-width:620px;margin-top:26px;color:var(--dim);text-wrap:pretty}
+.hero .ctas{margin-top:28px}.works{font-size:12px;margin-top:20px;color:var(--faint)}.works span{color:var(--dim)}
 .hero-demo{margin-top:46px;width:min(1080px,100%)}
-.hero-demo .stage{border:5px solid #284839;border-radius:22px;box-shadow:0 22px 60px -30px #193d3b55}
 .sec{gap:80px;padding-top:96px;padding-bottom:96px}
 .sec .copy h2{font-size:clamp(34px,3.6vw,52px);line-height:1.05;letter-spacing:-.02em;max-width:520px}
 .sec .copy p{font-size:17px;line-height:1.55;max-width:470px;text-wrap:pretty}
-.sec .copy .eyebrow{font-size:12px;font-weight:500;color:#526e5d}.sec .copy p.aside{font-size:13px}
+.sec .copy .eyebrow{font-size:12px;font-weight:500;color:var(--faint)}.sec .copy p.aside{font-size:13px}
 .why{border-top:0}.ceremony li{font-size:13px}.ceremony li span{font-size:11px}
-.stage{box-shadow:0 24px 56px -26px #1b3b3240,0 0 0 1px #263b2924}
-.stage .menubar{background:rgba(37,69,51,.24);color:#fff}
-.attention{background:#eef4ed;padding:64px;margin-top:56px;margin-bottom:56px}.attention .copy h2{font-size:clamp(36px,3.6vw,52px);max-width:820px}.attention .copy p{max-width:650px}
-.close{position:relative;isolation:isolate;max-width:none;border:0;margin:40px 0 0;padding:135px 24px 130px;overflow:hidden}
-.close::before{content:"";position:absolute;inset:0;z-index:-2;background:url('assets/background-concepts/05-pixel-closing.png') center bottom / cover no-repeat}
-.close::after{content:"";position:absolute;inset:0;z-index:-1;background:radial-gradient(ellipse at center,rgba(255,255,250,.88),rgba(255,255,250,.58) 44%,transparent 78%)}
-.close h2{font-size:clamp(40px,4.1vw,60px);line-height:1.06;max-width:850px}.close p{font-size:17px;line-height:1.6;color:#3c5448;max-width:600px}.close .accounts{font-size:12px;margin-top:14px}.close .tag{font-size:12px;color:#305746}.close .marks{margin-top:27px}.marks span{font-size:14px;font-weight:500}
+.attention{background:#f5f5f4;padding:64px;margin-top:56px;margin-bottom:56px}.attention .copy h2{font-size:clamp(36px,3.6vw,52px);max-width:820px}.attention .copy p{max-width:650px}
+.close{position:relative;max-width:none;border:0;border-top:1px solid var(--line);margin:40px 0 0;padding:120px 24px 120px}
+.close h2{font-size:clamp(40px,4.1vw,60px);line-height:1.06;max-width:850px}.close p{font-size:17px;line-height:1.6;color:var(--dim);max-width:600px}.close .accounts{font-size:12px;margin-top:14px}.close .tag{font-size:12px;color:var(--faint)}.close .marks{margin-top:27px}.marks span{font-size:14px;font-weight:500}
 footer{background:#fff;border-top:0;padding-top:30px;padding-bottom:30px}
-@media(max-width:900px){.sec,.sec.flip{gap:32px;padding-top:64px;padding-bottom:64px}.hero{padding-top:45px}.hero::after{inset:0;background:radial-gradient(ellipse 60% 28% at 50% 20%,#fafbeded 0%,#fafbedd9 60%,transparent 100%)}.attention{padding:44px 24px}.close{padding:110px 24px}.hero h1{font-size:64px}}
-@media(max-width:600px){nav.top{padding:14px 20px}nav.top img{height:34px}.btn.sm{font-size:11px;padding:10px 12px}.hero{padding:36px 20px 44px}.hero::before{background-size:auto 700px;background-position:38% top}.hero::after{background:linear-gradient(to bottom,#f7faeee6,#f7faeecc 390px,transparent 580px)}.hero h1{font-size:44px;line-height:1.06;letter-spacing:-.03em}.hero .eyebrow{font-size:11px}.hero .sub{font-size:15px;line-height:1.6}.btn{font-size:12px;padding:13px 17px}.hero-demo{margin-top:32px}.hero-demo .stage{border-width:3px;border-radius:13px}.works{font-size:10px;gap:10px}.sec .copy h2{font-size:36px;line-height:1.1}.sec .copy p{font-size:16px}.attention .copy h2{font-size:35px}.close{padding:85px 24px 100px}.close h2{font-size:40px}.close p{font-size:15px}.close::before{background-position:65% bottom}.close::after{background:rgba(255,255,247,.6)}}
+@media(max-width:900px){.sec,.sec.flip{gap:32px;padding-top:64px;padding-bottom:64px}.hero{padding-top:45px}.attention{padding:44px 24px}.close{padding:96px 24px}.hero h1{font-size:64px}}
+@media(max-width:600px){nav.top{padding:14px 20px}nav.top img{height:34px}.btn.sm{font-size:11px;padding:10px 12px}.hero{padding:36px 20px 44px}.hero h1{font-size:44px;line-height:1.06;letter-spacing:-.03em}.hero .eyebrow{font-size:11px}.hero .sub{font-size:15px;line-height:1.6}.btn{font-size:12px;padding:13px 17px}.hero-demo{margin-top:32px}.works{font-size:10px;gap:10px}.sec .copy h2{font-size:36px;line-height:1.1}.sec .copy p{font-size:16px}.attention .copy h2{font-size:35px}.close{padding:80px 24px 90px}.close h2{font-size:40px}.close p{font-size:15px}}
 
 @media(prefers-reduced-motion:reduce){nav.top{transition:none}}
-
-/* Blend the closing artwork into the white section above it. */
-.close::before,.close::after{-webkit-mask-image:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.35) 70px,#000 180px);mask-image:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.35) 70px,#000 180px)}

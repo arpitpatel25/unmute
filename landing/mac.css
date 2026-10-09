@@ -6,14 +6,14 @@
 /* The device. Its lower edge dissolves into the page instead of ending in a
    hard line, which keeps the eye on the screen. */
 .mac{position:relative;padding:1.15% 1.15% 0;background:#0b0b0c;border-radius:20px 20px 0 0;
-  box-shadow:0 30px 80px -24px rgba(12,24,18,.55),inset 0 .5px 0 rgba(255,255,255,.12),inset 0 0 0 1px rgba(255,255,255,.04);
+  box-shadow:0 30px 80px -24px rgba(0,0,0,.45),inset 0 .5px 0 rgba(255,255,255,.12),inset 0 0 0 1px rgba(255,255,255,.04);
   -webkit-mask-image:linear-gradient(#000 84%,transparent 99%);mask-image:linear-gradient(#000 84%,transparent 99%)}
 .sec .mac{border-radius:14px 14px 0 0}
 .mac .stage,.hero-demo .mac .stage{aspect-ratio:1120/700;border:0;border-radius:8px 8px 0 0;box-shadow:none;background:#000}
 .stage .screen,.stage .cam,.stage .voice,.stage canvas.live{width:1120px;height:700px}
 
-/* Wallpaper: drawn for Unmute (assets/wallpaper-flow.svg). */
-.stage .cam.wallpaper{background:#173f3b url('assets/wallpaper-flow.svg') center / cover no-repeat}
+/* Wallpaper: drawn for Unmute (assets/wallpaper-flow.svg?v=2). */
+.stage .cam.wallpaper{background:#11131b url('assets/wallpaper-flow.svg?v=2') center / cover no-repeat}
 
 /* Menu bar: transparent over the wallpaper, as in current macOS. Its height
    is the notch's, so the notch sits flush in it. */
@@ -125,3 +125,7 @@
 /* Small devices fade over a shorter edge, so a pushed-in shot keeps its content. */
 .sec .mac,.attention .mac{-webkit-mask-image:linear-gradient(#000 92%,transparent 100%);mask-image:linear-gradient(#000 92%,transparent 100%)}
 @media(max-width:700px){.hero-demo .mac{-webkit-mask-image:linear-gradient(#000 92%,transparent 100%);mask-image:linear-gradient(#000 92%,transparent 100%)}}
+/* Before the demo's script runs, its screen is already the right size and
+   shows the wallpaper, so the page never looks half built. */
+.mac > [data-stage]{display:block;aspect-ratio:1120/700;border-radius:8px 8px 0 0;background:#11131b url('assets/wallpaper-flow.svg?v=2') center / cover no-repeat}
+.sec .mac > [data-stage]{border-radius:6px 6px 0 0}
