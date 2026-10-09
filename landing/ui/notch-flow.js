@@ -2,7 +2,7 @@
 //
 // Raw speech (grey, lowercase, with the ums) enters on the left, circles,
 // spirals in and runs toward the middle. Partway along it becomes the clean
-// request, white on a black ribbon, which rises into Claude Code and Codex
+// request, in ink, which rises into Claude Code and Codex
 // above the headline. One path carries both texts at the same offset; each
 // phrase starts at the same distance along it in both, so what reaches the
 // agents is the clean version of what was said. Stroke masks show raw text
@@ -26,7 +26,7 @@
 
   const path = svg.querySelector('#nf-path')
   const tpRaw = svg.querySelector('.nf-raw textPath'), tpClean = svg.querySelector('.nf-clean textPath')
-  const ribbon = svg.querySelector('.nf-ribbon'), mRaw = svg.querySelector('#nf-m-raw path'), mClean = svg.querySelector('#nf-m-clean path')
+  const mRaw = svg.querySelector('#nf-m-raw path')
   const probe = document.createElementNS(NS, 'path'); svg.querySelector('defs').append(probe)
   let unit = 1, pos = 260
 
@@ -41,21 +41,32 @@
     const RUN = Math.round(top(ctas) + ctas.offsetHeight + 46)
     svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
     const y = (v) => v + dy
+    // Where speech becomes the clean request: halfway along the run, with a
+    // soft fade either side so no word is cut in half.
+    const X = Math.round((360 + c - 60) / 2), FADE = 70
     // Raw speech: a circle, a turn inside it, then a run toward the middle.
     const inD = `M -40 ${y(110)} C 60 ${y(92)}, 150 ${y(88)}, 210 ${y(90)} C 290 ${y(92)}, 316 ${y(150)}, 314 ${y(205)} `
       + `C 312 ${y(270)}, 250 ${y(310)}, 190 ${y(308)} C 120 ${y(306)}, 86 ${y(250)}, 92 ${y(200)} `
       + `C 98 ${y(150)}, 150 ${y(128)}, 200 ${y(134)} C 250 ${y(140)}, 262 ${y(190)}, 240 ${y(222)} `
-      + `C 220 ${y(252)}, 250 ${RUN}, 360 ${RUN} L ${c - 360} ${RUN}`
-    // Transcribed: the line carries on as a ribbon, into the agents' badge.
+      + `C 220 ${y(252)}, 250 ${RUN}, 360 ${RUN} L ${X} ${RUN}`
+    // Transcribed: the line carries on as clean text, into the agents' badge.
     const outD = ` L ${c - 40} ${RUN}`
     svg.querySelector('.nf-agents').setAttribute('transform', `translate(${c} ${RUN})`)
     const d = inD + outD
-    for (const p of [path, mRaw, mClean]) p.setAttribute('d', d)
+    for (const p of [path, mRaw]) p.setAttribute('d', d)
     probe.setAttribute('d', inD)
     const total = path.getTotalLength(), at = probe.getTotalLength()
-    mRaw.setAttribute('stroke-dasharray', `${at} ${total * 2}`)
-    for (const el of [mClean, ribbon]) el.setAttribute('stroke-dasharray', `0 ${at} ${total * 2}`)
-
+    mRaw.setAttribute('stroke-dasharray', `${at - FADE} ${total * 2}`)
+    for (const r of svg.querySelectorAll('.nf-x')) { r.setAttribute('y', RUN - 25) }
+    // Speech fades out just before the switch; the clean request fades in
+    // just after it. They never overlap, so no two sentences sit on top of
+    // each other.
+    const [rOut, rIn] = svg.querySelectorAll('.nf-x')
+    rOut.setAttribute('x', X - FADE); rOut.setAttribute('width', FADE)
+    rIn.setAttribute('x', X); rIn.setAttribute('width', c - X + 200)
+    for (const [id, a, b] of [['nf-fade-out', X - FADE, X], ['nf-fade-in', X, X + FADE]]) {
+      const g = svg.querySelector('#' + id); g.setAttribute('x1', a); g.setAttribute('x2', b); g.setAttribute('y1', 0); g.setAttribute('y2', 0)
+    }
     const measure = (tp, s) => { tp.textContent = s; return tp.getComputedTextLength() }
     const seg = PHRASES.map(([r, cl]) => ({ r, c: cl, rw: measure(tpRaw, r), cw: measure(tpClean, cl) }))
     for (const s of seg) s.w = Math.max(s.rw, s.cw) + 44

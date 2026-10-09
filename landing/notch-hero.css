@@ -5,9 +5,9 @@
 .notch-flow.ready{opacity:1}
 /* Raw speech: light, lowercase, the way it was said. */
 .notch-flow .nf-raw{font:400 16px Inter,system-ui,sans-serif;fill:#a3a3a3}
-/* Transcribed: the clean request, white on a black ribbon. */
-.notch-flow .nf-ribbon{fill:none;stroke:#0a0a0a;stroke-width:32;stroke-linejoin:round;stroke-linecap:round}
-.notch-flow .nf-clean{font:500 15px Inter,system-ui,sans-serif;fill:#fff}
+/* Transcribed: the clean request, in ink. */
+.notch-flow .nf-ribbon{display:none}
+.notch-flow .nf-clean{font:500 16px Inter,system-ui,sans-serif;fill:#0a0a0a}
 /* Claude Code and Codex, where the ribbon ends. */
 .notch-flow .nf-agents rect{fill:#fff;stroke:#e2e2e2}
 .notch-flow .nf-agents{filter:drop-shadow(0 10px 22px rgba(0,0,0,.12))}
