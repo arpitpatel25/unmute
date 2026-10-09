@@ -1,6 +1,6 @@
 /* HERO FLOW — what you say, flowing into your agents (ui/notch-flow.js). */
 .hero{position:relative;isolation:isolate}
-.hero > :not(.notch-flow){position:relative;z-index:1}
+.hero > :not(.notch-flow):not(.nf-after){position:relative;z-index:1}
 .notch-flow{position:absolute;z-index:0;top:0;left:50%;transform:translateX(-50%);width:100vw;height:680px;pointer-events:none;opacity:0;transition:opacity .6s ease}
 .notch-flow.ready{opacity:1}
 /* Raw speech: light, lowercase, the way it was said. */
@@ -15,6 +15,20 @@
 @keyframes nf-ring{from{transform:scale(1.2);stroke-opacity:.2}to{transform:scale(2.3);stroke-opacity:0}}
 /* The badge carries the two marks, so the "Works with" line steps aside,
    and the demo starts a little lower to leave the ribbon its room. */
-@media(min-width:1000px){.hero .works{visibility:hidden}.hero-demo{margin-top:104px}}
+@media(min-width:1000px){.hero .works{visibility:hidden}.hero-demo{margin-top:150px}}
 @media(max-width:999px){.notch-flow{display:none}}
 @media(prefers-reduced-motion:reduce){.notch-flow .nf-ring{display:none;animation:none;stroke-opacity:0}}
+/* The fan: sessions the requests become, always both agents. */
+.notch-flow .nf-branch{fill:none;stroke:#d9d9d9;stroke-width:1.5}
+.notch-flow .nf-pulse{fill:#0a0a0a}
+.nf-after{position:absolute;z-index:1;top:0;left:50%;transform:translateX(-50%);width:100vw;height:680px;pointer-events:none}
+.nf-chip{position:absolute;display:flex;align-items:center;gap:9px;height:40px;padding:0 14px 0 10px;border-radius:12px;background:#fff;border:1px solid #e4e4e4;
+  box-shadow:0 8px 22px -14px rgba(0,0,0,.35);font:500 13.5px Inter,system-ui,sans-serif;color:#0a0a0a;white-space:nowrap;transition:transform .45s cubic-bezier(.3,1.2,.5,1)}
+.nf-chip img{width:18px;height:18px;object-fit:contain}
+.nf-chip i{width:7px;height:7px;border-radius:50%;margin-left:2px}
+.nf-chip.working i{background:#30D158;animation:nf-breathe 1.2s ease-in-out infinite alternate}
+.nf-chip.needs i{background:#FF9230}
+.nf-chip.flash{transform:scale(1.06)}
+@keyframes nf-breathe{to{opacity:.4}}
+@media(max-width:999px){.nf-after{display:none}}
+@media(prefers-reduced-motion:reduce){.nf-chip.working i{animation:none}}

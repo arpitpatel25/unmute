@@ -3,7 +3,9 @@
 // One line of speech sweeps in from the top left behind the headline, curves
 // down, makes a small loop beside the buttons, and runs into Claude Code and
 // Codex. Most of the way it is raw speech (grey, lowercase, with the ums); on
-// the last stretch it fades into the clean request, in ink.
+// the last stretch it fades into the clean request, in ink. From the badge it
+// fans out into three live sessions, always both Claude Code and Codex: each
+// request that arrives runs down a branch and becomes that session's task.
 //
 // Each text is packed with its own sentences back to back, so the line is
 // never empty. Scrolling pushes it along. Paused off screen; still under
@@ -15,14 +17,17 @@
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches
   const SPEED = 42, FADE = 80, CLEAN = 230, GAP = 34, H = 680
 
+  // What was said · what the agent gets · the session it becomes · which agent.
   const SAID = [
-    ['um so can you build a first version of the uh new onboarding flow', 'Build a first version of the new onboarding flow.'],
-    ['and uh add tests for the signup form', 'Add tests for the signup form.'],
-    ['fix the save button it like does nothing on settings', 'Fix the Save button on Settings. It does nothing.'],
-    ['so like refactor the auth middleware', 'Refactor the auth middleware.'],
-    ['can you pick up the pricing work from yesterday', 'Pick up the pricing work from yesterday.'],
-    ['why is the checkout test flaky like again', 'Why is the checkout test flaky again?'],
+    ['um so can you build a first version of the uh new onboarding flow', 'Build a first version of the new onboarding flow.', 'Onboarding flow', 'claude'],
+    ['and uh add tests for the signup form', 'Add tests for the signup form.', 'Signup tests', 'codex'],
+    ['fix the save button it like does nothing on settings', 'Fix the Save button on Settings. It does nothing.', 'Settings bug', 'claude'],
+    ['so like refactor the auth middleware', 'Refactor the auth middleware.', 'Auth middleware', 'codex'],
+    ['can you pick up the pricing work from yesterday', 'Pick up the pricing work from yesterday.', 'Pricing page', 'claude'],
+    ['why is the checkout test flaky like again', 'Why is the checkout test flaky again?', 'Checkout test', 'codex'],
   ]
+  const MARK = { claude: 'assets/mark-claude.png', codex: 'assets/mark-codex.png' }
+  const after = svg.parentElement.querySelector('.nf-after')
   const el = (tag, attrs = {}, parent) => {
     const e = document.createElementNS(NS, tag)
     for (const k in attrs) e.setAttribute(k, attrs[k])
@@ -32,12 +37,47 @@
   const defs = svg.querySelector('defs'), layer = svg.querySelector('.nf-streams'), hero = svg.parentElement
   let place = null, pos = 200
 
+  // THE FAN: three branches from the badge, each ending in a session.
+  function fan(bx, by, W) {
+    if (W < 1200) return () => {}
+    const x0 = bx + 58, cx = bx + 112, ys = [by - 62, by, by + 62], shown = [0, 1, 2], chips = [], paths = []
+    const g = el('g', {}, layer)
+    const chip = (i, st) => {
+      const c = document.createElement('div')
+      c.className = 'nf-chip ' + st
+      c.innerHTML = `<img src="${MARK[SAID[i][3]]}" alt=""><span>${SAID[i][2]}</span><i></i>`
+      return c
+    }
+    ys.forEach((y, k) => {
+      paths.push(el('path', { class: 'nf-branch', d: `M ${x0} ${by} C ${x0 + 50} ${by}, ${cx - 50} ${y}, ${cx} ${y}` }, g))
+      const c = chip(shown[k], k === 2 ? 'needs' : 'working'); c.style.left = cx + 'px'; c.style.top = y - 20 + 'px'; after.append(c); chips.push(c)
+    })
+    const mixed = (list) => new Set(list.map((j) => SAID[j][3])).size > 1
+    let next = 0
+    return (i) => {
+      // Both agents stay on show: a new task takes the next branch whose
+      // replacement keeps Claude Code and Codex both there.
+      let k = shown.indexOf(i)
+      const fresh = k < 0
+      if (fresh) for (let n = 0; n < 3; n++) { const c = (next + n) % 3, t = shown.slice(); t[c] = i; if (mixed(t)) { k = c; next = c + 1; break } }
+      if (k < 0) return
+      const p = paths[k], L = p.getTotalLength(), dot = el('circle', { class: 'nf-pulse', r: 4 }, g), t0 = performance.now()
+      ;(function run(now) { const f = Math.min(1, (now - t0) / 650), pt = p.getPointAtLength(f * L); dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y); if (f < 1) requestAnimationFrame(run); else dot.remove() })(t0)
+      setTimeout(() => {
+        if (fresh) { const n = chip(i, 'working'); n.style.cssText = chips[k].style.cssText; chips[k].replaceWith(n); chips[k] = n; shown[k] = i }
+        chips[k].classList.add('flash'); setTimeout(() => chips[k].classList.remove('flash'), 300)
+      }, 620)
+    }
+  }
+
   function layout() {
-    defs.textContent = ''; layer.textContent = ''
+    defs.textContent = ''; layer.textContent = ''; after.textContent = ''
     const W = innerWidth
     const rel = (e) => { const r = e.getBoundingClientRect(), h = hero.getBoundingClientRect(); return { top: r.top - h.top, bottom: r.bottom - h.top } }
     const top = rel(hero.querySelector('h1')).top, by = Math.round(rel(hero.querySelector('.ctas')).bottom + 80)
-    const bx = Math.round(W * 0.8), cx = W * 0.6
+    // The badge sits past the loop, so the line never doubles back on itself.
+    // On narrower screens the loop moves left so the fan still fits.
+    const cx = Math.min(W * 0.6, W - 540), bx = Math.round(cx + 240)
     svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
     svg.querySelector('.nf-agents').setAttribute('transform', `translate(${bx} ${by})`)
 
@@ -67,12 +107,20 @@
       const unit = ws.reduce((a, w) => a + w, 0), reps = Math.ceil(total / unit) + 2
       tp.textContent = ''
       for (let k = 0; k < reps; k++) list.forEach((t, i) => { const e = el('tspan', { dx: i || k ? GAP : 0 }, tp); e.textContent = t })
-      return unit
+      return { unit, ws }
     }
-    const ur = fill(tr, SAID.map((x) => x[0])), uc = fill(tc, SAID.map((x) => x[1]))
+    const R = fill(tr, SAID.map((x) => x[0])), C = fill(tc, SAID.map((x) => x[1]))
+    const starts = C.ws.map((_, i) => C.ws.slice(0, i).reduce((a, w) => a + w, 0)), seen = starts.map(() => null)
+    const arrive = fan(bx, by, W)
     place = () => {
-      tr.setAttribute('startOffset', (pos % ur) - ur)
-      tc.setAttribute('startOffset', (pos % uc) - uc)
+      tr.setAttribute('startOffset', (pos % R.unit) - R.unit)
+      tc.setAttribute('startOffset', (pos % C.unit) - C.unit)
+      // A sentence arrives when its end reaches the end of the line.
+      starts.forEach((st0, i) => {
+        const n = Math.floor((pos + st0 + C.ws[i] - GAP - C.unit - total) / C.unit)
+        if (seen[i] !== null && n > seen[i]) arrive(i)
+        seen[i] = n
+      })
     }
     place()
   }
