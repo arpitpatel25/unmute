@@ -21,7 +21,7 @@
 <link rel="stylesheet" href="heritage.css?v=20261009-fast1" />
 <link rel="stylesheet" href="film.css?v=20261009-fast1" />
 <link rel="stylesheet" href="mac.css?v=20261009-fast1" />
-<link rel="stylesheet" href="flow.css?v=20261009-flow2" />
+<link rel="stylesheet" href="flow.css?v=20261009-strip2" />
 <link rel="preload" href="assets/fonts/Lora.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
 <!-- The demos' code and data, fetched in parallel instead of one after another. -->
@@ -48,33 +48,38 @@
 
 <!-- HERO — concrete first: what it is, then the demo. Text never animates in. -->
 <section class="hero">
-  <!-- What people say, flowing into their agents (ui/hero-flow.js). -->
-  <svg class="hero-flow" viewBox="0 0 1440 500" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
+  <!-- What you say, transcribed, handed to your agent (ui/hero-flow.js). -->
+  <svg class="hero-flow" viewBox="0 0 1440 600" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
     <defs>
+      <!-- The strip in two parts: raw speech, then the ribbon. JS joins them. -->
+      <path id="hf-raw" d="M -40 96 C 150 40, 352 74, 348 206 C 344 330, 150 336, 136 238 C 124 150, 240 124, 290 196 C 330 256, 286 330, 262 380 C 244 420, 238 470, 290 512"/>
+      <path id="hf-ribbon" d="M 290 512 C 420 572, 760 566, 1000 540 C 1120 527, 1190 500, 1236 476"/>
+      <path id="hf-path"/>
       <linearGradient id="hf-edge" x1="0" x2="1">
-        <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".07" stop-color="#fff"/>
-        <stop offset=".93" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+        <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".06" stop-color="#fff"/><stop offset="1" stop-color="#fff"/>
       </linearGradient>
-      <mask id="hf-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="1440" height="500"><rect width="1440" height="500" fill="url(#hf-edge)"/></mask>
-      <radialGradient id="hf-halo"><stop offset=".45" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
-      <path id="hf-c1" d="M -20 112 C 140 40, 340 70, 336 198 C 332 322, 150 330, 136 236 C 124 150, 236 126, 284 192 C 326 252, 262 330, 232 374"/>
-      <path id="hf-c2" d="M -20 470 C 70 474, 150 446, 200 408"/>
-      <path id="hf-x1" d="M 1036 -18 C 1196 30, 1404 64, 1400 200 C 1396 322, 1196 332, 1172 244 C 1152 166, 1270 140, 1294 216 C 1314 280, 1238 330, 1216 360"/>
+      <mask id="hf-mask-raw" maskUnits="userSpaceOnUse" x="-100" y="-100" width="1640" height="800">
+        <path d="" fill="none" stroke="#fff" stroke-width="60"/>
+      </mask>
+      <mask id="hf-mask-clean" maskUnits="userSpaceOnUse" x="-100" y="-100" width="1640" height="800">
+        <path d="" fill="none" stroke="#fff" stroke-width="60"/>
+      </mask>
+      <mask id="hf-mask-edge" maskUnits="userSpaceOnUse" x="0" y="0" width="1440" height="600"><rect width="1440" height="600" fill="url(#hf-edge)"/></mask>
     </defs>
-    <g class="hf-text" mask="url(#hf-mask)">
-      <text><textPath href="#hf-c1" data-phrases="build a first version of the new onboarding flow|fix the save button on the settings page|why is the checkout test flaky|pick up the pricing work from yesterday|move it after the first project|take the decisions from that call into the onboarding session"></textPath></text>
-      <text><textPath href="#hf-c2" data-speed=".8" data-phrases="add a loading state to the dashboard|ship it"></textPath></text>
-      <text><textPath href="#hf-x1" data-speed="1.05" data-phrases="add tests for the signup form|refactor the auth middleware|write a migration for the teams table|make the signup step shorter|summarize what changed in this pull request|find where we validate the token"></textPath></text>
+    <g mask="url(#hf-mask-edge)">
+      <g mask="url(#hf-mask-raw)"><text class="hf-raw"><textPath href="#hf-path"></textPath></text></g>
+      <use class="hf-ribbon" href="#hf-path"/>
+      <g mask="url(#hf-mask-clean)"><text class="hf-clean" dy="5"><textPath href="#hf-path"></textPath></text></g>
     </g>
-    <g class="hf-agent" transform="translate(232 404)">
-      <circle r="70" fill="url(#hf-halo)"/><circle class="hf-ring" r="30"/>
-      <circle class="hf-badge" r="30"/><image href="assets/mark-claude.png" x="-16" y="-16" width="32" height="32"/>
-      <text class="hf-label" y="52">Claude Code</text>
-    </g>
-    <g class="hf-agent" transform="translate(1212 392)">
-      <circle r="70" fill="url(#hf-halo)"/><circle class="hf-ring" r="30"/>
-      <circle class="hf-badge" r="30"/><image href="assets/mark-codex.png" x="-16" y="-16" width="32" height="32"/>
-      <text class="hf-label" y="52">Codex</text>
+    <!-- The Unmute pill: where speech becomes text. -->
+    <g class="hf-pill"><rect x="-44" y="-21" width="88" height="42" rx="21"/><rect class="bar" x="-31.0" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="-25.4" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="-19.8" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="-14.2" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="-8.6" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="-3.0" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="2.6" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="8.2" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="13.8" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="19.4" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="25.0" y="-3" width="2.6" height="6" rx="1.3"/><rect class="bar" x="30.6" y="-3" width="2.6" height="6" rx="1.3"/></g>
+    <!-- Where it goes. -->
+    <g class="hf-agents" transform="translate(1236 476)">
+      <rect x="0" y="-27" width="190" height="54" rx="27"/>
+      <image href="assets/mark-claude.png" x="18" y="-12" width="24" height="24"/>
+      <image href="assets/mark-codex.png" x="48" y="-12" width="24" height="24"/>
+      <text x="84" y="-2" class="hf-agents-name">Claude Code</text>
+      <text x="84" y="13" class="hf-agents-sub">or Codex</text>
     </g>
   </svg>
   <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
@@ -189,7 +194,7 @@
   <span class="flinks"><a href="../dictation.html">Dictation</a><a href="../pricing.html">Pricing</a><a href="../manifesto.html">Manifesto</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
 </footer>
 
-<script src="ui/hero-flow.js?v=20261009-flow2" defer></script>
+<script src="ui/hero-flow.js?v=20261009-strip1" defer></script>
 <script src="ui/vendor/gsap.min.js"></script>
 <script type="module" src="app.js?v=20261009-fast1"></script>
 </body>
