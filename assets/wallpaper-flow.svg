@@ -1,52 +1,59 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 700" preserveAspectRatio="xMidYMid slice">
-  <!-- A macOS-style flowing wallpaper in Unmute's palette: soft bands sweeping
-       out from a warm glow behind the notch. Drawn, not photographed. -->
+  <!-- Desktop wallpaper for the demo Macs, drawn for Unmute: two families of
+       broad, softly lit ribbons on a deep neutral night, in the manner of a
+       macOS wallpaper. One sweeps up from the lower left to the upper right;
+       the other falls from the top left down the right edge, so colour shows
+       around the windows wherever they sit. Small, and needs no photo. -->
   <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2d5f57"/>
-      <stop offset=".55" stop-color="#173f3b"/>
-      <stop offset="1" stop-color="#0c2a2a"/>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a1c2b"/>
+      <stop offset=".6" stop-color="#101219"/>
+      <stop offset="1" stop-color="#08090d"/>
     </linearGradient>
-    <radialGradient id="glow" cx=".5" cy="0" r=".75">
-      <stop offset="0" stop-color="#ffe2b0" stop-opacity=".95"/>
-      <stop offset=".35" stop-color="#f3b27a" stop-opacity=".55"/>
-      <stop offset="1" stop-color="#f3b27a" stop-opacity="0"/>
+    <linearGradient id="apricot" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#c8552f"/>
+      <stop offset=".35" stop-color="#f29a62"/>
+      <stop offset=".7" stop-color="#ffd2a3"/>
+      <stop offset="1" stop-color="#fff0dc"/>
+    </linearGradient>
+    <linearGradient id="rose" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#8f2f55"/>
+      <stop offset=".5" stop-color="#dd6f8f"/>
+      <stop offset="1" stop-color="#ffc2cf"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b9a4ff"/>
+      <stop offset=".45" stop-color="#6d4fc0"/>
+      <stop offset="1" stop-color="#2c2163"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8fb6ff"/>
+      <stop offset=".5" stop-color="#3866c8"/>
+      <stop offset="1" stop-color="#16295e"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".28"/>
+      <stop offset=".6" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="vignette" cx=".5" cy=".45" r=".78">
+      <stop offset=".62" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".5"/>
     </radialGradient>
-    <linearGradient id="apricot" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffd7a3"/>
-      <stop offset=".5" stop-color="#ef9f6d"/>
-      <stop offset="1" stop-color="#b8664a"/>
-    </linearGradient>
-    <linearGradient id="sage" x1="1" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#d9e7c8"/>
-      <stop offset=".45" stop-color="#8fb89d"/>
-      <stop offset="1" stop-color="#3e7a6c"/>
-    </linearGradient>
-    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5fa39a"/>
-      <stop offset="1" stop-color="#1b5552"/>
-    </linearGradient>
-    <linearGradient id="plum" x1="1" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#e7a07c"/>
-      <stop offset="1" stop-color="#6b4a63"/>
-    </linearGradient>
-    <filter id="soft" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="7"/></filter>
-    <filter id="softer" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="22"/></filter>
+    <filter id="soft"><feGaussianBlur stdDeviation="2"/></filter>
+    <filter id="haze" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="40"/></filter>
   </defs>
-  <rect width="1120" height="700" fill="url(#sky)"/>
+  <rect width="1120" height="700" fill="url(#base)"/>
+  <!-- light behind the notch -->
+  <ellipse cx="560" cy="40" rx="360" ry="170" fill="#ffb98a" opacity=".22" filter="url(#haze)"/>
   <g filter="url(#soft)">
-    <!-- left sweep -->
-    <path d="M-60 760 C 120 520, 300 300, 520 40 L 600 40 C 420 300, 260 560, 120 760 Z" fill="url(#teal)" opacity=".9"/>
-    <path d="M-80 620 C 140 420, 330 230, 548 0 L 600 0 C 380 260, 200 470, -20 700 Z" fill="url(#apricot)" opacity=".95"/>
-    <path d="M-100 470 C 120 330, 330 170, 540 -20 L 570 -20 C 360 200, 160 380, -60 560 Z" fill="url(#sage)" opacity=".85"/>
-    <path d="M-60 330 C 140 230, 340 110, 530 -30 L 548 -30 C 350 140, 130 290, -40 400 Z" fill="url(#plum)" opacity=".7"/>
-    <!-- right sweep -->
-    <path d="M1180 760 C 1000 520, 820 300, 600 40 L 520 40 C 700 300, 860 560, 1000 760 Z" fill="url(#teal)" opacity=".9"/>
-    <path d="M1200 640 C 980 430, 790 240, 572 0 L 520 0 C 740 260, 920 480, 1140 700 Z" fill="url(#apricot)" opacity=".9"/>
-    <path d="M1220 480 C 1000 340, 790 175, 580 -20 L 550 -20 C 760 200, 960 390, 1180 570 Z" fill="url(#sage)" opacity=".8"/>
-    <path d="M1180 330 C 980 230, 780 110, 590 -30 L 572 -30 C 770 140, 990 290, 1160 400 Z" fill="url(#plum)" opacity=".65"/>
-    <!-- centre beam under the notch -->
-    <path d="M500 0 C 520 250, 470 480, 380 760 L 740 760 C 650 480, 600 250, 620 0 Z" fill="url(#apricot)" opacity=".55"/>
+    <!-- falling family: top left → down the right edge -->
+    <path d="M-40 -20 C 260 60, 520 120, 760 250 S 1060 520, 1180 760 L 1180 600 C 1040 420, 880 250, 690 150 S 260 10, -40 -70 Z" fill="url(#blue)" opacity=".9"/>
+    <path d="M-40 60 C 250 120, 500 190, 740 320 S 1040 600, 1150 780 L 1210 780 C 1090 560, 900 330, 700 220 S 280 70, -40 10 Z" fill="url(#violet)" opacity=".95"/>
+    <path d="M-40 60 C 250 120, 500 190, 740 320 S 1040 600, 1150 780 L 1170 780 C 1060 590, 880 360, 690 250 S 260 100, -40 40 Z" fill="url(#sheen)"/>
+    <!-- rising family: lower left → top right -->
+    <path d="M-60 720 C 200 640, 420 500, 640 380 S 980 150, 1200 60 L 1200 200 C 980 260, 780 380, 620 480 S 260 720, -20 790 Z" fill="url(#rose)" opacity=".9"/>
+    <path d="M-80 640 C 180 570, 400 430, 620 300 S 960 70, 1200 -20 L 1200 90 C 990 160, 790 290, 630 390 S 260 640, -60 720 Z" fill="url(#apricot)"/>
+    <path d="M-80 640 C 180 570, 400 430, 620 300 S 960 70, 1200 -20 L 1200 20 C 990 100, 790 230, 620 340 S 230 600, -70 680 Z" fill="url(#sheen)"/>
   </g>
-  <rect width="1120" height="700" fill="url(#glow)" filter="url(#softer)"/>
+  <rect width="1120" height="700" fill="url(#vignette)"/>
 </svg>

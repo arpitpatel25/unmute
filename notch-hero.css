@@ -1,0 +1,20 @@
+/* HERO FLOW — what you say, flowing into your agents (ui/notch-flow.js). */
+.hero{position:relative;isolation:isolate}
+.hero > :not(.notch-flow){position:relative;z-index:1}
+.notch-flow{position:absolute;z-index:0;top:0;left:50%;transform:translateX(-50%);width:100vw;height:680px;pointer-events:none;opacity:0;transition:opacity .6s ease}
+.notch-flow.ready{opacity:1}
+/* Raw speech: light, lowercase, the way it was said. */
+.notch-flow .nf-raw{font:400 28px Inter,system-ui,sans-serif;fill:#b8b8b8}
+/* Transcribed: the clean request, in ink. */
+.notch-flow .nf-ribbon{display:none}
+.notch-flow .nf-clean{font:500 20px Inter,system-ui,sans-serif;fill:#0a0a0a}
+/* Claude Code and Codex, where the ribbon ends. */
+.notch-flow .nf-agents rect{fill:#fff;stroke:#e2e2e2}
+.notch-flow .nf-agents{filter:drop-shadow(0 10px 22px rgba(0,0,0,.12))}
+.notch-flow .nf-ring{display:none;fill:none;stroke:#0a0a0a;stroke-opacity:.18;transform-box:fill-box;transform-origin:center;animation:nf-ring 2.4s cubic-bezier(.2,.6,.3,1) infinite}
+@keyframes nf-ring{from{transform:scale(1.2);stroke-opacity:.2}to{transform:scale(2.3);stroke-opacity:0}}
+/* The badge carries the two marks, so the "Works with" line steps aside,
+   and the demo starts a little lower to leave the ribbon its room. */
+@media(min-width:1000px){.hero .works{visibility:hidden}.hero-demo{margin-top:104px}}
+@media(max-width:999px){.notch-flow{display:none}}
+@media(prefers-reduced-motion:reduce){.notch-flow .nf-ring{display:none;animation:none;stroke-opacity:0}}

@@ -1,4 +1,4 @@
-import { Film, SHOT, ready } from './ui/film.js?v=20261004-ctl3'
+import { Film, SHOT, ready } from './ui/film.js?v=20261009-fast1'
 
 const $ = (s, r = document) => r.querySelector(s)
 const $$ = (s, r = document) => [...r.querySelectorAll(s)]
