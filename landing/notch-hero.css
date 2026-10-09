@@ -1,7 +1,7 @@
 /* HERO FLOW — what you say, flowing into your agents (ui/notch-flow.js). */
 .hero{position:relative;isolation:isolate}
 .hero > :not(.notch-flow){position:relative;z-index:1}
-.notch-flow{position:absolute;z-index:0;top:0;left:50%;transform:translateX(-50%);width:100vw;height:640px;pointer-events:none;opacity:0;transition:opacity .6s ease}
+.notch-flow{position:absolute;z-index:0;top:0;left:50%;transform:translateX(-50%);width:100vw;height:680px;pointer-events:none;opacity:0;transition:opacity .6s ease}
 .notch-flow.ready{opacity:1}
 /* Raw speech: light, lowercase, the way it was said. */
 .notch-flow .nf-raw{font:400 16px Inter,system-ui,sans-serif;fill:#a3a3a3}
