@@ -51,14 +51,25 @@
   }
 
   // ── The shape (NotchShape.path), around the cutout's centre ──────────────
+  // The fill is a div clipped to the path, so it can blur what's behind it.
+  // At bar level it is opaque black (the app's rule D5: the bar continues the
+  // hardware). Opened, it thins to the glass tone: shell black 25% over a
+  // blurred backdrop, with the content plane (black 34%) inset inside it.
   const svg = root.querySelector('svg'), path = svg.querySelector('path')
-  function draw(p) {
-    const x0 = -(MIDDLE / 2 + p.L + p.f), x1 = MIDDLE / 2 + p.R + p.f
+  const glass = root.querySelector('.ln-glass')
+  const shapeD = (p, dx) => {
+    const x0 = -(MIDDLE / 2 + p.L + p.f) + dx, x1 = MIDDLE / 2 + p.R + p.f + dx
     const f = Math.max(Math.min(p.f, (x1 - x0) / 2, p.H), 0)
     const a = x0 + f, b = x1 - f
     const r = Math.max(Math.min(p.r, (b - a) / 2, p.H - f), 0)
-    path.setAttribute('d', `M ${x0} 0 Q ${a} 0 ${a} ${f} L ${a} ${p.H - r} A ${r} ${r} 0 0 0 ${a + r} ${p.H} `
-      + `L ${b - r} ${p.H} A ${r} ${r} 0 0 0 ${b} ${p.H - r} L ${b} ${f} Q ${b} 0 ${x1} 0 Z`)
+    return `M ${x0} 0 Q ${a} 0 ${a} ${f} L ${a} ${p.H - r} A ${r} ${r} 0 0 0 ${a + r} ${p.H} `
+      + `L ${b - r} ${p.H} A ${r} ${r} 0 0 0 ${b} ${p.H - r} L ${b} ${f} Q ${b} 0 ${x1} 0 Z`
+  }
+  function draw(p) {
+    path.setAttribute('d', shapeD(p, 0))
+    glass.style.clipPath = `path('${shapeD(p, 560)}')`
+    const k = Math.min(1, Math.max(0, (p.H - BAR) / (PANEL.h - BAR)))
+    glass.style.background = `rgba(0,0,0,${(1 - 0.75 * k).toFixed(3)})`
   }
   let cur = { L: 0, R: 0, H: BAR, f: FILLET, r: CORNER }
   function morph(to, ms = 240) {
