@@ -60,9 +60,12 @@
 @media(max-width:759px){.hero{padding-top:150px}}
 @media(prefers-reduced-motion:reduce){.ln-dot.breathe{animation:none}}
 
-/* Words through the notch: one line from edge to edge, under the notch. */
-.notch-flow{position:absolute;z-index:39;left:0;width:100%;height:260px;pointer-events:none;opacity:0;transition:opacity .6s ease}
+/* Words through the notch: raw speech in, the clean request out on a ribbon. */
+.notch-flow{position:absolute;z-index:39;left:0;width:100%;height:420px;pointer-events:none;opacity:0;transition:opacity .6s ease}
 .notch-flow.ready{opacity:1}
 .notch-flow .nf-raw{font:400 16px Inter,system-ui,sans-serif;fill:#a3a3a3}
-.notch-flow .nf-clean{font:500 16px Inter,system-ui,sans-serif;fill:#0a0a0a}
-@media(max-width:759px){.notch-flow{display:none}}
+.notch-flow .nf-ribbon{fill:none;stroke:#0a0a0a;stroke-width:32;stroke-linejoin:round}
+.notch-flow .nf-clean{font:500 15px Inter,system-ui,sans-serif;fill:#fff}
+/* The words run below the open panel, so the hero's own words start lower. */
+@media(min-width:1000px){.hero{padding-top:304px}}
+@media(max-width:999px){.notch-flow{display:none}}

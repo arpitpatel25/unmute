@@ -1,20 +1,23 @@
-// WORDS THROUGH THE NOTCH — what you say goes in one side and comes out the
-// other as what your agent gets.
+// WORDS THROUGH THE NOTCH — what you say goes in, what your agent gets
+// comes out.
 //
-// One line of text sweeps down from the left, runs level through the notch
-// at bar height, and sweeps back down on the right. Left of centre it is raw
-// speech: grey, lowercase, with the ums. Right of centre it is the clean
-// request, in ink. The switch happens under the notch, which hides it at bar
-// level and frosts it when the notch is open. Each phrase starts at the same
-// distance along the line in both texts, so what comes out is the clean
-// version of what went in. Scrolling pushes the words along.
+// Raw speech (grey, lowercase, with the ums) enters on the left, circles,
+// spirals in, runs toward the middle and rises INTO the notch from below.
+// It comes back out of the notch's floor as the clean request, white on a
+// black ribbon, and sweeps away to the right. The switch happens under the
+// bar, which hides it; when the notch opens, its glass frosts it.
+//
+// One path carries both texts at the same offset. Each phrase starts at the
+// same distance along it in both, so what leaves the notch is the clean
+// version of what went in. Stroke masks show raw text before the notch and
+// the ribbon after it. Scrolling pushes the words along.
 ;(() => {
   const svg = document.querySelector('.notch-flow')
   if (!svg) return
   const NS = 'http://www.w3.org/2000/svg'
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches
-  const SPEED = 42 // px per second
-  const BAR_MID = 18 // the bar is 34 tall; text rides its middle
+  const SPEED = 44 // px per second
+  const H = 420, BAR_MID = 17, RUN = 262 // the run toward the notch, under the open panel
 
   const PHRASES = [
     ['um so can you build a first version of the uh new onboarding flow', 'Build a first version of the new onboarding flow.'],
@@ -27,23 +30,35 @@
 
   const path = svg.querySelector('#nf-path')
   const tpRaw = svg.querySelector('.nf-raw textPath'), tpClean = svg.querySelector('.nf-clean textPath')
-  const [maskRaw, maskClean] = svg.querySelectorAll('.nf-mask rect')
-  let unit = 1, pos = 300
+  const ribbon = svg.querySelector('.nf-ribbon'), mRaw = svg.querySelector('#nf-m-raw path'), mClean = svg.querySelector('#nf-m-clean path')
+  const probe = document.createElementNS(NS, 'path'); svg.querySelector('defs').append(probe)
+  let unit = 1, pos = 260
 
   function layout() {
-    const W = innerWidth, c = W / 2, low = 150
-    svg.setAttribute('viewBox', `0 0 ${W} 260`)
+    const W = innerWidth, c = W / 2
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
     svg.style.top = document.querySelector('nav.top').offsetHeight + 'px'
-    // Level through the notch (±230 covers the bar at any width it takes),
-    // then easing down to either edge.
-    path.setAttribute('d', `M -40 ${low} C ${c * 0.42} ${low}, ${c - 380} ${BAR_MID}, ${c - 230} ${BAR_MID} `
-      + `L ${c + 230} ${BAR_MID} C ${c + 380} ${BAR_MID}, ${W - c * 0.42} ${low}, ${W + 40} ${low}`)
-    maskRaw.setAttribute('width', c); maskClean.setAttribute('x', c); maskClean.setAttribute('width', c)
+    // IN: a circle, a smaller turn inside it, then the run to the notch and
+    // straight up into its floor, to the bar's middle.
+    const inD = `M -40 110 C 60 92, 150 88, 210 90 C 290 92, 316 150, 314 205 C 312 270, 250 310, 190 308 `
+      + `C 120 306, 86 250, 92 200 C 98 150, 150 128, 200 134 C 250 140, 262 190, 240 222 `
+      + `C 220 252, 236 ${RUN}, 330 ${RUN} `
+      + `L ${c - 140} ${RUN} C ${c - 88} ${RUN}, ${c - 60} ${RUN - 28}, ${c - 60} ${RUN - 80} L ${c - 60} ${BAR_MID + 40} `
+      + `C ${c - 60} ${BAR_MID + 12}, ${c - 48} ${BAR_MID}, ${c - 20} ${BAR_MID} L ${c} ${BAR_MID}`
+    // OUT: across under the bar, down out of its floor, and away to the right.
+    const outD = ` L ${c + 20} ${BAR_MID} C ${c + 48} ${BAR_MID}, ${c + 60} ${BAR_MID + 12}, ${c + 60} ${BAR_MID + 40} `
+      + `L ${c + 60} ${RUN - 80} C ${c + 60} ${RUN - 28}, ${c + 88} ${RUN}, ${c + 140} ${RUN} `
+      + `C ${c + 320} ${RUN}, ${W - 260} ${RUN + 10}, ${W - 150} ${RUN + 50} S ${W - 30} ${RUN + 120}, ${W + 60} ${RUN + 130}`
+    const d = inD + outD
+    for (const p of [path, mRaw, mClean]) p.setAttribute('d', d)
+    probe.setAttribute('d', inD)
+    const total = path.getTotalLength(), at = probe.getTotalLength()
+    mRaw.setAttribute('stroke-dasharray', `${at} ${total * 2}`)
+    for (const el of [mClean, ribbon]) el.setAttribute('stroke-dasharray', `0 ${at} ${total * 2}`)
 
-    const total = path.getTotalLength()
     const measure = (tp, s) => { tp.textContent = s; return tp.getComputedTextLength() }
     const seg = PHRASES.map(([r, cl]) => ({ r, c: cl, rw: measure(tpRaw, r), cw: measure(tpClean, cl) }))
-    for (const s of seg) s.w = Math.max(s.rw, s.cw) + 48
+    for (const s of seg) s.w = Math.max(s.rw, s.cw) + 44
     unit = seg.reduce((a, s) => a + s.w, 0)
     const reps = Math.ceil(total / unit) + 2
     for (const [tp, key, wk] of [[tpRaw, 'r', 'rw'], [tpClean, 'c', 'cw']]) {
