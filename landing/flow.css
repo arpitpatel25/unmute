@@ -1,0 +1,16 @@
+/* HERO FLOW — spoken requests flowing into Claude Code and Codex. Sits
+   behind the hero's words; the page's own content stays on top. */
+.hero{position:relative;isolation:isolate}
+.hero > :not(.hero-flow){position:relative;z-index:1}
+.hero-flow{position:absolute;z-index:0;top:0;left:50%;transform:translateX(-50%);width:100vw;max-width:1920px;height:500px;pointer-events:none;overflow:visible}
+.hero-flow .hf-text text{font:400 16px/1 Inter,system-ui,sans-serif;fill:#b4b4b4;letter-spacing:.01em}
+.hero-flow .hf-badge{fill:#fff;stroke:#e4e4e4;stroke-width:1}
+.hero-flow .hf-agent{filter:drop-shadow(0 6px 14px rgba(0,0,0,.08))}
+.hero-flow .hf-label{font:500 12.5px Inter,system-ui,sans-serif;fill:#6b6b6b;text-anchor:middle}
+/* A slow ring off each badge: words keep arriving. */
+.hero-flow .hf-ring{fill:none;stroke:#0a0a0a;stroke-opacity:.18;transform-box:fill-box;transform-origin:center;animation:hf-ring 2.6s cubic-bezier(.2,.6,.3,1) infinite}
+.hero-flow .hf-agent + .hf-agent .hf-ring{animation-delay:1.3s}
+@keyframes hf-ring{from{transform:scale(1);stroke-opacity:.22}to{transform:scale(1.7);stroke-opacity:0}}
+@media(prefers-reduced-motion:reduce){.hero-flow .hf-ring{animation:none;stroke-opacity:0}}
+/* Too narrow to flow beside the headline without crossing it. */
+@media(max-width:1000px){.hero-flow{display:none}}

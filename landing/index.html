@@ -8,7 +8,7 @@
 <link rel="icon" href="../icon.png" />
 <link rel="apple-touch-icon" href="../apple-touch-icon.png" />
 <link rel="canonical" href="https://justunmute.me/" />
-<meta property="og:title" content="Unmute — put your agents to work from anywhere" />
+<meta property="og:title" content="Unmute — talk to your agents from anywhere" />
 <meta property="og:description" content="Start and continue Claude Code or Codex sessions by voice, from anywhere on your Mac. When a session needs you, the notch opens wherever you are." />
 <meta property="og:image" content="https://justunmute.me/og.png" />
 <meta property="og:type" content="website" />
@@ -21,6 +21,7 @@
 <link rel="stylesheet" href="heritage.css?v=20261009-fast1" />
 <link rel="stylesheet" href="film.css?v=20261009-fast1" />
 <link rel="stylesheet" href="mac.css?v=20261009-fast1" />
+<link rel="stylesheet" href="flow.css?v=20261009-flow2" />
 <link rel="preload" href="assets/fonts/Lora.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
 <!-- The demos' code and data, fetched in parallel instead of one after another. -->
@@ -47,8 +48,37 @@
 
 <!-- HERO — concrete first: what it is, then the demo. Text never animates in. -->
 <section class="hero">
+  <!-- What people say, flowing into their agents (ui/hero-flow.js). -->
+  <svg class="hero-flow" viewBox="0 0 1440 500" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
+    <defs>
+      <linearGradient id="hf-edge" x1="0" x2="1">
+        <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".07" stop-color="#fff"/>
+        <stop offset=".93" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+      </linearGradient>
+      <mask id="hf-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="1440" height="500"><rect width="1440" height="500" fill="url(#hf-edge)"/></mask>
+      <radialGradient id="hf-halo"><stop offset=".45" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+      <path id="hf-c1" d="M -20 112 C 140 40, 340 70, 336 198 C 332 322, 150 330, 136 236 C 124 150, 236 126, 284 192 C 326 252, 262 330, 232 374"/>
+      <path id="hf-c2" d="M -20 470 C 70 474, 150 446, 200 408"/>
+      <path id="hf-x1" d="M 1036 -18 C 1196 30, 1404 64, 1400 200 C 1396 322, 1196 332, 1172 244 C 1152 166, 1270 140, 1294 216 C 1314 280, 1238 330, 1216 360"/>
+    </defs>
+    <g class="hf-text" mask="url(#hf-mask)">
+      <text><textPath href="#hf-c1" data-phrases="build a first version of the new onboarding flow|fix the save button on the settings page|why is the checkout test flaky|pick up the pricing work from yesterday|move it after the first project|take the decisions from that call into the onboarding session"></textPath></text>
+      <text><textPath href="#hf-c2" data-speed=".8" data-phrases="add a loading state to the dashboard|ship it"></textPath></text>
+      <text><textPath href="#hf-x1" data-speed="1.05" data-phrases="add tests for the signup form|refactor the auth middleware|write a migration for the teams table|make the signup step shorter|summarize what changed in this pull request|find where we validate the token"></textPath></text>
+    </g>
+    <g class="hf-agent" transform="translate(232 404)">
+      <circle r="70" fill="url(#hf-halo)"/><circle class="hf-ring" r="30"/>
+      <circle class="hf-badge" r="30"/><image href="assets/mark-claude.png" x="-16" y="-16" width="32" height="32"/>
+      <text class="hf-label" y="52">Claude Code</text>
+    </g>
+    <g class="hf-agent" transform="translate(1212 392)">
+      <circle r="70" fill="url(#hf-halo)"/><circle class="hf-ring" r="30"/>
+      <circle class="hf-badge" r="30"/><image href="assets/mark-codex.png" x="-16" y="-16" width="32" height="32"/>
+      <text class="hf-label" y="52">Codex</text>
+    </g>
+  </svg>
   <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
-  <h1>Put your agents to work.<br />From anywhere.</h1>
+  <h1>Talk to your agents.<br />From anywhere.</h1>
   <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app.<br class="desktop-break" /> Bring the context along. Keep going while your agent works.</p>
   <div class="ctas">
     <a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="16" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a>
@@ -159,6 +189,7 @@
   <span class="flinks"><a href="../dictation.html">Dictation</a><a href="../pricing.html">Pricing</a><a href="../manifesto.html">Manifesto</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
 </footer>
 
+<script src="ui/hero-flow.js?v=20261009-flow2" defer></script>
 <script src="ui/vendor/gsap.min.js"></script>
 <script type="module" src="app.js?v=20261009-fast1"></script>
 </body>
