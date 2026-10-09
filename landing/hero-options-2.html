@@ -161,15 +161,18 @@ scene(document.getElementById('A'), (W, H, rel, hero) => {
   return { d, switchAt: total * 0.52, badge: [bx, y], fade: 90 }
 })
 
-// B: one big sweep behind the hero, always moving left to right (so the
-// words stay upright), down past the buttons into the agents.
+// B: one big sweep behind the hero, then a small loop on the way down,
+// then into the agents.
 scene(document.getElementById('B'), (W, H, rel, hero) => {
-  const top = rel(hero.querySelector('h1')).top, by = rel(hero.querySelector('.ctas')).bottom + 90, bx = Math.round(W * 0.78)
-  const d = `M -80 ${top + 30} C ${W * .28} ${top - 70}, ${W * .5} ${top + 60}, ${W * .58} ${top + 200} `
-    + `C ${W * .63} ${top + 300}, ${W * .6} ${by}, ${bx - 260} ${by} L ${bx - 64} ${by}`
+  const top = rel(hero.querySelector('h1')).top, by = rel(hero.querySelector('.ctas')).bottom + 90
+  const bx = Math.round(W * 0.8), cx = W * 0.6
+  const d = `M -80 ${top + 30} C ${W * .28} ${top - 70}, ${W * .5} ${top + 60}, ${cx} ${top + 210} `
+    + `C ${cx + 15} ${top + 300}, ${cx + 130} ${top + 310}, ${cx + 135} ${top + 235} `
+    + `C ${cx + 140} ${top + 160}, ${cx + 30} ${top + 150}, ${cx + 10} ${top + 215} `
+    + `C ${cx - 10} ${top + 290}, ${cx + 40} ${by}, ${cx + 160} ${by} L ${bx - 64} ${by}`
   const probe = el('path', { d }); const s = document.createElementNS(NS, 'svg'); s.append(probe); document.body.append(s)
   const total = probe.getTotalLength(); s.remove()
-  return { d, switchAt: total - 260, badge: [bx, by], fade: 90 }
+  return { d, switchAt: total - 230, badge: [bx, by], fade: 80 }
 })
 
 // C: the transcript line.
