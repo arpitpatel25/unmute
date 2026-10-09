@@ -28,7 +28,7 @@ h1{margin:22px 0 0;font-family:Lora,Georgia,serif;font-weight:400;letter-spacing
 
 /* Text on a line: raw speech → the clean request. */
 svg.flow{position:absolute;left:0;top:0;width:100%;pointer-events:none;overflow:visible}
-.raw{font:400 19px var(--ui);fill:#a3a3a3}
+.raw{font:400 19px var(--ui);fill:#9a9a9a}
 .clean{font:500 19px var(--ui);fill:var(--ink)}
 .agents rect{fill:#fff;stroke:#e2e2e2}
 .agents{filter:drop-shadow(0 10px 22px rgba(0,0,0,.12))}
@@ -37,7 +37,7 @@ svg.flow{position:absolute;left:0;top:0;width:100%;pointer-events:none;overflow:
 #A .flow{z-index:0}
 #A .hero{padding-bottom:210px}
 /* B: huge and faint, behind everything; ink only near the agents. */
-#B .raw{font:400 30px var(--ui);fill:#ececec}
+#B .raw{font:400 28px var(--ui);fill:#b8b8b8}
 #B .clean{font:500 20px var(--ui);fill:var(--ink)}
 #B .hero{padding-bottom:200px}
 /* C */
@@ -111,7 +111,7 @@ const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS,
 
 // A line of words on a path: raw speech, then the clean request from
 // `switchAt` (length along the path) onward, faded along the line over FADE.
-function flowLine(svg, { d, switchAt, fade = 70, gap = 48 }) {
+function flowLine(svg, { d, switchAt, fade = 70, gap = 34 }) {
   const defs = svg.querySelector('defs'), layer = svg.querySelector('.lines')
   const id = 'p' + Math.random().toString(36).slice(2)
   const path = el('path', { id, d }, defs), total = path.getTotalLength()
@@ -125,15 +125,18 @@ function flowLine(svg, { d, switchAt, fade = 70, gap = 48 }) {
   const g = el('g', {}, layer)
   const tr = el('textPath', { href: '#' + id }, el('text', { class: 'raw', dy: 6, mask: `url(#${id}r)` }, g))
   const tc = el('textPath', { href: '#' + id }, el('text', { class: 'clean', dy: 6, mask: `url(#${id}c)` }, g))
-  const measure = (tp, s) => { tp.textContent = s; return tp.getComputedTextLength() }
-  const seg = SAID.map(([r, c]) => ({ r, c, rw: measure(tr, r), cw: measure(tc, c) }))
-  for (const s of seg) s.w = Math.max(s.rw, s.cw) + gap
-  const unit = seg.reduce((a, s) => a + s.w, 0), reps = Math.ceil(total / unit) + 2
-  for (const [tp, key, wk] of [[tr, 'r', 'rw'], [tc, 'c', 'cw']]) {
-    tp.textContent = ''; let start = 0, prev = 0
-    for (let k = 0; k < reps; k++) for (const s of seg) { const t = el('tspan', { dx: start - prev }, tp); t.textContent = s[key]; prev = start + s[wk]; start += s.w }
+  // Each text is packed with its own sentences back to back, so the line is
+  // never empty, whatever the length of a sentence.
+  const fill = (tp, list) => {
+    const ws = list.map((t) => { tp.textContent = t; return tp.getComputedTextLength() + gap })
+    const unit = ws.reduce((a, w) => a + w, 0), reps = Math.ceil(total / unit) + 2
+    tp.textContent = ''
+    for (let k = 0; k < reps; k++) list.forEach((t, i) => { const e = el('tspan', { dx: i || k ? gap : 0 }, tp); e.textContent = t })
+    return unit
   }
-  return (pos) => { const o = (pos % unit) - unit; tr.setAttribute('startOffset', o); tc.setAttribute('startOffset', o) }
+  const ur = fill(tr, SAID.map((x) => x[0])), uc = fill(tc, SAID.map((x) => x[1]))
+  const at = (u, pos) => (pos % u) - u
+  return (pos) => { tr.setAttribute('startOffset', at(ur, pos)); tc.setAttribute('startOffset', at(uc, pos)) }
 }
 
 function scene(section, build) {
