@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Unmute — after the badge: options</title>
+<style>
+@font-face{font-family:Lora;src:url('assets/fonts/Lora.woff2') format('woff2');font-weight:400 700}
+@font-face{font-family:Inter;src:url('assets/fonts/Inter.woff2') format('woff2');font-weight:100 900}
+:root{--ink:#0a0a0a;--dim:#4a4a4a;--faint:#8a8a8a;--line:#e6e6e6;--ui:Inter,system-ui,sans-serif;--sf:-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;
+  --green:#30D158;--orange:#FF9230}
+*{box-sizing:border-box}body{margin:0;font-family:var(--ui);color:var(--ink);background:#fff;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+p{margin:0}
+.picker{position:sticky;top:0;z-index:20;display:flex;gap:8px;justify-content:center;padding:12px;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);font-size:13px}
+.picker a{padding:7px 12px;border:1px solid var(--line);border-radius:999px;text-decoration:none;color:var(--ink)}
+.opt{position:relative;border-bottom:1px solid var(--line);overflow:hidden}
+.tag{position:absolute;top:18px;left:24px;z-index:5;font-size:12px;color:var(--dim);background:#f4f4f4;border-radius:999px;padding:6px 12px}
+.tag b{color:var(--ink)}
+.hero{position:relative;max-width:1180px;margin:auto;padding:110px 24px 330px;text-align:center;display:flex;flex-direction:column;align-items:center}
+.hero > *{position:relative;z-index:1}
+.eyebrow{font-size:14px;color:var(--dim);font-weight:500}
+h1{margin:22px 0 0;font-family:Lora,Georgia,serif;font-weight:400;letter-spacing:-.025em;font-size:clamp(44px,5.4vw,78px);line-height:1.04}
+.sub{max-width:620px;margin-top:22px;font-size:18px;line-height:1.55;color:var(--dim)}
+.ctas{display:flex;gap:10px;justify-content:center;margin-top:28px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 22px;border-radius:9px;background:var(--ink);color:#fff;font:500 14px var(--ui);text-decoration:none;border:1px solid var(--ink)}
+.btn.ghost{background:#fff;color:var(--ink);border-color:#d4d4d4}
+.note{max-width:740px;margin:0 auto;padding:0 24px 48px;text-align:center;font-size:14px;line-height:1.6;color:var(--dim);position:relative;z-index:1}
+
+/* The speech flow (same as the live page). */
+svg.flow{position:absolute;left:0;top:0;width:100%;pointer-events:none;overflow:visible;z-index:0}
+.raw{font:400 28px var(--ui);fill:#b8b8b8}
+.clean{font:500 20px var(--ui);fill:var(--ink)}
+.agents rect{fill:#fff;stroke:#e2e2e2}
+.agents{filter:drop-shadow(0 10px 22px rgba(0,0,0,.12))}
+.branch{fill:none;stroke:#d9d9d9;stroke-width:1.5}
+.pulse{fill:var(--ink)}
+
+/* What comes after the badge. */
+.after{position:absolute;inset:0;pointer-events:none;z-index:2}
+.chip{position:absolute;display:flex;align-items:center;gap:9px;height:40px;padding:0 14px 0 10px;border-radius:12px;background:#fff;border:1px solid #e4e4e4;
+  box-shadow:0 8px 22px -14px rgba(0,0,0,.35);font:500 13.5px var(--ui);white-space:nowrap;transition:transform .45s cubic-bezier(.3,1.2,.5,1),opacity .4s,top .5s cubic-bezier(.4,0,.2,1),left .5s cubic-bezier(.4,0,.2,1)}
+.chip img{width:18px;height:18px;object-fit:contain;flex:none}
+.chip .t{overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.chip .st{display:flex;align-items:center;gap:5px;margin-left:4px;font-size:12px;color:var(--faint)}
+.chip .st i{width:7px;height:7px;border-radius:50%;background:#c4c4c4}
+.chip.working .st{color:#1f9d4a}.chip.working .st i{background:var(--green);animation:breathe 1.2s ease-in-out infinite alternate}
+.chip.needs .st{color:#d9731a}.chip.needs .st i{background:var(--orange)}
+.chip.flash{transform:scale(1.06)}
+.chip.compact .st{font-size:0;gap:0;margin-left:2px}
+@keyframes breathe{to{opacity:.4}}
+
+/* D: the pocket — the app's own session list, dark. */
+.pocket{position:absolute;width:300px;border-radius:0 0 18px 18px;background:#000;color:rgba(255,255,255,.95);padding:12px 10px 10px;font-family:var(--sf);
+  box-shadow:0 20px 40px -20px rgba(0,0,0,.55)}
+.pocket .hd{display:flex;align-items:center;justify-content:space-between;padding:0 6px 8px;font:600 11px var(--sf);color:rgba(255,255,255,.4)}
+.pocket .row{display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;margin-top:4px;border-radius:9px;background:rgba(255,255,255,.085);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14);
+  font-size:12.5px;overflow:hidden;transition:max-height .45s,opacity .4s,margin .45s;max-height:34px}
+.pocket .row.enter{max-height:0;opacity:0;margin-top:0}
+.pocket .row img{width:15px;height:15px;object-fit:contain}
+.pocket .row .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pocket .row .st{display:flex;align-items:center;gap:5px;font:600 11px var(--sf)}
+.pocket .row .st i{width:7px;height:7px;border-radius:50%}
+.pocket .row.working .st{color:var(--green)}.pocket .row.working .st i{background:var(--green);animation:breathe 1.2s ease-in-out infinite alternate}
+.pocket .row.needs .st{color:var(--orange)}.pocket .row.needs .st i{background:var(--orange)}
+</style>
+</head>
+<body>
+<nav class="picker"><a href="#A">A · Fan out</a><a href="#B">B · Stack</a><a href="#C">C · Tree</a><a href="#D">D · The pocket</a></nav>
+
+<template id="hero"><div class="hero">
+  <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
+  <h1>Talk to your agents.<br />From anywhere.</h1>
+  <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app. Bring the context along. Keep going while your agent works.</p>
+  <div class="ctas"><a class="btn" href="#"> Download for Mac</a><a class="btn ghost" href="#">See how it works</a></div>
+</div></template>
+
+<section class="opt" id="A" data-kind="fan"><span class="tag"><b>A</b> · Fan out</span>
+  <p class="note">The badge splits into three thin branches, each ending in a live session. Every request that arrives travels down one branch and becomes that session's task. Reads as "one voice, many agents" at a glance.</p></section>
+<section class="opt" id="B" data-kind="stack"><span class="tag"><b>B</b> · Stack</span>
+  <p class="note">No lines. Each request drops out of the badge as a new session card; the cards stack under it, three at most, the oldest fading away. Quietest of the four.</p></section>
+<section class="opt" id="C" data-kind="tree"><span class="tag"><b>C</b> · Tree</span>
+  <p class="note">A line drops from the badge and splits into a row of sessions underneath, like a tree. The request lights up its branch on the way down. Most structured; reads like a diagram.</p></section>
+<section class="opt" id="D" data-kind="pocket"><span class="tag"><b>D</b> · The pocket</span>
+  <p class="note">The badge opens into the app's own session list, the black pocket from the notch. Each request lands as a new row, Working in green; one of them asks for you in orange. The most "this is the product".</p></section>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg'
+const SAID = [
+  ['um so can you build a first version of the uh new onboarding flow', 'Build a first version of the new onboarding flow.', 'Onboarding flow', 'claude'],
+  ['and uh add tests for the signup form', 'Add tests for the signup form.', 'Signup tests', 'codex'],
+  ['fix the save button it like does nothing on settings', 'Fix the Save button on Settings. It does nothing.', 'Settings bug', 'claude'],
+  ['so like refactor the auth middleware', 'Refactor the auth middleware.', 'Auth middleware', 'codex'],
+  ['can you pick up the pricing work from yesterday', 'Pick up the pricing work from yesterday.', 'Pricing page', 'claude'],
+  ['why is the checkout test flaky like again', 'Why is the checkout test flaky again?', 'Checkout test', 'codex'],
+]
+const MARK = { claude: 'assets/mark-claude.png', codex: 'assets/mark-codex.png' }
+const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.append(e); return e }
+const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild }
+const chipHTML = (s, st = 'working') => `<div class="chip ${st}"><img src="${MARK[s[3]]}" alt=""><span class="t">${s[2]}</span><span class="st"><i></i>${st === 'needs' ? 'Needs you' : 'Working'}</span></div>`
+
+// The flow line (as live): speech, then the clean request into the badge.
+// `onArrive(i)` fires as each clean sentence reaches the badge.
+function flow(svg, d, W, H, onArrive) {
+  const defs = svg.querySelector('defs'), layer = svg.querySelector('.lines')
+  const path = el('path', { id: svg.id + 'p', d }, defs), total = path.getTotalLength(), CLEAN = 230, FADE = 80, GAP = 34, sw = total - CLEAN
+  const mask = (id) => el('mask', { id, maskUnits: 'userSpaceOnUse', x: -200, y: -200, width: W + 400, height: H + 400 }, defs)
+  const dash = (m, a, b, o) => el('use', { href: '#' + svg.id + 'p', fill: 'none', stroke: '#fff', 'stroke-width': 60, 'stroke-opacity': o, 'stroke-dasharray': `0 ${a} ${b - a} ${total * 3}` }, m)
+  const mr = mask(svg.id + 'r'), mc = mask(svg.id + 'c'), N = 12, st = FADE / N
+  dash(mr, 0, sw - FADE, 1)
+  for (let k = 0; k < N; k++) dash(mr, sw - FADE + k * st, sw - FADE + (k + 1) * st + .5, 1 - (k + .5) / N)
+  for (let k = 0; k < N; k++) dash(mc, sw + k * st, sw + (k + 1) * st + .5, (k + .5) / N)
+  dash(mc, sw + FADE, total, 1)
+  const tr = el('textPath', { href: '#' + svg.id + 'p' }, el('text', { class: 'raw', dy: 7, mask: `url(#${svg.id}r)` }, layer))
+  const tc = el('textPath', { href: '#' + svg.id + 'p' }, el('text', { class: 'clean', dy: 7, mask: `url(#${svg.id}c)` }, layer))
+  const fill = (tp, list) => {
+    const ws = list.map((t) => { tp.textContent = t; return tp.getComputedTextLength() + GAP })
+    const unit = ws.reduce((a, w) => a + w, 0), reps = Math.ceil(total / unit) + 2
+    tp.textContent = ''
+    for (let k = 0; k < reps; k++) list.forEach((t, i) => { const e = el('tspan', { dx: i || k ? GAP : 0 }, tp); e.textContent = t })
+    return { unit, ws }
+  }
+  const R = fill(tr, SAID.map((x) => x[0])), C = fill(tc, SAID.map((x) => x[1]))
+  const starts = C.ws.map((_, i) => C.ws.slice(0, i).reduce((a, w) => a + w, 0))
+  const seen = starts.map(() => null)
+  return (pos) => {
+    tr.setAttribute('startOffset', (pos % R.unit) - R.unit)
+    tc.setAttribute('startOffset', (pos % C.unit) - C.unit)
+    // A sentence arrives when its end reaches the end of the line.
+    starts.forEach((s, i) => {
+      const n = Math.floor((pos + s + C.ws[i] - GAP - C.unit - total) / C.unit)
+      if (seen[i] !== null && n > seen[i]) onArrive(i)
+      seen[i] = n
+    })
+  }
+}
+
+// ── What comes after the badge ──────────────────────────────────────────────
+const AFTER = {
+  // Three branches to the right, each ending in a session.
+  fan(ctx) {
+    const { svg, after, bx, by } = ctx, x0 = bx + 58, cx = bx + 112
+    const ys = [by - 62, by, by + 62], chips = [], shown = [0, 2, 4], paths = []
+    const g = el('g', {}, svg.querySelector('.lines'))
+    ys.forEach((y, k) => {
+      const p = el('path', { class: 'branch', d: `M ${x0} ${by} C ${x0 + 50} ${by}, ${cx - 50} ${y}, ${cx} ${y}` }, g); paths.push(p)
+      const c = h(chipHTML(SAID[shown[k]])); c.classList.add('compact'); c.style.left = cx + 'px'; c.style.top = y - 20 + 'px'; after.append(c); chips.push(c)
+    })
+    chips[2].className = 'chip compact needs'
+    let next = 0
+    return (i) => {
+      const at = shown.indexOf(i), k = at >= 0 ? at : next++ % 3, p = paths[k], L = p.getTotalLength()
+      const dot = el('circle', { class: 'pulse', r: 4 }, g)
+      const t0 = performance.now()
+      ;(function run(now) { const f = Math.min(1, (now - t0) / 650), pt = p.getPointAtLength(f * L); dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y); if (f < 1) requestAnimationFrame(run); else dot.remove() })(t0)
+      setTimeout(() => {
+        // A task already on show just lights up again; otherwise it takes this branch.
+        const at = shown.indexOf(i), j = at >= 0 ? at : k
+        if (at < 0) { const c = chips[k], n = h(chipHTML(SAID[i])); n.classList.add('compact'); n.style.cssText = c.style.cssText; c.replaceWith(n); chips[k] = n; shown[k] = i }
+        chips[j].classList.add('flash'); setTimeout(() => chips[j].classList.remove('flash'), 300)
+      }, 620)
+    }
+  },
+  // New sessions drop out of the badge and stack beneath it.
+  stack(ctx) {
+    const { after, bx, by } = ctx, list = []
+    const lay = () => list.forEach((c, k) => { c.style.top = by + 46 + k * 48 + 'px'; c.style.opacity = k < 3 ? 1 : 0 })
+    for (const k of [4, 2, 0]) { const c = h(chipHTML(SAID[k])); c.style.left = bx - 110 + 'px'; after.append(c); list.push(c) }
+    lay()
+    return (i) => {
+      const c = h(chipHTML(SAID[i])); c.style.left = bx - 110 + 'px'; c.style.top = by + 'px'; c.style.opacity = 0; c.style.transform = 'scale(.8)'
+      after.append(c); list.unshift(c)
+      requestAnimationFrame(() => requestAnimationFrame(() => { c.style.transform = ''; lay() }))
+      const old = list.splice(3); setTimeout(() => old.forEach((o) => o.remove()), 500)
+    }
+  },
+  // A trunk drops from the badge and splits into a row of sessions below.
+  tree(ctx) {
+    const { svg, after, bx, by } = ctx, y1 = by + 70, y2 = by + 120, xs = [bx - 230, bx - 20, bx + 175], chips = [], shown = [0, 3, 2], paths = []
+    const g = el('g', {}, svg.querySelector('.lines'))
+    xs.forEach((x, k) => {
+      paths.push(el('path', { class: 'branch', d: `M ${bx} ${by + 28} L ${bx} ${y1 - 20} C ${bx} ${y1}, ${x} ${y1 - 10}, ${x} ${y2}` }, g))
+      const c = h(chipHTML(SAID[shown[k]], k === 2 ? 'needs' : 'working')); c.classList.add('compact'); after.append(c)
+      requestAnimationFrame(() => { c.style.left = x - c.offsetWidth / 2 + 'px'; c.style.top = y2 + 'px' }); chips.push(c)
+    })
+    let next = 0
+    return (i) => {
+      const at = shown.indexOf(i), k = at >= 0 ? at : next++ % 3, p = paths[k], L = p.getTotalLength(), dot = el('circle', { class: 'pulse', r: 4 }, g), t0 = performance.now()
+      ;(function run(now) { const f = Math.min(1, (now - t0) / 650), pt = p.getPointAtLength(f * L); dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y); if (f < 1) requestAnimationFrame(run); else dot.remove() })(t0)
+      setTimeout(() => {
+        if (at < 0) { const n = h(chipHTML(SAID[i])); n.classList.add('compact'); after.append(n); n.style.left = xs[k] - n.offsetWidth / 2 + 'px'; n.style.top = y2 + 'px'; chips[k].remove(); chips[k] = n; shown[k] = i }
+        chips[k].classList.add('flash'); setTimeout(() => chips[k].classList.remove('flash'), 300)
+      }, 620)
+    }
+  },
+  // The badge opens into the pocket: the app's own list of sessions.
+  pocket(ctx) {
+    const { after, bx, by } = ctx
+    const p = h(`<div class="pocket"><div class="hd"><span>Sessions</span><span class="n"></span></div><div class="rows"></div></div>`)
+    p.style.left = bx - 150 + 'px'; p.style.top = by + 34 + 'px'; after.append(p)
+    const rows = p.querySelector('.rows'), n = p.querySelector('.n')
+    const row = (s, st = 'working') => h(`<div class="row ${st}"><img src="${MARK[s[3]]}" alt=""><span class="t">${s[2]}</span><span class="st"><i></i>${st === 'needs' ? 'Needs you' : 'Working'}</span></div>`)
+    rows.append(row(SAID[2], 'needs'), row(SAID[0]))
+    let count = 4; n.textContent = count + ' running'
+    return (i) => {
+      const r = row(SAID[i]); r.classList.add('enter'); rows.prepend(r)
+      requestAnimationFrame(() => requestAnimationFrame(() => r.classList.remove('enter')))
+      while (rows.children.length > 3) rows.lastElementChild.remove()
+      n.textContent = ++count + ' running'
+    }
+  },
+}
+
+for (const section of document.querySelectorAll('section.opt')) {
+  section.insertBefore(document.getElementById('hero').content.cloneNode(true), section.querySelector('.note'))
+  const svg = el('svg', { class: 'flow', id: 'f' + section.id, 'aria-hidden': 'true' }); section.prepend(svg)
+  const after = document.createElement('div'); after.className = 'after'; section.append(after)
+  const hero = section.querySelector('.hero')
+  let place = null, pos = 200, last = performance.now()
+  const layout = () => {
+    svg.innerHTML = '<defs></defs><g class="lines"></g>'; after.innerHTML = ''
+    const W = section.clientWidth, H = section.clientHeight
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.style.height = H + 'px'
+    const rel = (e) => { const r = e.getBoundingClientRect(), s = section.getBoundingClientRect(); return { top: r.top - s.top, bottom: r.bottom - s.top } }
+    const top = rel(hero.querySelector('h1')).top, by = Math.round(rel(hero.querySelector('.ctas')).bottom + 80)
+    const kind = section.dataset.kind, cx = W * 0.6
+    // The badge sits past the loop, so the line never doubles back on itself.
+    const bx = Math.round(cx + 240)
+    const d = `M -80 ${top + 30} C ${W * .28} ${top - 70}, ${W * .5} ${top + 60}, ${cx} ${top + 210} `
+      + `C ${cx + 15} ${top + 300}, ${cx + 130} ${top + 310}, ${cx + 135} ${top + 235} `
+      + `C ${cx + 140} ${top + 160}, ${cx + 30} ${top + 150}, ${cx + 10} ${top + 215} `
+      + `C ${cx - 10} ${top + 290}, ${cx + 40} ${by}, ${cx + 160} ${by} L ${bx - 64} ${by}`
+    const arrive = AFTER[kind]({ svg, after, bx, by, W })
+    place = flow(svg, d, W, H, arrive)
+    const badge = el('g', { class: 'agents', transform: `translate(${bx} ${by})` }, svg)
+    el('rect', { x: -58, y: -28, width: 116, height: 56, rx: 28 }, badge)
+    el('image', { href: MARK.claude, x: -40, y: -14, width: 28, height: 28 }, badge)
+    el('image', { href: MARK.codex, x: 12, y: -14, width: 28, height: 28 }, badge)
+    place(pos)
+  }
+  document.fonts.ready.then(layout)
+  let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(layout, 150) })
+  ;(function tick(now) { pos += 42 * Math.min(.05, (now - last) / 1000); last = now; place && place(pos); requestAnimationFrame(tick) })(last)
+}
+</script>
+</body>
+</html>
