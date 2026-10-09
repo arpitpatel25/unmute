@@ -1,71 +1,16 @@
-/* THE LIVE NOTCH — styles for ui/hero-notch.js. Sizes and colours are the
-   app's (BarContent, Badge, Theme, TaskSurfaceView); see that file's header. */
-.live-notch{--sf:-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;
-  position:absolute;z-index:40;top:0;left:50%;width:1120px;height:260px;margin-left:-560px;pointer-events:none;transform-origin:50% 0;
-  font-family:var(--sf);-webkit-font-smoothing:antialiased;color:rgba(255,255,255,.95)}
-.live-notch > svg{position:absolute;inset:0;overflow:visible}
-/* The shell: blurs the page behind it, darkened the way macOS's dark
-   materials are, so white text holds over a white page. */
-.ln-glass{position:absolute;inset:0;background:#000;-webkit-backdrop-filter:blur(9px) saturate(1.6) brightness(.6);backdrop-filter:blur(9px) saturate(1.6) brightness(.6)}
-/* The content plane, inset 6 inside the shell (Theme.panelPadding), radius 12. */
-.ln-panel::before{content:"";position:absolute;z-index:-1;inset:6px 20px;border-radius:12px;background:rgba(0,0,0,.34);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.06)}
-.ln-panel{isolation:isolate}
-
-/* Bar level: two shoulders either side of the 200pt cutout, middle empty. */
-.ln-bar{position:absolute;left:0;right:0;top:0;height:34px}
-.ln-half{position:absolute;top:0;height:34px;display:flex;align-items:center;gap:6px;font:500 11px var(--sf);white-space:nowrap}
-.ln-left{right:calc(50% + 100px);padding-left:21px}
-.ln-left.centred{justify-content:center;padding-left:0}
-.ln-right{left:calc(50% + 100px);justify-content:flex-end;padding-right:21px}
-.ln-mark{height:13px;width:auto;margin-right:2px;display:block}
-.ln-dot{flex:none;width:7px;height:7px;border-radius:50%}
-.ln-dot.big{width:9px;height:9px}
-/* The working dot breathes: opacity only, never a spin (NotchShape.Dot). */
-.ln-dot.breathe{animation:ln-breathe 1.2s cubic-bezier(.42,0,.58,1) infinite alternate}
-@keyframes ln-breathe{to{opacity:.42}}
-.ln-badge{font:600 9.5px var(--sf);padding:1.5px 5px;border-radius:5px;line-height:1.2}
-
-/* Expanded: the session, compact (TaskSurfaceView). Content sits inside the
-   fillets (14) plus the gutter (16), below the bar row (34 + 4). */
-.ln-panel{position:absolute;top:0;left:50%;width:600px;height:196px;margin-left:-300px;padding:38px 30px 14px}
-.ln-head{display:flex;align-items:center;gap:9px;height:24px}
-.ln-pmark{width:16px;height:16px;object-fit:contain}
-.ln-title{font:600 17px var(--sf);letter-spacing:-.01em}
-.ln-status{font:600 11px var(--sf);margin-left:2px}
-.ln-body{display:flex;flex-direction:column;gap:8px;margin-top:12px}
-.ln-body p{margin:0;font:400 13px/1.4 var(--sf)}
-.ln-ask{color:rgba(255,255,255,.95)}
-/* The user's own message (Theme.userBubble on black: white 11%, edge 16%). */
-.ln-said{align-self:flex-end;max-width:78%;padding:7px 12px;border-radius:12px;background:rgba(255,255,255,.11);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.16)}
-.ln-said:empty{display:none}
-.ln-work{color:rgba(255,255,255,.62);font-size:12px !important}
-.ln-body [hidden]{display:none}
-/* The composer (Theme.composerFill / composerEdge on black). */
-.ln-composer{position:absolute;left:30px;right:30px;bottom:14px;height:36px;display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;border-radius:10px;
-  background:rgba(255,255,255,.075);box-shadow:inset 0 0 0 1px rgba(255,255,255,.20)}
-.ln-ph{color:rgba(255,255,255,.40);font-size:13px}
-.ln-model{margin-left:auto;color:rgba(255,255,255,.40);font-size:11px}
-.ln-send{width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,.93);position:relative}
-.ln-send::after{content:"";position:absolute;left:8px;top:8px;width:8px;height:8px;border-radius:1.5px;background:rgb(15,17,20)}
-/* Speaking into the session: the aimed chip, red mic and a live waveform. */
-.ln-chip{display:none;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;background:rgba(255,66,69,.16);box-shadow:inset 0 0 0 .5px rgba(255,66,69,.4);color:#FF4245}
-.ln-chip svg{width:11px;height:11px}
-.ln-wave{display:flex;align-items:center;gap:2px;height:12px}
-.ln-wave i{display:block;width:2.5px;height:2.5px;border-radius:2px;background:#fff}
-.ln-composer.listening .ln-chip{display:flex}
-.ln-composer.listening .ln-ph{display:none}
-
-/* Room for the open panel above the hero's words (the nav is above it). */
-.hero{padding-top:214px}
-@media(max-width:759px){.hero{padding-top:150px}}
-@media(prefers-reduced-motion:reduce){.ln-dot.breathe{animation:none}}
-
-/* Words through the notch: raw speech in, the clean request out on a ribbon. */
+/* HERO FLOW — what you say, flowing into your agents (ui/notch-flow.js). */
 .notch-flow{position:absolute;z-index:39;left:0;width:100%;height:420px;pointer-events:none;opacity:0;transition:opacity .6s ease}
 .notch-flow.ready{opacity:1}
+/* Raw speech: light, lowercase, the way it was said. */
 .notch-flow .nf-raw{font:400 16px Inter,system-ui,sans-serif;fill:#a3a3a3}
-.notch-flow .nf-ribbon{fill:none;stroke:#0a0a0a;stroke-width:32;stroke-linejoin:round}
+/* Transcribed: the clean request, white on a black ribbon. */
+.notch-flow .nf-ribbon{fill:none;stroke:#0a0a0a;stroke-width:32;stroke-linejoin:round;stroke-linecap:round}
 .notch-flow .nf-clean{font:500 15px Inter,system-ui,sans-serif;fill:#fff}
-/* The words run below the open panel, so the hero's own words start lower. */
-@media(min-width:1000px){.hero{padding-top:304px}}
+/* Claude Code and Codex, where the ribbon ends. */
+.notch-flow .nf-agents rect{fill:#fff;stroke:#e2e2e2}
+.notch-flow .nf-agents{filter:drop-shadow(0 10px 22px rgba(0,0,0,.12))}
+.notch-flow .nf-ring{fill:none;stroke:#0a0a0a;stroke-opacity:.18;transform-box:fill-box;transform-origin:center;animation:nf-ring 2.4s cubic-bezier(.2,.6,.3,1) infinite}
+@keyframes nf-ring{from{transform:scale(1.2);stroke-opacity:.2}to{transform:scale(2.3);stroke-opacity:0}}
+@media(min-width:1000px){.hero{padding-top:290px}}
 @media(max-width:999px){.notch-flow{display:none}}
+@media(prefers-reduced-motion:reduce){.notch-flow .nf-ring{animation:none;stroke-opacity:0}}

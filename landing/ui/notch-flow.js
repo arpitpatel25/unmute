@@ -1,23 +1,19 @@
-// WORDS THROUGH THE NOTCH — what you say goes in, what your agent gets
-// comes out.
+// HERO FLOW — what you say, transcribed, handed to your agent.
 //
 // Raw speech (grey, lowercase, with the ums) enters on the left, circles,
-// spirals in, runs toward the middle and rises INTO the notch from below.
-// It comes back out of the notch's floor as the clean request, white on a
-// black ribbon, and sweeps away to the right. The switch happens under the
-// bar, which hides it; when the notch opens, its glass frosts it.
-//
-// One path carries both texts at the same offset. Each phrase starts at the
-// same distance along it in both, so what leaves the notch is the clean
-// version of what went in. Stroke masks show raw text before the notch and
-// the ribbon after it. Scrolling pushes the words along.
+// spirals in and runs toward the middle. Partway along it becomes the clean
+// request, white on a black ribbon, which rises into Claude Code and Codex
+// above the headline. One path carries both texts at the same offset; each
+// phrase starts at the same distance along it in both, so what reaches the
+// agents is the clean version of what was said. Stroke masks show raw text
+// before the switch and the ribbon after it. Scrolling pushes it along.
 ;(() => {
   const svg = document.querySelector('.notch-flow')
   if (!svg) return
   const NS = 'http://www.w3.org/2000/svg'
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches
   const SPEED = 44 // px per second
-  const H = 420, BAR_MID = 17, RUN = 262 // the run toward the notch, under the open panel
+  const H = 420, RUN = 232, AGENTS_Y = 70
 
   const PHRASES = [
     ['um so can you build a first version of the uh new onboarding flow', 'Build a first version of the new onboarding flow.'],
@@ -40,15 +36,14 @@
     svg.style.top = document.querySelector('nav.top').offsetHeight + 'px'
     // IN: a circle, a smaller turn inside it, then the run to the notch and
     // straight up into its floor, to the bar's middle.
+    // Raw speech: a circle, a turn inside it, then a run toward the middle.
     const inD = `M -40 110 C 60 92, 150 88, 210 90 C 290 92, 316 150, 314 205 C 312 270, 250 310, 190 308 `
       + `C 120 306, 86 250, 92 200 C 98 150, 150 128, 200 134 C 250 140, 262 190, 240 222 `
-      + `C 220 252, 236 ${RUN}, 330 ${RUN} `
-      + `L ${c - 140} ${RUN} C ${c - 88} ${RUN}, ${c - 60} ${RUN - 28}, ${c - 60} ${RUN - 80} L ${c - 60} ${BAR_MID + 40} `
-      + `C ${c - 60} ${BAR_MID + 12}, ${c - 48} ${BAR_MID}, ${c - 20} ${BAR_MID} L ${c} ${BAR_MID}`
-    // OUT: across under the bar, down out of its floor, and away to the right.
-    const outD = ` L ${c + 20} ${BAR_MID} C ${c + 48} ${BAR_MID}, ${c + 60} ${BAR_MID + 12}, ${c + 60} ${BAR_MID + 40} `
-      + `L ${c + 60} ${RUN - 80} C ${c + 60} ${RUN - 28}, ${c + 88} ${RUN}, ${c + 140} ${RUN} `
-      + `C ${c + 320} ${RUN}, ${W - 260} ${RUN + 10}, ${W - 150} ${RUN + 50} S ${W - 30} ${RUN + 120}, ${W + 60} ${RUN + 130}`
+      + `C 220 252, 236 ${RUN}, 330 ${RUN} L ${c - 330} ${RUN}`
+    // Transcribed: the same line carries on as a ribbon and rises into the
+    // agents' badge, centred above the headline.
+    const outD = ` L ${c - 140} ${RUN} C ${c - 60} ${RUN}, ${c} ${RUN - 40}, ${c} ${RUN - 110} L ${c} ${AGENTS_Y}`
+    svg.querySelector('.nf-agents').setAttribute('transform', `translate(${c} ${AGENTS_Y})`)
     const d = inD + outD
     for (const p of [path, mRaw, mClean]) p.setAttribute('d', d)
     probe.setAttribute('d', inD)
