@@ -139,7 +139,7 @@ const AFTER = {
   // Three branches to the right, each ending in a session.
   fan(ctx) {
     const { svg, after, bx, by } = ctx, x0 = bx + 58, cx = bx + 112
-    const ys = [by - 62, by, by + 62], chips = [], shown = [0, 2, 4], paths = []
+    const ys = [by - 62, by, by + 62], chips = [], shown = [0, 1, 2], paths = []
     const g = el('g', {}, svg.querySelector('.lines'))
     ys.forEach((y, k) => {
       const p = el('path', { class: 'branch', d: `M ${x0} ${by} C ${x0 + 50} ${by}, ${cx - 50} ${y}, ${cx} ${y}` }, g); paths.push(p)
@@ -148,7 +148,13 @@ const AFTER = {
     chips[2].className = 'chip compact needs'
     let next = 0
     return (i) => {
-      const at = shown.indexOf(i), k = at >= 0 ? at : next++ % 3, p = paths[k], L = p.getTotalLength()
+      // The three sessions always include both Claude Code and Codex: a new
+      // task takes the next branch whose replacement keeps both on show.
+      const mixed = (list) => new Set(list.map((j) => SAID[j][3])).size > 1
+      let k = shown.indexOf(i)
+      if (k < 0) for (let n = 0; n < 3; n++) { const c = (next + n) % 3, t = shown.slice(); t[c] = i; if (mixed(t)) { k = c; next = c + 1; break } }
+      if (k < 0) return
+      const at = shown.indexOf(i), p = paths[k], L = p.getTotalLength()
       const dot = el('circle', { class: 'pulse', r: 4 }, g)
       const t0 = performance.now()
       ;(function run(now) { const f = Math.min(1, (now - t0) / 650), pt = p.getPointAtLength(f * L); dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y); if (f < 1) requestAnimationFrame(run); else dot.remove() })(t0)
