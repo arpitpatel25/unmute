@@ -22,8 +22,8 @@ nav.top .links a:not(.btn){text-decoration:none}
 /* 1 · Hero */
 .hero{max-width:1120px;margin:auto;padding:72px 24px 40px;text-align:center}
 .kicker{font-size:14px;font-weight:500;color:var(--faint)}
-.hero h1{max-width:900px;margin:16px auto 0;font:400 clamp(40px,5.4vw,68px)/1.06 var(--serif);letter-spacing:-.025em}
-.def{max-width:640px;margin:22px auto 0;font-size:20px;line-height:1.5;color:var(--ink)}
+.hero h1{max-width:1000px;margin:0 auto;font:400 clamp(48px,7.4vw,96px)/1.02 var(--serif);letter-spacing:-.025em;text-wrap:balance}
+.def{max-width:640px;margin:26px auto 0;font-size:20px;line-height:1.5;color:var(--ink);text-wrap:balance}
 .not{max-width:640px;margin:12px auto 0;font-size:16px;line-height:1.5;color:var(--faint)}
 .ctas{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:28px}
 .works{margin-top:18px;font-size:13px;color:var(--faint);display:flex;gap:8px;justify-content:center;align-items:center}
