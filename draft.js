@@ -8,6 +8,18 @@
 // says "Click anywhere for sound"; the first interaction turns it on.
 ;(() => {
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  // AUTOPLAY CAN BE REFUSED (iPhone Low Power Mode, Android data saver). Then
+  // the poster shows with a play button, and a tap starts that demo.
+  for (const v of document.querySelectorAll('.film video')) {
+    v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', ''); v.muted = true
+    const fig = v.closest('.film'), frame = v.closest('.frame')
+    const tap = document.createElement('button'); tap.type = 'button'; tap.className = 'tap'; tap.setAttribute('aria-label', 'Play demo'); tap.innerHTML = '<span></span>'
+    frame.append(tap)
+    const realPlay = v.play.bind(v)
+    v.play = () => { const r = realPlay(); if (r && r.catch) r.then(() => fig.classList.remove('blocked'), (e) => { if (e && e.name === 'NotAllowedError' && v.muted) fig.classList.add('blocked') }); return r }
+    tap.addEventListener('click', () => { fig.classList.remove('blocked'); realPlay().catch(() => {}) })
+    v.addEventListener('playing', () => fig.classList.remove('blocked'))
+  }
   const films = [...document.querySelectorAll('.film')].filter((f) => f.querySelector('.listen'))
   const items = films.map((fig) => ({ fig, v: fig.querySelector('video'), btn: fig.querySelector('.listen-btn'), hint: fig.querySelector('.listen .hint'), ratio: 0 }))
   let soundOn = true, unlocked = navigator.userActivation?.hasBeenActive || false, focused = null
