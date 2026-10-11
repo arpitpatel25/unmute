@@ -112,3 +112,45 @@
 .uses .card li::before{content:none}
 .film.needs-click .listen .hint{color:var(--ink);font-weight:500}
 .film.needs-click .listen-btn{border-color:var(--ink)}
+
+/* ── Phones ─────────────────────────────────────────────────────────────── */
+.close h2,.final h2,.uses h2,.pricing h2,.how>h2{text-wrap:balance}
+@media(max-width:600px){
+  /* Demos run edge to edge with a slimmer bezel, so the recordings stay readable. */
+  .film{margin-left:-14px;margin-right:-14px}
+  .film .frame{border-width:5px;border-radius:12px 12px 0 0}
+  .film .frame::before{height:4%;min-height:4px;border-radius:0 0 4px 4px}
+  .film .listen,.film .beats,.film figcaption{margin-left:14px;margin-right:14px}
+  /* Under each demo, only the step that's happening now. */
+
+  .film .beats{margin-top:12px}
+  /* Callout labels are too small to read at this size; the boxes stay. */
+  .ring span{display:none}
+  .ring i{transform:scale(.8)}
+  /* Hero */
+  .hero h1{font-size:clamp(34px,9.6vw,42px)}
+  .hero .def{font-size:16.5px;line-height:1.55}
+  .hero .ctas{flex-direction:column;align-items:stretch;max-width:320px;margin-left:auto;margin-right:auto}
+  .hero .ctas .btn{justify-content:center}
+  .hero .works{font-size:12.5px}
+  .hero-film{margin-top:36px}
+  /* Steps */
+  .steps{gap:56px}
+  .step .text .n{width:26px;height:26px;font-size:13px}
+  .step h3{margin-top:12px}
+  .film .listen{justify-content:flex-start;gap:10px}
+  .film .listen .hint{font-size:13px}
+  /* Use cases */
+  .uses .card{padding:20px 18px 6px}
+  .uses .card li{font-size:15px;padding:11px 0}
+  /* Pricing */
+  .pricing{margin:40px 12px 0;padding:44px 18px 40px}
+  .pricing .plan{padding:20px 18px}
+  .pricing .pprice b{font-size:34px}
+  .pricing .incl{gap:16px}
+  /* Close */
+  .final{padding:72px 20px 80px}
+  .final h2{font-size:34px}
+}
+/* Phones and tablets: under each demo, only the step that's happening now. */
+@media(max-width:900px){.film .beats{grid-template-columns:1fr!important}.film .beats li:not(.on){display:none}}

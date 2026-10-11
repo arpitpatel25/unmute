@@ -17,7 +17,7 @@
       const live = it === focused && soundOn && unlocked
       it.btn.setAttribute('aria-pressed', String(soundOn))
       it.btn.querySelector('.lbl').textContent = soundOn ? 'Mute' : 'Turn sound on'
-      it.hint.textContent = !soundOn ? 'Sound is off' : unlocked ? (live ? 'Playing with sound' : 'Plays with sound when you scroll to it') : 'Click anywhere on the page for sound'
+      it.hint.textContent = !soundOn ? 'Sound is off' : unlocked ? (live ? 'Playing with sound' : 'Plays with sound when you scroll to it') : (matchMedia('(pointer: coarse)').matches ? 'Tap anywhere on the page for sound' : 'Click anywhere on the page for sound')
       it.fig.classList.toggle('needs-click', soundOn && !unlocked && it === focused)
     }
   }
