@@ -19,14 +19,14 @@
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="assets/fonts/Lora.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="clear.css?v=20261011-3" />
-<link rel="stylesheet" href="draft.css?v=5" />
+<link rel="stylesheet" href="draft.css?v=6" />
 </head>
 <body>
 
 <nav class="top">
   <a href="#top" class="brand" aria-label="Unmute home"><img src="../unmute-wordmark-black.png" alt="unmute" /></a>
   <div class="links">
-    <a href="#how">How it works</a>
+    <a href="#how">How it works</a><a href="#pricing">Pricing</a>
     <a class="btn sm" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Download for Mac</a>
   </div>
 </nav>
@@ -86,8 +86,33 @@
 <section class="uses">
   <h2>What you can use Unmute for</h2>
   <p class="lead">Tap <kbd>right ⌥</kbd> and say it, wherever you are.</p>
-  <div class="groups"><div class="group"><h3>Code</h3><ul><li>“Fix the bug Rishi reported in Slack.”</li><li>“Find out why checkout fails. Once it’s fixed, open a PR.”</li><li>“Review this pull request and merge it if the tests pass.”</li><li>“Add tests for the signup form.”</li><li>“Refactor the auth middleware.”</li><li>“Commit these changes on a new branch.”</li><li>“Create a worktree for the pricing page and start on it there.”</li><li>“Check out the payments branch in a new worktree.”</li><li>“Rebase this branch on main and fix the conflicts.”</li><li>“Why is this test flaky? Here’s a screenshot.”</li></ul></div><div class="group"><h3>Everything else</h3><ul><li>“Watch this YouTube video and list the key points.”</li><li>“Email these three files to Priya with a short note.”</li><li>“Edit this video: cut the first ten seconds and add captions.”</li><li>“Research how competitors price their team plans.”</li><li>“Turn this Slack thread into tasks with owners.”</li><li>“Read this PDF and pull out the action items.”</li><li>“Add what we decided in the meeting to the onboarding session.”</li><li>“Draft a reply to this email.”</li></ul></div></div>
+  <div class="cards"><div class="card"><div class="card-h"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><h3>Code</h3></div><ul><li>Fix the bug Rishi reported in Slack.</li><li>Find out why checkout fails. Once it’s fixed, open a PR.</li><li>Review this pull request and merge it if the tests pass.</li><li>Add tests for the signup form.</li><li>Refactor the auth middleware.</li><li>Commit these changes on a new branch.</li><li>Create a worktree for the pricing page and start on it there.</li><li>Check out the payments branch in a new worktree.</li><li>Rebase this branch on main and fix the conflicts.</li><li>Why is this test flaky? Here’s a screenshot.</li></ul></div><div class="card"><div class="card-h"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.4 5.6L20 11l-5.6 2.4L12 19l-2.4-5.6L4 11l5.6-2.4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span><h3>Everything else</h3></div><ul><li>Watch this YouTube video and list the key points.</li><li>Email these three files to Priya with a short note.</li><li>Edit this video: cut the first ten seconds and add captions.</li><li>Research how competitors price their team plans.</li><li>Turn this Slack thread into tasks with owners.</li><li>Read this PDF and pull out the action items.</li><li>Add what we decided in the meeting to the onboarding session.</li><li>Draft a reply to this email.</li></ul></div></div>
   <p class="note">Anything Claude Code or Codex can do with the tools you’ve connected to them.</p>
+</section>
+
+<!-- Pricing. -->
+<section class="pricing" id="pricing">
+  <h2>Pricing</h2>
+  <p class="lead">One plan. It works with your own Claude Code or Codex subscription.</p>
+  <div class="plans">
+    <div class="plan">
+      <p class="pname">Monthly</p>
+      <p class="pprice"><b>$7.99</b><span>/ month</span></p>
+      <p class="pnote">Cancel anytime.</p>
+    </div>
+    <div class="plan best">
+      <p class="pname">Yearly <em>2 months free</em></p>
+      <p class="pprice"><b>$79</b><span>/ year</span></p>
+      <p class="pnote">About $6.58 a month.</p>
+    </div>
+  </div>
+  <ul class="incl">
+    <li>Talk to Claude Code and Codex from anywhere on your Mac</li>
+    <li>Sessions come to you when they finish or need a decision</li>
+    <li>Screenshots and links added to what you say</li>
+  </ul>
+  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="15" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a></div>
+  <p class="small">For Macs with Apple silicon. Needs your own Claude Code or Codex subscription.</p>
 </section>
 
 <!-- Close. -->
