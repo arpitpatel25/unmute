@@ -3,178 +3,188 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Unmute — a voice interface for Claude Code and Codex</title>
-<meta name="description" content="Speak from any app on your Mac to start or continue a Claude Code or Codex session. Capture context as you talk. When a session needs you, the notch opens wherever you are." />
+<title>Unmute: talk to Claude Code and Codex without leaving what you’re doing</title>
+<meta name="description" content="Unmute is a Mac app. Tap a key, say what you want done, and Claude Code or Codex starts on it. When it finishes or needs you, its chat opens at the top of your screen." />
 <link rel="icon" href="icon.png" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
 <link rel="canonical" href="https://justunmute.me/" />
-<meta property="og:title" content="Unmute — talk to your agents from anywhere" />
-<meta property="og:description" content="Start and continue Claude Code or Codex sessions by voice, from anywhere on your Mac. When a session needs you, the notch opens wherever you are." />
+<meta property="og:title" content="Unmute: talk to Claude Code and Codex without leaving what you’re doing" />
+<meta property="og:description" content="Unmute is a Mac app. Tap a key, say what you want done, and Claude Code or Codex starts on it." />
 <meta property="og:image" content="https://justunmute.me/og.png" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://justunmute.me/" />
 <meta name="twitter:site" content="@just_unmute" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:image" content="https://justunmute.me/og.png" />
-<link rel="stylesheet" href="ui/wallpaper.css?v=20261003-sage" />
-<link rel="stylesheet" href="v3.css?v=20261003-v6" />
-<link rel="stylesheet" href="heritage.css?v=20261009-fast1" />
-<link rel="stylesheet" href="film.css?v=20261009-fast1" />
-<link rel="stylesheet" href="mac.css?v=20261009-fast1" />
-<link rel="stylesheet" href="notch-hero.css?v=20261009-fan2" />
-<link rel="preload" href="assets/fonts/Lora.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
-<!-- The demos' code and data, fetched in parallel instead of one after another. -->
-<link rel="modulepreload" href="app.js?v=20261009-fast1" />
-<link rel="modulepreload" href="ui/film.js?v=20261009-fast1" />
-<link rel="modulepreload" href="ui/stage.js?v=20261009-fast1" />
-<link rel="preload" href="assets/ui/manifest.json" as="fetch" crossorigin />
-<link rel="preload" href="ui/vendor/gsap.min.js" as="script" />
-<link rel="preload" href="assets/wallpaper-flow.svg?v=2" as="image" />
-<!-- Every notch and pill surface on this page is a capture of the real unmute-notch
-     helper (unmute-cloud), placed at its real window position. See landing/README.md. -->
+<link rel="preload" href="assets/fonts/Lora.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="clear.css?v=20261011-3" />
+<link rel="stylesheet" href="draft.css?v=16" />
 </head>
 <body>
 
 <nav class="top">
-  <a href="#top" aria-label="Unmute home"><img src="unmute-wordmark-black.png" alt="unmute" /></a>
+  <a href="#top" class="brand" aria-label="Unmute home"><img src="unmute-wordmark-black.png" alt="unmute" /></a>
   <div class="links">
-    <a href="#why">Why Unmute</a><a href="#start">How it works</a><a href="pricing.html">Pricing</a>
-    <a class="btn sm" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"> Download for Mac</a>
+    <a href="#how">How it works</a><a href="#pricing">Pricing</a>
+    <a class="btn sm" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Download for Mac</a>
   </div>
 </nav>
 
 <main id="top">
 
-<!-- HERO — concrete first: what it is, then the demo. Text never animates in. -->
+<!-- What it is, in one plain sentence, then the real thing. -->
 <section class="hero">
-  <!-- What you say, flowing into your agents (ui/notch-flow.js). -->
-<div class="nf-after" aria-hidden="true"></div>
-  <svg class="notch-flow" height="680" aria-hidden="true">
-  <defs></defs>
-  <g class="nf-streams"></g>
-  <!-- Where the words go. -->
-  <g class="nf-agents">
-    <circle class="nf-ring" r="34"/>
-    <rect x="-58" y="-28" width="116" height="56" rx="28"/>
-    <image href="assets/mark-claude.png" x="-40" y="-14" width="28" height="28"/>
-    <image href="assets/mark-codex.png" x="12" y="-14" width="28" height="28"/>
-  </g>
-</svg>
-  <p class="eyebrow">A voice interface for Claude Code and Codex.</p>
-  <h1>Talk to your agents.<br />From anywhere.</h1>
-  <p class="sub">Start or continue a Claude Code or Codex session by voice, from any app.<br class="desktop-break" /> Bring the context along. Keep going while your agent works.</p>
+  <h1>Talk to Claude Code and Codex without leaving what you’re doing.</h1>
+  <p class="def">Unmute is a Mac app. Tap a key, say what you want done, and Claude Code or Codex starts on it. When it finishes or needs you, its chat opens at the top of your screen. You don’t go to the session. It comes to you.</p>
   <div class="ctas">
-    <a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="16" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a>
-    <a class="btn ghost" href="#start">See how it works</a>
+    <a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="15" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a>
+    <a class="btn ghost" href="#how">See how it works</a>
   </div>
-  <div class="works">Works with <span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span><img src="assets/mark-codex.png" alt="" />Codex</span></div>
-  <div class="hero-demo">
-    <ol class="chapters" aria-label="Demo chapters">
-      <li><button type="button"><b>1</b>Say it, from any app</button></li>
-      <li><button type="button"><b>2</b>It runs in Claude Code</button></li>
-      <li><button type="button"><b>3</b>It comes back when it needs you</button></li>
-    </ol>
-    <div class="mac"><div data-stage="hero"></div></div>
-    <p class="film-sub" data-said="hero" aria-live="off"></p>
-  </div>
+  <p class="works"><span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span class="dot">·</span><span><img src="assets/mark-codex.png" alt="" />Codex</span><span class="dot">·</span><span class="plain">Uses your own subscription</span><span class="dot">·</span><span class="plain">Apple silicon Macs</span></p>
+
+  <figure class="film hero-film">
+    <div class="frame">
+      <video data-cues="hero2" autoplay muted loop playsinline preload="auto" poster="assets/video/hero-poster.jpg?v=full2">
+        <source src="assets/video/hero.webm?v=full2" type="video/webm" />
+        <source src="assets/video/hero.mp4?v=full2" type="video/mp4" />
+      </video>
+      <button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button>
+    </div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div>
+  </figure>
 </section>
 
-<!-- WHY — the only philosophy section before the close. -->
-<section class="sec why" id="why">
-  <div class="copy">
-    <h2>What changes when asking becomes effortless?</h2>
-    <p>Every time you reach for your machine, there's a little ceremony. Open an app. Find a conversation. Put the thought back together. Sometimes, you decide it can wait.</p>
-    <p>Make reaching out as easy as thinking out loud, and more of those thoughts get a chance to become something.</p>
-    <ol class="ceremony">
-      <li><b>Open the right app</b><span>One more switch</span></li>
-      <li><b>Find the conversation</b><span>Where was it?</span></li>
-      <li><b>Gather the context</b><span>Copy. Paste. Explain.</span></li>
-      <li><b>Decide to do it later</b><span>Thought lost</span></li>
-    </ol>
-  </div>
-  <div class="demo">
-    <p class="demo-kicker">Or just say it, right here.</p>
-    <div class="mac"><div data-stage="why"></div></div>
-    <p class="film-sub" data-said="why"></p>
-  </div>
+<!-- How it works: three steps, one real clip each. -->
+<section class="how" id="how">
+  <h2>How it works</h2>
+  <ol class="steps">
+    <li class="step">
+      <div class="text"><span class="n">1</span><h3>Say what you want done.</h3><p>Tap <kbd>right ⌥</kbd> and speak. Your words start a new Claude Code or Codex session, or go to one that’s already running.</p></div>
+      <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-say-poster.jpg?v=full2"><source src="assets/video/step-say.webm?v=full2" type="video/webm" /><source src="assets/video/step-say.mp4?v=full2" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
+    </li>
+    <li class="step">
+      <div class="text"><span class="n">2</span><h3>Keep working.</h3><p>The session runs in Claude Code or Codex. A small status at the top of your screen shows it’s working.</p></div>
+      <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-works-poster.jpg?v=full2"><source src="assets/video/step-works.webm?v=full2" type="video/webm" /><source src="assets/video/step-works.mp4?v=full2" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
+    </li>
+    <li class="step">
+      <div class="text"><span class="n">3</span><h3>Answer when it asks.</h3><p>When the session finishes or needs a decision, its chat opens at the top of your screen. Read it and reply by voice, without going anywhere.</p></div>
+      <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-answer-poster.jpg?v=full2"><source src="assets/video/step-answer.webm?v=full2" type="video/webm" /><source src="assets/video/step-answer.mp4?v=full2" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
+    </li>
+  </ol>
 </section>
 
-<section class="sec" id="start">
-  <div class="copy">
-    <p class="eyebrow">Start and continue agent sessions</p>
-    <h2>Start a session. Or pick one back up.</h2>
-    <p>Press a key and speak to start a new agent session or send an instruction to an existing one. Ask a question, delegate a task, or give a follow-up — all from the app you're already using.</p>
-
+<!-- Not just code: one line. -->
+<section class="wide">
+  <div class="text">
+    <h2>Not just for code.</h2>
+    <p>Anything you’d ask Claude Code or Codex: research a competitor, plan a launch, follow up on a thread.</p>
   </div>
-  <div class="demo"><div class="mac"><div data-stage="start"></div></div><p class="film-sub" data-said="start"></p></div>
+  <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-research-poster.jpg?v=full2"><source src="assets/video/step-research.webm?v=full2" type="video/webm" /><source src="assets/video/step-research.mp4?v=full2" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
 </section>
 
-<section class="sec flip" id="capture">
-  <div class="copy">
-    <p class="eyebrow">Capture context</p>
-    <h2>Your thought comes with context. Bring it along.</h2>
-    <p>The page you're reading. The error you're seeing. The design you want changed. Capture a link, text, or screenshot as you speak, and send it straight into your agent session.</p>
-  </div>
-  <div class="demo"><div class="mac"><div data-stage="capture"></div></div><p class="film-sub" data-said="capture"></p></div>
+
+<!-- What people say to it. -->
+<section class="uses">
+  <h2>What you can use Unmute for</h2>
+  <p class="lead">Tap <kbd>right ⌥</kbd> and say it, wherever you are.</p>
+  <div class="cards"><div class="card"><div class="card-h"><h3>Code</h3></div><ul><li>Fix the bug Rishi reported in Slack.</li><li>Find out why checkout fails. Once it’s fixed, open a PR.</li><li>Review this pull request and merge it if the tests pass.</li><li>Add tests for the signup form.</li><li>Refactor the auth middleware.</li><li>Commit these changes on a new branch.</li><li>Create a worktree for the pricing page and start on it there.</li><li>Check out the payments branch in a new worktree.</li><li>Rebase this branch on main and fix the conflicts.</li><li>Why is this test flaky? Here’s a screenshot.</li></ul></div><div class="card"><div class="card-h"><h3>Everything else</h3></div><ul><li>Watch this YouTube video and list the key points.</li><li>Email these three files to Priya with a short note.</li><li>Edit this video: cut the first ten seconds and add captions.</li><li>Research how competitors price their team plans.</li><li>Turn this Slack thread into tasks with owners.</li><li>Read this PDF and pull out the action items.</li><li>Add what we decided in the meeting to the onboarding session.</li><li>Draft a reply to this email.</li></ul></div></div>
+  <p class="note">Anything Claude Code or Codex can do with the tools you’ve connected to them.</p>
 </section>
 
-<section class="sec" id="agent">
-  <div class="copy">
-    <p class="eyebrow">Unmute Agent</p>
-    <h2>Find the session. Remember the work.</h2>
-    <p>Tell Unmute Agent what you want to return to. It finds the relevant agent session and brings back its context, including related conversations and meeting notes. Pick up the work without remembering where you left it.</p>
-    <p class="aside">You remember the work. Unmute helps find where you left it.</p>
+<!-- Pricing. -->
+<section class="pricing" id="pricing">
+  <h2>Pricing</h2>
+  <p class="lead">One plan with everything. It works with your own Claude Code or Codex subscription.</p>
+  <div class="plans">
+    <div class="plan">
+      <p class="pname">Monthly</p>
+      <p class="pprice"><b>$7.99</b><span>/ month</span></p>
+      <p class="pnote">Cancel anytime.</p>
+    </div>
+    <div class="plan best">
+      <p class="pname">Yearly <em>2 months free</em></p>
+      <p class="pprice"><b>$79</b><span>/ year</span></p>
+      <p class="pnote">About $6.58 a month.</p>
+    </div>
   </div>
-  <div class="demo"><div class="mac"><div data-stage="agent"></div></div><p class="film-sub" data-said="agent"></p></div>
+  <div class="incl-h">Everything in Unmute</div><ul class="incl"><li><b>Claude Code and Codex by voice</b><span>Start or continue a session from anywhere on your Mac. Tap right ⌥ and speak.</span></li><li><b>Sessions come to you</b><span>When a session finishes or needs a decision, its chat opens at the top of your screen.</span></li><li><b>All your sessions in the notch</b><span>See what’s running and reply to any session without opening it.</span></li><li><b>Context while you talk</b><span>Add a screenshot or the link you’re looking at to what you say.</span></li><li><b>Unmute Agent</b><span>Ask for a past session by what it was about, and pick up where you left off.</span></li><li><b>Unlimited dictation</b><span>Type by voice in any text field, with the best cloud models. Works on-device when you’re offline.</span></li><li><b>Meeting notetaker</b><span>Summary, decisions and action items, ready to send to a session.</span></li><li><b>Scratchpad</b><span>Collect dictations as you think, then send them to a session or paste them.</span></li></ul>
+  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="15" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a></div>
+  <p class="small">For Macs with Apple silicon. Needs your own Claude Code or Codex subscription.</p>
 </section>
 
-<section class="sec attention" id="attention">
-  <div class="copy">
-    <p class="eyebrow">When a session needs you</p>
-    <h2>The task comes to you.<br />You don't go to the task.</h2>
-    <p>When an agent session needs your attention, the notch opens wherever you are on your Mac. Answer its question, review what it needs, or give the next instruction right there. Then carry on while the agent continues.</p>
-  </div>
-  <div class="demo"><div class="mac"><div data-stage="attention"></div></div><p class="film-sub" data-said="attention"></p></div>
-</section>
-
-<section class="sec" id="meetings">
-  <div class="copy">
-    <p class="eyebrow">Meeting notes</p>
-    <h2>Leave the meeting with more than notes.</h2>
-    <p>Capture a meeting and generate notes with your connected agent. Review what was decided, then start or continue an agent session with the meeting context already attached.</p>
-  </div>
-  <div class="demo"><div class="mac"><div data-stage="meet"></div></div><p class="film-sub" data-said="meet"></p></div>
-</section>
-
-<section class="sec flip" id="dictation">
-  <div class="copy">
-    <p class="eyebrow">Dictation</p>
-    <h2>Write by voice wherever you already write.</h2>
-    <p>Messages, documents, notes, and prompts. Press a key, speak, and keep going.</p>
-    <p class="aside">Free on-device dictation, no account needed.</p>
-  </div>
-  <div class="demo"><div class="mac"><div data-stage="dictate"></div></div><p class="film-sub" data-said="dictate"></p></div>
-</section>
-
-<section class="close" id="agents">
-  <h2>A shorter distance between<br class="desktop-break" /> thinking and doing.</h2>
-  <p>When reaching your agents takes less effort, you can ask more often, express more of the thought, and keep work moving.</p>
-  <div class="marks"><span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span><img src="assets/mark-codex.png" alt="" />Codex</span></div>
-  <p class="accounts">Your agents. Your accounts. Your subscriptions.</p>
-  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Download for Mac</a></div>
-  <p class="tag">Make delegating as easy as thinking out loud.</p>
+<!-- Close. -->
+<section class="final">
+  <h2>The best way to vibe code.<br />And to vibe work.</h2>
+  <p class="need">Say it, keep working, answer when it asks. Works with your own Claude Code or Codex subscription.</p>
+  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="15" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a></div>
 </section>
 
 </main>
 
 <footer>
   <span>© 2026 unmute</span>
-  <span class="flinks"><a href="dictation.html">Dictation</a><a href="pricing.html">Pricing</a><a href="manifesto.html">Manifesto</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
+  <span class="flinks"><a href="#pricing">Pricing</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
 </footer>
 
-<script src="ui/notch-flow.js?v=20261009-fan2" defer></script>
-<script src="ui/vendor/gsap.min.js"></script>
-<script type="module" src="app.js?v=20261009-fast1"></script>
+<script>
+// Cues for the draft's videos, which show the whole screen whenever a session
+// is open (so it reads as the notch). Ring boxes are % of the 16:9 frame.
+window.EXTRA_CUES = {
+  // Two scenes: Slack (0–23.8 s, with a 7.5 s held opening), then the session
+  // coming back with a question (from 23.3 s).
+  hero2: {
+    steps: [
+      { at: 0, k: 'On screen', t: 'Rishi’s bug report in Slack' },
+      { at: 10.0, k: 'You say', t: 'Tap right ⌥: “Investigate this issue reported by Rishi”' },
+      { at: 16.9, k: 'Claude Code', t: 'A new session opens in the notch, with the Slack link' },
+      { at: 23.5, k: 'It comes back', t: 'Done, it asks what next, right where you are' },
+      { at: 29.3, k: 'You answer', t: '“Commit those changes in a new separate branch”' },
+    ],
+    rings: [
+      { from: 10.1, to: 16.8, x: 50.4, y: 49.6, w: 48.6, h: 11, n: 1, label: 'On screen: the bug report', at: 'below' },
+      { from: 20.3, to: 23.1, x: 41.5, y: 16.3, w: 28.5, h: 4, n: 3, label: 'Added by Unmute: the Slack link', at: 'below' },
+      { from: 24.5, to: 29.1, x: 22.8, y: 67.6, w: 54, h: 5.2, n: 4, label: 'Its question', at: 'above' },
+      { from: 34.3, to: 99, x: 22.8, y: 55, w: 51, h: 4.6, n: 5, label: 'Done', at: 'below' },
+    ],
+  },
+  'step-say': {
+    steps: [
+      { at: 0, k: 'On screen', t: 'A “Subscription inactive” banner while signed in' },
+      { at: 0.8, k: 'You say', t: 'Tap right ⌥: “Why is the subscription inactive? We need to check that.”' },
+      { at: 9.2, k: 'Unmute adds', t: 'A screenshot of what you were looking at' },
+      { at: 10.2, k: 'Claude Code', t: 'A new session starts fixing it' },
+    ],
+    rings: [
+      { from: 0.4, to: 9, x: 29.4, y: 16, w: 41.4, h: 9, n: 1, label: 'On screen: the bug', at: 'below' },
+      { from: 9.5, to: 12.4, x: 29.8, y: 21, w: 7.8, h: 11.8, n: 3, label: 'Added by Unmute: a screenshot', at: 'below' },
+    ],
+  },
+  'step-answer': {
+    steps: [
+      { at: 0, k: 'It asks', t: 'Claude Code: “Want me to put them on a branch and commit?”' },
+      { at: 3.4, k: 'You answer', t: 'Tap right ⌥: “Commit those changes in a new separate branch.”' },
+      { at: 10.8, k: 'Done', t: 'Committed on a new branch, without opening a terminal' },
+    ],
+    rings: [
+      { from: 1.2, to: 3.8, x: 22.8, y: 67.6, w: 54, h: 5.2, n: 1, label: 'The question', at: 'above' },
+      { from: 11, to: 99, x: 22.8, y: 55, w: 51, h: 4.6, n: 3, label: 'The result', at: 'below' },
+    ],
+  },
+  'step-research': {
+    steps: [
+      { at: 0, k: 'On screen', t: 'A video on X about Wispr Flow’s paid ads program' },
+      { at: 0.8, k: 'You say', t: 'Tap right ⌥: “Let’s see how this fits for Unmute. Can we replicate it?”' },
+      { at: 14.4, k: 'Unmute adds', t: 'A link to the post you were watching' },
+      { at: 15.2, k: 'Claude Code', t: 'A research session starts on it' },
+    ],
+    rings: [
+      { from: 3, to: 13.8, x: 32, y: 25, w: 30.2, h: 30.4, n: 1, label: 'On screen: the video', at: 'below' },
+      { from: 14.8, to: 99, x: 32.3, y: 16.3, w: 23, h: 4, n: 3, label: 'Added by Unmute: the post’s link', at: 'below' },
+    ],
+  },
+}
+</script>
+<script src="clear.js?v=20261011-4" defer></script>
+<script src="draft.js?v=3" defer></script>
 </body>
 </html>
