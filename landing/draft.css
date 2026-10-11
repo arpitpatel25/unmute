@@ -110,3 +110,5 @@
 .uses .ic{display:none}
 .uses .card li{padding-left:0}
 .uses .card li::before{content:none}
+.film.needs-click .listen .hint{color:var(--ink);font-weight:500}
+.film.needs-click .listen-btn{border-color:var(--ink)}

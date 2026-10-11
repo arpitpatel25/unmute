@@ -105,6 +105,9 @@
     },
   }
 
+  // A page can add its own cue sets (window.EXTRA_CUES) before this runs.
+  Object.assign(CUES, window.EXTRA_CUES || {})
+
   for (const v of videos) {
     const cues = CUES[v.dataset.cues]
     if (!cues) continue
