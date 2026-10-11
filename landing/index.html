@@ -18,7 +18,7 @@
 <meta name="twitter:image" content="https://justunmute.me/og.png" />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="assets/fonts/Lora.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="stylesheet" href="clear.css?v=20261011-1" />
+<link rel="stylesheet" href="clear.css?v=20261011-3" />
 </head>
 <body>
 
@@ -44,13 +44,13 @@
 
   <figure class="film hero-film">
     <div class="frame">
-      <video data-sound autoplay muted loop playsinline preload="auto" poster="assets/video/hero-poster.jpg">
+      <video data-cues="hero" autoplay muted loop playsinline preload="auto" poster="assets/video/hero-poster.jpg">
         <source src="assets/video/hero.webm" type="video/webm" />
         <source src="assets/video/hero.mp4" type="video/mp4" />
       </video>
       <button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button>
     </div>
-    <figcaption>A real recording. A bug report arrives in Slack; it’s said out loud; Claude Code starts on it. Slack never loses focus.</figcaption>
+    <figcaption>A real recording, not a mock-up. Turn the sound on to hear what was said.</figcaption>
   </figure>
 </section>
 
@@ -64,7 +64,7 @@
         <h3>Say it from any app.</h3>
         <p>Hold <kbd>right ⌥</kbd> and speak. A session starts.</p>
       </div>
-      <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-say-poster.jpg"><source src="assets/video/step-say.webm" type="video/webm" /><source src="assets/video/step-say.mp4" type="video/mp4" /></video></div></figure>
+      <figure class="film"><div class="frame"><video data-cues="step-say" autoplay muted loop playsinline preload="none" poster="assets/video/step-say-poster.jpg"><source src="assets/video/step-say.webm" type="video/webm" /><source src="assets/video/step-say.mp4" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div></figure>
     </li>
     <li class="step">
       <div class="text">
@@ -72,7 +72,7 @@
         <h3>It works in the background.</h3>
         <p>The session runs while you keep working.</p>
       </div>
-      <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-works-poster.jpg"><source src="assets/video/step-works.webm" type="video/webm" /><source src="assets/video/step-works.mp4" type="video/mp4" /></video></div></figure>
+      <figure class="film"><div class="frame"><video data-cues="step-works" autoplay muted loop playsinline preload="none" poster="assets/video/step-works-poster.jpg"><source src="assets/video/step-works.webm" type="video/webm" /><source src="assets/video/step-works.mp4" type="video/mp4" /></video></div></figure>
     </li>
     <li class="step">
       <div class="text">
@@ -80,7 +80,7 @@
         <h3>Answer when it asks.</h3>
         <p>Its question appears on screen. Reply by voice.</p>
       </div>
-      <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-answer-poster.jpg"><source src="assets/video/step-answer.webm" type="video/webm" /><source src="assets/video/step-answer.mp4" type="video/mp4" /></video></div></figure>
+      <figure class="film"><div class="frame"><video data-cues="step-answer" autoplay muted loop playsinline preload="none" poster="assets/video/step-answer-poster.jpg"><source src="assets/video/step-answer.webm" type="video/webm" /><source src="assets/video/step-answer.mp4" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div></figure>
     </li>
   </ol>
 </section>
@@ -91,8 +91,7 @@
     <h2>Not just code.</h2>
     <p>Anything you’d ask Claude Code or Codex: fix a bug, research a competitor, draft a plan, follow up on a thread. Say it where you are, when you think of it.</p>
   </div>
-  <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-research-poster.jpg"><source src="assets/video/step-research.webm" type="video/webm" /><source src="assets/video/step-research.mp4" type="video/mp4" /></video></div>
-    <figcaption>Watching a video on X: “let’s see how this fits for Unmute.” A research session starts on it.</figcaption></figure>
+  <figure class="film"><div class="frame"><video data-cues="step-research" autoplay muted loop playsinline preload="none" poster="assets/video/step-research-poster.jpg"><source src="assets/video/step-research.webm" type="video/webm" /><source src="assets/video/step-research.mp4" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div></figure>
 </section>
 
 <!-- 4 · Also included, what you need, what it costs. -->
@@ -133,6 +132,6 @@
   <span class="flinks"><a href="../dictation.html">Dictation</a><a href="../pricing.html">Pricing</a><a href="../manifesto.html">Manifesto</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
 </footer>
 
-<script src="clear.js?v=20261011-1" defer></script>
+<script src="clear.js?v=20261011-3" defer></script>
 </body>
 </html>

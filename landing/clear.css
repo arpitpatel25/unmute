@@ -88,3 +88,46 @@ footer .flinks{display:flex;flex-wrap:wrap;gap:20px}footer a{text-decoration:non
   footer{flex-direction:column}
 }
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+
+/* Callouts on the real footage (clear.js): boxes around what matters, and the
+   sequence under each clip. They point; they never redraw the app. */
+.marks{position:absolute;inset:0;pointer-events:none}
+.ring{position:absolute;border:2.5px solid #ffd43b;border-radius:10px;box-shadow:0 0 0 4px rgba(255,212,59,.25);opacity:0;transform:scale(1.04);transition:opacity .25s,transform .25s}
+.ring.show{opacity:1;transform:none}
+.ring i{position:absolute;left:-12px;top:-12px;display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:#ffd43b;color:#111;font:700 13px var(--ui);font-style:normal}
+.ring span{position:absolute;left:-2px;white-space:nowrap;padding:6px 10px;border-radius:7px;background:#ffd43b;color:#111;font:600 14px/1.2 var(--ui)}
+.ring.below span{top:calc(100% + 8px)}
+.ring.above span{bottom:calc(100% + 8px)}
+.ring.low span{left:50%;transform:translateX(-50%)}
+
+.beats{list-style:none;display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:8px;margin-top:12px}
+.beats li{padding:10px 12px 11px;border-radius:10px;background:var(--soft);border:1px solid var(--line);color:var(--faint);transition:background .25s,border-color .25s,color .25s}
+.beats b{display:flex;align-items:center;gap:7px;font:600 12px var(--ui);letter-spacing:.02em;text-transform:uppercase}
+.beats b i{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;background:#d9d9d9;color:#fff;font:700 11px var(--ui);font-style:normal;transition:background .25s,color .25s}
+.beats span{display:block;margin-top:5px;font-size:13.5px;line-height:1.4}
+.beats li.done{color:var(--dim)}
+.beats li.done b i{background:var(--ink)}
+.beats li.on{background:#fff8d6;border-color:#f0c419;color:var(--ink)}
+.beats li.on b i{background:#ffd43b;color:#111}
+.hero-film .beats{text-align:left}
+
+@media(max-width:1000px){.ring span{font-size:12px;padding:4px 8px}}
+
+@media(max-width:600px){
+  /* On a phone the footage is small: keep the boxes and numbers, put the words
+     in the sequence under the clip, one line per step. */
+  .ring{border-width:2px;border-radius:6px}.ring span{display:none}.ring i{width:18px;height:18px;left:-9px;top:-9px;font-size:11px}
+  .beats{grid-template-columns:1fr;gap:6px}
+  .beats li{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:baseline;padding:9px 11px}
+  .beats span{margin:0;font-size:14px}
+}
+@media(prefers-reduced-motion:reduce){.ring,.beats li{transition:none}}
+.zoom{position:absolute;margin:0;opacity:0;transform:translateY(6px);transition:opacity .25s,transform .25s}
+.zoom.show{opacity:1;transform:none}
+.zoom img{display:block;width:100%;height:auto;border-radius:10px;border:2.5px solid #ffd43b;box-shadow:0 18px 40px -12px rgba(0,0,0,.7)}
+.zoom figcaption{display:inline-block;margin-top:8px;padding:6px 10px;border-radius:7px;background:#ffd43b;color:#111;font:600 14px/1.2 var(--ui)}
+.step .film{width:100%}
+@media(min-width:601px){.step .beats.four,.wide .beats.four{grid-template-columns:1fr 1fr}}
+@media(max-width:1000px){.zoom figcaption{font-size:12px;padding:4px 8px}}
+@media(max-width:600px){.zoom{left:3%!important;width:62%!important}.zoom img{border-width:2px;border-radius:6px}.zoom figcaption{display:none}.beats li{padding:8px 11px}.beats b{font-size:11px}}
+@media(prefers-reduced-motion:reduce){.zoom{transition:none}}
