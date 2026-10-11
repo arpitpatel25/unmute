@@ -1,0 +1,10 @@
+/* The draft: fewer elements. Only what someone needs to decide to download. */
+.hero{padding-top:88px}
+.hero h1{max-width:960px}
+.hero .works{margin-top:20px;font-size:14px}
+.final{max-width:1120px;margin:56px auto 0;padding:96px 24px 104px;text-align:center;border-top:1px solid var(--line)}
+.final h2{max-width:760px;margin:auto;font:400 clamp(32px,4vw,52px)/1.1 var(--serif);letter-spacing:-.02em}
+.final .need{margin-top:20px;font-size:17px;line-height:1.55;color:var(--dim)}
+.final .price{margin-top:10px;font-size:17px;font-weight:600;color:var(--ink)}
+.final .ctas{margin-top:26px}
+@media(max-width:600px){.hero .works{display:block;font-size:13px;line-height:1.9;max-width:300px;margin-left:auto;margin-right:auto}.hero .works span{vertical-align:middle}}
