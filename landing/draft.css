@@ -57,3 +57,24 @@
 .pricing .small{margin-top:12px;font-size:13.5px;color:var(--faint)}
 .final{margin-top:24px}
 @media(max-width:600px){.pricing .plans{grid-template-columns:1fr}}
+
+/* Every clip on a MacBook: a near-black bezel with rounded corners and the
+   camera notch. The bezel is a border, so the callouts inside the frame keep
+   lining up with the footage. */
+.film .frame{border:clamp(6px,1.05vw,13px) solid #0b0b0c;border-radius:clamp(12px,1.7vw,22px);background:#0b0b0c;
+  box-shadow:0 34px 80px -38px rgba(0,0,0,.55),inset 0 0 0 1px rgba(255,255,255,.04),0 0 0 1px rgba(0,0,0,.08)}
+.film .frame video{border-radius:clamp(4px,.5vw,7px)}
+.film .frame::before{content:"";position:absolute;z-index:3;top:0;left:50%;transform:translateX(-50%);width:11%;height:3.4%;min-height:6px;
+  background:#0b0b0c;border-radius:0 0 6px 6px;pointer-events:none}
+/* The laptop's base, directly under every screen (above any step list). */
+.film{display:flex;flex-direction:column}
+.film .frame{order:0}
+.film::after{content:"";order:1;display:block;width:104%;margin-left:-2%;height:clamp(7px,1vw,13px);margin-top:-2px;border-radius:0 0 14px 14px;
+  background:linear-gradient(#d4d5d8,#a7a9ad);box-shadow:0 18px 30px -18px rgba(0,0,0,.45)}
+.film .beats{order:2;margin-top:18px}
+.film figcaption{order:3}
+
+/* Pricing in a soft grey panel. */
+.pricing{max-width:1180px;margin:72px auto 0;padding:72px 64px 64px;border-top:0;background:#f4f4f2;border-radius:28px}
+@media(max-width:900px){.pricing{margin:48px 20px 0;padding:52px 24px 48px;border-radius:22px}}
+.final{border-top:0}
