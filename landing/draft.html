@@ -45,10 +45,7 @@
 
   <figure class="film hero-film">
     <div class="frame">
-      <video data-cues="hero2" autoplay muted loop playsinline preload="auto" poster="assets/video/hero-poster.jpg?v=l40">
-        
-        <source src="assets/video/hero.mp4?v=l40" type="video/mp4" />
-      </video>
+      <video data-src="hero" data-cues="hero2" autoplay muted loop playsinline preload="auto" poster="assets/video/hero-poster.jpg?v=l41"></video>
       <button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button>
     </div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div>
   </figure>
@@ -60,15 +57,15 @@
   <ol class="steps">
     <li class="step">
       <div class="text"><span class="n">1</span><h3>Say what you want done.</h3><p>Tap <kbd>right ⌥</kbd> and speak. Your words start a new Claude Code or Codex session, or go to one that’s already running.</p></div>
-      <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-say-poster.jpg?v=l40"><source src="assets/video/step-say.mp4?v=l40" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
+      <figure class="film"><div class="frame"><video data-src="step-say" autoplay muted loop playsinline preload="none" poster="assets/video/step-say-poster.jpg?v=l41"></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
     </li>
     <li class="step">
       <div class="text"><span class="n">2</span><h3>Keep working.</h3><p>The session runs in Claude Code or Codex. A small status at the top of your screen shows it’s working.</p></div>
-      <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-works-poster.jpg?v=l40"><source src="assets/video/step-works.mp4?v=l40" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
+      <figure class="film"><div class="frame"><video data-src="step-works" autoplay muted loop playsinline preload="none" poster="assets/video/step-works-poster.jpg?v=l41"></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
     </li>
     <li class="step">
       <div class="text"><span class="n">3</span><h3>Answer when it asks.</h3><p>When the session finishes or needs a decision, its chat opens at the top of your screen. Read it and reply by voice, without going anywhere.</p></div>
-      <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-answer-poster.jpg?v=l40"><source src="assets/video/step-answer.mp4?v=l40" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
+      <figure class="film"><div class="frame"><video data-src="step-answer" autoplay muted loop playsinline preload="none" poster="assets/video/step-answer-poster.jpg?v=l41"></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
     </li>
   </ol>
 </section>
@@ -79,7 +76,7 @@
     <h2>Not just for code.</h2>
     <p>Anything you’d ask Claude Code or Codex: research a competitor, plan a launch, follow up on a thread.</p>
   </div>
-  <figure class="film"><div class="frame"><video autoplay muted loop playsinline preload="none" poster="assets/video/step-research-poster.jpg?v=l40"><source src="assets/video/step-research.mp4?v=l40" type="video/mp4" /></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
+  <figure class="film"><div class="frame"><video data-src="step-research" autoplay muted loop playsinline preload="none" poster="assets/video/step-research-poster.jpg?v=l41"></video><button type="button" class="sound" aria-pressed="false"><span class="on-off">Sound on</span></button></div><div class="listen"><button type="button" class="listen-btn" aria-pressed="false"><span class="ico"></span><span class="lbl">Play with sound</span></button><span class="hint">Hear it narrated</span></div></figure>
 </section>
 
 
@@ -126,6 +123,20 @@
   <span class="flinks"><a href="../pricing.html">Pricing</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span>
 </footer>
 
+<script>
+// VIDEOS LOAD AS YOU GET TO THEM. Each demo gets its file only when it is
+// within about a screen of view (the top one straight away), and phones get
+// a 720p file a third the size. Downloading all five at once kept every
+// demo black for a long time on mobile data.
+(function(){
+  var small = Math.min(screen.width, innerWidth) < 900, V = 'v=l40'
+  var load = function(v){ if (v.src) return; v.src = 'assets/video/' + v.dataset.src + (small ? '-720' : '') + '.mp4?' + V; v.load() }
+  var vids = [].slice.call(document.querySelectorAll('video[data-src]'))
+  if (!('IntersectionObserver' in window)) return vids.forEach(load)
+  var io = new IntersectionObserver(function(es){ es.forEach(function(e){ if (e.isIntersecting) { load(e.target); io.unobserve(e.target) } }) }, { rootMargin: '900px 0px' })
+  vids.forEach(function(v, i){ v.preload = i === 0 ? 'auto' : 'metadata'; if (i === 0) load(v); else io.observe(v) })
+})()
+</script>
 <script>
 // Cues for the draft's videos, which show the whole screen whenever a session
 // is open (so it reads as the notch). Ring boxes are % of the 16:9 frame.
