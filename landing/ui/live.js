@@ -128,25 +128,39 @@ const saidText = (t) => `You say: “${t}”`
 // ── The full flow: the real recording, rebuilt, with chapters ────────────────
 {
   const fig = $('.film-scene'), chs = $$('.chapters button', fig), cap = $('.film-cap', fig)
+  const big = $('.film-snd', fig)
   const s = new Screen($('#film-stage'))
-  let target = 0
+  s.host.append(big) // Screen() cleared the stage; keep the button on top of it.
+  let target = 0, cur = 0, userOff = false
   const paint = (i) => chs.forEach((b, k) => { b.classList.toggle('on', k === i); b.classList.toggle('done', i >= 0 && k < i) })
   s.host.addEventListener('kit:narrate', (e) => { if (!s.clock.fast) cap.textContent = e.detail })
   const ctl = runScene(s, film, { threshold: 0.5, still: filmStill, onStep: (i) => {
     // Jumping to a chapter plays everything before it instantly.
     if (i >= target) { s.clock.fast = false; target = 0 }
-    paint(i)
+    cur = i; paint(i)
   } })
   const pause = $('.c-pause', fig), snd = $('.c-sound', fig)
   const playing = () => { pause.setAttribute('aria-pressed', 'false'); pause.textContent = 'Pause' }
-  chs.forEach((b, k) => b.addEventListener('click', () => {
+  const jump = (k) => {
     stopNarration(); cap.textContent = ''; playing(); ctl.replay()
     target = k; setTimeout(() => { s.clock.fast = k > 0 }, 0)
-  }))
+  }
+  chs.forEach((b, k) => b.addEventListener('click', () => jump(k)))
   pause.addEventListener('click', () => { const p = ctl.pause(); if (p) stopNarration(); pause.setAttribute('aria-pressed', String(p)); pause.textContent = p ? 'Play' : 'Pause' })
-  $('.c-replay', fig).addEventListener('click', () => { stopNarration(); target = 0; s.clock.fast = false; playing(); ctl.replay() })
-  snd.addEventListener('click', () => { setSound(!sound.on); if (!sound.on) stopNarration() })
-  sound.listeners.add((on) => { snd.setAttribute('aria-pressed', String(on)); snd.textContent = on ? 'Sound on' : 'Sound off' })
+  $('.c-replay', fig).addEventListener('click', () => jump(0))
+  // Turning sound on restarts the current chapter, so its narration is heard
+  // from the top of the line instead of from the next one.
+  snd.addEventListener('click', () => { const on = !sound.on; userOff = !on; setSound(on); if (on) jump(cur); else stopNarration() })
+  big.addEventListener('click', () => { userOff = false; setSound(true); jump(0) })
+  sound.listeners.add((on) => { snd.setAttribute('aria-pressed', String(on)); snd.textContent = on ? 'Sound on' : 'Sound off'; big.hidden = on })
+  // Browsers only allow sound after the visitor has clicked something on the
+  // page. If they have, the film starts with its narration.
+  let first = true
+  new IntersectionObserver(([e]) => {
+    if (!first || e.intersectionRatio < 0.5) return
+    first = false
+    if (navigator.userActivation?.hasBeenActive && !userOff && !sound.on) { setSound(true); jump(0) }
+  }, { threshold: [0, 0.5] }).observe(s.host)
   if (reduced) { pause.hidden = true; $('.c-replay', fig).hidden = true }
 }
 
