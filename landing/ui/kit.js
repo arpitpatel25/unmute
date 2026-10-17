@@ -36,11 +36,13 @@ fetch('assets/voice/lines.json').then((r) => r.json()).then((j) => { sound.lines
 // Scenes are async scripts. Every wait goes through the clock, so pausing (or
 // scrolling the scene out of view) freezes the script exactly where it is.
 export class Clock {
-  constructor() { this.paused = false; this.gen = 0; this.waiters = [] }
+  constructor() { this.paused = false; this.fast = false; this.gen = 0; this.waiters = [] }
   wait(ms) {
     const gen = this.gen
+    // Fast-forwarding (jumping to a chapter) skips waits without a frame each.
+    if (this.fast) return gen === this.gen ? Promise.resolve() : Promise.reject(new Error('reset'))
     return new Promise((res, rej) => {
-      let left = reduce ? 0 : ms, last = performance.now()
+      let left = reduce || this.fast ? 0 : ms, last = performance.now()
       const tick = (now) => {
         if (gen !== this.gen) return rej(new Error('reset'))
         if (!this.paused) left -= now - last
@@ -152,7 +154,7 @@ export class Screen {
   async move(x, y, ms = 700) {
     const from = { ...this.cursor }, t0 = performance.now(), c = this.cursorEl
     this.cursorEl.classList.add('on')
-    if (reduce) { this.cursor = { x, y }; this.place(c, x, y); return }
+    if (reduce || this.clock.fast) { this.cursor = { x, y }; this.place(c, x, y); return }
     await new Promise((res) => {
       const step = (now) => {
         const k = Math.min(1, (now - t0) / ms), e = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2
@@ -192,7 +194,7 @@ export class Screen {
     say.classList.add('on')
     this.host.dispatchEvent(new CustomEvent('kit:say', { detail: text }))
     const words = text.split(' ')
-    const line = sound.on && sound.lines[text]
+    const line = sound.on && !this.clock.fast && sound.lines[text]
     let audio = null
     if (line) { audio = new Audio(line.src); audio.play().catch(() => {}) }
     const per = line ? (line.dur * 1000) / words.length : 1000 / WPS

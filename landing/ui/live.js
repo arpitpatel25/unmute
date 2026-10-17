@@ -2,7 +2,7 @@
 // controls, the app tabs, the scroll-driven walk-through, several sessions at
 // once, the use-case cards, and the real recording.
 import { Screen, runScene, setSound, sound, reduced, WPS } from './kit.js'
-import { hero, heroStill, apps, stages, parallel } from './scenes.js'
+import { hero, heroStill, apps, stages, parallel, film, filmStill, stopNarration } from './scenes.js'
 
 const $ = (s, r = document) => r.querySelector(s)
 const $$ = (s, r = document) => [...r.querySelectorAll(s)]
@@ -125,12 +125,34 @@ const saidText = (t) => `You say: “${t}”`
   cards.forEach((c) => c.addEventListener('mouseenter', () => play(c, 0)))
 }
 
-// ── The real recording: loads only when you get near it ───────────────────────
+// ── The full flow: the real recording, rebuilt, with chapters ────────────────
 {
-  const v = $('.real video')
+  const fig = $('.film-scene'), chs = $$('.chapters button', fig), cap = $('.film-cap', fig)
+  const s = new Screen($('#film-stage'))
+  let target = 0
+  const paint = (i) => chs.forEach((b, k) => { b.classList.toggle('on', k === i); b.classList.toggle('done', i >= 0 && k < i) })
+  s.host.addEventListener('kit:narrate', (e) => { if (!s.clock.fast) cap.textContent = e.detail })
+  const ctl = runScene(s, film, { threshold: 0.5, still: filmStill, onStep: (i) => {
+    // Jumping to a chapter plays everything before it instantly.
+    if (i >= target) { s.clock.fast = false; target = 0 }
+    paint(i)
+  } })
+  const pause = $('.c-pause', fig), snd = $('.c-sound', fig)
+  const playing = () => { pause.setAttribute('aria-pressed', 'false'); pause.textContent = 'Pause' }
+  chs.forEach((b, k) => b.addEventListener('click', () => {
+    stopNarration(); cap.textContent = ''; playing(); ctl.replay()
+    target = k; setTimeout(() => { s.clock.fast = k > 0 }, 0)
+  }))
+  pause.addEventListener('click', () => { const p = ctl.pause(); if (p) stopNarration(); pause.setAttribute('aria-pressed', String(p)); pause.textContent = p ? 'Play' : 'Pause' })
+  $('.c-replay', fig).addEventListener('click', () => { stopNarration(); target = 0; s.clock.fast = false; playing(); ctl.replay() })
+  snd.addEventListener('click', () => { setSound(!sound.on); if (!sound.on) stopNarration() })
+  sound.listeners.add((on) => { snd.setAttribute('aria-pressed', String(on)); snd.textContent = on ? 'Sound on' : 'Sound off' })
+  if (reduced) { pause.hidden = true; $('.c-replay', fig).hidden = true }
+}
+
+// ── The raw recording: loads only when it's opened ───────────────────────────
+{
+  const d = $('.real-wrap'), v = $('.real video')
   const small = Math.min(screen.width, innerWidth) < 900
-  new IntersectionObserver(([e], o) => {
-    if (!e.isIntersecting) return
-    v.src = `assets/video/hero${small ? '-720' : ''}.mp4?v=l41`; o.disconnect()
-  }, { rootMargin: '600px 0px' }).observe(v)
+  d.addEventListener('toggle', () => { if (d.open && !v.src) { v.src = `assets/video/hero${small ? '-720' : ''}.mp4?v=l41`; v.play().catch(() => {}) } })
 }

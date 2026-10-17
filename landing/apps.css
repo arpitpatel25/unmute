@@ -150,3 +150,20 @@
 .dc-main{flex:1;padding:30px 60px}.dc-main small{color:#3b5bdb;font-weight:700;letter-spacing:.08em}.dc-main h2{margin:6px 0 10px;font:700 30px Inter;letter-spacing:-.02em}.dc-main p{color:#4f566b;max-width:640px}
 .dc-main h4{margin:22px 0 8px}.dc-main pre{background:#0b1220;color:#d6deeb;border-radius:10px;padding:16px 18px;font:13px/1.6 ui-monospace,Menlo,monospace;max-width:640px}
 .dc-main pre .k{color:#c792ea}.dc-main pre .s{color:#ecc48d}.dc-main pre .h{background:rgba(59,91,219,.35)}
+
+/* Terminal · Claude Code */
+.kit-win.tm-win{left:250px;top:110px;width:780px;height:470px;background:#161616;box-shadow:0 40px 90px -30px rgba(0,0,0,.7),0 0 0 .5px rgba(255,255,255,.12)}
+.tm{height:100%;display:flex;flex-direction:column;font:13.5px/1.55 ui-monospace,"SF Mono",Menlo,monospace;color:#e6e6e6}
+.tm-h{height:38px;display:grid;place-items:center;font:600 12.5px var(--sf,system-ui);color:#9a9a9a;background:#232323;border-bottom:1px solid #0c0c0c}
+.tm-b{padding:16px 20px;display:flex;flex-direction:column;gap:10px}
+.cc-box{border:1px solid #d97757;border-radius:8px;padding:10px 14px;display:flex;flex-direction:column}
+.cc-box b{font-weight:600;color:#fff}.cc-box b i{color:#d97757;font-style:normal;margin-right:6px}
+.cc-box small{color:#8a8a8a;font-size:12.5px}
+.cc-dim{color:#8a8a8a}
+.cc-out i{color:#5fd068;font-style:normal;margin-right:6px}.cc-out b{color:#fff;font-weight:500}
+.cc-in{border:1px solid #4a4a4a;border-radius:8px;padding:9px 12px;display:flex;gap:10px;min-height:42px;align-items:flex-start}
+.cc-in .pr{color:#8a8a8a}.cc-in .tx{white-space:pre-wrap}
+.cc-in .caret{display:inline-block;width:8px;height:17px;background:#e6e6e6;margin-left:-6px;animation:caret 1s steps(1) infinite}
+@keyframes caret{50%{opacity:0}}
+.cc-hint{color:#6a6a6a;font-size:12px}
+.kit-win.tm-win.out{opacity:0;transform:translateY(14px) scale(.98);transition:opacity .45s,transform .45s}

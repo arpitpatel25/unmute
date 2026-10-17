@@ -116,3 +116,14 @@ export function docs() {
   customer_update: { address: <span class="s">'auto'</span> },
 })</pre><h4>2. Collect the billing address</h4><p>Ask for the country and postal code before showing the total…</p></main></div>` })
 }
+
+// ── Terminal · Claude Code ───────────────────────────────────────────────────
+// The usual way: switch to the terminal, find the session, type it all out.
+export function terminal() {
+  return `${lights}<div class="tm"><header class="tm-h">orbit — claude — 112×34</header><div class="tm-b">
+    <div class="cc-box"><b><i>✻</i> Welcome to Claude Code</b><small>/help for help, /status for your current setup</small><small>cwd: /Users/alex/orbit</small></div>
+    <p class="cc-dim">&gt; Add CSV export for invoices</p>
+    <p class="cc-out"><i>⏺</i> Added <b>exportInvoicesCsv()</b> and a download button on the invoices page.</p>
+    <div class="cc-in"><span class="pr">&gt;</span><span class="tx"></span><i class="caret"></i></div>
+    <p class="cc-hint">? for shortcuts</p></div></div>`
+}

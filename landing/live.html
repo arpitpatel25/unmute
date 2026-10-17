@@ -17,11 +17,11 @@
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:image" content="https://justunmute.me/og.png" />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="stylesheet" href="clear.css?v=live4" />
-<link rel="stylesheet" href="draft.css?v=live4" />
-<link rel="stylesheet" href="kit.css?v=live4" />
-<link rel="stylesheet" href="apps.css?v=live4" />
-<link rel="stylesheet" href="live.css?v=live4" />
+<link rel="stylesheet" href="clear.css?v=live8" />
+<link rel="stylesheet" href="draft.css?v=live8" />
+<link rel="stylesheet" href="kit.css?v=live8" />
+<link rel="stylesheet" href="apps.css?v=live8" />
+<link rel="stylesheet" href="live.css?v=live8" />
 </head>
 <body>
 <nav class="top">
@@ -34,7 +34,7 @@
 <section class="hero">
   <h1>Talk to Claude Code and Codex without leaving what you’re doing.</h1>
   <p class="def">Unmute is a Mac app. Tap a key, say what you want done, and Claude Code or Codex starts on it. When it finishes or needs you, it comes to you at the top of your screen.</p>
-  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="15" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a><a class="btn ghost" href="#film">Watch a real recording</a></div>
+  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="15" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a><a class="btn ghost" href="#film">Watch the full flow</a></div>
   <p class="works"><span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span class="dot">·</span><span><img src="assets/mark-codex.png" alt="" />Codex</span><span class="dot">·</span><span class="plain">Uses your own subscription</span><span class="dot">·</span><span class="plain">Apple silicon Macs</span></p>
 
   <figure class="scene hero-scene" aria-label="Animated example: a bug report arrives in Slack; you tap a key and ask Claude Code to fix it; it works in the background, asks to merge, and you answer by voice.">
@@ -80,8 +80,16 @@
 </section>
 
 <section class="film-sec" id="film">
-  <div class="sec-h"><h2>See it for real.</h2><p>A real recording on a real Mac, start to finish, with sound.</p></div>
-  <div class="real"><video controls playsinline preload="none" poster="assets/video/hero-poster.jpg?v=l41" data-src="hero"></video></div>
+  <div class="sec-h"><h2>One request, start to finish.</h2><p>A bug comes in, you say one sentence, and it ends up committed on a branch. About a minute. Turn on sound for the narration.</p></div>
+  <figure class="scene film-scene">
+    <div class="stage" id="film-stage"></div>
+    <p class="film-cap" aria-live="polite"></p>
+    <div class="rail">
+      <ol class="chapters"><li><button data-n="1">A bug comes in</button></li><li><button data-n="2">The usual way</button></li><li><button data-n="3">You say it</button></li><li><button data-n="4">It works</button></li><li><button data-n="5">It asks you</button></li><li><button data-n="6">Done</button></li></ol>
+      <div class="ctl"><button class="c-pause" aria-pressed="false">Pause</button><button class="c-replay">Replay</button><button class="c-sound" aria-pressed="false">Sound off</button></div>
+    </div>
+  </figure>
+  <details class="real-wrap"><summary>Watch the raw screen recording</summary><div class="real"><video controls playsinline preload="none" poster="assets/video/hero-poster.jpg?v=l41" data-src="hero"></video></div></details>
 </section>
 
 <section class="pricing" id="pricing">
@@ -112,6 +120,6 @@
 </section>
 </main>
 <footer><span>© 2026 unmute</span><span class="flinks"><a href="#pricing">Pricing</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span></footer>
-<script type="module" src="ui/live.js?v=live4"></script>
+<script type="module" src="ui/live.js?v=live8"></script>
 </body>
 </html>

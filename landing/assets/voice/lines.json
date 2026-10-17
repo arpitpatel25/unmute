@@ -42,5 +42,45 @@
  "Rate limit the public API.": {
   "src": "assets/voice/l10.mp3",
   "dur": 2.12
+ },
+ "A bug report comes in on Slack.": {
+  "src": "assets/voice/l11.mp3",
+  "dur": 2.01
+ },
+ "Normally, you’d switch to Claude Code, find the session, and type it all out.": {
+  "src": "assets/voice/l12.mp3",
+  "dur": 4.99
+ },
+ "With Unmute, you tap one key and say it.": {
+  "src": "assets/voice/l13.mp3",
+  "dur": 3.03
+ },
+ "Unmute sends it to Claude Code.": {
+  "src": "assets/voice/l14.mp3",
+  "dur": 1.72
+ },
+ "A new session starts in the notch and gets to work. You keep going in Slack.": {
+  "src": "assets/voice/l15.mp3",
+  "dur": 4.1
+ },
+ "When it’s finished, it opens right where you are, and asks what’s next.": {
+  "src": "assets/voice/l16.mp3",
+  "dur": 4.49
+ },
+ "You answer the same way.": {
+  "src": "assets/voice/l17.mp3",
+  "dur": 1.12
+ },
+ "Done. Committed on a new branch. And you never left Slack.": {
+  "src": "assets/voice/l18.mp3",
+  "dur": 4.55
+ },
+ "Hey, can you investigate the checkout issue Maya just reported?": {
+  "src": "assets/voice/l19.mp3",
+  "dur": 3.68
+ },
+ "Yeah, can you please commit those changes in a new separate branch?": {
+  "src": "assets/voice/l20.mp3",
+  "dur": 2.9
  }
 }

@@ -3,8 +3,8 @@
 // Pacing rules (see kit.js): words appear at speaking speed; every result is
 // held long enough to read (readMs); nothing on screen changes faster than
 // about a second. Each scene resets itself at the top, so loops are clean.
-import { panel, readMs, MARK } from './kit.js'
-import { slack, skMsg, skReact, skReplies, linear, figma, github, gmail, docs, av } from './apps.js'
+import { panel, readMs, MARK, sound } from './kit.js'
+import { slack, skMsg, skReact, skReplies, linear, figma, github, gmail, docs, terminal, av } from './apps.js'
 
 const $ = (root, s) => root.querySelector(s)
 const add = (root, html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); const n = t.content.firstElementChild; root.append(n); return n }
@@ -206,4 +206,112 @@ export async function parallel(s) {
   await s.wait(2600)
   s.notch()
   await s.wait(800)
+}
+
+// ── THE FULL FLOW · the real recording, rebuilt ──────────────────────────────
+// One request start to finish, about a minute, with a narrator. The narration
+// is also the caption under the film, so it works with the sound off.
+// 0 A bug comes in · 1 The usual way · 2 You say it · 3 It works · 4 It asks you · 5 Done
+export const FILM_LINES = [
+  'A bug report comes in on Slack.',
+  'Normally, you’d switch to Claude Code, find the session, and type it all out.',
+  'With Unmute, you tap one key and say it.',
+  'Unmute sends it to Claude Code.',
+  'A new session starts in the notch and gets to work. You keep going in Slack.',
+  'When it’s finished, it opens right where you are, and asks what’s next.',
+  'You answer the same way.',
+  'Done. Committed on a new branch. And you never left Slack.',
+]
+const ASK = 'Hey, can you investigate the checkout issue Maya just reported?'
+const ANSWER = 'Yeah, can you please commit those changes in a new separate branch?'
+let narration = null
+function narrate(s, i) {
+  const text = FILM_LINES[i]
+  s.host.dispatchEvent(new CustomEvent('kit:narrate', { detail: text }))
+  const line = sound.on && !s.clock.fast && sound.lines[text]
+  if (line) { narration?.pause(); narration = new Audio(line.src); narration.play().catch(() => {}) }
+  return s.wait(Math.max(readMs(text), line ? line.dur * 1000 + 450 : 0))
+}
+export function stopNarration() { narration?.pause() }
+
+export async function film(s, step) {
+  s.menu('Slack'); s.time('Wed 5:17 PM'); s.notch(); s.hideCursor()
+  s.host.dispatchEvent(new CustomEvent('kit:narrate', { detail: '' }))
+  const w = s.window(slack({ channel: 'bugs' }))
+  const msgs = $(w, '.sk-msgs')
+  add(msgs, skMsg('dev', '4:02 PM', 'Release <b>2026.10.14</b> is out: new billing page and Pro plan checkout 🚀', skReact([['🚀', 5]])))
+  add(msgs, skMsg('jon', '4:40 PM', 'Reminder: design review moved to Thursday.', skReact([['👍', 3]])))
+
+  step(0)
+  await s.wait(700)
+  const bug = add(msgs, skMsg('maya', '5:17 PM', '<span class="men">@here</span> A customer can’t buy the Pro plan. The app says <b>“Subscription inactive”</b> even though they’re signed in. Can someone take a look?', skReact([['👀', 2]])))
+  bug.classList.add('new', 'hl')
+  await narrate(s, 0)
+  await s.wait(600)
+
+  step(1)
+  const usual = (async () => {
+    await s.to($(s.screen, '.dk-term'), 900); await s.click($(s.screen, '.dk-term'))
+    s.menu('Terminal')
+    const t = document.createElement('div'); t.className = 'kit-win tm-win'; t.innerHTML = terminal(); s.windows.append(t)
+    s.hideCursor()
+    await s.wait(500)
+    const tx = $(t, '.tx')
+    for (const ch of 'there’s a bug in checkout, a customer can’t buy pro, the app says subscription inactive even though they’re signed in. maya posted it in #bugs, can you') { tx.textContent += ch; await s.wait(34) }
+    return t
+  })()
+  const [, term] = await Promise.all([narrate(s, 1), usual])
+  await s.wait(400)
+  term.classList.add('out'); s.menu('Slack')
+  await s.wait(500); term.remove()
+
+  step(2)
+  await narrate(s, 2)
+  await s.tap()
+  await s.speak(ASK)
+  s.notch({ right: { text: 'Sending', dot: 'green' }, width: 340 })
+  await narrate(s, 3)
+
+  step(3)
+  s.notch({ right: { text: 'Working', n: 1 }, width: 380 })
+  const reply = (async () => {
+    await s.wait(1200)
+    const comp = $(w, '.sk-comp .ph')
+    await s.to(comp, 800, 0.3, 0.5); await s.click()
+    comp.classList.add('typing'); comp.textContent = ''
+    for (const ch of 'Looking into it 👀') { comp.textContent += ch; await s.wait(45) }
+    await s.wait(300)
+    comp.classList.remove('typing'); comp.textContent = 'Message #bugs'
+    add(msgs, skMsg('you', '5:18 PM', 'Looking into it 👀')).classList.add('new')
+    bug.classList.remove('hl'); s.hideCursor()
+  })()
+  await Promise.all([narrate(s, 4), reply])
+  await s.wait(1600)
+
+  step(4)
+  const found = `<span class="you">${ASK}</span>
+    <span class="step"><i></i>Read 31 files · checked the billing logs · ran the checkout tests</span>
+    <b>The bug:</b> when the billing check timed out, the app fell back to a cached plan, and that path always said “inactive”. Signed-in Pro customers saw the banner and couldn’t buy.<br>
+    <b>What I changed:</b> <code>billing/status.ts</code> and <code>checkout/guard.ts</code>. <span class="ok">38 tests pass</span>.<br>
+    <b>Want me to put them on a branch and commit?</b>`
+  s.notch({ size: [720, 404], panel: panel({ title: 'Subscription inactive while signed in', status: 'needs', body: found, actions: '<span class="primary">Commit</span><span>View diff</span>' }) })
+  await narrate(s, 5)
+  await s.wait(3200)
+  await narrate(s, 6)
+  await s.tap()
+  await s.speak(ANSWER)
+
+  step(5)
+  s.notch({ size: [720, 248], panel: panel({ title: 'Subscription inactive while signed in', status: 'done', body: `<span class="you">${ANSWER}</span>
+    <span class="step"><i></i>Created branch <code>fix/subscription-inactive-banner</code></span>
+    <span class="step"><i></i>Committed 2 files as <code>a41c9e2</code> · <code>main</code> untouched</span>` }) })
+  await narrate(s, 7)
+  s.notch({ right: { text: 'Done', dot: 'grey' }, width: 330 })
+  await s.wait(3000)
+}
+export function filmStill(s) {
+  s.menu('Slack')
+  const w = s.window(slack({ channel: 'bugs' }))
+  add($(w, '.sk-msgs'), skMsg('maya', '5:17 PM', '<span class="men">@here</span> A customer can’t buy the Pro plan. The app says <b>“Subscription inactive”</b> even though they’re signed in.'))
+  s.notch({ size: [720, 248], panel: panel({ title: 'Subscription inactive while signed in', status: 'done', body: `<span class="you">${ANSWER}</span><span class="step"><i></i>Committed 2 files on <code>fix/subscription-inactive-banner</code></span>` }) })
 }
