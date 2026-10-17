@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Unmute: talk to Claude Code and Codex without leaving what you’re doing</title>
+<meta name="description" content="Unmute is a Mac app. Tap a key, say what you want done, and Claude Code or Codex starts on it. When it finishes or needs you, its chat opens at the top of your screen." />
+<link rel="icon" href="../icon.png" />
+<link rel="apple-touch-icon" href="../apple-touch-icon.png" />
+<link rel="canonical" href="https://justunmute.me/" />
+<meta property="og:title" content="Unmute: talk to Claude Code and Codex without leaving what you’re doing" />
+<meta property="og:description" content="Unmute is a Mac app. Tap a key, say what you want done, and Claude Code or Codex starts on it." />
+<meta property="og:image" content="https://justunmute.me/og.png" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://justunmute.me/" />
+<meta name="twitter:site" content="@just_unmute" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="https://justunmute.me/og.png" />
+<link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="clear.css?v=live4" />
+<link rel="stylesheet" href="draft.css?v=live4" />
+<link rel="stylesheet" href="kit.css?v=live4" />
+<link rel="stylesheet" href="apps.css?v=live4" />
+<link rel="stylesheet" href="live.css?v=live4" />
+</head>
+<body>
+<nav class="top">
+  <a href="#top" class="brand" aria-label="Unmute home"><img src="../unmute-wordmark-black.png" alt="unmute" /></a>
+  <div class="links"><a href="#how">How it works</a><a href="#apps">Where it works</a><a href="#pricing">Pricing</a>
+    <a class="btn sm" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Download for Mac</a></div>
+</nav>
+<main id="top">
+
+<section class="hero">
+  <h1>Talk to Claude Code and Codex without leaving what you’re doing.</h1>
+  <p class="def">Unmute is a Mac app. Tap a key, say what you want done, and Claude Code or Codex starts on it. When it finishes or needs you, it comes to you at the top of your screen.</p>
+  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="15" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a><a class="btn ghost" href="#film">Watch a real recording</a></div>
+  <p class="works"><span><img src="assets/mark-claude.png" alt="" />Claude Code</span><span class="dot">·</span><span><img src="assets/mark-codex.png" alt="" />Codex</span><span class="dot">·</span><span class="plain">Uses your own subscription</span><span class="dot">·</span><span class="plain">Apple silicon Macs</span></p>
+
+  <figure class="scene hero-scene" aria-label="Animated example: a bug report arrives in Slack; you tap a key and ask Claude Code to fix it; it works in the background, asks to merge, and you answer by voice.">
+    <div class="stage" id="hero-stage"></div>
+    <figcaption class="rail">
+      <ol class="steps" aria-hidden="true"><li>A bug comes in</li><li>You say it</li><li>It works</li><li>It asks you</li><li>Done</li></ol>
+      <p class="said" aria-live="off"></p>
+      <div class="ctl"><button type="button" class="c-pause" aria-pressed="false">Pause</button><button type="button" class="c-replay">Replay</button><button type="button" class="c-sound" aria-pressed="false">Sound off</button></div>
+    </figcaption>
+  </figure>
+</section>
+
+<section class="where" id="apps">
+  <div class="sec-h"><h2>Wherever you’re working.</h2><p>Unmute isn’t a plugin inside each app. It sits on top of your whole Mac, so the same key works in all of them.</p></div>
+  <div class="tabs" role="tablist"><button type="button" class="tab" data-app="slack" role="tab"><img src="assets/logos/slack-color.svg" alt="">Slack</button><button type="button" class="tab" data-app="linear" role="tab"><img src="assets/logos/linear.svg" alt="">Linear</button><button type="button" class="tab" data-app="figma" role="tab"><img src="assets/logos/figma-color.svg" alt="">Figma</button><button type="button" class="tab" data-app="github" role="tab"><img src="assets/logos/github.svg" alt="">GitHub</button><button type="button" class="tab" data-app="gmail" role="tab"><img src="assets/logos/gmail-color.svg" alt="">Gmail</button><button type="button" class="tab" data-app="docs" role="tab"><img src="assets/logos/chrome-color.svg" alt="">Chrome</button></div>
+  <figure class="scene"><div class="stage" id="apps-stage"></div><figcaption class="rail"><p class="tab-note"></p><p class="said" aria-live="off"></p><div class="tbar"><i></i></div></figcaption></figure>
+</section>
+
+<section class="how" id="how">
+  <div class="sec-h"><h2>What happens after you speak.</h2><p>Scroll through one request, start to finish.</p></div>
+  <div class="scrolly">
+    <div class="sticky">
+      <ol class="stages">
+        <li><b>You tap a key and say it.</b><span>Tap right ⌥ anywhere on your Mac. Your words appear as you speak.</span></li>
+        <li><b>Unmute sends it.</b><span>To a new Claude Code or Codex session, with what you were looking at.</span></li>
+        <li><b>It works in the background.</b><span>A small status at the top of your screen. You keep working.</span></li>
+        <li><b>It asks when it needs you.</b><span>The session opens in the notch, right where you are. No switching windows.</span></li>
+        <li><b>You answer. It’s done.</b><span>Reply by voice. The result comes back the same way.</span></li>
+      </ol>
+      <div class="stage" id="how-stage"></div>
+    </div>
+  </div>
+</section>
+
+<section class="many">
+  <div class="sec-h"><h2>Run several at once.</h2><p>One sentence each. They all live in the notch, Claude Code and Codex side by side.</p></div>
+  <figure class="scene"><div class="stage" id="many-stage"></div></figure>
+</section>
+
+<section class="uses" id="uses">
+  <div class="sec-h"><h2>What you can use Unmute for</h2><p>Anything you’d ask Claude Code or Codex, said in one sentence.</p></div>
+  <div class="tk-groups"><div><h3>Code</h3><ul class="tasks"><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/slack-color.svg" alt=""><span>Slack · #bugs</span></div><p class="tk-q">“Find what broke EU checkout and open a PR.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">PR #812 opened · 41 tests pass</span></div></li><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/linear.svg" alt=""><span>Linear · ORB-418</span></div><p class="tk-q">“Take ORB-418. Rate limit the public API.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">Moved to In Progress · branch created</span></div></li><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/figma-color.svg" alt=""><span>Figma · Pricing v3</span></div><p class="tk-q">“Build this pricing page in our Next.js app.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">Page built from the screenshot · PR #815</span></div></li><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/github.svg" alt=""><span>GitHub · PR #807</span></div><p class="tk-q">“Tell the onboarding session to reuse exchangeAuthCode.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">Sent to “Onboarding flow”</span></div></li><li class="task" data-agent="codex"><div class="tk-h"><img src="assets/logos/term.svg" alt=""><span>Terminal</span></div><p class="tk-q">“Tests are failing on main. Find out why and fix them.”</p><div class="tk-r"><img src="assets/mark-codex.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">Fixed a timezone bug in 2 tests</span></div></li><li class="task" data-agent="codex"><div class="tk-h"><img src="assets/logos/github.svg" alt=""><span>Worktrees</span></div><p class="tk-q">“Start the CSV export in a new worktree off main.”</p><div class="tk-r"><img src="assets/mark-codex.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">New worktree · csv-export branch</span></div></li></ul></div><div><h3>Everything else</h3><ul class="tasks"><li class="task" data-agent="codex"><div class="tk-h"><img src="assets/logos/gmail-color.svg" alt=""><span>Gmail · Refunds</span></div><p class="tk-q">“Draft replies to these three refund requests.”</p><div class="tk-r"><img src="assets/mark-codex.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">3 drafts ready in Gmail</span></div></li><li class="task" data-agent="codex"><div class="tk-h"><img src="assets/logos/slack-color.svg" alt=""><span>Slack · #launch</span></div><p class="tk-q">“Turn this thread into Linear issues with owners.”</p><div class="tk-r"><img src="assets/mark-codex.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">8 issues created, linked in the thread</span></div></li><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/meet.svg" alt=""><span>Meeting notes</span></div><p class="tk-q">“Add the decisions from that call to the onboarding session.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">4 decisions added to the session</span></div></li><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/chrome-color.svg" alt=""><span>Chrome · competitor page</span></div><p class="tk-q">“Research how competitors price team plans.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">Comparison table of 6 competitors</span></div></li></ul></div></div>
+</section>
+
+<section class="film-sec" id="film">
+  <div class="sec-h"><h2>See it for real.</h2><p>A real recording on a real Mac, start to finish, with sound.</p></div>
+  <div class="real"><video controls playsinline preload="none" poster="assets/video/hero-poster.jpg?v=l41" data-src="hero"></video></div>
+</section>
+
+<section class="pricing" id="pricing">
+  <h2>Pricing</h2>
+  <p class="lead">One plan with everything. It works with your own Claude Code or Codex subscription.</p>
+  <div class="plans">
+    <div class="plan">
+      <p class="pname">Monthly</p>
+      <p class="pprice"><b>$7.99</b><span>/ month</span></p>
+      <p class="pnote">Cancel anytime.</p>
+    </div>
+    <div class="plan best">
+      <p class="pname">Yearly <em>2 months free</em></p>
+      <p class="pprice"><b>$79</b><span>/ year</span></p>
+      <p class="pnote">About $6.58 a month.</p>
+    </div>
+  </div>
+  <div class="incl-h">Everything in Unmute</div><ul class="incl"><li><b>Claude Code and Codex by voice</b><span>Start or continue a session from anywhere on your Mac. Tap right ⌥ and speak.</span></li><li><b>Sessions come to you</b><span>When a session finishes or needs a decision, its chat opens at the top of your screen.</span></li><li><b>All your sessions in the notch</b><span>See what’s running and reply to any session without opening it.</span></li><li><b>Context while you talk</b><span>Add a screenshot or the link you’re looking at to what you say.</span></li><li><b>Unmute Agent</b><span>Ask for a past session by what it was about, and pick up where you left off.</span></li><li><b>Unlimited dictation</b><span>Type by voice in any text field, with the best cloud models. Works on-device when you’re offline.</span></li><li><b>Meeting notetaker</b><span>Summary, decisions and action items, ready to send to a session.</span></li><li><b>Scratchpad</b><span>Collect dictations as you think, then send them to a session or paste them.</span></li></ul>
+  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="15" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a></div>
+  <p class="small">For Macs with Apple silicon. Needs your own Claude Code or Codex subscription.</p>
+</section>
+
+
+<section class="final">
+  <h2>The best way to vibe code.<br />And to vibe work.</h2>
+  <p class="need">Say it, keep working, answer when it asks. Works with your own Claude Code or Codex subscription.</p>
+  <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg aria-hidden="true" width="15" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a></div>
+</section>
+</main>
+<footer><span>© 2026 unmute</span><span class="flinks"><a href="#pricing">Pricing</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute" aria-label="Unmute on X">X / Twitter</a></span></footer>
+<script type="module" src="ui/live.js?v=live4"></script>
+</body>
+</html>

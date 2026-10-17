@@ -1,0 +1,133 @@
+/* THE KIT — styles for ui/kit.js. The screen is drawn at 1280×800 and scaled. */
+.kit-host{--sf:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Inter,system-ui,sans-serif;position:relative}
+.kit-bezel{background:#0b0b0c;border-radius:clamp(12px,1.6vw,20px) clamp(12px,1.6vw,20px) 0 0;padding:clamp(5px,.9vw,11px) clamp(5px,.9vw,11px) 0;
+  box-shadow:0 40px 80px -40px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.05);position:relative}
+.kit-bezel::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:5%;background:linear-gradient(rgba(255,255,255,0),#fff);pointer-events:none;z-index:5}
+.kit-view{position:relative;overflow:hidden;border-radius:clamp(5px,.6vw,8px) clamp(5px,.6vw,8px) 0 0;background:#1b1d26}
+.kit-screen{position:absolute;left:0;top:0;width:1280px;height:800px;transform-origin:0 0;text-align:left;letter-spacing:normal;font-family:var(--sf);-webkit-font-smoothing:antialiased;overflow:hidden;color:#1d1d1f}
+.kit-wall{position:absolute;inset:0;background:#11131b url('assets/wallpaper-flow.svg?v=2') center/cover no-repeat}
+
+/* Menu bar: translucent over the wallpaper; the hardware notch sits in it. */
+.kit-menubar{position:absolute;z-index:30;left:0;right:0;top:0;height:32px;display:flex;justify-content:space-between;align-items:center;padding:0 18px 0 20px;
+  background:rgba(20,20,26,.28);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);color:#fff;font:400 13.5px/1 var(--sf);text-shadow:0 0 8px rgba(0,0,0,.3)}
+.kit-menubar .mb-l,.kit-menubar .mb-r{display:flex;align-items:center;gap:19px}
+.kit-menubar .mb-r{gap:16px}
+.kit-menubar i{display:inline-flex;width:16px;height:16px}.kit-menubar i svg{width:100%;height:100%}
+.kit-menubar .mb-apple{width:15px;height:15px;margin-top:-2px}
+.kit-menubar b{font-weight:700}
+.kit-menubar .mb-r i:first-child{width:24px}
+
+/* Windows */
+.kit-windows{position:absolute;inset:0;z-index:10}
+.kit-win{position:absolute;left:52px;top:52px;width:1176px;height:648px;border-radius:12px;overflow:hidden;background:#fff;
+  box-shadow:0 30px 70px -18px rgba(0,0,0,.6),0 0 0 .5px rgba(0,0,0,.5),inset 0 0 0 .5px rgba(255,255,255,.12);animation:win-in .45s cubic-bezier(.2,.8,.2,1) both}
+@keyframes win-in{from{opacity:0;transform:translateY(8px) scale(.99)}}
+.lights{position:absolute;z-index:3;left:14px;top:14px;display:flex;gap:8px}
+.lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.2)}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+
+/* Dock */
+.kit-dock{position:absolute;z-index:20;left:50%;bottom:8px;transform:translateX(-50%);display:flex;gap:9px;padding:7px 9px;border-radius:18px;
+  background:rgba(255,255,255,.22);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.35),0 10px 30px rgba(0,0,0,.3)}
+.kit-dock .dk{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.kit-dock .dk img{width:24px;height:24px;object-fit:contain}
+.kit-dock .dk svg{width:40px;height:40px}
+.kit-dock .dk-term,.kit-dock .dk-finder{background:none;box-shadow:none}
+.kit-dock .dk-un{background:#0b0b0c}.kit-dock .dk-un img{width:26px;height:auto}
+.kit-dock .dk-linear img{filter:brightness(0) saturate(100%) invert(31%) sepia(68%) saturate(1300%) hue-rotate(222deg)}
+
+/* ── The notch ─────────────────────────────────────────────────────────────── */
+.un-notch{position:absolute;z-index:40;top:0;left:50%;transform:translateX(-50%);width:220px;height:32px;background:#000;color:#fff;
+  border-radius:0 0 11px 11px;transition:width .42s cubic-bezier(.32,1.12,.5,1),height .42s cubic-bezier(.32,1.12,.5,1),border-radius .42s;font-family:var(--sf)}
+.un-notch .fil{position:absolute;top:0;width:10px;height:10px;background:radial-gradient(circle at 0 100%,transparent 9.5px,#000 10px)}
+.un-notch .fil.l{left:-10px;background:radial-gradient(circle at 0 100%,transparent 9.5px,#000 10px)}
+.un-notch .fil.r{right:-10px;background:radial-gradient(circle at 100% 100%,transparent 9.5px,#000 10px)}
+.un-notch .nb{position:absolute;left:0;right:0;top:0;height:32px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 18px;transition:opacity .2s}
+.un-notch .nb-l img{height:12px;display:block;opacity:.9}
+.un-notch .nb-r{display:flex;align-items:center;gap:7px;font:500 12px var(--sf);white-space:nowrap;opacity:0;transition:opacity .2s .15s}
+.un-notch.bar .nb-r{opacity:1}
+.un-notch .dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none}
+.dot.green{background:#30D158;animation:breathe 1.2s ease-in-out infinite alternate}.dot.orange{background:#FF9230}.dot.grey{background:#98989D}.dot.teal{background:#00D2E0}
+@keyframes breathe{to{opacity:.4}}
+.un-notch .badge{font:600 10px var(--sf);padding:1px 5px;border-radius:5px}
+.badge.green{color:#30D158;background:rgba(48,209,88,.17)}.badge.orange{color:#FF9230;background:rgba(255,146,48,.17)}
+.un-notch .np{position:absolute;left:0;right:0;top:36px;bottom:0;padding:4px 22px 16px;opacity:0;transition:opacity .2s;overflow:hidden}
+.un-notch.open,.un-notch.pocket{border-radius:0 0 22px 22px}
+.un-notch.open .np,.un-notch.pocket .np{opacity:1;transition:opacity .25s .3s}
+.un-notch.open .nb-r{opacity:0}
+/* Session panel */
+.pn-h{display:flex;align-items:center;gap:8px;height:26px}
+.pn-h img{width:15px;height:15px;object-fit:contain}
+.pn-h b{font:600 17px var(--sf);letter-spacing:-.01em}
+.pn-h .st{margin-left:auto;font:600 13px var(--sf)}
+.st.working{color:#30D158}.st.needs{color:#FF9230}.st.done{color:#98989D}.st.ready{color:#00D2E0}
+.pn-b{margin-top:10px;font:400 15px/1.5 var(--sf);color:rgba(255,255,255,.88)}
+.pn-b .you{display:block;margin-left:auto;max-width:78%;width:fit-content;padding:7px 11px;border-radius:11px;background:rgba(255,255,255,.11);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.16);margin-bottom:8px}
+.pn-b .step{display:flex;align-items:center;gap:7px;color:rgba(255,255,255,.6);font-size:13.5px;margin:3px 0}
+.pn-b .step i{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.4)}
+.pn-b code{font:11.5px ui-monospace,"SF Mono",Menlo,monospace;background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px}
+.pn-b .ok{color:#30D158}
+.pn-a{display:flex;gap:8px;margin-top:10px}
+.pn-a span{padding:7px 14px;border-radius:8px;font:600 13.5px var(--sf);background:rgba(255,255,255,.1);color:#fff}
+.pn-a span.primary{background:rgba(255,255,255,.93);color:#0f1114}
+.pn-a span.pressed{transform:scale(.95)}
+.pn-c{position:absolute;left:22px;right:22px;bottom:14px;height:32px;border-radius:9px;background:rgba(255,255,255,.075);box-shadow:inset 0 0 0 1px rgba(255,255,255,.18);display:flex;align-items:center;padding:0 6px 0 12px;font:13px var(--sf);color:rgba(255,255,255,.38)}
+.pn-c i{margin-left:auto;width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.9)}
+/* Pocket: sessions listed in the notch */
+.pk-row{display:flex;align-items:center;gap:9px;height:38px;padding:0 11px;margin-top:6px;border-radius:10px;background:rgba(255,255,255,.085);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14);font:500 13px var(--sf);transition:background .2s,box-shadow .2s}
+.pk-row img{width:15px;height:15px;object-fit:contain}
+.pk-row .t{flex:1}
+.pk-row .s{display:flex;align-items:center;gap:6px;font:600 11px var(--sf)}
+.pk-row.aim{background:rgba(255,255,255,.16);box-shadow:inset 0 0 0 1px rgba(255,255,255,.45)}
+.pk-row .mic{display:none;align-items:center;gap:5px;padding:2px 7px;border-radius:999px;background:rgba(255,66,69,.18);color:#FF4245;font:600 10.5px var(--sf)}
+.pk-row.aim .mic{display:inline-flex}
+.pk-row.enter{animation:row-in .4s cubic-bezier(.2,.8,.2,1) both}
+@keyframes row-in{from{opacity:0;transform:translateY(-6px)}}
+.pk-h{display:flex;justify-content:space-between;font:600 11px var(--sf);color:rgba(255,255,255,.42);padding:0 2px}
+
+/* ── The pill ──────────────────────────────────────────────────────────────── */
+.un-pill{position:absolute;z-index:45;left:50%;bottom:84px;transform:translateX(-50%) translateY(10px) scale(.92);display:flex;gap:8px;align-items:center;opacity:0;transition:opacity .22s,transform .3s cubic-bezier(.3,1.3,.5,1)}
+.un-pill.on{opacity:1;transform:translateX(-50%)}
+.un-pill .up-agent{display:flex;align-items:center;gap:7px;height:34px;padding:0 13px 0 10px;border-radius:999px;background:#000;color:#fff;font:600 12.5px var(--sf);box-shadow:inset 0 0 0 1px rgba(255,255,255,.25)}
+.un-pill .up-agent img{width:16px;height:16px;object-fit:contain}
+.un-pill .up-cap{display:flex;align-items:center;gap:9px;height:36px;padding:0 7px;border-radius:999px;background:#000;box-shadow:inset 0 0 0 1px rgba(255,255,255,.3)}
+.un-pill .up-cap > i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;color:rgba(255,255,255,.55)}
+.un-pill .up-cap > i svg{width:12px;height:12px}
+.un-pill .up-ok{background:rgba(255,255,255,.12);color:#fff!important}
+.un-pill.done .up-ok{background:#30D158;color:#000!important}
+.un-pill .up-wave{display:flex;align-items:center;gap:2.5px;width:58px;height:18px;justify-content:center}
+.un-pill .up-wave i{width:3px;height:3px;border-radius:2px;background:#fff;display:block}
+
+/* What you say: big, readable, above the pill. */
+.un-say{position:absolute;z-index:44;left:50%;bottom:132px;transform:translateX(-50%) translateY(8px);width:max-content;max-width:640px;opacity:0;transition:opacity .25s,transform .35s cubic-bezier(.2,.8,.2,1);
+  background:#fff;border-radius:18px;padding:13px 20px 15px;box-shadow:0 24px 60px -16px rgba(0,0,0,.55),0 0 0 1px rgba(0,0,0,.06)}
+.un-say.on{opacity:1;transform:translateX(-50%)}
+.un-say .us-h{display:flex;align-items:center;gap:9px;font:600 12px var(--sf);color:#6b6b6b;text-transform:uppercase;letter-spacing:.04em}
+.un-say .us-key{font:700 11px ui-monospace,Menlo,monospace;text-transform:none;letter-spacing:0;color:#111;padding:3px 7px;border-radius:6px;background:#f2f2f2;box-shadow:inset 0 0 0 1px #ddd,0 1px 0 #ccc}
+.un-say .us-t{margin:6px 0 0;font:600 25px/1.3 var(--sf);color:#0a0a0a;letter-spacing:-.015em}
+.un-say .us-t span{animation:word .28s ease-out both}
+@keyframes word{from{opacity:0;transform:translateY(3px)}}
+.un-say .chip{display:inline-flex;align-items:center;gap:6px;margin-top:9px;padding:5px 10px;border-radius:8px;background:#f1f3f5;font:500 13px var(--sf);color:#333;animation:word .3s ease-out both}
+
+/* The key you tap */
+.un-key{position:absolute;z-index:46;left:64px;bottom:96px;display:flex;align-items:center;gap:12px;opacity:0;transform:translateY(10px);transition:opacity .25s,transform .3s cubic-bezier(.3,1.3,.5,1)}
+.un-key.on{opacity:1;transform:none}
+.un-key .cap{width:62px;height:58px;border-radius:12px;background:linear-gradient(#fdfdfd,#e9e9eb);box-shadow:0 5px 0 #b9b9bd,0 12px 24px rgba(0,0,0,.35),inset 0 0 0 1px rgba(0,0,0,.08);display:grid;place-items:center;font:500 26px var(--sf);color:#222;transition:transform .12s,box-shadow .12s}
+.un-key.down .cap{transform:translateY(4px);box-shadow:0 1px 0 #b9b9bd,0 6px 12px rgba(0,0,0,.3),inset 0 0 0 1px rgba(0,0,0,.08)}
+.un-key .lbl{padding:8px 13px;border-radius:10px;background:rgba(0,0,0,.72);color:#fff;font:600 15px var(--sf)}
+
+/* Cursor */
+.kit-cursor{position:absolute;z-index:60;width:26px;height:26px;margin:-3px 0 0 -6px;opacity:0;transition:opacity .25s,transform .12s;pointer-events:none;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))}
+.kit-cursor.on{opacity:1}.kit-cursor.down{transform:scale(.86)}
+.kit-cursor svg{width:100%;height:100%}
+
+/* Region screenshot (hold left ⌘ and drag) */
+.kit-sel{position:absolute;z-index:42;border:2px solid #fff;background:rgba(255,255,255,.14);box-shadow:0 0 0 9999px rgba(0,0,0,.28);border-radius:3px;pointer-events:none}
+.kit-flash{position:absolute;z-index:43;background:#fff;opacity:.9;animation:flash .5s ease-out forwards;pointer-events:none}
+@keyframes flash{to{opacity:0}}
+
+@media(prefers-reduced-motion:reduce){.kit-win,.un-say .us-t span,.pk-row.enter{animation:none}.dot.green{animation:none}}
+/* Close-ups (a region of the screen): bring the pill and words up into view. */
+.closeup .un-pill{bottom:424px}
+.closeup .un-say{bottom:472px;max-width:600px}
+.closeup .un-say .us-t{font-size:23px}
+.closeup .un-key{display:none}
