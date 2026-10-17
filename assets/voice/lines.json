@@ -1,0 +1,86 @@
+{
+ "Find what broke EU checkout since this morning’s release, fix it, and open a PR.": {
+  "src": "assets/voice/l0.mp3",
+  "dur": 4.41
+ },
+ "Merge it and reply in the thread.": {
+  "src": "assets/voice/l1.mp3",
+  "dur": 1.75
+ },
+ "Turn this thread into Linear issues, with owners and due dates.": {
+  "src": "assets/voice/l2.mp3",
+  "dur": 3.76
+ },
+ "Take ORB-418. Limit each API key to 100 requests a minute.": {
+  "src": "assets/voice/l3.mp3",
+  "dur": 5.2
+ },
+ "Build this pricing page in our Next.js app. Match the spacing exactly.": {
+  "src": "assets/voice/l4.mp3",
+  "dur": 4.49
+ },
+ "Reuse exchangeAuthCode from lib/auth instead of calling the token endpoint yourself.": {
+  "src": "assets/voice/l5.mp3",
+  "dur": 4.49
+ },
+ "Draft replies to these three refund requests, using our refund policy.": {
+  "src": "assets/voice/l6.mp3",
+  "dur": 4.21
+ },
+ "Add automatic tax to our checkout, following this guide.": {
+  "src": "assets/voice/l7.mp3",
+  "dur": 4.44
+ },
+ "Fix the EU checkout bug.": {
+  "src": "assets/voice/l8.mp3",
+  "dur": 1.33
+ },
+ "Add CSV export for invoices.": {
+  "src": "assets/voice/l9.mp3",
+  "dur": 2.12
+ },
+ "Rate limit the public API.": {
+  "src": "assets/voice/l10.mp3",
+  "dur": 2.12
+ },
+ "A bug report comes in on Slack.": {
+  "src": "assets/voice/l11.mp3",
+  "dur": 2.01
+ },
+ "Normally, you’d switch to Claude Code, find the session, and type it all out.": {
+  "src": "assets/voice/l12.mp3",
+  "dur": 4.99
+ },
+ "With Unmute, you tap one key and say it.": {
+  "src": "assets/voice/l13.mp3",
+  "dur": 3.03
+ },
+ "Unmute sends it to Claude Code.": {
+  "src": "assets/voice/l14.mp3",
+  "dur": 1.72
+ },
+ "A new session starts in the notch and gets to work. You keep going in Slack.": {
+  "src": "assets/voice/l15.mp3",
+  "dur": 4.1
+ },
+ "When it’s finished, it opens right where you are, and asks what’s next.": {
+  "src": "assets/voice/l16.mp3",
+  "dur": 4.49
+ },
+ "You answer the same way.": {
+  "src": "assets/voice/l17.mp3",
+  "dur": 1.12
+ },
+ "Done. Committed on a new branch. And you never left Slack.": {
+  "src": "assets/voice/l18.mp3",
+  "dur": 4.55
+ },
+ "Hey, can you investigate the checkout issue Maya just reported?": {
+  "src": "assets/voice/l19.mp3",
+  "dur": 3.68
+ },
+ "Yeah, can you please commit those changes in a new separate branch?": {
+  "src": "assets/voice/l20.mp3",
+  "dur": 2.9
+ }
+}
