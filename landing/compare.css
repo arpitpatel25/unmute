@@ -139,3 +139,6 @@ img[src*="unmark"]:not(.un){filter:invert(1) hue-rotate(180deg)}
 .ap p{margin-top:10px;font-size:16.5px;line-height:1.6;color:var(--dim)}
 .ap.us p{color:rgba(255,255,255,.75)}
 @media(max-width:960px){.approach{grid-template-columns:1fr}}
+.wf-page{padding:0;max-width:none}
+.wf-page .cmp-t{margin-top:0}
+.vs-pill img.wf{height:46px}

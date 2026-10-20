@@ -301,3 +301,14 @@ const saidText = (t) => `You say: “${t}”`
   const small = Math.min(screen.width, innerWidth) < 900
   d.addEventListener('toggle', () => { if (d.open && !v.src) { v.src = `assets/video/hero${small ? '-720' : ''}.mp4?v=l41`; v.play().catch(() => {}) } })
 }
+
+// Touch screens have no right ⌥: say "tap" instead of "press".
+if (matchMedia('(hover: none)').matches) {
+  const hintBtn = document.querySelector('.try-hint'), talkBtn = document.querySelector('#talk')
+  hintBtn.innerHTML = 'Tap here to talk'
+  const relabel = () => { const sp = talkBtn.querySelector('span'); if (sp.textContent.includes('Press right Option')) sp.textContent = sp.textContent.replace('Press right Option', 'Tap to talk') }
+  relabel(); new MutationObserver(relabel).observe(talkBtn, { subtree: true, characterData: true, childList: true })
+  const st = document.querySelector('.try-status')
+  const fixStatus = () => { if (/press/i.test(st.textContent)) st.textContent = st.textContent.replace(/press right ⌥|press the key/gi, 'tap the button') }
+  fixStatus(); new MutationObserver(fixStatus).observe(st, { childList: true, characterData: true, subtree: true })
+}

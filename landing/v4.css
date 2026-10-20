@@ -314,3 +314,64 @@ kbd{font:600 .82em var(--ui);padding:.12em .45em;border-radius:6px;background:#f
 .how .sec-h h2,.where .sec-h h2,.many .sec-h h2,.uses .sec-h h2,.film-sec .sec-h h2{font:650 clamp(34px,4.4vw,56px)/1.04 var(--ui);letter-spacing:-.045em}
 .tabs .tab{border-radius:999px}
 .uses .tk-groups h3{color:var(--faint)}
+
+/* ── Phones: shorter, swipeable, nothing doubled up ─────────────────────── */
+@media(max-width:620px){
+  /* Hero */
+  .pill-badge{display:none}
+  .hero{padding:44px 20px 18px}
+  .hero h1{margin-top:0;font-size:clamp(36px,10.6vw,44px);line-height:1.02}
+  .lede{margin-top:16px;font-size:17px}
+  .ctas{margin-top:22px;flex-direction:column;align-items:stretch;padding:0 6px}
+  .ctas .btn{justify-content:center}
+  .ctas .btn.ghost{display:none}
+  .works{margin-top:18px;gap:12px;font-size:13.5px}.works .dim{flex-basis:100%;text-align:center}
+
+  /* Try it: compact controls */
+  .try{padding:8px 12px 0}
+  .try-bar{margin-top:12px;padding:8px;gap:8px;border-radius:18px}
+  .tb-grp{padding:8px 10px;gap:8px;border-radius:14px;flex-wrap:nowrap}
+  .tb-l,.tb-n,.model{display:none}
+  .chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 -10px;padding:0 10px}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{flex:none}
+  .seg{width:100%}.seg button{flex:1;justify-content:center}
+  .tb-grp.go{justify-content:center;padding:12px}
+  .try-status{font-size:14px;margin-top:10px;padding:0 10px}
+
+  /* Sections: tighter rhythm */
+  .how,.where,.uses,.film-sec,.does,.plans-own,.cmp-hub,.faq{padding-top:76px}
+  .sec-h h2,.how .sec-h h2,.where .sec-h h2,.uses .sec-h h2,.film-sec .sec-h h2{font-size:32px;line-height:1.06}
+  .sec-h p:not(.eyebrow){font-size:16px;margin-top:10px}
+  .scrolly{height:280vh!important}
+  .many,.dl{display:none}
+
+  /* Swipe rows instead of tall stacks */
+  .bento,.vs-grid,.tasks{display:flex!important;flex-direction:row!important;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;margin-left:-20px;margin-right:-20px;padding:2px 20px 10px}
+  .bento::-webkit-scrollbar,.vs-grid::-webkit-scrollbar,.tasks::-webkit-scrollbar{display:none}
+  .bento > *,.vs-grid > *,.tasks > *{flex:0 0 82%;scroll-snap-align:center}
+  .bento{margin-top:28px}
+  .bx{padding:10px 10px 18px}.bx h3{margin-top:14px;font-size:17px}.bx p{font-size:14.5px}
+  .viz{height:190px}
+  .also{font-size:14px;margin-top:12px;padding:0 4px}
+  .tk-groups{gap:18px!important;margin-top:24px}
+  .tasks > li{flex-basis:78%}
+  .vs-art{height:130px}
+  .swipe-hint{display:block}
+
+  /* Your agents, price, compare, questions */
+  .own{margin-top:24px;gap:10px}.own-c{padding:16px 18px}.own-c.dim{display:none}
+  .own-c img{width:30px;height:30px}
+  .price{margin:76px 12px 0;padding:56px 18px;border-radius:26px}
+  .price .big{font-size:96px}.price .per{font-size:17px}
+  .incl li{font-size:13px;padding:7px 11px}
+  .glance{margin-top:18px}
+  .gl-h{padding:16px}.gl-h span{font-size:16px}
+  .faq{gap:12px}.faq-r summary{font-size:16px;padding:16px 0}
+  .close-wall{height:400px;margin-top:80px}
+  .cw-in{padding:30px 22px}.cw-in p{font-size:16px}
+  .foot{padding:44px 20px 32px;gap:22px}
+}
+.swipe-hint{display:none;margin-top:6px;font:500 13px var(--ui);color:var(--faint);text-align:center}
+@media(max-width:620px){.works .dim{justify-content:center}.scrolly{height:240vh!important}}
+.tk-groups > div,.does,.cmp-hub{min-width:0}
