@@ -125,3 +125,17 @@ html,body{overflow-x:clip}
 /* The "un" mark is white; on light surfaces show it dark, waves stay purple. */
 img[src*="unmark"]:not(.un){filter:invert(1) hue-rotate(180deg)}
 .fc.us kbd{background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.3);box-shadow:none}
+.matrix.simple{min-width:860px;font-size:14.5px}
+.matrix.simple th,.matrix.simple td{padding:18px 18px;vertical-align:middle}
+.matrix.simple tbody th{width:240px;font-size:15.5px}
+.approach{margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.ap{border-radius:24px;padding:30px;border:1px solid var(--line);background:var(--soft)}
+.ap.us{background:#0b0b0c;color:#fff;border-color:#0b0b0c;position:relative;overflow:hidden}
+.ap.us::before{content:"";position:absolute;right:-30%;top:-50%;width:90%;height:160%;background:radial-gradient(closest-side,rgba(155,108,246,.35),transparent);pointer-events:none}
+.ap > *{position:relative}
+.ap img{height:34px;width:auto;border-radius:8px}
+.ap.us img{filter:none}
+.ap h3{margin-top:22px;font:650 26px/1.1 var(--ui);letter-spacing:-.035em}
+.ap p{margin-top:10px;font-size:16.5px;line-height:1.6;color:var(--dim)}
+.ap.us p{color:rgba(255,255,255,.75)}
+@media(max-width:960px){.approach{grid-template-columns:1fr}}

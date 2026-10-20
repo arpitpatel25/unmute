@@ -302,3 +302,4 @@ kbd{font:600 .82em var(--ui);padding:.12em .45em;border-radius:6px;background:#f
 .v-say{grid-template-columns:minmax(0,1fr);justify-items:center}
 @media(max-width:620px){.v-words{font-size:16px}.v-say .v-pill{transform:scale(.78)}}
 .gl-r.head img[src*="unmark"]{filter:invert(1) hue-rotate(180deg)}
+.gl-r .y{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--ink);color:#fff;font:700 11px var(--ui);margin-right:4px}.gl-r .y::before{content:"✓"}
