@@ -8,25 +8,21 @@
 <link rel="icon" type="image/png" href="icon.png" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
 <link rel="stylesheet" href="docs.css?v=10" />
-<script>(function(){try{var t=localStorage.getItem('theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="legal.css?v=1" />
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="logo" viewBox="60 55 770 170"><image href="assets/unmute-word.png" x="60" y="55" width="770" height="170"/><g class="waves" fill="none" stroke="#9b6cf6" stroke-width="15" stroke-linecap="round"><path class="w1" d="M764 92 Q 781 103 783 126"/><path class="w2" d="M773 70 Q 803 85 806 129"/></g></symbol>
+</defs></svg>
+<header class="nav">
+  <a class="brand" href="./" aria-label="Unmute home"><svg class="logo"><use href="#logo"/></svg></a>
+  <nav class="links">
+    <a href="./#try">Try it</a><a href="./#how">How it works</a><a href="./#apps">Where it works</a><a href="compare.html">Compare</a><a href="./#price">Pricing</a><a href="./#blog">Blog</a>
+  </nav>
+  <a class="btn sm" href="./#download"><svg width="13" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download</a>
+</header>
   <div class="page">
-    <div class="top">
-      <a class="logo" href="./" aria-label="unmute">
-        <img class="logo-black" src="unmute-wordmark-black.png" alt="unmute" width="108" height="36" /><img class="logo-white" src="unmute-wordmark-white.png" alt="" aria-hidden="true" width="108" height="36" />
-      </a>
-      <nav>
-        <a href="dictation.html">dictation</a>
-        <a href="remote.html">unmute remote</a>
-        <a href="pricing.html">pricing</a>
-        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
-          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-        </button>
-        <a class="nav-cta" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Get unmute</a>
-      </nav>
-    </div>
 
     <main class="legal">
       <h1>Terms of Service</h1>
@@ -127,23 +123,16 @@
       </p>
     </main>
 
-    <footer>
-      <div class="links">
-        <a href="./">Home</a>
-        <a href="dictation.html">Dictation</a>
-        <a href="remote.html">Remote</a>
-        <a href="pricing.html">Pricing</a>
-        <a href="manifesto.html">Manifesto</a>
-        <a href="privacy.html">Privacy</a>
-        <a href="terms.html">Terms</a>
-        <a href="refund.html">Refunds</a>
-        <a href="https://cal.com/unmute/15min">Book a call</a>
-        <a href="https://github.com/arpitpatel25/unmute-dictation">Open source</a>
-        <a href="https://x.com/just_unmute">Twitter</a>
-      </div>
-      <div>© 2026 unmute</div>
-    </footer>
+    
   </div>
-  <script src="theme.js?v=10"></script>
+<footer class="foot">
+  <div class="f-l"><svg class="logo"><use href="#logo"/></svg><p>Talk to Claude Code and Codex from anywhere on your Mac.</p></div>
+  <div class="f-c"><b>Product</b><a href="./#download">Download</a><a href="./#try">Try it</a><a href="./#how">How it works</a><a href="./#price">Pricing</a></div>
+  <div class="f-c"><b>Compare</b><a href="compare-t3-code.html">vs T3 Code</a><a href="compare-wispr-flow.html">vs Wispr Flow</a><a href="compare.html">All comparisons</a></div>
+  <div class="f-c"><b>Follow</b><a href="./#blog">Blog</a><a href="https://x.com/just_unmute">X / Twitter</a><a href="https://www.instagram.com/justunmute.me/">Instagram</a></div>
+  <div class="f-c"><b>Company</b><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="refund.html">Refunds</a><a href="manifesto.html">Manifesto</a></div>
+  <p class="f-b">© 2026 unmute</p>
+</footer>
+<script>addEventListener("scroll",()=>document.querySelector(".nav").classList.toggle("scrolled",scrollY>8),{passive:true})</script>
 </body>
 </html>

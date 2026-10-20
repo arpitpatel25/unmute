@@ -1,0 +1,43 @@
+/* Shared header and footer for the legal and info pages (privacy, terms,
+   refunds, manifesto), so they match the homepage. Loaded after docs.css. */
+:root{--ink:#0b0b0c;--dim:#55565b;--faint:#8b8c91;--line:#e8e8e5;--soft:#f5f5f2;--acc:#9b6cf6;--ui:Inter,-apple-system,system-ui,sans-serif}
+@font-face{font-family:Inter;src:url(assets/fonts/Inter.woff2) format("woff2");font-weight:100 900;font-display:swap}
+.logo{width:112px;height:25px;display:block}
+.logo .w1,.logo .w2{animation:wave 2.8s ease-in-out infinite}
+.logo .w2{animation-delay:.18s}
+@keyframes wave{0%,62%,100%{opacity:1}72%{opacity:.25}82%{opacity:1}}
+.btn{display:inline-flex;align-items:center;gap:9px;height:48px;padding:0 22px;border-radius:999px;background:var(--ink);color:#fff;font:600 15.5px var(--ui);letter-spacing:-.01em;transition:transform .15s,background .2s;border:0;cursor:pointer}
+.btn:hover{background:#000;transform:translateY(-1px)}
+.btn.sm{height:38px;padding:0 16px;font-size:14px;gap:7px}
+.btn.ghost{background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1px #d8d8d4}
+.btn.ghost:hover{background:var(--soft)}
+.btn.light{background:#fff;color:var(--ink)}
+.nav{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:20px;height:64px;padding:0 max(24px,calc((100vw - 1180px)/2));background:rgba(255,255,255,.82);backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid transparent;transition:border-color .2s}
+.nav.scrolled{border-color:var(--line)}
+.links{display:flex;gap:4px;padding:4px;border-radius:999px;background:var(--soft)}
+.links a{padding:7px 14px;border-radius:999px;font:500 14px var(--ui);color:var(--dim);transition:background .2s,color .2s}
+.links a:hover{background:#fff;color:var(--ink)}
+.links a[aria-current="page"]{background:#fff;color:var(--ink)}
+.foot{max-width:1180px;margin:0 auto;padding:64px 24px 48px;display:grid;grid-template-columns:1.6fr repeat(4,1fr);gap:24px}
+.f-l p{margin-top:14px;max-width:260px;font-size:15px;color:var(--dim)}
+.f-c{display:flex;flex-direction:column;gap:9px;font-size:14.5px;color:var(--dim)}
+.f-c b{font:600 12px var(--ui);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:4px}
+.f-c a{cursor:pointer}.f-c a:hover{color:var(--ink)}
+.f-b{grid-column:1/-1;padding-top:28px;border-top:1px solid var(--line);font-size:13.5px;color:var(--faint)}
+.links a[aria-current="page"]{background:#fff;color:var(--ink)}
+body{background:#fff;color:var(--ink);font-family:var(--ui)}
+.nav a,.foot a{text-decoration:none}
+.nav a:hover,.foot a:hover{background:none}
+.nav .links a:hover{background:#fff}
+.nav .btn:hover{background:#000;color:#fff}
+.page{max-width:760px;padding:56px 24px 40px}
+.legal h1,.page > main h1{font:650 clamp(36px,5vw,52px)/1.05 var(--ui);letter-spacing:-.04em;margin:0 0 12px}
+.legal h2{font:620 22px/1.3 var(--ui);letter-spacing:-.02em;margin:40px 0 10px}
+.legal p,.legal li{font-size:16.5px;line-height:1.7;color:var(--dim)}
+.legal a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.legal .lastupd{font:500 14px var(--ui);color:var(--faint)}
+.legal .tldr{border-radius:18px;background:var(--soft);border:1px solid var(--line)}
+.foot{border-top:1px solid var(--line);margin-top:40px}
+.foot{font-size:inherit;color:inherit}
+@media(max-width:960px){.links{display:none}.foot{grid-template-columns:1fr 1fr}.f-l{grid-column:1/-1}}
+@media(max-width:620px){.page{padding:36px 20px 20px}.legal p,.legal li{font-size:15.5px}}
