@@ -9,21 +9,32 @@ const $ = (s, r = document) => r.querySelector(s)
 const $$ = (s, r = document) => [...r.querySelectorAll(s)]
 const add = (root, html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); const n = t.content.firstElementChild; root.append(n); return n }
 
-// Nav border once the page scrolls.
-const nav = $('.nav')
-addEventListener('scroll', () => nav.classList.toggle('scrolled', scrollY > 8), { passive: true })
-
-// The closing wall: rows of things people say, drifting.
+// The menu-bar notch: a status for wherever you are on the page, like the app.
 {
-  const lines = [['claude', 'Fix the flaky checkout test'], ['codex', 'Draft replies to these refunds'], ['claude', 'Merge it'], ['codex', 'Turn this thread into tickets'], ['claude', 'Build this pricing page'], ['claude', 'Why did the deploy fail?'], ['codex', 'Add CSV export for invoices'], ['claude', 'Continue the onboarding session'], ['codex', 'Rebase on main and fix the conflicts'], ['claude', 'Summarize this call for Priya'], ['codex', 'Rate limit the public API'], ['claude', 'Yes, 20% off for annual']]
-  const wall = $('.wall')
-  for (let r = 0; r < 6; r++) {
-    const row = document.createElement('div'); row.className = 'row'
-    const seq = [...lines.slice(r * 2), ...lines.slice(0, r * 2)]
-    row.innerHTML = [...seq, ...seq].map(([a, t]) => `<span><img src="${MARK[a]}" alt="">${t}</span>`).join('')
-    wall.append(row)
-  }
+  const n = $('.page-notch'), t = $('.pn-t')
+  const states = [['.hero2', 'Listening', 'live'], ['#try', 'Working', 'live'], ['#keys', 'Working', 'live'], ['#price', 'Needs you', 'needs'], ['#compare', 'Working', 'live'], ['#faq', 'Working', 'live'], ['#get', 'Done', 'done']]
+  const io = new IntersectionObserver((es) => es.forEach((e) => {
+    if (!e.isIntersecting) return
+    const st = states.find(([sel]) => e.target.matches(sel)); if (!st) return
+    t.textContent = st[1]; n.dataset.s = st[2]
+  }), { rootMargin: '-45% 0px -50% 0px' })
+  states.forEach(([sel]) => { const el = $(sel); el && io.observe(el) })
+  n.addEventListener('click', () => $('#try').scrollIntoView({ behavior: 'smooth' }))
 }
+
+// How it works: pick a key, see it; it cycles on its own until you pick one.
+{
+  const items = $$('.k-list li'), views = $$('.k-view .viz')
+  let i = 0, auto = true, timer
+  const show = (k) => { i = k; items.forEach((li, j) => li.classList.toggle('on', j === k)); views.forEach((v) => v.classList.toggle('on', v.dataset.v === items[k].dataset.k)) }
+  items.forEach((li, k) => li.addEventListener('click', () => { auto = false; show(k) }))
+  const tick = () => { if (auto) show((i + 1) % items.length) }
+  new IntersectionObserver(([e]) => { clearInterval(timer); if (e.isIntersecting) timer = setInterval(tick, 4200) }, { threshold: 0.3 }).observe($('#keys'))
+  show(0)
+}
+
+// The finale: the notch drops down and opens when you reach it.
+new IntersectionObserver(([e], o) => { if (e.isIntersecting) { e.target.classList.add('in'); o.disconnect() } }, { threshold: 0.4 }).observe($('.finale'))
 
 // ── The playable hero ────────────────────────────────────────────────────────
 const MODELS = { claude: ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'], codex: ['GPT-6.1 Sol', 'GPT-6 Astra', 'GPT-6.1 Luna'] }

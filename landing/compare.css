@@ -139,3 +139,16 @@ img[src*="unmark"]:not(.un){filter:invert(1) hue-rotate(180deg)}
 .ap p{margin-top:10px;font-size:16.5px;line-height:1.6;color:var(--dim)}
 .ap.us p{color:rgba(255,255,255,.75)}
 @media(max-width:960px){.approach{grid-template-columns:1fr}}
+/* v5: serif headings, notch tiles, no gradient art */
+.c-hero h1,.grp-h h2,.sec > h2,.thesis h2,.ap h3,.both h3,.more h2{font-family:var(--serif)!important;font-weight:500!important;letter-spacing:-.02em!important}
+.c-hero{padding-top:64px}
+.tiles.two{grid-template-columns:repeat(2,1fr)}.tiles.three{grid-template-columns:repeat(3,1fr)}
+.t-tx{font:600 12.5px var(--ui);color:#fff}
+.tile img.un,.t-notch img.un{filter:none}
+.vs-notch{align-self:start;justify-self:center;width:min(420px,100%);background:#000;color:#fff;border-radius:0 0 30px 30px;padding:0 0 30px;text-align:center;box-shadow:0 30px 60px -30px rgba(0,0,0,.6)}
+.vn-bar{height:84px;display:flex;align-items:center;justify-content:center;gap:18px}
+.vn-bar img{height:40px;width:auto}.vn-bar img.r{border-radius:9px}
+.vn-bar i{font:500 13px var(--ui);font-style:normal;color:rgba(255,255,255,.55)}
+.vs-notch p{font:500 14px var(--ui);color:rgba(255,255,255,.6)}
+@media(max-width:960px){.tiles.three{grid-template-columns:1fr 1fr}}
+@media(max-width:620px){.tiles.two,.tiles.three{grid-template-columns:1fr}}
