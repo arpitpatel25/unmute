@@ -9,8 +9,8 @@
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="kit.css?v=v4f" />
 <link rel="stylesheet" href="apps.css?v=v4f" />
-<link rel="stylesheet" href="v4.css?v=v5b" />
-<link rel="stylesheet" href="compare.css?v=c4" />
+<link rel="stylesheet" href="v4.css?v=v4h" />
+<link rel="stylesheet" href="compare.css?v=c3" />
 </head>
 <body>
 
@@ -19,11 +19,12 @@
   <symbol id="logo" viewBox="60 55 770 170"><image href="assets/unmute-word.png" x="60" y="55" width="770" height="170"/><g class="waves" fill="none" stroke="#9b6cf6" stroke-width="15" stroke-linecap="round"><path class="w1" d="M764 92 Q 781 103 783 126"/><path class="w2" d="M773 70 Q 803 85 806 129"/></g></symbol>
 </defs></svg>
 
-<header class="menubar">
+<header class="nav">
   <a class="brand" href="v4.html" aria-label="Unmute home"><svg class="logo"><use href="#logo"/></svg></a>
-  <nav class="mb-links"><a href="v4.html#try">Try it</a><a href="v4.html#keys">How it works</a><a href="compare.html">Compare</a><a href="v4.html#price">Pricing</a></nav>
-  <button type="button" class="page-notch" aria-label="Try Unmute"><span class="pn-dot"></span><span class="pn-t">Comparing</span></button>
-  <a class="mb-dl" href="v4.html#get"><svg width="14" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download</a>
+  <nav class="links">
+    <a href="v4.html#try">Try it</a><a href="v4.html#does">What it does</a><a href="compare.html" style="background:#fff;color:var(--ink)">Compare</a><a href="v4.html#price">Pricing</a>
+  </nav>
+  <a class="btn sm" href="v4.html#download"><svg width="13" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download</a>
 </header>
 
 <main class="wrap" id="top">
@@ -49,12 +50,22 @@
 
 <section class="grp">
   <div class="grp-h"><h2>Coding agent apps</h2><p>Where your Claude Code and Codex sessions live.</p></div>
-  <div class="tiles"><a class="tile" href="compare-t3-code.html"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/logos/t3code.png" alt="" class="r"></span><b>Unmute vs T3 Code</b><span>A window for your agents, or a way to talk to them from anywhere.</span></a><a class="tile"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/mark-claude.png" alt=""></span><b>Unmute vs Claude Code</b><span>The terminal and desktop app, and talking to it from any app.</span></a><a class="tile"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/mark-codex.png" alt=""></span><b>Unmute vs the Codex app</b><span>Codex without opening the Codex app.</span></a><a class="tile"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/logos/conductor.png" alt="" class="r"></span><b>Unmute vs Conductor</b><span>Parallel agents in workspaces, or parallel sessions in the notch.</span></a></div>
+  <div class="cards two">
+    <a class="vs" href="compare-t3-code.html"><div class="vs-art g1"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt="Unmute"><i>vs</i><img class="app" src="assets/logos/t3code.png" alt="T3 Code"></span></div><span class="st-tag live">Read it</span><b>Unmute vs T3 Code</b><p>An open-source window for many agents, or a voice layer over your whole Mac.</p><span class="rd">Read the comparison →</span></a>
+    <a class="vs"><div class="vs-art g5"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/mark-claude.png" alt=""><span class="tx2">Claude Code</span></span></div><span class="st-tag">Draft</span><b>Unmute vs Claude Code</b><p>The terminal, the desktop app and its /voice, and what Unmute adds on top.</p><span class="rd soon">Coming soon</span></a>
+    <a class="vs"><div class="vs-art g3"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/mark-codex.png" alt=""><span class="tx2">Codex app</span></span></div><span class="st-tag">Draft</span><b>Unmute vs the Codex app</b><p>OpenAI’s desktop app, and talking to Codex without opening it.</p><span class="rd soon">Coming soon</span></a>
+    <a class="vs"><div class="vs-art g6"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img class="app" src="assets/logos/conductor.png" alt=""></span></div><span class="st-tag">Draft</span><b>Unmute vs Conductor</b><p>Parallel agents in workspaces, or parallel sessions in the notch.</p><span class="rd soon">Coming soon</span></a>
+    
+    
+  </div>
 </section>
 
 <section class="grp">
   <div class="grp-h"><h2>Voice tools</h2><p>Dictation apps, and where they stop.</p></div>
-  <div class="tiles two"><a class="tile" href="live.html#compare"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/logos/wisprflow-mark.svg" alt=""></span><b>Unmute vs Wispr Flow</b><span>Dictation, or dictation plus your coding agents.</span></a><a class="tile"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><span class="t-tx">Superwhisper</span></span><b>Unmute vs Superwhisper</b><span>On-device dictation, or dictation that starts sessions.</span></a></div>
+  <div class="cards two">
+    <a class="vs" href="live.html#compare"><div class="vs-art g1"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img class="wf" src="assets/logos/wisprflow-mark.svg" alt="Wispr Flow"></span></div><span class="st-tag live">Read it</span><b>Unmute vs Wispr Flow</b><p>Dictation everywhere, or dictation plus your coding agents.</p><span class="rd">Read the comparison →</span></a>
+    <a class="vs"><div class="vs-art g4"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><span class="tx2">Superwhisper</span></span></div><span class="st-tag">Draft</span><b>Unmute vs Superwhisper</b><p>On-device dictation, or dictation that starts and answers sessions.</p><span class="rd soon">Coming soon</span></a>
+  </div>
 </section>
 
 <section class="grp" id="glance">
@@ -81,11 +92,14 @@
 </section>
 
 </main>
-<footer class="foot2">
-  <svg class="logo"><use href="#logo"/></svg>
-  <nav><a href="v4.html#price">Pricing</a><a href="compare.html">Compare</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute">X / Twitter</a></nav>
-  <span>© 2026 unmute</span>
+<footer class="foot">
+  <div class="f-l"><svg class="logo"><use href="#logo"/></svg><p>Talk to Claude Code and Codex from anywhere on your Mac.</p></div>
+  <div class="f-c"><b>Product</b><a href="v4.html#download">Download</a><a href="v4.html#price">Pricing</a><a href="v4.html#faq">Questions</a><a>Changelog</a></div>
+  <div class="f-c"><b>Compare</b><a href="compare-t3-code.html">vs T3 Code</a><a>vs Claude Code</a><a>vs Codex app</a><a href="compare.html">All comparisons</a></div>
+  <div class="f-c"><b>Use it with</b><a>Claude Code</a><a>Codex</a><a>Slack</a><a>Figma</a></div>
+  <div class="f-c"><b>Company</b><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute">X / Twitter</a></div>
+  <p class="f-b">© 2026 unmute</p>
 </footer>
-<script type="module" src="ui/compare.js?v=c4"></script>
+<script type="module" src="ui/compare.js?v=c1"></script>
 </body>
 </html>

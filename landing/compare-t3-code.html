@@ -9,8 +9,8 @@
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="kit.css?v=v4f" />
 <link rel="stylesheet" href="apps.css?v=v4f" />
-<link rel="stylesheet" href="v4.css?v=v5b" />
-<link rel="stylesheet" href="compare.css?v=c4" />
+<link rel="stylesheet" href="v4.css?v=v4h" />
+<link rel="stylesheet" href="compare.css?v=c3" />
 </head>
 <body>
 
@@ -19,11 +19,12 @@
   <symbol id="logo" viewBox="60 55 770 170"><image href="assets/unmute-word.png" x="60" y="55" width="770" height="170"/><g class="waves" fill="none" stroke="#9b6cf6" stroke-width="15" stroke-linecap="round"><path class="w1" d="M764 92 Q 781 103 783 126"/><path class="w2" d="M773 70 Q 803 85 806 129"/></g></symbol>
 </defs></svg>
 
-<header class="menubar">
+<header class="nav">
   <a class="brand" href="v4.html" aria-label="Unmute home"><svg class="logo"><use href="#logo"/></svg></a>
-  <nav class="mb-links"><a href="v4.html#try">Try it</a><a href="v4.html#keys">How it works</a><a href="compare.html">Compare</a><a href="v4.html#price">Pricing</a></nav>
-  <button type="button" class="page-notch" aria-label="Try Unmute"><span class="pn-dot"></span><span class="pn-t">Comparing</span></button>
-  <a class="mb-dl" href="v4.html#get"><svg width="14" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download</a>
+  <nav class="links">
+    <a href="v4.html#try">Try it</a><a href="v4.html#does">What it does</a><a href="compare.html" style="background:#fff;color:var(--ink)">Compare</a><a href="v4.html#price">Pricing</a>
+  </nav>
+  <a class="btn sm" href="v4.html#download"><svg width="13" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download</a>
 </header>
 
 <main class="wrap" id="top">
@@ -37,7 +38,7 @@
       <p class="lede">T3 Code gives your agents a window. Unmute lets you talk to Claude Code and Codex from whatever app you’re in, and brings the answer back to you.</p>
       <p class="checked">Checked Oct 20, 2026 · <a href="#sources">Sources</a></p>
     </div>
-    <div class="vs-notch"><div class="vn-bar"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/logos/t3code.png" alt="" class="r"></div><p>Two ways to reach your agents</p></div>
+    <div class="vs-art g1"><span class="vs-pill"><figure><img class="un" src="assets/unmark.png" alt="">Unmute</figure><i>vs</i><figure><img class="app" src="assets/logos/t3code.png" alt="">T3 Code</figure></span></div>
   </div>
 </section>
 
@@ -87,16 +88,23 @@
 
 <section class="more">
   <div class="grp-h"><h2 style="font:650 26px var(--ui);letter-spacing:-.03em">More comparisons</h2><a href="compare.html" class="crumb">All comparisons →</a></div>
-  <div class="tiles three" style="margin-top:30px"><a class="tile"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/mark-claude.png" alt=""></span><b>Unmute vs Claude Code</b><span>The terminal and desktop app, and talking to it from any app.</span></a><a class="tile"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/mark-codex.png" alt=""></span><b>Unmute vs the Codex app</b><span>Codex without opening the Codex app.</span></a><a class="tile"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/logos/conductor.png" alt="" class="r"></span><b>Unmute vs Conductor</b><span>Parallel agents in workspaces, or parallel sessions in the notch.</span></a></div>
+  <div class="cards" style="margin-top:18px">
+    <a class="vs"><div class="vs-art g5" style="height:150px"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/mark-claude.png" alt=""></span></div><b>Unmute vs Claude Code</b></a>
+    <a class="vs"><div class="vs-art g3" style="height:150px"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/mark-codex.png" alt=""></span></div><b>Unmute vs the Codex app</b></a>
+    <a class="vs"><div class="vs-art g6" style="height:150px"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img class="app" src="assets/logos/conductor.png" alt=""></span></div><b>Unmute vs Conductor</b></a>
+  </div>
 </section>
 
 </main>
 
-<footer class="foot2">
-  <svg class="logo"><use href="#logo"/></svg>
-  <nav><a href="v4.html#price">Pricing</a><a href="compare.html">Compare</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute">X / Twitter</a></nav>
-  <span>© 2026 unmute</span>
+<footer class="foot">
+  <div class="f-l"><svg class="logo"><use href="#logo"/></svg><p>Talk to Claude Code and Codex from anywhere on your Mac.</p></div>
+  <div class="f-c"><b>Product</b><a href="v4.html#download">Download</a><a href="v4.html#price">Pricing</a><a href="v4.html#faq">Questions</a><a>Changelog</a></div>
+  <div class="f-c"><b>Compare</b><a href="compare-t3-code.html">vs T3 Code</a><a>vs Claude Code</a><a>vs Codex app</a><a href="compare.html">All comparisons</a></div>
+  <div class="f-c"><b>Use it with</b><a>Claude Code</a><a>Codex</a><a>Slack</a><a>Figma</a></div>
+  <div class="f-c"><b>Company</b><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute">X / Twitter</a></div>
+  <p class="f-b">© 2026 unmute</p>
 </footer>
-<script type="module" src="ui/compare.js?v=c4"></script>
+<script type="module" src="ui/compare.js?v=c1"></script>
 </body>
 </html>

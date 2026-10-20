@@ -7,40 +7,41 @@
 <meta name="description" content="Tap right Option anywhere on your Mac and say what you want. Claude Code or Codex starts on it, and when it finishes or needs you, the session opens in the notch." />
 <link rel="icon" href="../icon.png" />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="preload" href="assets/fonts/Lora.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="stylesheet" href="kit.css?v=v5a" />
-<link rel="stylesheet" href="apps.css?v=v5a" />
-<link rel="stylesheet" href="v4.css?v=v5a" />
+<link rel="stylesheet" href="kit.css?v=v4m" />
+<link rel="stylesheet" href="apps.css?v=v4m" />
+<link rel="stylesheet" href="live.css?v=v4m" />
+<link rel="stylesheet" href="v4.css?v=v4m" />
 </head>
 <body>
 
+<!-- The logo: the wordmark, with the two waves drawn so they can move. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
   <symbol id="logo" viewBox="60 55 770 170"><image href="assets/unmute-word.png" x="60" y="55" width="770" height="170"/><g class="waves" fill="none" stroke="#9b6cf6" stroke-width="15" stroke-linecap="round"><path class="w1" d="M764 92 Q 781 103 783 126"/><path class="w2" d="M773 70 Q 803 85 806 129"/></g></symbol>
 </defs></svg>
 
-<!-- The nav is a Mac menu bar, with Unmute's notch in the middle. -->
-<header class="menubar">
+<header class="nav">
   <a class="brand" href="#top" aria-label="Unmute home"><svg class="logo"><use href="#logo"/></svg></a>
-  <nav class="mb-links"><a href="#try">Try it</a><a href="#keys">How it works</a><a href="compare.html">Compare</a><a href="#price">Pricing</a></nav>
-  <button type="button" class="page-notch" aria-label="Try Unmute"><span class="pn-dot"></span><span class="pn-t">Listening</span></button>
-  <a class="mb-dl" href="#get"><svg width="14" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download</a>
+  <nav class="links">
+    <a href="#try">Try it</a><a href="#how">How it works</a><a href="#apps">Where it works</a><a href="compare.html">Compare</a><a href="#price">Pricing</a><a href="#faq">Questions</a>
+  </nav>
+  <a class="btn sm" href="#download"><svg width="13" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download</a>
 </header>
 
 <main id="top">
 
-<section class="hero2">
-  <div class="h-copy">
-    <h1>Talk to Claude Code and Codex from anywhere on your Mac.</h1>
-    <p class="lede">Tap right <kbd>⌥</kbd>, say what you want, and keep working. When it’s done or needs you, the session opens in the notch.</p>
-    <div class="ctas"><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg width="14" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a><a class="btn ghost" href="#try">Try it right here</a></div>
-    <p class="works"><span><img src="assets/mark-claude.png" alt="">Claude Code</span><span><img src="assets/mark-codex.png" alt="">Codex</span><span class="dim">Works with the ones you already have</span></p>
+<!-- ── Hero ───────────────────────────────────────────────────────────── -->
+<section class="hero">
+  <a class="pill-badge" href="#does"><b>New</b> Run Claude Code and Codex side by side in the notch <i>→</i></a>
+  <h1>Talk to Claude Code and Codex<br />from anywhere on your Mac.</h1>
+  <p class="lede">Tap right <kbd>⌥</kbd>, say what you want, and keep working. When it’s done or needs you, the session opens in the notch.</p>
+  <div class="ctas">
+    <a class="btn" href="#download"><svg width="15" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a>
+    <a class="btn ghost" href="#try">Try it right here ↓</a>
   </div>
-  <div class="h-key" aria-hidden="true">
-    <div class="bigkey"><span class="k-sym">⌥</span><span class="k-lbl">option</span></div>
-    <p class="k-cap">right option</p>
-  </div>
+  <p class="works"><span><img src="assets/mark-claude.png" alt="">Claude Code</span> <span><img src="assets/mark-codex.png" alt="">Codex</span><span class="dim">with the plan you already pay for</span></p>
 </section>
 
+<!-- ── Try it: the product, playable ──────────────────────────────────── -->
 <section class="try" id="try">
   <div class="try-stage"><div class="stage" id="try-stage"></div>
     <button type="button" class="try-hint">Press <kbd>right ⌥</kbd> or click here to talk</button>
@@ -67,89 +68,170 @@
   <p class="try-status" aria-live="polite">This is Unmute running on a pretend Mac. Pick a task and press the key.</p>
 </section>
 
-
-<!-- How it works: the whole app is a few keys. -->
-<section class="keys" id="keys">
-  <div class="sec-h"><p class="eyebrow">How it works</p><h2>The whole app is a few keys.</h2><p>No new window to learn. Unmute lives in the notch at the top of your screen and the pill at the bottom.</p></div>
-  <div class="k-grid">
-    <ol class="k-list">
-      <li class="on" data-k="say"><span class="kc wide">right ⌥</span><div><b>Start a session</b><span>Tap it in any app and say what you want.</span></div></li>
-      <li data-k="notch"><span class="kc notchy"></span><div><b>It comes back to you</b><span>The chat opens in the notch when it’s done or needs you.</span></div></li>
-      <li data-k="pocket"><span class="kc notchy list"></span><div><b>Every session in one place</b><span>Talk into any of them without opening it.</span></div></li>
-      <li data-k="shot"><span class="kc wide">⌘ + drag</span><div><b>Show it what you mean</b><span>Hold left ⌘ and drag. The screenshot goes along.</span></div></li>
-      <li data-k="agent"><span class="kc wide">⌘ ⌘</span><div><b>Pick up a past session</b><span>Double-tap right ⌘ and ask for it by what it was about.</span></div></li>
-      <li data-k="dict"><span class="kc">fn</span><div><b>Dictate anywhere else</b><span>Hold fn and talk into any text field.</span></div></li>
-      <li data-k="notes"><span class="kc rec">●</span><div><b>Take meeting notes</b><span>Summary, decisions and action items, ready to send.</span></div></li>
-    </ol>
-    <div class="k-view">
-      <div class="viz v-say" data-v="say"><div class="v-words"><span>Rename</span> <span>the</span> <span>billing</span> <span>tables</span> <span>and</span> <span>update</span> <span>the</span> <span>migration.</span></div>
-        <div class="v-pill"><span class="ag"><img src="assets/mark-claude.png" alt="">Claude Code</span><span class="cap"><i class="x">×</i><span class="wv"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><i class="ok">✓</i></span></div></div>
-      <div class="viz v-notch" data-v="notch"><div class="mn"><span class="mn-bar"><b class="mk">un</b><span class="st"><i></i>Working</span></span><div class="mn-body"><b>Pricing page</b><p>Built it from the frame. Use 20% off for annual?</p><span class="mn-a"><em>Yes</em><em>Show me</em></span></div></div></div>
-      <div class="viz v-pocket" data-v="pocket"><div class="pk"><div class="pk-h2"><span>Sessions</span><span>3 running</span></div>
-        <div class="pr"><img src="assets/mark-claude.png" alt=""><span>EU checkout bug</span><b class="s s1">Working</b></div>
-        <div class="pr"><img src="assets/mark-codex.png" alt=""><span>CSV export</span><b class="s s2">Working</b></div>
-        <div class="pr"><img src="assets/mark-claude.png" alt=""><span>API rate limits</span><b class="s s3">Working</b></div></div></div>
-      <div class="viz v-shot" data-v="shot"><div class="pg"><i></i><i></i><i></i><b></b><b></b><b></b></div><div class="sel"></div><span class="att">🖼 Screenshot attached</span></div>
-      <div class="viz v-agent" data-v="agent"><div class="ask">“Continue the pricing page from yesterday.”</div><div class="found"><img src="assets/mark-claude.png" alt=""><div><b>Pricing page</b><span>Yesterday · 14 messages</span></div><em>Resume</em></div></div>
-      <div class="viz v-dict" data-v="dict"><div class="field"><span class="fl">To: Maya Chen</span><p class="ft">Thanks for flagging this. The fix is merged and deploying now.</p></div><span class="fn"><kbd>fn</kbd>hold to dictate</span></div>
-      <div class="viz v-notes" data-v="notes"><div class="nt"><div class="nt-h"><i></i>Recording · 24:10</div><b>Decisions</b><span>Ship annual pricing on Monday</span><span>Priya owns the launch email</span><b>Action items</b><span>Alex: fix the EU checkout bug</span></div></div>
+<!-- ── The motion sections from the live page ─────────────────────── -->
+<section class="how" id="how">
+  <div class="sec-h"><h2>What happens after you speak.</h2><p>Scroll through one request, start to finish.</p></div>
+  <div class="scrolly">
+    <div class="sticky">
+      <ol class="stages">
+        <li><b>You tap a key and say it.</b><span>Tap right ⌥ anywhere on your Mac. Your words appear as you speak.</span></li>
+        <li><b>Unmute sends it.</b><span>To a new Claude Code or Codex session, with what you were looking at.</span></li>
+        <li><b>It works in the background.</b><span>A small status at the top of your screen. You keep working.</span></li>
+        <li><b>It asks when it needs you.</b><span>The session opens in the notch, right where you are. No switching windows.</span></li>
+        <li><b>You answer. It’s done.</b><span>Reply by voice. The result comes back the same way.</span></li>
+      </ol>
+      <div class="stage" id="how-stage"></div>
     </div>
   </div>
 </section>
 
-<!-- Your agents -->
-<section class="agents-band">
-  <p><img src="assets/mark-claude.png" alt=""><b>Claude Code</b> and <img src="assets/mark-codex.png" alt=""><b>Codex</b>, signed in with your own Claude or ChatGPT plan. Unmute is the way you talk to them. Your sessions stay theirs.</p>
+<section class="where" id="apps">
+  <div class="sec-h"><h2>Wherever you’re working.</h2><p>Unmute isn’t a plugin inside each app. It sits on top of your whole Mac, so the same key works in all of them.</p></div>
+  <div class="tabs" role="tablist"><button type="button" class="tab" data-app="slack" role="tab"><img src="assets/logos/slack-color.svg" alt="">Slack</button><button type="button" class="tab" data-app="linear" role="tab"><img src="assets/logos/linear.svg" alt="">Linear</button><button type="button" class="tab" data-app="figma" role="tab"><img src="assets/logos/figma-color.svg" alt="">Figma</button><button type="button" class="tab" data-app="github" role="tab"><img src="assets/logos/github.svg" alt="">GitHub</button><button type="button" class="tab" data-app="gmail" role="tab"><img src="assets/logos/gmail-color.svg" alt="">Gmail</button><button type="button" class="tab" data-app="docs" role="tab"><img src="assets/logos/chrome-color.svg" alt="">Chrome</button></div>
+  <figure class="scene"><div class="stage" id="apps-stage"></div><figcaption class="rail"><p class="tab-note"></p><p class="said" aria-live="off"></p><div class="tbar"><i></i></div></figcaption></figure>
 </section>
 
-<!-- Pricing: two plain cards -->
-<section class="price2" id="price">
-  <div class="sec-h"><p class="eyebrow">Pricing</p><h2>One plan, everything in it.</h2></div>
-  <div class="p-row">
-    <div class="p-card"><span class="p-n">Monthly</span><p class="p-amt"><b>$7.99</b> a month</p><p class="p-note">Cancel anytime.</p></div>
-    <div class="p-card best"><span class="p-n">Yearly <em>2 months free</em></span><p class="p-amt"><b>$79</b> a year</p><p class="p-note">About $6.58 a month.</p></div>
-    <ul class="p-incl"><li>Claude Code and Codex by voice</li><li>Sessions in the notch</li><li>Unmute Agent</li><li>Unlimited dictation</li><li>Meeting notetaker</li><li>Scratchpad</li></ul>
+<section class="many">
+  <div class="sec-h"><h2>Run several at once.</h2><p>One sentence each. They all live in the notch, Claude Code and Codex side by side.</p></div>
+  <figure class="scene"><div class="stage" id="many-stage"></div></figure>
+</section>
+
+<!-- ── What it does: small live pieces of the product ─────────────────── -->
+<section class="does" id="does">
+  <div class="sec-h"><p class="eyebrow">What Unmute does</p><h2>One key. Then it comes back to you.</h2><p>Everything Unmute does happens at the top and bottom of your screen, so the app you’re in never moves.</p></div>
+  <div class="bento">
+    <article class="bx bx-wide">
+      <div class="viz v-say"><div class="v-words"><span>Rename</span> <span>the</span> <span>billing</span> <span>tables</span> <span>and</span> <span>update</span> <span>the</span> <span>migration.</span></div>
+        <div class="v-pill"><span class="ag"><img src="assets/mark-claude.png" alt="">Claude Code</span><span class="cap"><i class="x">×</i><span class="wv"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><i class="ok">✓</i></span></div></div>
+      <h3>Say it from anywhere</h3><p>Tap right ⌥ in any app. Your words appear as you speak, and a new session starts.</p>
+    </article>
+    <article class="bx">
+      <div class="viz v-notch"><div class="mn"><span class="mn-bar"><b class="mk">un</b><span class="st"><i></i>Working</span></span><div class="mn-body"><b>Pricing page</b><p>Built it from the frame. Use 20% off for annual?</p><span class="mn-a"><em>Yes</em><em>Show me</em></span></div></div></div>
+      <h3>It comes back to you</h3><p>When it finishes or needs a decision, the chat opens in the notch.</p>
+    </article>
+    <article class="bx">
+      <div class="viz v-pocket"><div class="pk"><div class="pk-h2"><span>Sessions</span> <span>3 running</span></div>
+        <div class="pr"><img src="assets/mark-claude.png" alt=""><span>EU checkout bug</span><b class="s s1">Working</b></div>
+        <div class="pr"><img src="assets/mark-codex.png" alt=""><span>CSV export</span><b class="s s2">Working</b></div>
+        <div class="pr"><img src="assets/mark-claude.png" alt=""><span>API rate limits</span><b class="s s3">Working</b></div></div></div>
+      <h3>Every session in one place</h3><p>See what’s running, and talk into any of them without opening it.</p>
+    </article>
+    <article class="bx">
+      <div class="viz v-shot"><div class="pg"><i></i><i></i><i></i><b></b><b></b><b></b></div><div class="sel"></div><span class="att">🖼 Screenshot attached</span></div>
+      <h3>Show it what you mean</h3><p>Hold left ⌘ and drag. The screenshot goes along with what you say.</p>
+    </article>
+    <article class="bx">
+      <div class="viz v-agent"><div class="ask">“Continue the pricing page from yesterday.”</div><div class="found"><img src="assets/mark-claude.png" alt=""><div><b>Pricing page</b><span>Yesterday · 14 messages</span></div><em>Resume</em></div></div>
+      <h3>Pick up any past session</h3><p>Ask for it by what it was about. Unmute finds it and carries on.</p>
+    </article>
+    <article class="bx bx-wide">
+      <div class="viz v-dict"><div class="field"><span class="fl">To: Maya Chen</span><p class="ft">Thanks for flagging this. The fix is merged and deploying now, so new orders should go through within the hour.</p></div><span class="fn"><kbd>fn</kbd>hold to dictate</span></div>
+      <h3>Dictation everywhere else</h3><p>Hold fn and talk into any text field. Unlimited, with the best cloud models, and on-device when you’re offline.</p>
+    </article>
+    <article class="bx">
+      <div class="viz v-notes"><div class="nt"><div class="nt-h"><i></i>Recording · 24:10</div><b>Decisions</b><span>Ship annual pricing on Monday</span> <span>Priya owns the launch email</span><b>Action items</b><span>Alex: fix the EU checkout bug</span></div></div>
+      <h3>Meeting notes, ready to use</h3><p>A summary, decisions and action items you can send straight to a session.</p>
+    </article>
+  </div>
+  <p class="also">Also in every plan: <b>Scratchpad</b> · <b>Screenshots while you talk</b> · <b>Offline dictation</b></p>
+</section>
+
+<section class="uses" id="uses">
+  <div class="sec-h"><h2>What you can use Unmute for</h2><p>Anything you’d ask Claude Code or Codex, said in one sentence.</p></div>
+  <div class="tk-groups"><div><h3>Code</h3><ul class="tasks"><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/slack-color.svg" alt=""><span>Slack · #bugs</span></div><p class="tk-q">“Find what broke EU checkout and open a PR.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">PR #812 opened · 41 tests pass</span></div></li><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/linear.svg" alt=""><span>Linear · ORB-418</span></div><p class="tk-q">“Take ORB-418. Rate limit the public API.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">Moved to In Progress · branch created</span></div></li><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/figma-color.svg" alt=""><span>Figma · Pricing v3</span></div><p class="tk-q">“Build this pricing page in our Next.js app.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">Page built from the screenshot · PR #815</span></div></li><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/github.svg" alt=""><span>GitHub · PR #807</span></div><p class="tk-q">“Tell the onboarding session to reuse exchangeAuthCode.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">Sent to “Onboarding flow”</span></div></li><li class="task" data-agent="codex"><div class="tk-h"><img src="assets/logos/term.svg" alt=""><span>Terminal</span></div><p class="tk-q">“Tests are failing on main. Find out why and fix them.”</p><div class="tk-r"><img src="assets/mark-codex.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">Fixed a timezone bug in 2 tests</span></div></li><li class="task" data-agent="codex"><div class="tk-h"><img src="assets/logos/github.svg" alt=""><span>Worktrees</span></div><p class="tk-q">“Start the CSV export in a new worktree off main.”</p><div class="tk-r"><img src="assets/mark-codex.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">New worktree · csv-export branch</span></div></li></ul></div><div><h3>Everything else</h3><ul class="tasks"><li class="task" data-agent="codex"><div class="tk-h"><img src="assets/logos/gmail-color.svg" alt=""><span>Gmail · Refunds</span></div><p class="tk-q">“Draft replies to these three refund requests.”</p><div class="tk-r"><img src="assets/mark-codex.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">3 drafts ready in Gmail</span></div></li><li class="task" data-agent="codex"><div class="tk-h"><img src="assets/logos/slack-color.svg" alt=""><span>Slack · #launch</span></div><p class="tk-q">“Turn this thread into Linear issues with owners.”</p><div class="tk-r"><img src="assets/mark-codex.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">8 issues created, linked in the thread</span></div></li><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/meet.svg" alt=""><span>Meeting notes</span></div><p class="tk-q">“Add the decisions from that call to the onboarding session.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">4 decisions added to the session</span></div></li><li class="task" data-agent="claude"><div class="tk-h"><img src="assets/logos/chrome-color.svg" alt=""><span>Chrome · competitor page</span></div><p class="tk-q">“Research how competitors price team plans.”</p><div class="tk-r"><img src="assets/mark-claude.png" alt=""><span class="tk-s"><i class="dot"></i><b>Working</b></span><span class="tk-out">Comparison table of 6 competitors</span></div></li></ul></div></div>
+</section>
+
+<section class="film-sec" id="film">
+  <div class="sec-h"><h2>One request, start to finish.</h2><p>A bug comes in, you say one sentence, and it ends up committed on a branch. About a minute. Turn on sound for the narration.</p></div>
+  <figure class="scene film-scene">
+    <div class="stage" id="film-stage"><button type="button" class="film-snd"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4Zm12.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4Zm-2.5-8.8v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6Z"/></svg>Play with sound</button></div>
+    <p class="film-cap" aria-live="polite"></p>
+    <div class="rail">
+      <ol class="chapters"><li><button data-n="1">A bug comes in</button></li><li><button data-n="2">The usual way</button></li><li><button data-n="3">You say it</button></li><li><button data-n="4">It works</button></li><li><button data-n="5">It asks you</button></li><li><button data-n="6">Done</button></li></ol>
+      <div class="ctl"><button class="c-pause" aria-pressed="false">Pause</button><button class="c-replay">Replay</button><button class="c-sound" aria-pressed="false">Sound off</button></div>
+    </div>
+  </figure>
+  <details class="real-wrap"><summary>Watch the raw screen recording</summary><div class="real"><video controls playsinline preload="none" poster="assets/video/hero-poster.jpg?v=l41" data-src="hero"></video></div></details>
+</section>
+
+<!-- ── Your plan ──────────────────────────────────────────────────────── -->
+<section class="plans-own">
+  <div class="sec-h"><p class="eyebrow">Your agents</p><h2>Works with the Claude Code and Codex you already have.</h2><p>Unmute doesn’t sell you a model. It talks to the Claude Code and Codex you already have, on your Mac.</p></div>
+  <div class="own">
+    <div class="own-c"><img src="assets/mark-claude.png" alt=""><div><b>Claude Code</b><span>With the Claude plan you already have.</span></div></div>
+    <div class="own-c"><img src="assets/mark-codex.png" alt=""><div><b>Codex</b><span>With the ChatGPT plan you already have.</span></div></div>
+    <div class="own-c dim"><span class="plus">+</span><div><b>Sessions stay yours</b><span>They run in your own Claude Code or Codex, on your Mac. Open them there any time.</span></div></div>
   </div>
 </section>
 
-<!-- Compare -->
-<section class="cmp2" id="compare">
-  <div class="sec-h"><p class="eyebrow">Compare</p><h2>Same agents, a different way in.</h2><p>Other apps give your agents a window you go to. Unmute brings them to wherever you are. <a href="compare.html">All comparisons →</a></p></div>
-  <div class="tiles">
-    <a class="tile" href="compare-t3-code.html"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/logos/t3code.png" alt="" class="r"></span><b>Unmute vs T3 Code</b><span>A window for your agents, or a way to talk to them from anywhere.</span></a>
-    <a class="tile" href="compare.html"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/mark-claude.png" alt=""></span><b>Unmute vs Claude Code</b><span>The terminal and desktop app, and talking to it from any app.</span></a>
-    <a class="tile" href="compare.html"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/mark-codex.png" alt=""></span><b>Unmute vs the Codex app</b><span>Codex without opening the Codex app.</span></a>
-    <a class="tile" href="live.html#compare"><span class="t-notch"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img src="assets/logos/wisprflow-mark.svg" alt=""></span><b>Unmute vs Wispr Flow</b><span>Dictation, or dictation plus your coding agents.</span></a>
+<!-- ── Price ──────────────────────────────────────────────────────────── -->
+<section class="price" id="price">
+  <p class="eyebrow">What it costs</p>
+  <div class="big">$7.99</div>
+  <p class="per">a month, or $79 a year. Everything included.</p>
+  <ul class="incl">
+    <li>Claude Code and Codex by voice</li><li>Sessions in the notch</li><li>Unmute Agent</li><li>Unlimited dictation</li><li>Meeting notetaker</li><li>Scratchpad</li>
+  </ul>
+  <a class="btn" href="#download">Download for Mac</a>
+</section>
+
+<!-- ── Compare ────────────────────────────────────────────────────────── -->
+<section class="cmp-hub" id="compare">
+  <div class="sec-h"><p class="eyebrow">Compare</p><h2>How Unmute compares</h2><p>Against the apps you use to run Claude Code and Codex, and against voice tools. Each one is checked against the other product’s own site, with the date and the sources. <a href="compare.html" style="color:var(--ink);font-weight:600">All comparisons →</a></p></div>
+  <div class="vs-grid">
+    <a class="vs" href="live.html#compare"><div class="vs-art g1"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt="Unmute"><i>vs</i><img class="wf" src="assets/logos/wisprflow-mark.svg" alt="Wispr Flow"></span></div><b>Unmute vs Wispr Flow</b><p>Dictation everywhere, or dictation plus your coding agents.</p><span class="rd">Read the comparison →</span></a>
+    <a class="vs"><div class="vs-art g2"><span class="vs-pill"><img src="assets/mark-claude.png" alt=""><i>vs</i><img src="assets/mark-codex.png" alt=""></span></div><b>Claude Code vs Codex, by voice</b><p>Which one to talk to for which job, and how to run both.</p><span class="rd soon">Coming soon</span></a>
+    <a class="vs" href="compare-t3-code.html"><div class="vs-art g3"><span class="vs-pill"><img class="un" src="assets/unmark.png" alt=""><i>vs</i><img class="app" src="assets/logos/t3code.png" alt="" style="width:32px;height:32px;border-radius:8px"></span></div><b>Unmute vs T3 Code</b><p>An open-source window for many agents, or a voice layer over your whole Mac.</p><span class="rd">Read the comparison →</span></a>
+    <a class="vs" href="compare.html#glance"><div class="vs-art g4"><span class="vs-pill"><span class="tx">All of them</span></span></div><b>Every way to talk to Claude Code and Codex</b><p>Unmute, Claude Code, the Codex app, T3 Code and Conductor in one table.</p><span class="rd">See the table →</span></a>
+  </div>
+  <!-- A preview of the table every comparison page uses. -->
+  <div class="glance">
+    <div class="gl-h"><span>Same agents, a different way to use them</span><em>Checked Oct 20, 2026</em></div>
+    <div class="gl-r head"><span></span><span><img src="assets/unmark.png" alt="">Unmute</span><span>Terminal and agent apps</span></div>
+    <div class="gl-r"><span>Start a session from the app you’re in</span><span><i class="y"></i>Tap right ⌥ anywhere</span><span>Open the terminal or the app</span></div>
+    <div class="gl-r"><span>When it’s done or needs you</span><span><i class="y"></i>The chat opens in the notch</span><span>You go back to the window</span></div>
+    <div class="gl-r"><span>Answer it</span><span><i class="y"></i>By voice, without switching apps</span><span>In that window</span></div>
   </div>
 </section>
 
-<!-- Questions: every answer visible -->
-<section class="qa" id="faq">
-  <div class="sec-h"><p class="eyebrow">Questions</p><h2>Short answers.</h2></div>
-  <div class="qa-grid">
-    <div><h3>Do I need Claude Code or Codex?</h3><p>Yes, for sessions. Unmute starts and answers them in the Claude Code or Codex you already have. Dictation, notes and the scratchpad work without them.</p></div>
-    <div><h3>Does it work in every app?</h3><p>Yes. Right ⌥ works in Slack, Chrome, Figma, your editor, anywhere on your Mac.</p></div>
-    <div><h3>Where do my sessions run?</h3><p>On your Mac, in your own Claude Code or Codex. You can open any session there and keep going by typing.</p></div>
-    <div><h3>Can I run several at once?</h3><p>Yes. Each request is its own session, and they all show in the notch.</p></div>
-    <div><h3>Which Macs?</h3><p>Macs with Apple silicon.</p></div>
-    <div><h3>How much is it?</h3><p>$7.99 a month or $79 a year, with everything included.</p></div>
+<!-- ── Questions ──────────────────────────────────────────────────────── -->
+<section class="faq" id="faq">
+  <div class="faq-l"><h2>Questions</h2><p>Short answers about setup, agents and price.</p><a href="https://x.com/just_unmute">Ask us on X →</a></div>
+  <div class="faq-r">
+    <details><summary>Do I need Claude Code or Codex?</summary><p>Yes. Unmute starts and answers sessions in the Claude Code or Codex you already have, with your own plan. Dictation, the notetaker and the scratchpad work without them.</p></details>
+    <details><summary>Does it work in every app?</summary><p>Yes. Unmute sits on top of your whole Mac, so right ⌥ works in Slack, Chrome, Figma, your editor, anywhere.</p></details>
+    <details><summary>Where do my sessions run?</summary><p>On your Mac, in your own Claude Code or Codex. You can open any session there and carry on by typing.</p></details>
+    <details><summary>Can I run several sessions at once?</summary><p>Yes. Each request is its own session. They all show in the notch, and you can talk into any of them.</p></details>
+    <details><summary>Which Macs does it run on?</summary><p>Macs with Apple silicon.</p></details>
+    <details><summary>How much is it?</summary><p>$7.99 a month or $79 a year, with everything included.</p></details>
   </div>
 </section>
 
-<!-- Close: the notch drops down and opens -->
-<section class="finale" id="get">
-  <div class="f-notch"><div class="fn-bar"><b>un</b><span><i></i>Done</span></div>
-    <div class="fn-body"><h2>Just unmute.</h2><p>Say it, keep working, answer when it asks.</p><a class="btn light" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg"><svg width="14" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.3 12.3c0-2 1.6-3 1.7-3.1-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.8-3.2.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.7.8-3.4 2-1.5 2.5-.4 6.2 1 8.2.6 1 1.4 2 2.4 1.9 1-.1 1.4-.6 2.6-.6 1.2 0 1.6.6 2.7.6 1.1 0 1.7-1 2.3-1.9.7-1 1-2 1-2.1-.1 0-3.3-1.2-3.3-3.4ZM15.3 6.3c.5-.7 1-1.7.9-2.7-.8 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.5.9.1 1.9-.5 2.5-1.1Z"/></svg>Download for Mac</a><small>For Macs with Apple silicon</small></div></div>
+<!-- ── Download ───────────────────────────────────────────────────────── -->
+<section class="dl" id="download">
+  <div class="dl-card">
+    <div class="dl-l"><span class="tag">Available</span><h3>macOS</h3><p>Macs with Apple silicon</p><a class="btn" href="https://github.com/arpitpatel25/unmute/releases/latest/download/unmute-arm64.dmg">Download for Mac</a></div>
+    <div class="dl-r"><div class="v-pill big"><span class="ag"><img src="assets/mark-claude.png" alt="">Claude Code</span><span class="cap"><i class="x">×</i><span class="wv"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><i class="ok">✓</i></span></div></div>
+  </div>
+</section>
+
+<!-- ── Close: a wall of things people say ─────────────────────────────── -->
+<section class="close-wall">
+  <div class="wall" aria-hidden="true"></div>
+  <div class="cw-in"><h2>Just unmute.</h2><p>Say it, keep working, answer when it asks.</p><a class="btn light" href="#download">Download for Mac</a></div>
 </section>
 
 </main>
 
-<footer class="foot2">
-  <svg class="logo"><use href="#logo"/></svg>
-  <nav><a href="#price">Pricing</a><a href="compare.html">Compare</a><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute">X / Twitter</a></nav>
-  <span>© 2026 unmute</span>
+<footer class="foot">
+  <div class="f-l"><svg class="logo"><use href="#logo"/></svg><p>Talk to Claude Code and Codex from anywhere on your Mac.</p></div>
+  <div class="f-c"><b>Product</b><a href="#download">Download</a><a href="#price">Pricing</a><a href="#faq">Questions</a><a>Changelog</a></div>
+  <div class="f-c"><b>Compare</b><a href="live.html#compare">vs Wispr Flow</a><a>vs Superwhisper</a><a>vs VoiceOS</a><a>All comparisons</a></div>
+  <div class="f-c"><b>Use it with</b><a>Claude Code</a><a>Codex</a><a>Slack</a><a>Figma</a></div>
+  <div class="f-c"><b>Company</b><a href="../privacy.html">Privacy</a><a href="../terms.html">Terms</a><a href="https://x.com/just_unmute">X / Twitter</a></div>
+  <p class="f-b">© 2026 unmute</p>
 </footer>
 
-<script type="module" src="ui/v4.js?v=v5a"></script>
+<script type="module" src="ui/v4.js?v=v4m"></script>
 </body>
 </html>
