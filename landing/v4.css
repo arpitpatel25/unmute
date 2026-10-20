@@ -280,7 +280,7 @@ kbd{font:600 .82em var(--ui);padding:.12em .45em;border-radius:6px;background:#f
   .try-hint{bottom:10%;font-size:14px;padding:10px 16px}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.v-words span{opacity:1}.mn-body{opacity:1}.mn{max-height:none}.ft{width:auto;white-space:normal;border:0}}
-.v-words span{margin-right:.26em}
+
 .vs-pill img{filter:none}.vs-pill img.un{filter:brightness(0) invert(1)}
 .v-notes{background:linear-gradient(180deg,#f1ecfb,#fff)}
 .nt{width:280px;padding:14px 16px;border-radius:14px;background:#fff;box-shadow:0 0 0 1px var(--line),0 16px 30px -20px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--dim)}
