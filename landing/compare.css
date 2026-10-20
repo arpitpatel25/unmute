@@ -142,3 +142,4 @@ img[src*="unmark"]:not(.un){filter:invert(1) hue-rotate(180deg)}
 .wf-page{padding:0;max-width:none}
 .wf-page .cmp-t{margin-top:0}
 .vs-pill img.wf{height:46px}
+.c-hero::before{display:none}
