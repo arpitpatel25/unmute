@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="docs.css?v=10" />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="legal.css?v=1" />
+<script defer src="analytics.js?v=1"></script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
@@ -39,6 +40,11 @@
           per-request metadata (timestamp, audio duration, charge amount).
           Optional Google Calendar access and meeting notes have additional
           data flows, described below.
+        </p>
+        <p>
+          We count which buttons, keys and steps get used, and when. We
+          <strong>never</strong> record what you say or type, task names, files, or
+          anything Claude Code or Codex does. You can turn it off in the app.
         </p>
       </div>
 
@@ -163,17 +169,52 @@
 
       <h2>Cookies, analytics, telemetry</h2>
       <p>
-        The unmute app contains <strong>no analytics SDK, no telemetry
-        SDK, and no crash-reporting SDK</strong>. Dictation requests go to
-        your selected transcription engine or its model download service.
-        Optional connected features also make network requests, including
-        Google Calendar synchronization and the notes-agent processing
-        described above.
+        The unmute app bundles <strong>no third-party analytics,
+        telemetry or crash-reporting SDK</strong>. It does keep a small,
+        first-party record of how the app is used, so we can see where it
+        gets in people's way. That record is described here in full.
+      </p>
+      <h3>Usage analytics in the app</h3>
+      <p>
+        The app records <em>which controls are used and when</em>: a
+        dictation key pressed and how long it was held, a step of the
+        onboarding tour finished or skipped, a permission granted or not, a
+        task started, waiting on you, finished or stopped, a setting switched,
+        how long a dictation took, whether it was delivered, and similar
+        events. Each event carries the app version, macOS version, your
+        engine and plan, and a random ID created for this install. When you
+        sign in, that ID is linked to your account.
       </p>
       <p>
-        This website (the one you're reading) is hosted on GitHub Pages
-        which may log standard server-side info
-        (IP address, user agent). We don't set any cookies on this site.
+        It <strong>never</strong> records audio, transcripts, anything you
+        type, task or session names, file or folder names, window titles,
+        clipboard contents, screenshots, calendar data, or anything Claude
+        Code or Codex does inside a session. This is enforced in code: an
+        event may only carry numbers, on/off values and short fixed codes.
+        Anything else is dropped on your Mac, and again on our server before
+        it is forwarded.
+      </p>
+      <p>
+        Events go to our own server (on Cloudflare), which forwards them to
+        <a href="https://posthog.com/privacy">PostHog</a>, our analytics
+        provider. We do not forward your IP address; only the country
+        Cloudflare reports is kept. You can turn this off at any time in the
+        app under <strong>Settings → Privacy → Share anonymous usage
+        data</strong>. When it is off, nothing is sent and anything waiting to
+        be sent is deleted.
+      </p>
+      <h3>This website</h3>
+      <p>
+        This website (the one you're reading) is hosted on GitHub Pages,
+        which may log standard server-side info (IP address, user agent). We
+        don't set any cookies and don't use local storage. To learn which
+        pages and buttons help people decide, the site counts page views,
+        which sections are scrolled into view, clicks on download, demo and
+        film controls, and where a visit came from (the referring site and
+        any campaign tag in the link). These go through the same server to
+        PostHog, under a random ID that lasts only as long as the browser
+        tab. If your browser sends Do Not Track or Global Privacy Control,
+        the site records nothing.
       </p>
 
       <h2>Today's dictations cache (in-app)</h2>
