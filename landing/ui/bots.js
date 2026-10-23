@@ -74,10 +74,10 @@ export function face(name, { size = 28, mood = 'idle', cls = '' } = {}) {
   const arc = (x) => `<path d="M${x} ${cy + hh / 2}Q${x + hw / 2} ${cy - hh / 2 - hh * 0.4} ${x + hw} ${cy + hh / 2}"/>`
   const g = `bg${++uid}`, col = PALETTE[id.hue]
   return `<svg class="bot ${cls}" data-mood="${mood}" data-name="${name}" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}" aria-hidden="true" style="--bot:rgb(${col});--s:${s}px;overflow:visible">
-    <defs><linearGradient id="${g}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="rgba(${col},.92)"/><stop offset="1" stop-color="rgb(${col})"/></linearGradient></defs>
+    <defs><clipPath id="${g}c"><path d="${bodyPath(id.shape, s)}"/></clipPath><linearGradient id="${g}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="rgba(${col},.92)"/><stop offset="1" stop-color="rgb(${col})"/></linearGradient></defs>
     <g class="bot-body"><path d="${bodyPath(id.shape, s)}" fill="url(#${g})"/>
-    <g class="bot-look"><g class="bot-eyes" fill="rgba(0,0,0,.72)" style="transform-origin:${cx}px ${cy}px">${eyes}</g></g>
-    <g class="bot-happy" fill="none" stroke="rgba(0,0,0,.72)" stroke-width="${Math.max(1, e * 0.42).toFixed(2)}" stroke-linecap="round">${arc(hx0)}${arc(hx0 + hw + gap)}</g></g>
+    <g clip-path="url(#${g}c)"><g class="bot-look"><g class="bot-eyes" fill="rgba(0,0,0,.72)" style="transform-origin:${cx}px ${cy}px">${eyes}</g></g></g>
+    <g class="bot-happy" clip-path="url(#${g}c)" fill="none" stroke="rgba(0,0,0,.72)" stroke-width="${Math.max(1, e * 0.42).toFixed(2)}" stroke-linecap="round">${arc(hx0)}${arc(hx0 + hw + gap)}</g></g>
   </svg>`
 }
 
@@ -114,7 +114,7 @@ if (!reduce) addEventListener('pointermove', (ev) => {
     const r = svg.getBoundingClientRect(), s = r.width
     const dx = ev.clientX - (r.left + s / 2), dy = ev.clientY - (r.top + s / 2), dist = Math.max(0.001, Math.hypot(dx, dy))
     const look = svg.querySelector('.bot-look')
-    if (dist < 260) { const k = Math.min(1, dist / (s * 2.2)); look.style.transform = `translate(${(dx / dist * k * s * 0.11).toFixed(2)}px,${(dy / dist * k * s * 0.08).toFixed(2)}px)` }
+    if (dist < Math.max(260, s * 5)) { const k = Math.min(1, dist / (s * 2.2)); look.style.transform = `translate(${(dx / dist * k * s * 0.11).toFixed(2)}px,${(dy / dist * k * s * 0.08).toFixed(2)}px)` }
     else look.style.transform = ''
   }
 }, { passive: true })

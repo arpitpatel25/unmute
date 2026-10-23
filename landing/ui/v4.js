@@ -322,8 +322,32 @@ import('./bots.js').then(({ face, stack, liven, celebrate }) => {
 
   // Hero: bots sitting on top of the demo screen, and a small stack by the logos.
   const perch = $('.bot-perch')
-  if (perch) { perch.innerHTML = CREW.map((n) => face(n, { size: 34, cls: 'lively' })).join(''); }
-  const hb = $('.hb-faces'); if (hb) hb.innerHTML = stack(['Checkout', 'Marketing', 'Personal'], 18)
+  if (perch) { perch.innerHTML = CREW.map((n) => face(n, { size: 46, cls: 'lively' })).join(''); }
+
+  // Giant bots in the empty space beside headings, across the page. They bob
+  // on their own beat, blink, and watch the pointer.
+  const SPOTS = [
+    ['.hero', 'Checkout', 150, 'left:calc(50% - 690px);top:150px', 0],
+    ['.hero', 'Marketing', 120, 'left:calc(50% + 560px);top:300px', 1.2],
+    ['.hero', 'Personal', 84, 'left:calc(50% - 600px);top:430px', 2.1],
+    ['.hero', 'Inbox', 70, 'left:calc(50% + 520px);top:120px', .6],
+    ['#how', 'Bug fixes', 130, 'right:calc(50% - 560px);top:120px', .4],
+    ['#apps', 'Mobile app', 140, 'right:calc(50% - 540px);top:96px', 1.4],
+    ['#does', 'Hiring', 150, 'right:calc(50% - 560px);top:110px', .8],
+    ['#uses', 'Payments', 120, 'right:calc(50% - 540px);top:96px', 1.8],
+    ['#film', 'Design', 130, 'right:calc(50% - 540px);top:100px', .2],
+    ['.plans-own', 'Research', 120, 'right:calc(50% - 540px);top:120px', 1],
+    ['#compare', 'Growth', 130, 'right:calc(50% - 540px);top:110px', 1.6],
+    ['#faq', 'Docs', 110, 'left:calc(50% - 560px);top:320px', .5],
+    ['#blog', 'Ops', 120, 'right:calc(50% - 540px);top:110px', 1.3],
+  ]
+  for (const [sel, name, size, pos, delay] of SPOTS) {
+    const host = $(sel); if (!host) continue
+    const d = document.createElement('div'); d.className = `bot-deco bd-${host.querySelectorAll(':scope > .bot-deco').length}`; d.setAttribute('aria-hidden', 'true')
+    d.style.cssText = pos + `;--d:${delay}s`
+    d.innerHTML = face(name, { size, cls: 'lively' }) + '<i class="bd-shadow"></i>'
+    host.classList.add('has-deco'); host.append(d)
+  }
 
   // Feature card: bot faces on the rows.
   document.querySelectorAll('.v-bots .pr').forEach((r) => { r.querySelector('.pf').innerHTML = face(r.dataset.bot, { size: 18 }) })
@@ -358,31 +382,43 @@ import('./bots.js').then(({ face, stack, liven, celebrate }) => {
     chip.style.opacity = '0'
     await sleep(700); chip.remove()
   }
+  const focusBot = $('.bf-bot', stage), focusName = $('.bf-name', stage), focusTasks = $('.bf-tasks', stage)
+  const focus = (name, tasks, { pop = false } = {}) => {
+    focusBot.innerHTML = name ? face(name, { size: 150, cls: 'lively' + (pop ? ' pop' : '') }) : '<i class="bf-empty"></i>'
+    focusName.innerHTML = name ? `<b>${name}</b>` : '<span>Finding the right bot…</span>'
+    focusTasks.innerHTML = tasks.map((t, i) => `<span class="bf-t${i === 0 ? ' fresh' : ''}">${t}</span>`).join('')
+    liven(stage); return focusBot.querySelector('svg.bot')
+  }
   const bump = (r) => { const c = $('.rl-c', r); c.textContent = +c.textContent + 1; r.classList.add('hit'); setTimeout(() => r.classList.remove('hit'), 900); $('.rl-tot', list).textContent = total() }
   let visible = false, running = false
   const loop = async () => {
     if (running) return; running = true
     while (visible) {
-      paint(); step(0); words.innerHTML = ''; await sleep(900)
+      paint(); step(0); words.innerHTML = ''; focus('Checkout', ['Ship the new checkout page', 'Fix tax on EU orders']); await sleep(1200)
       // 1 · fits an existing bot
       await say('Fix the flaky checkout test before the release.')
       step(1)
       const co = list.querySelector('.rl-row[data-name="Checkout"]')
+      focus(null, []); await sleep(500)
       await fly('Fix the flaky checkout test', co); bump(co)
       co.querySelector('svg.bot').dataset.mood = 'working'
+      const big = focus('Checkout', ['Fix the flaky checkout test', 'Ship the new checkout page', 'Fix tax on EU orders'], { pop: true }); big.dataset.mood = 'working'
       await sleep(2000)
       // 2 · nothing fits: a new bot appears
       step(0); await say('Book flights and a hotel for the Tokyo offsite.')
       step(2)
+      focus(null, []); await sleep(700)
       const fresh = document.createElement('div'); fresh.innerHTML = row('Tokyo trip', 0)
       const nr = fresh.firstElementChild; nr.classList.add('new')
       list.querySelector('.rl-row.un').before(nr); liven(list)
       await sleep(450)
       await fly('Book flights and a hotel', nr); bump(nr)
       celebrate(nr.querySelector('svg.bot'))
+      celebrate(focus('Tokyo trip', ['Book flights and a hotel'], { pop: true }))
       await sleep(1600)
       // Checkout's work finishes: a smile.
       const cs = co.querySelector('svg.bot'); cs.dataset.mood = 'idle'; celebrate(cs)
+      await sleep(1400); celebrate(focus('Checkout', ['Fixed the flaky checkout test ✓', 'Ship the new checkout page', 'Fix tax on EU orders']))
       await sleep(3200)
     }
     running = false

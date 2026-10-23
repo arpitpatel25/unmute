@@ -7,10 +7,10 @@
 <meta name="description" content="Tap right Option anywhere on your Mac and say what you want. Claude Code or Codex starts on it, and when it finishes or needs you, the session opens in the notch." />
 <link rel="icon" href="../icon.png" />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="stylesheet" href="kit.css?v=v4r" />
-<link rel="stylesheet" href="apps.css?v=v4r" />
-<link rel="stylesheet" href="live.css?v=v4r" />
-<link rel="stylesheet" href="v4.css?v=v4r" />
+<link rel="stylesheet" href="kit.css?v=v4u" />
+<link rel="stylesheet" href="apps.css?v=v4u" />
+<link rel="stylesheet" href="live.css?v=v4u" />
+<link rel="stylesheet" href="v4.css?v=v4u" />
 </head>
 <body>
 
@@ -31,7 +31,7 @@
 
 <!-- ── Hero ───────────────────────────────────────────────────────────── -->
 <section class="hero">
-  <a class="pill-badge" href="#does"><b>New</b> Run Claude Code and Codex side by side in the notch <i>→</i></a>
+  <a class="pill-badge" href="#bots"><b>New</b> Bots that sort themselves. You never set one up <i>→</i></a>
   <h1>Talk to Claude Code and Codex<br />from anywhere on your Mac.</h1>
   <p class="lede">Tap right <kbd>⌥</kbd>, say what you want, and keep working. When it’s done or needs you, the session opens in the notch.</p>
   <div class="ctas">
@@ -39,7 +39,6 @@
     <a class="btn ghost" href="#try">Try it right here ↓</a>
   </div>
   <p class="works"><span><img src="assets/mark-claude.png" alt="">Claude Code</span> <span><img src="assets/mark-codex.png" alt="">Codex</span><span class="dim">with the plan you already pay for</span></p>
-  <p class="hero-bots"><span class="hb-faces"></span><span>Your work, sorted into bots for you</span></p>
 </section>
 
 <!-- ── Try it: the product, playable ──────────────────────────────────── -->
@@ -90,19 +89,20 @@
 <section class="bots" id="bots">
   <div class="bots-grid">
     <div class="bots-copy">
-      <div class="sec-h"><p class="eyebrow">Bots</p><h2>Bots that sort themselves.</h2><p>You never set up a bot. Say the task, and Unmute files it under the right one, or makes a new one.</p></div>
+      <div class="sec-h"><p class="eyebrow">Bots</p><h2>You don’t make bots. They make themselves.</h2><p>You never create, name or sort a bot. Just say the task. Unmute hands it to the right bot, and makes a new one when nothing fits.</p></div>
       <ol class="bot-steps">
         <li data-i="0"><b>Say it</b><span>One sentence, from any app.</span></li>
         <li data-i="1"><b>It goes to the right bot</b><span>Checkout work joins Checkout.</span></li>
         <li data-i="2"><b>Something new? A new bot</b><span>It appears on its own, ready.</span></li>
       </ol>
-      <p class="bots-note">No bots to create. No folders to manage.</p>
+      <p class="bots-note"><span>No bots to create.</span><span>No folders to manage.</span><span>Nothing to set up.</span></p>
     </div>
     <div class="bots-stage" aria-label="Tasks going into bots">
       <div class="bot-rail">
         <p class="rail-h">Bots</p>
         <div class="rail-list"></div>
       </div>
+      <div class="bs-focus"><div class="bf-bot"></div><p class="bf-name"></p><div class="bf-tasks"></div></div>
       <div class="bs-say"><div class="v-words bs-words"></div>
         <div class="v-pill"><span class="ag"><img src="assets/mark-claude.png" alt="">Claude Code</span><span class="cap"><i class="x">×</i><span class="wv"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><i class="ok">✓</i></span></div>
       </div>
@@ -278,6 +278,6 @@
   <p class="f-b">© 2026 unmute</p>
 </footer>
 
-<script type="module" src="ui/v4.js?v=v4r"></script>
+<script type="module" src="ui/v4.js?v=v4u"></script>
 </body>
 </html>
