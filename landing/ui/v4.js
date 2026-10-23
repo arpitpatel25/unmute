@@ -312,3 +312,81 @@ if (matchMedia('(hover: none)').matches) {
   const fixStatus = () => { if (/press/i.test(st.textContent)) st.textContent = st.textContent.replace(/press right ⌥|press the key/gi, 'tap the button') }
   fixStatus(); new MutationObserver(fixStatus).observe(st, { childList: true, characterData: true, subtree: true })
 }
+
+// ── Bots ─────────────────────────────────────────────────────────────────────
+// The faces are the app's own (ui/bots.js). The hero shows a few; the section
+// shows tasks filing themselves into the right bot, and a new one appearing.
+import('./bots.js').then(({ face, stack, liven, celebrate }) => {
+  const $ = (s, r = document) => r.querySelector(s)
+  const CREW = ['Checkout', 'Hiring', 'Marketing', 'Bug fixes', 'Mobile app', 'Personal', 'Inbox']
+
+  // Hero: bots sitting on top of the demo screen, and a small stack by the logos.
+  const perch = $('.bot-perch')
+  if (perch) { perch.innerHTML = CREW.map((n) => face(n, { size: 34, cls: 'lively' })).join(''); }
+  const hb = $('.hb-faces'); if (hb) hb.innerHTML = stack(['Checkout', 'Marketing', 'Personal'], 18)
+
+  // Feature card: bot faces on the rows.
+  document.querySelectorAll('.v-bots .pr').forEach((r) => { r.querySelector('.pf').innerHTML = face(r.dataset.bot, { size: 18 }) })
+
+  // The section: a bot rail like the app's, and tasks that find their bot.
+  const stage = $('.bots-stage'); if (!stage) { liven(); return }
+  const list = $('.rail-list', stage), words = $('.bs-words', stage), pill = $('.bs-say .v-pill', stage), steps = [...document.querySelectorAll('.bot-steps li')]
+  const START = [['Checkout', 4], ['Marketing', 3], ['Mobile app', 2], ['Personal', 1], ['Inbox', 0]]
+  const row = (name, n) => `<div class="rl-row" data-name="${name}">${face(name, { size: 28, cls: 'lively' })}<span class="rl-n">${name}</span><span class="rl-c">${n}</span></div>`
+  const total = () => [...list.querySelectorAll('.rl-row[data-name] .rl-c')].reduce((a, c) => a + +c.textContent, 0)
+  const paint = () => {
+    list.innerHTML = `<div class="rl-row all on">${stack(START.map((r) => r[0]), 20, '#2a292e')}<span class="rl-n">All bots</span><span class="rl-c rl-tot"></span></div>`
+      + START.map(([n, c]) => row(n, c)).join('') + `<div class="rl-row un"><i class="dash"></i><span class="rl-n">Unassigned</span><span class="rl-c">0</span></div>`
+    $('.rl-tot', list).textContent = total(); liven(list)
+  }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const step = (i) => steps.forEach((li, k) => { li.classList.toggle('on', k === i); li.classList.toggle('done', k < i) })
+  const say = async (text) => {
+    words.innerHTML = text.split(' ').map((w) => `<span>${w}</span>`).join(' ')
+    stage.classList.add('talking'); pill.classList.add('on')
+    for (const sp of words.querySelectorAll('span')) { sp.classList.add('in'); await sleep(280) }
+    await sleep(500); pill.classList.remove('on')
+  }
+  // A task chip flies from what you said into its bot's row.
+  const fly = async (text, target) => {
+    const from = words.getBoundingClientRect(), to = target.getBoundingClientRect(), base = stage.getBoundingClientRect()
+    const chip = document.createElement('span'); chip.className = 'bs-chip'; chip.textContent = text
+    chip.style.left = from.left - base.left + from.width / 2 + 'px'; chip.style.top = from.top - base.top + from.height / 2 + 'px'
+    stage.append(chip); stage.classList.remove('talking')
+    await sleep(40)
+    chip.style.transform = `translate(${to.left - from.left - from.width / 2 + 60}px,${to.top - from.top - from.height / 2 + to.height / 2}px) scale(.35)`
+    chip.style.opacity = '0'
+    await sleep(700); chip.remove()
+  }
+  const bump = (r) => { const c = $('.rl-c', r); c.textContent = +c.textContent + 1; r.classList.add('hit'); setTimeout(() => r.classList.remove('hit'), 900); $('.rl-tot', list).textContent = total() }
+  let visible = false, running = false
+  const loop = async () => {
+    if (running) return; running = true
+    while (visible) {
+      paint(); step(0); words.innerHTML = ''; await sleep(900)
+      // 1 · fits an existing bot
+      await say('Fix the flaky checkout test before the release.')
+      step(1)
+      const co = list.querySelector('.rl-row[data-name="Checkout"]')
+      await fly('Fix the flaky checkout test', co); bump(co)
+      co.querySelector('svg.bot').dataset.mood = 'working'
+      await sleep(2000)
+      // 2 · nothing fits: a new bot appears
+      step(0); await say('Book flights and a hotel for the Tokyo offsite.')
+      step(2)
+      const fresh = document.createElement('div'); fresh.innerHTML = row('Tokyo trip', 0)
+      const nr = fresh.firstElementChild; nr.classList.add('new')
+      list.querySelector('.rl-row.un').before(nr); liven(list)
+      await sleep(450)
+      await fly('Book flights and a hotel', nr); bump(nr)
+      celebrate(nr.querySelector('svg.bot'))
+      await sleep(1600)
+      // Checkout's work finishes: a smile.
+      const cs = co.querySelector('svg.bot'); cs.dataset.mood = 'idle'; celebrate(cs)
+      await sleep(3200)
+    }
+    running = false
+  }
+  new IntersectionObserver(([e]) => { visible = e.isIntersecting; if (visible) loop() }, { threshold: 0.35 }).observe(stage)
+  paint(); liven()
+})
