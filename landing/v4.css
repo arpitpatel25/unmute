@@ -572,3 +572,34 @@ svg.bot.happy .bot-body{transform:translateY(-10%)}
   .hero .bot-deco.bd-1{top:14px!important;right:18px!important}
   .hero .bot-deco svg.bot{width:58px;height:58px}.hero .bot-deco.bd-1 svg.bot{width:48px;height:48px}
 }
+
+/* Hover a giant bot: a small card says what it is and what it holds */
+.bot-deco svg.bot{pointer-events:auto;cursor:default}
+.bot-deco:hover{z-index:30}
+.bot-deco:hover svg.bot{animation-play-state:paused}
+.bd-tip{position:absolute;left:50%;top:calc(100% + 18px);width:250px;padding:12px 14px 12px;border-radius:16px;background:#121115;color:#fff;box-shadow:0 22px 44px -18px rgba(0,0,0,.55),inset 0 0 0 1px rgba(255,255,255,.08);display:flex;flex-direction:column;gap:6px;text-align:left;opacity:0;transform:translate(-50%,8px) scale(.94);transform-origin:50% 0;transition:opacity .18s,transform .3s cubic-bezier(.3,1.5,.5,1);pointer-events:none}
+.bd-tip::before{content:"";position:absolute;left:50%;top:-6px;width:14px;height:14px;background:#121115;border-radius:3px;transform:translateX(-50%) rotate(45deg)}
+.bot-deco:hover .bd-tip{opacity:1;transform:translate(-50%,0) scale(1)}
+.bot-deco.tip-r .bd-tip{left:auto;right:0;transform:translate(0,8px) scale(.94);transform-origin:100% 0}
+.bot-deco.tip-r:hover .bd-tip{transform:none}
+.bot-deco.tip-r .bd-tip::before{left:auto;right:calc(var(--w,60px) - 7px)}
+.bot-deco:not(.tip-r) .bd-tip{left:0;transform:translate(0,8px) scale(.94);transform-origin:0 0}
+.bot-deco:not(.tip-r):hover .bd-tip{transform:none}
+.bot-deco:not(.tip-r) .bd-tip::before{left:40px}
+.bot-deco.tip-r .bd-tip::before{right:40px}
+.bt-h{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+.bt-h svg.bot{width:20px;height:20px}
+.bt-h b{font:650 14.5px var(--ui);letter-spacing:-.01em}
+.bt-h em{margin-left:auto;font:600 11.5px var(--ui);font-style:normal;padding:2px 8px;border-radius:999px;background:rgba(155,108,246,.28);color:#d7c6ff}
+.bt-t{position:relative;padding:6px 10px 6px 24px;border-radius:9px;background:rgba(255,255,255,.07);font:500 13px var(--ui);color:rgba(255,255,255,.85)}
+.bt-t::before{content:"";position:absolute;left:10px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:#30d158}
+.bt-f{margin-top:2px;font:500 11.5px var(--ui);color:rgba(255,255,255,.5)}
+@media(hover:none){.bd-tip{display:none}}
+
+/* The bots on the Mac hop when you start talking */
+@keyframes hop{0%,100%{transform:none}35%{transform:translateY(-12px)}60%{transform:translateY(0) scale(1.08,.92)}80%{transform:scale(.97,1.03)}}
+.bot-perch svg.bot.hop{animation:hop .6s cubic-bezier(.3,1.3,.5,1)}
+.hero .bot-deco:hover{z-index:40}
+.bd-tip{z-index:41}
+.bt-f{white-space:nowrap}
+.bd-tip{width:264px}

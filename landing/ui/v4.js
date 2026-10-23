@@ -86,6 +86,7 @@ async function start() {
   state = 'busy'; hint.hidden = true; talk.disabled = true
   try {
     say('You’re talking. Unmute writes down what you say.')
+    document.dispatchEvent(new CustomEvent('try:start', { detail: task }))
     await s.tap()
     await s.speak(t.say, { agent, model: model() })
     s.notch({ right: { text: 'Sending' }, width: 340 }); say('Sent to a new ' + (agent === 'codex' ? 'Codex' : 'Claude Code') + ' session.')
@@ -116,6 +117,7 @@ async function answer(yes) {
     s.notch(lastPanel)
     t.after && t.after(msgs).classList.add('new')
     say('Done. Click the notch to open it again, or pick another task.')
+    document.dispatchEvent(new CustomEvent('try:done', { detail: task }))
     await s.wait(2600)
     s.notch({ right: { text: 'Done', dot: 'grey' }, width: 330 })
     state = 'done'; talk.disabled = false; talk.querySelector('span').textContent = 'Press right Option'
@@ -326,6 +328,22 @@ import('./bots.js').then(({ face, stack, liven, celebrate }) => {
 
   // Giant bots in the empty space beside headings, across the page. They bob
   // on their own beat, blink, and watch the pointer.
+  // What each bot holds, for its tooltip.
+  const WORK = {
+    Checkout: ['Fix the flaky checkout test', 'Ship the new checkout page', 'Fix tax on EU orders'],
+    Marketing: ['Draft the launch email', 'Turn the thread into tweets', 'Pricing page copy'],
+    Personal: ['Plan Saturday', 'Renew my passport', 'Book a dentist'],
+    Inbox: ['Reply to the refund requests', 'Summarize the investor update'],
+    'Bug fixes': ['Flaky signup test', 'Crash on empty cart', 'Slow invoices page'],
+    'Mobile app': ['Dark mode on settings', 'Push notification copy'],
+    Hiring: ['Screen the backend applicants', 'Draft the offer letter'],
+    Payments: ['Add Apple Pay', 'Retry failed charges', 'Refund webhook'],
+    Design: ['Turn the Figma frame into code', 'Icons for the new menu'],
+    Research: ['Compare team plan pricing', 'Summarize the user calls'],
+    Growth: ['SEO for the blog', 'Referral program draft', 'Weekly signups report'],
+    Docs: ['Update the API reference', 'Write the setup guide'],
+    Ops: ['Rotate the API keys', 'Check the backups'],
+  }
   const SPOTS = [
     ['.hero', 'Checkout', 150, 'left:calc(50% - 690px);top:150px', 0],
     ['.hero', 'Marketing', 120, 'left:calc(50% + 560px);top:300px', 1.2],
@@ -345,9 +363,25 @@ import('./bots.js').then(({ face, stack, liven, celebrate }) => {
     const host = $(sel); if (!host) continue
     const d = document.createElement('div'); d.className = `bot-deco bd-${host.querySelectorAll(':scope > .bot-deco').length}`; d.setAttribute('aria-hidden', 'true')
     d.style.cssText = pos + `;--d:${delay}s`
+    const info = WORK[name] || []
     d.innerHTML = face(name, { size, cls: 'lively' }) + '<i class="bd-shadow"></i>'
+      + `<span class="bd-tip" role="tooltip"><span class="bt-h">${face(name, { size: 20 })}<b>${name} bot</b><em>${info.length} tasks</em></span>`
+      + info.map((t) => `<span class="bt-t">${t}</span>`).join('') + '<span class="bt-f">Unmute made this bot. You never set it up.</span></span>'
     host.classList.add('has-deco'); host.append(d)
+    // The tooltip opens toward the middle of the page, so it never runs off-screen.
+    d.addEventListener('pointerenter', () => { const r = d.getBoundingClientRect(); d.classList.toggle('tip-r', r.left + r.width / 2 > innerWidth / 2) })
   }
+
+  // The bots on the Mac watch the demo: they hop when you start talking, and
+  // the bot the task belongs to smiles when it's done.
+  const OWNER = { bug: 'Checkout', sum: 'Inbox', reply: 'Marketing' }
+  document.addEventListener('try:start', () => {
+    perch?.querySelectorAll('svg.bot').forEach((b, i) => setTimeout(() => { b.classList.remove('hop'); void b.getBBox(); b.classList.add('hop') }, i * 60))
+  })
+  document.addEventListener('try:done', (e) => {
+    const b = perch?.querySelector(`svg.bot[data-name="${OWNER[e.detail]}"]`); if (!b) return
+    b.classList.add('hop'); celebrate(b); setTimeout(() => b.classList.remove('hop'), 900)
+  })
 
   // Feature card: bot faces on the rows.
   document.querySelectorAll('.v-bots .pr').forEach((r) => { r.querySelector('.pf').innerHTML = face(r.dataset.bot, { size: 18 }) })
