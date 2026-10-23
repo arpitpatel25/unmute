@@ -603,3 +603,7 @@ svg.bot.happy .bot-body{transform:translateY(-10%)}
 .bd-tip{z-index:41}
 .bt-f{white-space:nowrap}
 .bd-tip{width:264px}
+.hero{overflow:visible}
+.hero::before{border-radius:0}
+.rl-n{max-width:140px}
+html,body{overflow-x:clip}

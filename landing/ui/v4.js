@@ -320,7 +320,7 @@ if (matchMedia('(hover: none)').matches) {
 // shows tasks filing themselves into the right bot, and a new one appearing.
 import('./bots.js').then(({ face, stack, liven, celebrate }) => {
   const $ = (s, r = document) => r.querySelector(s)
-  const CREW = ['Checkout', 'Hiring', 'Marketing', 'Bug fixes', 'Mobile app', 'Personal', 'Inbox']
+  const CREW = ['Orbit billing', 'Orbit Instagram', 'Orbit mobile', 'Fundraise', 'Support inbox', 'Client · Acme', 'SEO · Orbit']
 
   // Hero: bots sitting on top of the demo screen, and a small stack by the logos.
   const perch = $('.bot-perch')
@@ -330,34 +330,35 @@ import('./bots.js').then(({ face, stack, liven, celebrate }) => {
   // on their own beat, blink, and watch the pointer.
   // What each bot holds, for its tooltip.
   const WORK = {
-    Checkout: ['Fix the flaky checkout test', 'Ship the new checkout page', 'Fix tax on EU orders'],
-    Marketing: ['Draft the launch email', 'Turn the thread into tweets', 'Pricing page copy'],
-    Personal: ['Plan Saturday', 'Renew my passport', 'Book a dentist'],
-    Inbox: ['Reply to the refund requests', 'Summarize the investor update'],
-    'Bug fixes': ['Flaky signup test', 'Crash on empty cart', 'Slow invoices page'],
-    'Mobile app': ['Dark mode on settings', 'Push notification copy'],
-    Hiring: ['Screen the backend applicants', 'Draft the offer letter'],
-    Payments: ['Add Apple Pay', 'Retry failed charges', 'Refund webhook'],
-    Design: ['Turn the Figma frame into code', 'Icons for the new menu'],
-    Research: ['Compare team plan pricing', 'Summarize the user calls'],
-    Growth: ['SEO for the blog', 'Referral program draft', 'Weekly signups report'],
-    Docs: ['Update the API reference', 'Write the setup guide'],
-    Ops: ['Rotate the API keys', 'Check the backups'],
+    'Orbit billing': ['Fix VAT rounding on EU checkout', 'Move billing to Stripe Tax', 'Ship usage-based pricing'],
+    'Orbit Instagram': ['Plan next week’s 6 Reels', 'Reply to creator DMs', 'Caption the launch carousel'],
+    'Fundraise': ['Add Q3 numbers to the investor memo', 'Follow up with 12 VCs', 'Clean up the data room'],
+    'Orbit mobile': ['Fix the TestFlight crash on login', 'Answer App Store reviews'],
+    'Public API': ['Rate-limit the public endpoints', 'Rotate the leaked keys', 'Write the v2 migration guide'],
+    'Fieldnote': ['Set up Postgres backups', 'Build the onboarding flow'],
+    'Backend hiring': ['Screen 30 applicants', 'Draft the offer letter'],
+    'Customer support': ['Draft replies to 3 refund requests', 'Tag this week’s churn reasons', 'Escalate the SSO bug'],
+    'Support inbox': ['Draft replies to 3 refund requests', 'Tag this week’s churn reasons', 'Escalate the SSO bug'],
+    'Client · Acme': ['Redesign Acme’s pricing page', 'Send the weekly status report'],
+    'SEO · Orbit': ['Fix 40 broken links', 'Write the “Orbit vs Stripe” page', 'Weekly rankings report'],
+    'Orbit on X': ['Turn the changelog into a thread', 'Reply to mentions about the outage'],
+    'Infra': ['Upgrade staging to Node 24', 'Cut the AWS bill by 20%'],
+    'Orbit docs': ['Rewrite the quickstart', 'Document the webhooks'],
   }
   const SPOTS = [
-    ['.hero', 'Checkout', 150, 'left:calc(50% - 690px);top:150px', 0],
-    ['.hero', 'Marketing', 120, 'left:calc(50% + 560px);top:300px', 1.2],
-    ['.hero', 'Personal', 84, 'left:calc(50% - 600px);top:430px', 2.1],
-    ['.hero', 'Inbox', 70, 'left:calc(50% + 520px);top:120px', .6],
-    ['#how', 'Bug fixes', 130, 'right:calc(50% - 560px);top:120px', .4],
-    ['#apps', 'Mobile app', 140, 'right:calc(50% - 540px);top:96px', 1.4],
-    ['#does', 'Hiring', 150, 'right:calc(50% - 560px);top:110px', .8],
-    ['#uses', 'Payments', 120, 'right:calc(50% - 540px);top:96px', 1.8],
-    ['#film', 'Design', 130, 'right:calc(50% - 540px);top:100px', .2],
-    ['.plans-own', 'Research', 120, 'right:calc(50% - 540px);top:120px', 1],
-    ['#compare', 'Growth', 130, 'right:calc(50% - 540px);top:110px', 1.6],
-    ['#faq', 'Docs', 110, 'left:calc(50% - 560px);top:320px', .5],
-    ['#blog', 'Ops', 120, 'right:calc(50% - 540px);top:110px', 1.3],
+    ['.hero', 'Orbit billing', 150, 'left:calc(50% - 690px);top:150px', 0],
+    ['.hero', 'Orbit Instagram', 120, 'left:calc(50% + 560px);top:300px', 1.2],
+    ['.hero', 'Fundraise', 84, 'left:calc(50% - 600px);top:430px', 2.1],
+    ['.hero', 'Orbit mobile', 70, 'left:calc(50% + 520px);top:120px', .6],
+    ['#how', 'Public API', 130, 'right:calc(50% - 560px);top:120px', .4],
+    ['#apps', 'Fieldnote', 140, 'right:calc(50% - 540px);top:96px', 1.4],
+    ['#does', 'Backend hiring', 150, 'right:calc(50% - 560px);top:110px', .8],
+    ['#uses', 'Customer support', 120, 'right:calc(50% - 540px);top:96px', 1.8],
+    ['#film', 'Client · Acme', 130, 'right:calc(50% - 540px);top:100px', .2],
+    ['.plans-own', 'SEO · Orbit', 120, 'right:calc(50% - 540px);top:120px', 1],
+    ['#compare', 'Orbit on X', 130, 'right:calc(50% - 540px);top:110px', 1.6],
+    ['#faq', 'Orbit docs', 110, 'left:calc(50% - 560px);top:320px', .5],
+    ['#blog', 'Infra', 120, 'right:calc(50% - 540px);top:110px', 1.3],
   ]
   for (const [sel, name, size, pos, delay] of SPOTS) {
     const host = $(sel); if (!host) continue
@@ -374,7 +375,7 @@ import('./bots.js').then(({ face, stack, liven, celebrate }) => {
 
   // The bots on the Mac watch the demo: they hop when you start talking, and
   // the bot the task belongs to smiles when it's done.
-  const OWNER = { bug: 'Checkout', sum: 'Inbox', reply: 'Marketing' }
+  const OWNER = { bug: 'Orbit billing', sum: 'Support inbox', reply: 'Support inbox' }
   document.addEventListener('try:start', () => {
     perch?.querySelectorAll('svg.bot').forEach((b, i) => setTimeout(() => { b.classList.remove('hop'); void b.getBBox(); b.classList.add('hop') }, i * 60))
   })
@@ -389,7 +390,7 @@ import('./bots.js').then(({ face, stack, liven, celebrate }) => {
   // The section: a bot rail like the app's, and tasks that find their bot.
   const stage = $('.bots-stage'); if (!stage) { liven(); return }
   const list = $('.rail-list', stage), words = $('.bs-words', stage), pill = $('.bs-say .v-pill', stage), steps = [...document.querySelectorAll('.bot-steps li')]
-  const START = [['Checkout', 4], ['Marketing', 3], ['Mobile app', 2], ['Personal', 1], ['Inbox', 0]]
+  const START = [['Orbit billing', 4], ['Orbit Instagram', 3], ['Orbit mobile', 2], ['Fundraise', 1], ['Support inbox', 0]]
   const row = (name, n) => `<div class="rl-row" data-name="${name}">${face(name, { size: 28, cls: 'lively' })}<span class="rl-n">${name}</span><span class="rl-c">${n}</span></div>`
   const total = () => [...list.querySelectorAll('.rl-row[data-name] .rl-c')].reduce((a, c) => a + +c.textContent, 0)
   const paint = () => {
@@ -428,31 +429,31 @@ import('./bots.js').then(({ face, stack, liven, celebrate }) => {
   const loop = async () => {
     if (running) return; running = true
     while (visible) {
-      paint(); step(0); words.innerHTML = ''; focus('Checkout', ['Ship the new checkout page', 'Fix tax on EU orders']); await sleep(1200)
+      paint(); step(0); words.innerHTML = ''; focus('Orbit billing', ['Move billing to Stripe Tax', 'Ship usage-based pricing']); await sleep(1200)
       // 1 · fits an existing bot
-      await say('Fix the flaky checkout test before the release.')
+      await say('Fix the VAT rounding bug on EU checkout before Friday’s release.')
       step(1)
-      const co = list.querySelector('.rl-row[data-name="Checkout"]')
+      const co = list.querySelector('.rl-row[data-name="Orbit billing"]')
       focus(null, []); await sleep(500)
-      await fly('Fix the flaky checkout test', co); bump(co)
+      await fly('Fix VAT rounding on EU checkout', co); bump(co)
       co.querySelector('svg.bot').dataset.mood = 'working'
-      const big = focus('Checkout', ['Fix the flaky checkout test', 'Ship the new checkout page', 'Fix tax on EU orders'], { pop: true }); big.dataset.mood = 'working'
+      const big = focus('Orbit billing', ['Fix VAT rounding on EU checkout', 'Move billing to Stripe Tax', 'Ship usage-based pricing'], { pop: true }); big.dataset.mood = 'working'
       await sleep(2000)
       // 2 · nothing fits: a new bot appears
-      step(0); await say('Book flights and a hotel for the Tokyo offsite.')
+      step(0); await say('Start the landing page for Fieldnote, our new notes app.')
       step(2)
       focus(null, []); await sleep(700)
-      const fresh = document.createElement('div'); fresh.innerHTML = row('Tokyo trip', 0)
+      const fresh = document.createElement('div'); fresh.innerHTML = row('Fieldnote', 0)
       const nr = fresh.firstElementChild; nr.classList.add('new')
       list.querySelector('.rl-row.un').before(nr); liven(list)
       await sleep(450)
-      await fly('Book flights and a hotel', nr); bump(nr)
+      await fly('Start the Fieldnote landing page', nr); bump(nr)
       celebrate(nr.querySelector('svg.bot'))
-      celebrate(focus('Tokyo trip', ['Book flights and a hotel'], { pop: true }))
+      celebrate(focus('Fieldnote', ['Start the Fieldnote landing page'], { pop: true }))
       await sleep(1600)
-      // Checkout's work finishes: a smile.
+      // The web app's work finishes: a smile.
       const cs = co.querySelector('svg.bot'); cs.dataset.mood = 'idle'; celebrate(cs)
-      await sleep(1400); celebrate(focus('Checkout', ['Fixed the flaky checkout test ✓', 'Ship the new checkout page', 'Fix tax on EU orders']))
+      await sleep(1400); celebrate(focus('Orbit billing', ['Fixed VAT rounding on EU checkout ✓', 'Move billing to Stripe Tax', 'Ship usage-based pricing']))
       await sleep(3200)
     }
     running = false
