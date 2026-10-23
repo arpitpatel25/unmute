@@ -86,6 +86,7 @@ async function start() {
   state = 'busy'; hint.hidden = true; talk.disabled = true
   try {
     say('You’re talking. Unmute writes down what you say.')
+    document.dispatchEvent(new CustomEvent('try:start', { detail: task }))
     await s.tap()
     await s.speak(t.say, { agent, model: model() })
     s.notch({ right: { text: 'Sending' }, width: 340 }); say('Sent to a new ' + (agent === 'codex' ? 'Codex' : 'Claude Code') + ' session.')
@@ -116,6 +117,7 @@ async function answer(yes) {
     s.notch(lastPanel)
     t.after && t.after(msgs).classList.add('new')
     say('Done. Click the notch to open it again, or pick another task.')
+    document.dispatchEvent(new CustomEvent('try:done', { detail: task }))
     await s.wait(2600)
     s.notch({ right: { text: 'Done', dot: 'grey' }, width: 330 })
     state = 'done'; talk.disabled = false; talk.querySelector('span').textContent = 'Press right Option'
@@ -312,3 +314,151 @@ if (matchMedia('(hover: none)').matches) {
   const fixStatus = () => { if (/press/i.test(st.textContent)) st.textContent = st.textContent.replace(/press right ⌥|press the key/gi, 'tap the button') }
   fixStatus(); new MutationObserver(fixStatus).observe(st, { childList: true, characterData: true, subtree: true })
 }
+
+// ── Bots ─────────────────────────────────────────────────────────────────────
+// The faces are the app's own (ui/bots.js). The hero shows a few; the section
+// shows tasks filing themselves into the right bot, and a new one appearing.
+import('./bots.js').then(({ face, stack, liven, celebrate }) => {
+  const $ = (s, r = document) => r.querySelector(s)
+  const CREW = ['Billing', 'Instagram growth', 'iOS app', 'Fundraising', 'Support inbox', 'Client website', 'SEO']
+
+  // Hero: bots sitting on top of the demo screen, and a small stack by the logos.
+  const perch = $('.bot-perch')
+  if (perch) { perch.innerHTML = CREW.map((n) => face(n, { size: 46, cls: 'lively' })).join(''); }
+
+  // Giant bots in the empty space beside headings, across the page. They bob
+  // on their own beat, blink, and watch the pointer.
+  // What each bot holds, for its tooltip.
+  const WORK = {
+    'Billing': ['Fix VAT rounding on EU orders', 'Move to Stripe Tax', 'Ship usage-based pricing'],
+    'Instagram growth': ['Plan next week’s 6 Reels', 'Reply to creator DMs', 'Caption the launch carousel'],
+    'Fundraising': ['Add Q3 numbers to the investor memo', 'Follow up with 12 VCs', 'Clean up the data room'],
+    'iOS app': ['Fix the TestFlight crash on login', 'Answer App Store reviews'],
+    'Support inbox': ['Draft replies to 3 refund requests', 'Tag this week’s churn reasons', 'Escalate the SSO bug'],
+    'Client website': ['Redesign the client’s pricing page', 'Send the weekly status report'],
+    'SEO': ['Fix 40 broken links', 'Write the comparison pages', 'Weekly rankings report'],
+    'Public API': ['Rate-limit the public endpoints', 'Rotate the leaked keys', 'Write the v2 migration guide'],
+    'Android app': ['Fix the Play Store build', 'Port dark mode from iOS'],
+    'Hiring': ['Screen 30 backend applicants', 'Draft the offer letter'],
+    'Data pipeline': ['Backfill last month’s events', 'Fix the nightly sync'],
+    'Pricing page': ['Turn the Figma frame into code', 'A/B test the annual toggle'],
+    'X / Twitter': ['Turn the changelog into a thread', 'Reply to mentions about the outage'],
+    'Docs': ['Rewrite the quickstart', 'Document the webhooks'],
+    'Infra': ['Upgrade staging to Node 24', 'Cut the AWS bill by 20%'],
+  }
+  const SPOTS = [
+    ['.hero', 'Billing', 150, 'left:calc(50% - 690px);top:150px', 0],
+    ['.hero', 'Instagram growth', 120, 'left:calc(50% + 560px);top:300px', 1.2],
+    ['.hero', 'Fundraising', 84, 'left:calc(50% - 600px);top:430px', 2.1],
+    ['.hero', 'iOS app', 70, 'left:calc(50% + 520px);top:120px', .6],
+    ['#how', 'Public API', 130, 'right:calc(50% - 560px);top:120px', .4],
+    ['#apps', 'Android app', 140, 'right:calc(50% - 540px);top:96px', 1.4],
+    ['#does', 'Hiring', 150, 'right:calc(50% - 560px);top:110px', .8],
+    ['#uses', 'Data pipeline', 120, 'right:calc(50% - 540px);top:96px', 1.8],
+    ['#film', 'Pricing page', 130, 'right:calc(50% - 540px);top:100px', .2],
+    ['.plans-own', 'SEO', 120, 'right:calc(50% - 540px);top:120px', 1],
+    ['#compare', 'X / Twitter', 130, 'right:calc(50% - 540px);top:110px', 1.6],
+    ['#faq', 'Docs', 110, 'left:calc(50% - 560px);top:320px', .5],
+    ['#blog', 'Infra', 120, 'right:calc(50% - 540px);top:110px', 1.3],
+  ]
+  for (const [sel, name, size, pos, delay] of SPOTS) {
+    const host = $(sel); if (!host) continue
+    const d = document.createElement('div'); d.className = `bot-deco bd-${host.querySelectorAll(':scope > .bot-deco').length}`; d.setAttribute('aria-hidden', 'true')
+    d.style.cssText = pos + `;--d:${delay}s`
+    const info = WORK[name] || []
+    d.innerHTML = face(name, { size, cls: 'lively' }) + '<i class="bd-shadow"></i>'
+      + `<span class="bd-tip" role="tooltip"><span class="bt-h">${face(name, { size: 20 })}<b>${name} bot</b><em>${info.length} tasks</em></span>`
+      + info.map((t) => `<span class="bt-t">${t}</span>`).join('') + '<span class="bt-f">Created by Unmute. You never set it up.</span></span>'
+    host.classList.add('has-deco'); host.append(d)
+    // The tooltip opens toward the middle of the page, so it never runs off-screen.
+    d.addEventListener('pointerenter', () => { const r = d.getBoundingClientRect(); d.classList.toggle('tip-r', r.left + r.width / 2 > innerWidth / 2) })
+  }
+
+  // The bots on the Mac watch the demo: they hop when you start talking, and
+  // the bot the task belongs to smiles when it's done.
+  const OWNER = { bug: 'Billing', sum: 'Support inbox', reply: 'Support inbox' }
+  document.addEventListener('try:start', () => {
+    perch?.querySelectorAll('svg.bot').forEach((b, i) => setTimeout(() => { b.classList.remove('hop'); void b.getBBox(); b.classList.add('hop') }, i * 60))
+  })
+  document.addEventListener('try:done', (e) => {
+    const b = perch?.querySelector(`svg.bot[data-name="${OWNER[e.detail]}"]`); if (!b) return
+    b.classList.add('hop'); celebrate(b); setTimeout(() => b.classList.remove('hop'), 900)
+  })
+
+  // Feature card: bot faces on the rows.
+  document.querySelectorAll('.v-bots .pr').forEach((r) => { r.querySelector('.pf').innerHTML = face(r.dataset.bot, { size: 18 }) })
+
+  // The section: a bot rail like the app's, and tasks that find their bot.
+  const stage = $('.bots-stage'); if (!stage) { liven(); return }
+  const list = $('.rail-list', stage), words = $('.bs-words', stage), pill = $('.bs-say .v-pill', stage), steps = [...document.querySelectorAll('.bot-steps li')]
+  const START = [['Billing', 4], ['Instagram growth', 3], ['iOS app', 2], ['Fundraising', 1], ['Support inbox', 0]]
+  const row = (name, n) => `<div class="rl-row" data-name="${name}">${face(name, { size: 28, cls: 'lively' })}<span class="rl-n">${name}</span><span class="rl-c">${n}</span></div>`
+  const total = () => [...list.querySelectorAll('.rl-row[data-name] .rl-c')].reduce((a, c) => a + +c.textContent, 0)
+  const paint = () => {
+    list.innerHTML = `<div class="rl-row all on">${stack(START.map((r) => r[0]), 20, '#2a292e')}<span class="rl-n">All bots</span><span class="rl-c rl-tot"></span></div>`
+      + START.map(([n, c]) => row(n, c)).join('') + `<div class="rl-row un"><i class="dash"></i><span class="rl-n">Unassigned</span><span class="rl-c">0</span></div>`
+    $('.rl-tot', list).textContent = total(); liven(list)
+  }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const step = (i) => steps.forEach((li, k) => { li.classList.toggle('on', k === i); li.classList.toggle('done', k < i) })
+  const say = async (text) => {
+    words.innerHTML = text.split(' ').map((w) => `<span>${w}</span>`).join(' ')
+    stage.classList.add('talking'); pill.classList.add('on')
+    for (const sp of words.querySelectorAll('span')) { sp.classList.add('in'); await sleep(280) }
+    await sleep(500); pill.classList.remove('on')
+  }
+  // A task chip flies from what you said into its bot's row.
+  const fly = async (text, target) => {
+    const from = words.getBoundingClientRect(), to = target.getBoundingClientRect(), base = stage.getBoundingClientRect()
+    const chip = document.createElement('span'); chip.className = 'bs-chip'; chip.textContent = text
+    chip.style.left = from.left - base.left + from.width / 2 + 'px'; chip.style.top = from.top - base.top + from.height / 2 + 'px'
+    stage.append(chip); stage.classList.remove('talking')
+    await sleep(40)
+    chip.style.transform = `translate(${to.left - from.left - from.width / 2 + 60}px,${to.top - from.top - from.height / 2 + to.height / 2}px) scale(.35)`
+    chip.style.opacity = '0'
+    await sleep(700); chip.remove()
+  }
+  const focusBot = $('.bf-bot', stage), focusName = $('.bf-name', stage), focusTasks = $('.bf-tasks', stage)
+  const focus = (name, tasks, { pop = false } = {}) => {
+    focusBot.innerHTML = name ? face(name, { size: 150, cls: 'lively' + (pop ? ' pop' : '') }) : '<i class="bf-empty"></i>'
+    focusName.innerHTML = name ? `<b>${name}</b>` : '<span>Finding the right bot…</span>'
+    focusTasks.innerHTML = tasks.map((t, i) => `<span class="bf-t${i === 0 ? ' fresh' : ''}">${t}</span>`).join('')
+    liven(stage); return focusBot.querySelector('svg.bot')
+  }
+  const bump = (r) => { const c = $('.rl-c', r); c.textContent = +c.textContent + 1; r.classList.add('hit'); setTimeout(() => r.classList.remove('hit'), 900); $('.rl-tot', list).textContent = total() }
+  let visible = false, running = false
+  const loop = async () => {
+    if (running) return; running = true
+    while (visible) {
+      paint(); step(0); words.innerHTML = ''; focus('Billing', ['Move to Stripe Tax', 'Ship usage-based pricing']); await sleep(1200)
+      // 1 · fits an existing bot
+      await say('Fix the VAT rounding bug on EU orders before Friday’s release.')
+      step(1)
+      const co = list.querySelector('.rl-row[data-name="Billing"]')
+      focus(null, []); await sleep(500)
+      await fly('Fix VAT rounding on EU orders', co); bump(co)
+      co.querySelector('svg.bot').dataset.mood = 'working'
+      const big = focus('Billing', ['Fix VAT rounding on EU orders', 'Move to Stripe Tax', 'Ship usage-based pricing'], { pop: true }); big.dataset.mood = 'working'
+      await sleep(2000)
+      // 2 · nothing fits: a new bot appears
+      step(0); await say('Start a Chrome extension that saves tweets to Notion.')
+      step(2)
+      focus(null, []); await sleep(700)
+      const fresh = document.createElement('div'); fresh.innerHTML = row('Chrome extension', 0)
+      const nr = fresh.firstElementChild; nr.classList.add('new')
+      list.querySelector('.rl-row.un').before(nr); liven(list)
+      await sleep(450)
+      await fly('Start the Chrome extension', nr); bump(nr)
+      celebrate(nr.querySelector('svg.bot'))
+      celebrate(focus('Chrome extension', ['Start the Chrome extension'], { pop: true }))
+      await sleep(1600)
+      // Billing's work finishes: a smile.
+      const cs = co.querySelector('svg.bot'); cs.dataset.mood = 'idle'; celebrate(cs)
+      await sleep(1400); celebrate(focus('Billing', ['Fixed VAT rounding on EU orders ✓', 'Move to Stripe Tax', 'Ship usage-based pricing']))
+      await sleep(3200)
+    }
+    running = false
+  }
+  new IntersectionObserver(([e]) => { visible = e.isIntersecting; if (visible) loop() }, { threshold: 0.35 }).observe(stage)
+  paint(); liven()
+})
