@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { writeFileSync } from "node:fs";
+import { existsSync as existsSync2, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync as spawnSync2 } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join as join2, resolve } from "node:path";
 
 // src/core.ts
 var TASK_TYPES = ["code", "research", "comms", "content", "personal", "other"];
@@ -487,9 +490,8 @@ function main() {
     process.stdout.write(report(result, splitKey, raw.length, dropped));
   }
   if (args.card) {
-    writeFileSync(args.card, card(result));
     log(`
-Share card written to ${args.card}
+${writeCard(args.card, card(result))}
 `);
   }
 }
@@ -519,7 +521,8 @@ function report(r, split, read, dropped) {
   out += `  Split date: ${split} \xB7 ${read} sessions read \xB7 removed ${dropped.bursts} bursts, ${dropped.duplicates} repeats, ${dropped.machineOnly} automated
 `;
   if (thin(b) || thin(a)) out += "  Fewer than 5 active days on one side: treat this as a preview, not a result.\n";
-  out += "\n  Method: justunmute.me/bench \xB7 Nothing left this machine.\n\n";
+  out += leaderboard(a);
+  out += "\n  Method and leaderboard: justunmute.me/bench \xB7 Nothing left this machine.\n\n";
   return out;
 }
 function card(r) {
@@ -558,6 +561,58 @@ ${body}
 </svg>
 `;
 }
+var LEADERBOARD = [
+  ["Claude Code + Codex, desktop apps", 3, 46, 4.9],
+  ["Claude Code + Codex, via Unmute", 10, 144, 9.4]
+];
+function leaderboard(you) {
+  const row = (name, s, m, h) => `  ${name.padEnd(36)} ${String(s).padStart(8)} ${String(m).padStart(9)} ${String(h).padStart(7)}
+`;
+  let out = "\n  Where you sit, median per active day (leaderboard v0.1, n=1 per row)\n";
+  out += `  ${"".padEnd(36)} ${"sessions".padStart(8)} ${"messages".padStart(9)} ${"hours".padStart(7)}
+`;
+  out += row(`You, ${range(you)}`, you.spd.median, you.mpd.median, you.ahd.median);
+  for (const [name, s, m, h] of LEADERBOARD) out += row(name, s, m, h);
+  return out;
+}
+function writeCard(path, svg) {
+  if (!path.toLowerCase().endsWith(".png")) {
+    writeFileSync(path, svg);
+    return `Share card written to ${path}`;
+  }
+  const chrome = findChrome();
+  const fallback = path.replace(/\.png$/i, ".svg");
+  if (!chrome) {
+    writeFileSync(fallback, svg);
+    return `No Chrome or Chromium found, so the card is an SVG: ${fallback} (open it in a browser and screenshot it)`;
+  }
+  const dir = mkdtempSync(join2(tmpdir(), "unmute-bench-"));
+  try {
+    const src = join2(dir, "card.svg");
+    writeFileSync(src, svg);
+    const out = resolve(path);
+    spawnSync2(chrome, ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=2", "--window-size=1200,675", `--screenshot=${out}`, `file://${src}`], { stdio: "ignore", timeout: 3e4 });
+    if (existsSync2(out)) return `Share card written to ${path}`;
+    writeFileSync(fallback, svg);
+    return `Could not draw the PNG, so the card is an SVG: ${fallback}`;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+function findChrome() {
+  const candidates = [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+  ];
+  for (const c of candidates) if (existsSync2(c)) return c;
+  for (const name of ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]) {
+    const r = spawnSync2("which", [name], { encoding: "utf8" });
+    if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
+  }
+  return null;
+}
 function range(m) {
   const f = (s) => (/* @__PURE__ */ new Date(`${s}T00:00:00`)).toLocaleDateString("en-US", { month: "short", day: "numeric" });
   return `${f(m.from)}\u2013${f(m.to)}`;
@@ -579,12 +634,12 @@ function fail(msg) {
 }
 var HELP = `unmute-bench v0.1 \u2014 the benchmark that measures the human, not the model
 
-Usage: node unmute-bench.mjs [--split YYYY-MM-DD] [--days N] [--card file.svg] [--json] [--no-index]
+Usage: node unmute-bench.mjs [--split YYYY-MM-DD] [--days N] [--card file.png] [--json] [--no-index]
    or: curl -fsSL https://justunmute.me/unmute-bench.mjs | node --input-type=module - [options]
 
   --split   first day of "after" (default: your first Unmute session, else ${30} days ago)
   --days    length of each window, 7\u201390 (default 30)
-  --card    write a shareable 1200\xD7675 SVG card
+  --card    write a shareable 1200\xD7675 card (.png needs Chrome or Chromium; .svg always works)
   --json    print machine-readable results
   --no-index  ignore Unmute's session index even if present
 
