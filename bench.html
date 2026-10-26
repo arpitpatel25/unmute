@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Unmute Bench — the benchmark that measures the human, not the model</title>
+<meta name="description" content="Every AI benchmark measures the model. Unmute Bench measures the human: how much work you actually hand to Claude Code and Codex, computed from your own local logs. Open source." />
+<link rel="canonical" href="https://justunmute.me/bench" />
+<link rel="icon" type="image/png" href="icon.png" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<meta property="og:title" content="Unmute Bench v0.1" />
+<meta property="og:description" content="The first benchmark that measures the human, not the model. Same Claude Code, 3.3× more agent sessions a day." />
+<meta property="og:image" content="https://justunmute.me/assets/bench/unmute-bench-v0.1.png" />
+<meta property="og:image:width" content="2400" />
+<meta property="og:image:height" content="1350" />
+<meta property="og:url" content="https://justunmute.me/bench" />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Unmute Bench v0.1" />
+<meta name="twitter:description" content="The first benchmark that measures the human, not the model." />
+<meta name="twitter:image" content="https://justunmute.me/assets/bench/unmute-bench-v0.1.png" />
+<meta name="theme-color" content="#ffffff" />
+<link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
+<script defer src="analytics.js?v=1"></script>
+<style>
+  @font-face { font-family: Inter; src: url(assets/fonts/Inter.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
+  :root { --ink: #0b0b0c; --ink-2: #3d3d40; --ink-3: #6b6b70; --ink-4: #9a9aa0; --line: #e6e6e8; --soft: #f6f6f7; --bar: #d9d9d9; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; overflow-x: hidden; background: #fff; color: var(--ink); font: 16px/1.6 Inter, "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+  header.top { border-bottom: 1px solid var(--line); }
+  header.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; font-size: 14px; }
+  header.top .mark { font-weight: 700; text-decoration: none; letter-spacing: -0.01em; }
+  header.top nav a { color: var(--ink-3); text-decoration: none; margin-left: 22px; }
+  header.top nav a:hover { color: var(--ink); }
+  .hero { padding: 64px 0 28px; text-align: center; }
+  .hero h1 { font-size: 52px; line-height: 1.05; letter-spacing: -0.03em; margin: 0; }
+  .ver { display: inline-block; font-size: 14px; font-weight: 500; color: var(--ink-3); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; vertical-align: 14px; margin-left: 8px; letter-spacing: 0; }
+  .hero .sub { font-size: 21px; color: var(--ink-2); margin: 16px auto 0; max-width: 640px; }
+  .hero .by { font-size: 14px; color: var(--ink-3); margin-top: 14px; }
+  .pills { display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+  .pills a { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; text-decoration: none; padding: 8px 16px; border-radius: 999px; border: 1px solid var(--ink); }
+  .pills a.solid { background: var(--ink); color: #fff; }
+  .pills a:not(.solid):hover { background: var(--soft); }
+  figure.chart { margin: 36px 0 8px; }
+  figure.chart img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; display: block; }
+  figure.chart figcaption { font-size: 13px; color: var(--ink-3); margin-top: 10px; text-align: center; }
+  section { padding: 44px 0 8px; }
+  section + section { border-top: 1px solid var(--line); margin-top: 36px; }
+  h2 { font-size: 26px; letter-spacing: -0.02em; margin: 0 0 14px; }
+  h3 { font-size: 17px; margin: 26px 0 8px; }
+  p { margin: 0 0 14px; color: var(--ink-2); overflow-wrap: break-word; }
+  .lead { font-size: 18px; color: var(--ink); }
+  .tbl { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; margin: 8px 0 14px; }
+  th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.top td { font-weight: 700; }
+  tr.open td { color: var(--ink-4); }
+  .rank { color: var(--ink-3); width: 36px; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
+  code { background: var(--soft); padding: 2px 6px; border-radius: 5px; }
+  pre { background: var(--ink); color: #f2f2f2; padding: 18px 20px; border-radius: 10px; overflow-x: auto; line-height: 1.55; margin: 8px 0 16px; }
+  pre code { background: none; padding: 0; color: inherit; }
+  .note { font-size: 14px; color: var(--ink-3); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .card b { display: block; margin-bottom: 4px; }
+  .card p { margin: 0; font-size: 15px; }
+  ul { padding-left: 20px; color: var(--ink-2); margin: 0 0 14px; }
+  li { margin: 6px 0; }
+  details { border-bottom: 1px solid var(--line); padding: 14px 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  details p { margin: 10px 0 0; }
+  footer.bot { border-top: 1px solid var(--line); margin-top: 56px; padding: 26px 0 40px; font-size: 13px; color: var(--ink-3); }
+  footer.bot .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  footer.bot a { color: var(--ink-3); }
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 38px; }
+    .hero .sub { font-size: 18px; }
+    header.top nav a:not(:last-child) { display: none; }
+    .grid2 { grid-template-columns: 1fr; }
+    th, td { padding: 9px 6px; font-size: 14px; }
+    .hide-sm { display: none; }
+  }
+</style>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Dataset",
+  "name": "Unmute Bench",
+  "version": "0.1",
+  "description": "A benchmark of human-to-agent work: how much work a person hands to AI coding agents, computed from local Claude Code and Codex logs.",
+  "url": "https://justunmute.me/bench",
+  "license": "https://opensource.org/licenses/MIT",
+  "creator": { "@type": "Organization", "name": "Unmute", "url": "https://justunmute.me" },
+  "dateModified": "2026-10-26"
+}
+</script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="mark" href="bench">Unmute Bench</a>
+    <nav>
+      <a href="#leaderboard">Leaderboard</a>
+      <a href="#metrics">Metrics</a>
+      <a href="#method">Method</a>
+      <a href="#run">Run it</a>
+      <a href="./">Unmute ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="hero">
+    <h1>Unmute Bench<span class="ver">v0.1</span></h1>
+    <p class="sub">The first benchmark that measures the human, not the model.</p>
+    <p class="by">Maintained by <a href="./">Unmute</a> · October 2026 · Open source (MIT)</p>
+    <div class="pills">
+      <a class="solid" href="#run">Run it on your logs</a>
+      <a href="https://github.com/arpitpatel25/unmute-bench">Code</a>
+      <a href="https://github.com/arpitpatel25/unmute-bench/blob/main/METHODOLOGY.md">Methodology</a>
+      <a href="#submit">Submit a result</a>
+      <a href="#cite">Cite</a>
+    </div>
+  </div>
+
+  <figure class="chart">
+    <img src="assets/bench/unmute-bench-v0.1.png" alt="Unmute Bench v0.1 chart. Same person, same models. Claude Code alone versus Claude Code with Unmute: agent sessions per active day 3 versus 10 (3.3 times), messages to agents per active day 46 versus 144 (3.1 times), hours agents ran per active day 4.9 versus 9.4 (1.9 times). Median per active day, July 11 to August 9 versus September 26 to October 25, 2026. n equals 1, p less than 0.001." width="2400" height="1350" />
+    <figcaption>Reference result. One person, same models, 30 days before vs. 30 days after switching. Median per active day.</figcaption>
+  </figure>
+
+  <section id="why">
+    <h2>Why a benchmark for humans</h2>
+    <p class="lead">Models are benchmarked to death. SWE-bench, Terminal-Bench, ARC: every launch comes with a chart. Nobody measures the other half of the system: the person handing the work over.</p>
+    <p>Models got far better this year. Most people did not get far better at using them. They still type one prompt into one terminal, wait, and read. The bottleneck has moved from the model to the human, and to the interface between them.</p>
+    <p>Unmute Bench measures that interface. It asks one question: <b>how much work do you actually hand to your agents?</b> It is computed from logs that Claude Code and Codex already keep on your computer, so nothing has to be self-reported and nothing leaves your machine.</p>
+  </section>
+
+  <section id="leaderboard">
+    <h2>Leaderboard</h2>
+    <p>Setups are ways of working with agents, not models. Median per active day.</p>
+    <div class="tbl"><table>
+      <thead>
+        <tr><th class="rank">#</th><th>Setup</th><th class="num">SPD</th><th class="num">MPD</th><th class="num">AHD</th><th class="num hide-sm">JPH</th><th class="num">People</th></tr>
+      </thead>
+      <tbody>
+        <tr class="top"><td class="rank">1</td><td>Claude Code + Codex, via Unmute</td><td class="num">10</td><td class="num">144</td><td class="num">9.4</td><td class="num hide-sm">3</td><td class="num">1</td></tr>
+        <tr><td class="rank">2</td><td>Claude Code + Codex, desktop apps</td><td class="num">3</td><td class="num">46</td><td class="num">4.9</td><td class="num hide-sm">1</td><td class="num">1</td></tr>
+        <tr class="open"><td class="rank">—</td><td>Claude Code / Codex, terminal</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num hide-sm">—</td><td class="num">open</td></tr>
+        <tr class="open"><td class="rank">—</td><td>Cursor</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num hide-sm">—</td><td class="num">open</td></tr>
+        <tr class="open"><td class="rank">—</td><td>Other orchestrators</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num hide-sm">—</td><td class="num">open</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">v0.1 is preliminary: both rows come from one person's history. Open rows fill in as results are submitted. <a href="#submit">Add yours.</a></p>
+  </section>
+
+  <section id="metrics">
+    <h2>Metrics</h2>
+    <p>An <b>active day</b> is a day with at least one message to an agent. Daily metrics count active days only, so days off never count against anyone.</p>
+    <div class="tbl"><table>
+      <thead><tr><th>Code</th><th>Metric</th><th>What it captures</th></tr></thead>
+      <tbody>
+        <tr><td><b>SPD</b></td><td>Agent sessions per active day</td><td>How much work you start</td></tr>
+        <tr><td><b>MPD</b></td><td>Messages to agents per active day</td><td>How often you reach your agents</td></tr>
+        <tr><td><b>AHD</b></td><td>Hours agents ran per active day</td><td>How long your agents are working for you</td></tr>
+        <tr><td><b>JPH</b></td><td>Agents steered per active hour</td><td>How many agents you juggle at once</td></tr>
+        <tr><td><b>PAR</b></td><td>Agents running at once</td><td>Parallelism</td></tr>
+        <tr><td><b>AD</b></td><td>Active days per window</td><td>Consistency</td></tr>
+        <tr><td><b>TTW</b></td><td>Task types per week (of 6)</td><td>Breadth: code, research, comms, content, personal, other</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="method">
+    <h2>Method</h2>
+    <div class="grid2">
+      <div class="card"><b>1 · Local logs only</b><p>Claude Code transcripts, Codex rollouts, and Unmute's session index if present. Only your own messages are read: timestamp and opening text. Never agent replies or files.</p></div>
+      <div class="card"><b>2 · Cleaning</b><p>Machine-written messages are dropped. Re-runs of the same prompt count once. Bursts (four sessions started within a minute) are dropped. Non-interactive <code>codex exec</code> runs are excluded.</p></div>
+      <div class="card"><b>3 · Robust statistics</b><p>Median, trimmed mean and p90 per active day. No means, no peaks: one burst can move those on its own.</p></div>
+      <div class="card"><b>4 · Significance</b><p>One-sided rank-sum permutation test (Mann–Whitney) on daily sessions and messages, 20,000 seeded relabellings, so the same logs always give the same p.</p></div>
+    </div>
+    <p class="note">Full definitions and every threshold: <a href="https://github.com/arpitpatel25/unmute-bench/blob/main/METHODOLOGY.md">METHODOLOGY.md</a>.</p>
+
+    <h3>Reference result</h3>
+    <div class="tbl"><table>
+      <thead><tr><th>Metric</th><th class="num">Before</th><th class="num">With Unmute</th><th class="num">Change</th></tr></thead>
+      <tbody>
+        <tr><td>SPD · agent sessions</td><td class="num">3</td><td class="num">10</td><td class="num"><b>3.3×</b></td></tr>
+        <tr><td>MPD · messages to agents</td><td class="num">46</td><td class="num">144</td><td class="num"><b>3.1×</b></td></tr>
+        <tr><td>AHD · hours agents ran</td><td class="num">4.9</td><td class="num">9.4</td><td class="num"><b>1.9×</b></td></tr>
+        <tr><td>JPH · agents steered per hour</td><td class="num">1</td><td class="num">3</td><td class="num"><b>3.0×</b></td></tr>
+        <tr><td>PAR · agents at once</td><td class="num">1</td><td class="num">2</td><td class="num">—</td></tr>
+        <tr><td>AD · active days of 30</td><td class="num">21</td><td class="num">29</td><td class="num">—</td></tr>
+        <tr><td>TTW · task types per week</td><td class="num">3.4</td><td class="num">5.4</td><td class="num">—</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">Jul 11 – Aug 9 vs. Sep 26 – Oct 25, 2026. Same person, same models. p &lt; 0.001 for SPD and MPD. 3,062 sessions read; 87 bursts, 1,762 repeats and 160 automated sessions removed.</p>
+
+    <h3>Limitations</h3>
+    <ul>
+      <li><b>n = 1.</b> The reference result is one person. It shows a large, significant change for that person, not a population effect. That is why the scorer is open.</li>
+      <li><b>Usage, not value.</b> The bench measures how much work is handed to agents, not whether it was good. More messages can mean more corrections.</li>
+      <li><b>Before/after is not a controlled experiment.</b> Workloads and habits change too.</li>
+      <li><b>History gets pruned.</b> Claude Code deletes transcripts after about 30 days, which can thin out a "before" window.</li>
+      <li><b>Some values are estimated.</b> AHD and PAR are inferred from your messages, not from agent activity. Task types are keyword-classified.</li>
+    </ul>
+  </section>
+
+  <section id="run">
+    <h2>Run it on your logs</h2>
+    <p>One command. Runs locally, reads only your own messages, uploads nothing.</p>
+    <pre><code>curl -fsSL https://justunmute.me/unmute-bench.mjs | node --input-type=module -</code></pre>
+    <p>It's one self-contained file with no dependencies. <a href="unmute-bench.mjs">Read it</a> before you run it, or read the <a href="https://github.com/arpitpatel25/unmute-bench">source on GitHub</a>. To compare before and after a change (a new tool, a new workflow), download it once:</p>
+    <pre><code>curl -fsSL https://justunmute.me/unmute-bench.mjs -o unmute-bench.mjs
+node unmute-bench.mjs --split 2026-08-10
+node unmute-bench.mjs --card my-bench.svg   # shareable card
+node unmute-bench.mjs --json                # for submissions</code></pre>
+    <p class="note">Node 18+. Reads <code>~/.claude/projects</code> and <code>~/.codex</code>. Unmute users also get this inside the app, under <b>Unmute Bench</b>: their own daily numbers and trends, recalculated every few hours.</p>
+  </section>
+
+  <section id="submit">
+    <h2>Submit a result</h2>
+    <p>Run <code>node unmute-bench.mjs --json</code> and open a submission with the output. Only the numbers are needed, never your logs. Tell us your main setup (terminal, desktop app, Cursor, Unmute, other) so your result lands in the right row.</p>
+    <div class="pills" style="justify-content:flex-start">
+      <a class="solid" href="https://github.com/arpitpatel25/unmute-bench/issues/new?title=Result%3A%20&amp;labels=result">Submit on GitHub</a>
+      <a href="https://x.com/just_unmute">Or post it and tag @just_unmute</a>
+    </div>
+  </section>
+
+  <section id="faq">
+    <h2>FAQ</h2>
+    <details><summary>Isn't this just measuring usage?</summary><p>Yes, deliberately. Model benchmarks measure what the model can do. This measures how much of that capability a person actually puts to work. Quality of the output is out of scope for v0.1.</p></details>
+    <details><summary>Doesn't the company that makes Unmute win its own benchmark?</summary><p>On the reference result, yes, which is exactly why the method and the code are public. Run it yourself, on any setup, and submit the numbers.</p></details>
+    <details><summary>Does it send my data anywhere?</summary><p>No. It runs on your machine, reads timestamps and the opening text of your own messages, and prints numbers. Read the code: it is a few hundred lines.</p></details>
+    <details><summary>Why per active day?</summary><p>So weekends and days off don't drag anyone down. The bench measures how you work on the days you work.</p></details>
+    <details><summary>What changes in future versions?</summary><p>More people in the leaderboard, per-setup splits within one person's history, model-labelled task types, and an output-quality signal. Every change bumps the version.</p></details>
+  </section>
+
+  <section id="cite">
+    <h2>Cite</h2>
+<pre><code>@misc{unmutebench2026,
+  title  = {Unmute Bench: A Benchmark of Human-to-Agent Work},
+  author = {Patel, Arpit},
+  year   = {2026},
+  note   = {Version 0.1},
+  url    = {https://justunmute.me/bench}
+}</code></pre>
+    <h3>Changelog</h3>
+    <ul><li><b>v0.1</b> · October 2026 · First public version: 7 metrics, cleaning rules, rank-sum significance test, reference result.</li></ul>
+  </section>
+
+</main>
+
+<footer class="bot">
+  <div class="wrap">
+    <span>Unmute Bench is maintained by <a href="./">Unmute</a>. Code MIT, results CC BY 4.0.</span>
+    <span><a href="https://github.com/arpitpatel25/unmute-bench">GitHub</a> · <a href="https://x.com/just_unmute">X</a> · <a href="privacy.html">Privacy</a></span>
+  </div>
+</footer>
+</body>
+</html>
