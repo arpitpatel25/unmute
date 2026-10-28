@@ -44,7 +44,17 @@
   .pills a { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; text-decoration: none; padding: 8px 16px; border-radius: 999px; border: 1px solid var(--ink); }
   .pills a.solid { background: var(--ink); color: #fff; }
   .pills a:not(.solid):hover { background: var(--soft); }
-  figure.chart { margin: 36px 0 8px; }
+  figure.film { margin: 36px 0 8px; }
+  .film-frame { position: relative; border-radius: 14px; overflow: hidden; background: #fbf9f5; border: 1px solid var(--line); box-shadow: 0 30px 60px -30px rgba(0,0,0,.35); }
+  .film-frame video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; }
+  .film-sound { position: absolute; left: 18px; bottom: 18px; display: inline-flex; align-items: center; gap: 8px; font: 600 15px/1 Inter, sans-serif; color: #fff; background: rgba(11,11,12,.86); border: 0; border-radius: 999px; padding: 12px 18px; cursor: pointer; }
+  .film-sound::before { content: ""; width: 0; height: 0; border-left: 11px solid #fff; border-top: 7px solid transparent; border-bottom: 7px solid transparent; }
+  .film-sound:hover { background: #0b0b0c; }
+  .film-sound:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+  .film-sound[hidden] { display: none; }
+  @media (max-width: 640px) { .film-sound { position: static; display: flex; margin: 10px auto 12px; font-size: 14px; padding: 10px 16px; } }
+  figure.film figcaption { font-size: 13px; color: var(--ink-3); margin-top: 10px; text-align: center; }
+  figure.chart { margin: 20px 0 18px; }
   figure.chart img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; display: block; }
   figure.chart figcaption { font-size: 13px; color: var(--ink-3); margin-top: 10px; text-align: center; }
   section { padding: 44px 0 8px; }
@@ -131,9 +141,12 @@
     </div>
   </div>
 
-  <figure class="chart">
-    <img src="assets/bench/unmute-bench-v0.1.png" alt="Unmute Bench v0.1 chart. Same person, same models. Claude Code alone versus Claude Code with Unmute: agent sessions per active day 3 versus 10 (3.3 times), messages to agents per active day 46 versus 144 (3.1 times), hours agents ran per active day 4.9 versus 9.4 (1.9 times). Median per active day, July 11 to August 9 versus September 26 to October 25, 2026. n equals 1, p less than 0.001." width="2400" height="1350" />
-    <figcaption>Reference result. One person, same models, 30 days before vs. 30 days after switching. Median per active day.</figcaption>
+  <figure class="film">
+    <div class="film-frame">
+      <video id="bench-film" src="assets/bench/unmute-bench-launch.mp4" poster="assets/bench/unmute-bench-launch-poster.jpg" autoplay muted loop playsinline preload="metadata" aria-label="Unmute Bench launch film, 42 seconds, narrated"></video>
+      <button class="film-sound" id="film-sound" type="button">Play with sound</button>
+    </div>
+    <figcaption>Unmute Bench in 42 seconds.</figcaption>
   </figure>
 
   <section id="why">
@@ -189,6 +202,10 @@
     <p class="note">Full definitions and every threshold: <a href="https://github.com/arpitpatel25/unmute-bench/blob/main/METHODOLOGY.md">METHODOLOGY.md</a>.</p>
 
     <h3>Reference result</h3>
+    <figure class="chart">
+    <img src="assets/bench/unmute-bench-v0.1.png" alt="Unmute Bench v0.1 chart. Same person, same models. Claude Code alone versus Claude Code with Unmute: agent sessions per active day 3 versus 10 (3.3 times), messages to agents per active day 46 versus 144 (3.1 times), hours agents ran per active day 4.9 versus 9.4 (1.9 times). Median per active day, July 11 to August 9 versus September 26 to October 25, 2026. n equals 1, p less than 0.001." width="2400" height="1350" />
+    <figcaption>Reference result. One person, same models, 30 days before vs. 30 days after switching. Median per active day.</figcaption>
+    </figure>
     <div class="tbl"><table>
       <thead><tr><th>Metric</th><th class="num">Before</th><th class="num">With Unmute</th><th class="num">Change</th></tr></thead>
       <tbody>
@@ -264,5 +281,16 @@ node unmute-bench.mjs --json                # for submissions</code></pre>
     <span><a href="https://github.com/arpitpatel25/unmute-bench">GitHub</a> · <a href="https://x.com/just_unmute">X</a> · <a href="privacy.html">Privacy</a></span>
   </div>
 </footer>
+<script>
+  // The film plays muted on its own; one click restarts it with sound and native controls.
+  (function () {
+    var v = document.getElementById('bench-film'), b = document.getElementById('film-sound');
+    if (!v || !b) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { v.removeAttribute('autoplay'); v.pause(); }
+    b.addEventListener('click', function () {
+      v.muted = false; v.loop = false; v.currentTime = 0; v.controls = true; v.play(); b.hidden = true;
+    });
+  })();
+</script>
 </body>
 </html>
