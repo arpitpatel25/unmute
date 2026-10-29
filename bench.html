@@ -10,15 +10,15 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
 <meta property="og:title" content="Unmute Bench v0.1" />
 <meta property="og:description" content="The first benchmark that measures the human, not the model. Same Claude Code, 3.3× more agent sessions a day." />
-<meta property="og:image" content="https://justunmute.me/assets/bench/unmute-bench-v0.1.png" />
-<meta property="og:image:width" content="2400" />
-<meta property="og:image:height" content="1350" />
+<meta property="og:image" content="https://justunmute.me/assets/bench/unmute-bench-launch-poster.jpg" />
+<meta property="og:image:width" content="1920" />
+<meta property="og:image:height" content="1080" />
 <meta property="og:url" content="https://justunmute.me/bench" />
 <meta property="og:type" content="website" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Unmute Bench v0.1" />
 <meta name="twitter:description" content="The first benchmark that measures the human, not the model." />
-<meta name="twitter:image" content="https://justunmute.me/assets/bench/unmute-bench-v0.1.png" />
+<meta name="twitter:image" content="https://justunmute.me/assets/bench/unmute-bench-launch-poster.jpg" />
 <meta name="theme-color" content="#ffffff" />
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin />
 <script defer src="analytics.js?v=1"></script>
@@ -166,9 +166,9 @@
       <tbody>
         <tr class="top"><td class="rank">1</td><td>Claude Code + Codex, via Unmute</td><td class="num">10</td><td class="num">144</td><td class="num">9.4</td><td class="num hide-sm">3</td><td class="num">1</td></tr>
         <tr><td class="rank">2</td><td>Claude Code + Codex, desktop apps</td><td class="num">3</td><td class="num">46</td><td class="num">4.9</td><td class="num hide-sm">1</td><td class="num">1</td></tr>
-        <tr class="open"><td class="rank">—</td><td>Claude Code / Codex, terminal</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num hide-sm">—</td><td class="num">open</td></tr>
-        <tr class="open"><td class="rank">—</td><td>Cursor</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num hide-sm">—</td><td class="num">open</td></tr>
-        <tr class="open"><td class="rank">—</td><td>Other orchestrators</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num hide-sm">—</td><td class="num">open</td></tr>
+        <tr class="open"><td class="rank">—</td><td>Claude Code, terminal</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num hide-sm">—</td><td class="num">open</td></tr>
+        <tr class="open"><td class="rank">—</td><td>Codex, terminal</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num hide-sm">—</td><td class="num">open</td></tr>
+        <tr class="open"><td class="rank">—</td><td>Grok</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num hide-sm">—</td><td class="num">open</td></tr>
       </tbody>
     </table></div>
     <p class="note">v0.1 is preliminary: both rows come from one person's history. Open rows fill in as results are submitted. <a href="#submit">Add yours.</a></p>
@@ -240,6 +240,16 @@ node unmute-bench.mjs --split 2026-08-10
 node unmute-bench.mjs --card my-bench.png   # shareable card
 node unmute-bench.mjs --json                # for submissions</code></pre>
     <p class="note">Node 18+. Reads <code>~/.claude/projects</code> and <code>~/.codex</code>. Unmute users also get this inside the app, under <b>Unmute Bench</b>: their own daily numbers and trends, recalculated every few hours.</p>
+  </section>
+
+  <section id="unmute">
+    <h2>Want a higher score?</h2>
+    <p class="lead">Unmute Bench is made by <a href="./">Unmute</a>, a Mac app for talking to Claude Code and Codex.</p>
+    <p>Tap a key and say the task. Unmute starts a Claude Code or Codex session on it, keeps several running at once, and the notch tells you which one needs you. It runs on the Claude and ChatGPT plans you already pay for, and dictation is free on your Mac.</p>
+    <div class="pills" style="justify-content:flex-start">
+      <a class="solid" href="./#download">Download Unmute for Mac</a>
+      <a href="./#how">See how it works</a>
+    </div>
   </section>
 
   <section id="submit">
